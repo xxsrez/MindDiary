@@ -927,10 +927,12 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   Recovery flight принадлежит только тому Worker request context, который его
   запустил: последующие document navigation не регистрируют уже активный
   background promise в собственном `waitUntil`, не drain-ят work, созданный
-  recovery flight, и не наследуют его wall time. UI pulse откладывается до
-  15-секундного quiet period, request-triggered pass ограничен четырьмя candidates
-  на stage и повторяется не чаще completion-based пяти минут; тяжёлые batch
-  recovery остаются operator-owned работой вне navigation path.
+  recovery flight, и не наследуют его wall time. В UAT автоматический UI pulse
+  отключён: Sites делит ресурсный бюджет Worker/D1 между foreground request и
+  `waitUntil`, поэтому даже bounded request-triggered pass может занять общий
+  контур и вызвать starvation навигации. Request recovery оставлен opt-in для
+  изолированных проверок, а тяжёлые batch recovery остаются operator-owned
+  работой вне navigation path.
   Cold-isolate schema bootstrap отправляет все ordered idempotent metadata
   migrations одним D1 batch вместо отдельного network round-trip на каждую
   migration. Current-schema cold load одним guarded SQL получает snapshot chunks

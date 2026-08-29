@@ -26,13 +26,32 @@ function recoveryPulse(path = "/") {
   });
 }
 
-test("product UI schedules a fire-and-forget recovery pulse only after page load", () => {
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /requestIdleCallback/u);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /setTimeout\(.*15000/su);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /visibilityState/u);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /method:"HEAD"/u);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /"x-mind-diary-recovery-pulse":"1"/u);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /addEventListener\("load"/u);
+test("product UI does not schedule request-triggered recovery work", () => {
+  assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /requestIdleCallback/u);
+  assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /setTimeout\(.*15000/su);
+  assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /x-mind-diary-recovery-pulse/u);
+});
+
+test("production Worker disables request-triggered recovery by default", async () => {
+  let recoveries = 0;
+  const waits = [];
+  const worker = createMindDiaryProductWorker({
+    async createRuntime() {
+      return {
+        async fetch() { return new Response("ok"); },
+        async recoverBackground() { recoveries += 1; },
+        async dispatchBackground() {},
+      };
+    },
+    readConfig() { return { publicOrigin: ORIGIN }; },
+    async fallbackFetch() { return new Response("fallback", { status: 404 }); },
+  });
+  const response = await worker.fetch(recoveryPulse(), {}, {
+    waitUntil: (promise) => waits.push(promise),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(recoveries, 0);
+  assert.equal(waits.length, 0);
 });
 
 test("foreground reads never inherit scheduled work from request recovery", async () => {

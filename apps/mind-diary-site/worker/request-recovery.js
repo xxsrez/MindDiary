@@ -63,18 +63,23 @@ export function isRecoveryEligibleRequest(request, response) {
  */
 export class RequestRecoveryCoordinator {
   #slots = new WeakMap();
+  #enabled;
   #cadenceMs;
   #idleMs;
   #now;
   #delay;
 
   constructor(options = {}) {
+    this.#enabled = options.enabled ?? true;
     this.#cadenceMs = options.cadenceMs ?? REQUEST_RECOVERY_CADENCE_MS;
     this.#idleMs = options.idleMs ?? REQUEST_RECOVERY_IDLE_MS;
     this.#now = options.now ?? Date.now;
     this.#delay = options.delay ?? ((milliseconds) => new Promise(
       (resolve) => setTimeout(resolve, milliseconds),
     ));
+    if (typeof this.#enabled !== "boolean") {
+      throw new TypeError("request recovery enabled flag must be boolean");
+    }
     if (!Number.isSafeInteger(this.#cadenceMs) || this.#cadenceMs < 1) {
       throw new TypeError("request recovery cadence must be a positive integer");
     }
@@ -84,6 +89,7 @@ export class RequestRecoveryCoordinator {
   }
 
   async respond(options) {
+    if (!this.#enabled) return options.foreground();
     const candidate = isRecoveryCandidateRequest(options.request);
     let slot = this.#slots.get(options.environment);
     if (slot === undefined || slot.fingerprint !== options.fingerprint) {
@@ -205,7 +211,12 @@ export function createMindDiaryProductWorker(options) {
     throw new TypeError("product Worker dependencies are required");
   }
   const runtimeCache = options.runtimeCache ?? new IsolateRuntimeCache();
-  const recoveryCoordinator = options.recoveryCoordinator ?? new RequestRecoveryCoordinator();
+  // Sites shares the Worker/D1 resource budget between foreground requests and
+  // waitUntil work. Keep request-triggered recovery opt-in until a dedicated
+  // scheduler exists; operator-owned full recovery remains available through
+  // the runtime API and foreground reads stay isolated from maintenance.
+  const recoveryCoordinator = options.recoveryCoordinator ??
+    new RequestRecoveryCoordinator({ enabled: false });
   return Object.freeze({
     async fetch(request, environment, context) {
       let failureStage = "static-assets";

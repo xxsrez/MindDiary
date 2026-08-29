@@ -10,6 +10,7 @@ export function isRecoveryEligibleRequest(
 
 export declare class RequestRecoveryCoordinator {
   constructor(options?: {
+    readonly enabled?: boolean;
     readonly cadenceMs?: number;
     readonly idleMs?: number;
     readonly now?: () => number;
