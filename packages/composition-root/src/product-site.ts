@@ -875,18 +875,32 @@ export async function createProductSiteRuntime(
   const index = await createSitesSearchIndex(options.database);
   const audit = await createSitesAuditSink(options.database);
   const uploadIntentMetadata = await createSitesLocalFileUploadIntentStore(options.database);
-  const tokensMissingPresentationRefs = await metadata.listMcpTokensMissingPresentationRefs();
-  if (tokensMissingPresentationRefs.length > 0) {
-    await metadata.assignPersonalTokenRefs(tokensMissingPresentationRefs.map((tokenId) =>
-      Object.freeze({
-        tokenId,
-        personalTokenRef: generated.nextPersonalTokenRef(),
-      })
-    ));
-    if ((await metadata.listMcpTokensMissingPresentationRefs()).length > 0) {
-      throw new Error("Personal token presentation-ref migration did not converge");
+  // Presentation refs are only needed by the user-facing token management
+  // page. Keep the legacy repair off the shared cold navigation path; a
+  // single-flight retry still preserves the migration invariant when that
+  // page is first opened.
+  let personalTokenPresentationRefsReady: Promise<void> | null = null;
+  const ensurePersonalTokenPresentationRefs = async (): Promise<void> => {
+    if (personalTokenPresentationRefsReady === null) {
+      personalTokenPresentationRefsReady = (async () => {
+        const missing = await metadata.listMcpTokensMissingPresentationRefs();
+        if (missing.length === 0) return;
+        await metadata.assignPersonalTokenRefs(missing.map((tokenId) =>
+          Object.freeze({
+            tokenId,
+            personalTokenRef: generated.nextPersonalTokenRef(),
+          })
+        ));
+        if ((await metadata.listMcpTokensMissingPresentationRefs()).length > 0) {
+          throw new Error("Personal token presentation-ref migration did not converge");
+        }
+      })().catch((error) => {
+        personalTokenPresentationRefsReady = null;
+        throw error;
+      });
     }
-  }
+    await personalTokenPresentationRefsReady;
+  };
   const benchmarkCorrelations = new Map<string, string>();
   const telemetry = createSitesPrivacySafeObservabilitySink(options.observabilityWriter, {
     benchmarkCorrelationId: (requestId) => requestId === null
@@ -1823,6 +1837,7 @@ export async function createProductSiteRuntime(
     },
     personalTokens: {
       async listPage(actor, query) {
+        await ensurePersonalTokenPresentationRefs();
         const page = await control.services.tokens.listPersonalTokenPage(actor as never, query);
         const items = await Promise.all(page.items.map(async (item) => {
           const metadataToken = await metadata.readMcpTokenMetadataByPresentationRef(
@@ -1841,6 +1856,7 @@ export async function createProductSiteRuntime(
       },
       async read(actor, personalTokenRef) {
         try {
+          await ensurePersonalTokenPresentationRefs();
           const [item, metadataToken] = await Promise.all([
             control.services.tokens.readPersonalToken(actor as never, personalTokenRef as never),
             metadata.readMcpTokenMetadataByPresentationRef(
