@@ -1,5 +1,6 @@
 import {
   createProductSiteRuntime,
+  createProductUiAnonymousResponse,
   createProductUiStaticAssetResponse,
 } from "@mind-diary/composition-root";
 import handler from "vinext/server/app-router-entry";
@@ -13,6 +14,7 @@ interface ExecutionContext {
 
 const worker = createMindDiaryProductWorker({
   createRuntime: createProductSiteRuntime,
+  anonymousFetch: createProductUiAnonymousResponse,
   staticFetch: createProductUiStaticAssetResponse,
   readConfig: (request: Request, environment: ProductEnv) =>
     readRuntimeConfig(request, environment),

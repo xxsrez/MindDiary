@@ -149,6 +149,41 @@ test("Product Worker serves static assets without composing the product runtime"
   assert.equal(waits.length, 0);
 });
 
+test("Product Worker serves anonymous UI navigation without composing the product runtime", async () => {
+  let runtimeCreations = 0;
+  let configReads = 0;
+  let anonymousCalls = 0;
+  const worker = createMindDiaryProductWorker({
+    async createRuntime() {
+      runtimeCreations += 1;
+      throw new Error("anonymous UI must not compose the runtime");
+    },
+    anonymousFetch(request) {
+      anonymousCalls += 1;
+      return new URL(request.url).pathname === "/minds"
+        ? new Response("anonymous shell")
+        : null;
+    },
+    readConfig() {
+      configReads += 1;
+      return { publicOrigin: ORIGIN };
+    },
+    async fallbackFetch() {
+      return new Response("fallback", { status: 404 });
+    },
+  });
+
+  const response = await worker.fetch(
+    new Request(`${ORIGIN}/minds`),
+    {},
+    { waitUntil() {} },
+  );
+  assert.equal(await response.text(), "anonymous shell");
+  assert.equal(anonymousCalls, 1);
+  assert.equal(runtimeCreations, 0);
+  assert.equal(configReads, 0);
+});
+
 test("Product Worker defers observational activity without delaying the response", async () => {
   let releaseActivity;
   const activity = new Promise((resolve) => { releaseActivity = resolve; });
@@ -273,6 +308,7 @@ test("only a successful explicit post-load HEAD pulse can trigger recovery", () 
     "/assets/app.css",
     "/favicon.ico",
     "/apple-touch-icon.png",
+    "/apple-touch-icon-precomposed.png",
     "/image.webp",
   ]) {
     assert.equal(

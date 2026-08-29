@@ -862,11 +862,9 @@ export async function createProductSiteRuntime(
       release();
     }
   };
-  // D1 serializes schema-changing batches. Starting metadata, search, audit
-  // and the other D1-backed adapters in one Promise.all made cold isolates
-  // contend on the same database and could hold the first page for tens of
-  // seconds. Keep non-D1 crypto/R2 setup parallel, but establish each D1
-  // schema in a deterministic order before serving a request.
+  // D1-backed adapters now probe their existing schema lazily; only a genuinely
+  // missing or outdated table runs the idempotent migration batch. This keeps
+  // cold isolates from competing on schema-changing DDL before serving a page.
   const [objects, tokenHasher, downloadCrypto, csrf] = await Promise.all([
     createSitesObjectStore(options.bucket),
     createWebCryptoTokenHasher({ verifierKey: options.tokenVerifierKey }),

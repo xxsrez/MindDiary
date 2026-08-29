@@ -48,6 +48,10 @@ interface IntentRow {
   readonly record_json: string;
 }
 
+interface SchemaObjectRow {
+  readonly name?: string;
+}
+
 function changes(result: D1ResultLike): number {
   return Number(result.meta?.changes ?? 0);
 }
@@ -105,12 +109,35 @@ export class SitesLocalFileUploadIntentStore implements LocalFileUploadIntentSto
   }
 
   async ready(): Promise<this> {
-    this.#ready ??= this.#database
-      .batch(SITES_LOCAL_FILE_UPLOAD_INTENT_SCHEMA.map((sql) =>
-        this.#database.prepare(sql)))
-      .then(() => undefined);
+    this.#ready ??= this.#ensureReady().catch((error) => {
+      this.#ready = null;
+      throw error;
+    });
     await this.#ready;
     return this;
+  }
+
+  async #ensureReady(): Promise<void> {
+    try {
+      const result = await this.#database
+        .prepare(
+          `/*md-upload-intent-schema-probe*/ SELECT name FROM sqlite_master
+           WHERE type IN ('table', 'index')
+             AND name IN ('md_local_file_upload_intents',
+                          'md_local_file_upload_intents_expiry')`,
+        )
+        .all<SchemaObjectRow>();
+      const names = new Set((result.results ?? []).map((row) => row.name));
+      if (
+        names.has("md_local_file_upload_intents") &&
+        names.has("md_local_file_upload_intents_expiry")
+      ) return;
+    } catch {
+      // The schema is absent or an older D1 adapter does not expose sqlite_master.
+      // Fall through to the idempotent schema batch below.
+    }
+    await this.#database.batch(SITES_LOCAL_FILE_UPLOAD_INTENT_SCHEMA.map((sql) =>
+      this.#database.prepare(sql)));
   }
 
   async #readByIntentId(intentId: string): Promise<IntentRow | null> {
@@ -322,5 +349,5 @@ export class SitesLocalFileUploadIntentStore implements LocalFileUploadIntentSto
 export async function createSitesLocalFileUploadIntentStore(
   database: LocalFileUploadIntentD1DatabaseLike,
 ): Promise<SitesLocalFileUploadIntentStore> {
-  return new SitesLocalFileUploadIntentStore(database).ready();
+  return new SitesLocalFileUploadIntentStore(database);
 }

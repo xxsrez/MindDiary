@@ -18,16 +18,25 @@ import {
 } from "./product-ui-assets.js";
 
 import {
+  PRODUCT_UI_ROUTES,
+  RESERVED_UI_HANDLES,
   SAFE_HEADERS,
+  SITES_SIGN_IN_PATH,
   STATIC_ASSET_CACHE_CONTROL,
   errorResponse,
+  html,
 } from "./product-http-request-helpers.js";
+
+import { renderAuthenticatedOnboardingDocument } from "./onboarding.js";
 
 function staticAsset(pathname: string): { readonly body: BodyInit; readonly type: string } | null {
   if (pathname === "/favicon.ico") return { body: PRODUCT_UI_FAVICON_ICO, type: "image/x-icon" };
   if (pathname === "/favicon.svg") return { body: PRODUCT_UI_FAVICON_SVG, type: "image/svg+xml; charset=utf-8" };
   if (pathname === "/favicon-32x32.png") return { body: PRODUCT_UI_FAVICON_PNG, type: "image/png" };
-  if (pathname === "/apple-touch-icon.png") return { body: PRODUCT_UI_APPLE_TOUCH_ICON_PNG, type: "image/png" };
+  if (
+    pathname === "/apple-touch-icon.png" ||
+    pathname === "/apple-touch-icon-precomposed.png"
+  ) return { body: PRODUCT_UI_APPLE_TOUCH_ICON_PNG, type: "image/png" };
   if (pathname === "/brand/mind-diary-tokens.css") return { body: PRODUCT_UI_TOKENS_CSS, type: "text/css; charset=utf-8" };
   if (pathname === "/ui/mind-diary-shell.css") return { body: PRODUCT_UI_SHELL_CSS, type: "text/css; charset=utf-8" };
   if (pathname === "/brand/mind-diary-lockup.svg") return { body: PRODUCT_UI_LOCKUP_SVG, type: "image/svg+xml; charset=utf-8" };
@@ -91,4 +100,37 @@ export function createProductUiStaticAssetResponse(request: Request): Response |
       "content-type": asset.type,
     },
   });
+}
+
+const PRODUCT_UI_DETAIL_ROUTE = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u;
+const PRODUCT_UI_CONNECTION_DETAIL_ROUTE = /^\/settings\/connections\/[^/]+$/u;
+
+function isProductUiRoute(pathname: string): boolean {
+  const detailMatch = PRODUCT_UI_DETAIL_ROUTE.exec(pathname);
+  return PRODUCT_UI_ROUTES.has(pathname) ||
+    PRODUCT_UI_CONNECTION_DETAIL_ROUTE.test(pathname) ||
+    (detailMatch !== null && !RESERVED_UI_HANDLES.has(detailMatch[1]!));
+}
+
+/**
+ * Anonymous UI navigation needs only the sign-in shell. Do not compose the
+ * D1-backed product runtime for a request that cannot read any product state.
+ * This is especially important for mobile Safari, which may request the page
+ * and touch-icon concurrently during a new tab/open-from-link flow.
+ */
+export function createProductUiAnonymousResponse(request: Request): Response | null {
+  const url = new URL(request.url);
+  if (
+    (request.method !== "GET" && request.method !== "HEAD") ||
+    request.headers.get("oai-authenticated-user-email") !== null ||
+    !isProductUiRoute(url.pathname)
+  ) return null;
+  return html(
+    request.method === "HEAD"
+      ? ""
+      : renderAuthenticatedOnboardingDocument({
+          kind: "anonymous",
+          authEntryPath: SITES_SIGN_IN_PATH,
+        }),
+  );
 }

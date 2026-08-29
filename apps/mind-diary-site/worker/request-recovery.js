@@ -11,6 +11,7 @@ const STATIC_PATHS = new Set([
   "/favicon.svg",
   "/favicon-32x32.png",
   "/apple-touch-icon.png",
+  "/apple-touch-icon-precomposed.png",
   "/robots.txt",
 ]);
 
@@ -207,7 +208,8 @@ export function createMindDiaryProductWorker(options) {
   if (typeof options?.createRuntime !== "function" ||
       typeof options?.readConfig !== "function" ||
       typeof options?.fallbackFetch !== "function" ||
-      (options.staticFetch !== undefined && typeof options.staticFetch !== "function")) {
+      (options.staticFetch !== undefined && typeof options.staticFetch !== "function") ||
+      (options.anonymousFetch !== undefined && typeof options.anonymousFetch !== "function")) {
     throw new TypeError("product Worker dependencies are required");
   }
   const runtimeCache = options.runtimeCache ?? new IsolateRuntimeCache();
@@ -223,6 +225,8 @@ export function createMindDiaryProductWorker(options) {
       try {
         const staticResponse = options.staticFetch?.(request) ?? null;
         if (staticResponse !== null) return staticResponse;
+        const anonymousResponse = options.anonymousFetch?.(request) ?? null;
+        if (anonymousResponse !== null) return anonymousResponse;
         failureStage = "runtime-config";
         const config = options.readConfig(request, environment);
         failureStage = "composition";

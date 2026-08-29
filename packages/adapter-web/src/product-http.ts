@@ -22,6 +22,7 @@ export type {
 
 export {
   createProductUiStaticAssetResponse,
+  createProductUiAnonymousResponse,
 } from "./product-http-static-assets.js";
 
 export {

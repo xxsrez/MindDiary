@@ -43,6 +43,10 @@ interface LocatorRow {
   readonly expires_at: string;
 }
 
+interface SchemaObjectRow {
+  readonly name?: string;
+}
+
 const PREFIX = "mdl2_";
 const TOKEN_BYTES = 24;
 const TOKEN_PATTERN = /^mdl2_[A-Za-z0-9_-]{32}$/u;
@@ -69,7 +73,7 @@ export class SitesMindLocatorCodec implements MindLocatorCodec {
   readonly #verifierKey: Promise<CryptoKey>;
   readonly #now: () => Date;
   readonly #ttlMs: number;
-  readonly #ready: Promise<void>;
+  #ready: Promise<void> | null = null;
 
   constructor(options: {
     readonly database: LocatorD1DatabaseLike;
@@ -97,11 +101,10 @@ export class SitesMindLocatorCodec implements MindLocatorCodec {
     if (!Number.isSafeInteger(this.#ttlMs) || this.#ttlMs < 1_000 || this.#ttlMs > 24 * 60 * 60 * 1_000) {
       throw new TypeError("Mind locator TTL is outside the supported range.");
     }
-    this.#ready = this.#migrate();
   }
 
   async encode(payload: Readonly<MindLocatorPayload>): Promise<string> {
-    await this.#ready;
+    await this.#ensureReady();
     const encryptedPayload = await this.#legacy.encode(payload);
     const token = base64Url(this.#crypto.getRandomValues(new Uint8Array(TOKEN_BYTES)));
     const handle = `${PREFIX}${token}`;
@@ -138,7 +141,7 @@ export class SitesMindLocatorCodec implements MindLocatorCodec {
     if (candidate.length > SITES_LOCATOR_MAX_CHARACTERS || !TOKEN_PATTERN.test(candidate)) {
       return null;
     }
-    await this.#ready;
+    await this.#ensureReady();
     const verifier = await this.#verifier(candidate);
     const result = await this.#database
       .prepare(
@@ -164,7 +167,31 @@ export class SitesMindLocatorCodec implements MindLocatorCodec {
     return this.#legacy.decode(row.encrypted_payload);
   }
 
+  async #ensureReady(): Promise<void> {
+    this.#ready ??= this.#migrate().catch((error) => {
+      this.#ready = null;
+      throw error;
+    });
+    await this.#ready;
+  }
+
   async #migrate(): Promise<void> {
+    try {
+      const result = await this.#database
+        .prepare(
+          `/*md-locator-schema-probe*/ SELECT name FROM sqlite_master
+           WHERE type IN ('table', 'index')
+             AND name IN ('md_mind_locator_handles', 'md_mind_locator_expiry')`,
+        )
+        .all<SchemaObjectRow>();
+      const names = new Set((result.results ?? []).map((row) => row.name));
+      if (names.has("md_mind_locator_handles") && names.has("md_mind_locator_expiry")) {
+        return;
+      }
+    } catch {
+      // The schema is absent or an older D1 adapter does not expose sqlite_master.
+      // Fall through to the idempotent schema batch below.
+    }
     await this.#database.batch(
       SITES_LOCATOR_MIGRATIONS.map((sql) => this.#database.prepare(sql)),
     );

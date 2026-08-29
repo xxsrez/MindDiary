@@ -7,6 +7,7 @@ import type {
 } from "@mind-diary/application-ports";
 
 export const SITES_SEARCH_ADAPTER = "sites-d1-exact-revision" as const;
+const SITES_SEARCH_SCHEMA_VERSION = 3;
 
 export interface D1ResultLike<Row = Record<string, unknown>> {
   readonly results?: readonly Row[];
@@ -87,6 +88,10 @@ interface SearchProjectionCountRow {
   readonly indexed_count: number;
 }
 
+interface SchemaVersionRow {
+  readonly version?: number | string;
+}
+
 function validateIdentity(value: unknown, label: string): asserts value is string {
   if (
     typeof value !== "string" ||
@@ -150,27 +155,46 @@ function placeholders(rows: number, columns: number): string {
 export class SitesExactRevisionSearchIndex implements SearchIndex {
   readonly kind = "search-index" as const;
   readonly #database: D1DatabaseLike;
-  #initialized = false;
+  #ready: Promise<void> | null = null;
 
   constructor(database: D1DatabaseLike) {
     this.#database = database;
   }
 
   async ready(): Promise<this> {
-    if (!this.#initialized) {
-      const statements = SITES_SEARCH_MIGRATIONS.map((sql) => this.#database.prepare(sql));
-      statements.push(
-        this.#database
-          .prepare(
-            `/*md-search-migration*/ INSERT OR IGNORE INTO md_search_schema_migrations
-             (version, name, applied_at) VALUES (3, 'query-lexical-v3', ?1)`,
-          )
-          .bind(new Date().toISOString()),
-      );
-      await this.#database.batch(statements);
-      this.#initialized = true;
-    }
+    this.#ready ??= this.#ensureReady().catch((error) => {
+      this.#ready = null;
+      throw error;
+    });
+    await this.#ready;
     return this;
+  }
+
+  async #ensureReady(): Promise<void> {
+    try {
+      const result = await this.#database
+        .prepare(
+          `/*md-search-schema-probe*/ SELECT COALESCE(MAX(version), 0) AS version
+           FROM md_search_schema_migrations`,
+        )
+        .all<SchemaVersionRow>();
+      if (Number(result.results?.[0]?.version ?? 0) >= SITES_SEARCH_SCHEMA_VERSION) {
+        return;
+      }
+    } catch {
+      // The migration table is absent or an older D1 adapter does not expose
+      // the probe. Fall through to the idempotent schema batch below.
+    }
+    const statements = SITES_SEARCH_MIGRATIONS.map((sql) => this.#database.prepare(sql));
+    statements.push(
+      this.#database
+        .prepare(
+          `/*md-search-migration*/ INSERT OR IGNORE INTO md_search_schema_migrations
+           (version, name, applied_at) VALUES (3, 'query-lexical-v3', ?1)`,
+        )
+        .bind(new Date().toISOString()),
+    );
+    await this.#database.batch(statements);
   }
 
   async replaceExactRevision(request: ReplaceExactRevisionIndexRequest): Promise<void> {
@@ -535,5 +559,5 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
 export async function createSitesSearchIndex(
   database: D1DatabaseLike,
 ): Promise<SitesExactRevisionSearchIndex> {
-  return new SitesExactRevisionSearchIndex(database).ready();
+  return new SitesExactRevisionSearchIndex(database);
 }

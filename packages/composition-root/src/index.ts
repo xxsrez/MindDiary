@@ -76,7 +76,10 @@ import {
 export * from "./product-site.js";
 export * from "./bounded-in-memory-ingress.js";
 export * from "./google-drive-connector.js";
-export { createProductUiStaticAssetResponse } from "@mind-diary/adapter-web";
+export {
+  createProductUiStaticAssetResponse,
+  createProductUiAnonymousResponse,
+} from "@mind-diary/adapter-web";
 
 export const COMPOSITION_SELECTION = {
   applications: {
@@ -119,9 +122,9 @@ export interface SitesPersistenceBoundaryOptions {
 export async function createSitesPersistenceBoundary(
   options: SitesPersistenceBoundaryOptions,
 ) {
-  // D1 schema batches must not compete with one another during a cold start.
-  // Keep the R2 adapter parallel, then initialize each D1-backed adapter in a
-  // deterministic order so the first request does not inherit lock waits.
+  // D1-backed adapters probe their existing schema lazily and only run the
+  // idempotent migration batch when a table is genuinely missing or outdated.
+  // Keep R2 setup parallel while avoiding cold-start DDL contention in D1.
   const [metadata, objects] = await Promise.all([
     createSitesMetadataStore(options.database),
     createSitesObjectStore(options.bucket),

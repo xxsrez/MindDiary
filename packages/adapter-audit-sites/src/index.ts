@@ -214,6 +214,7 @@ export function createSitesPrivacySafeObservabilitySink(
 }
 
 export const SITES_AUDIT_ADAPTER = "sites-d1-privacy-safe-audit" as const;
+const SITES_AUDIT_SCHEMA_VERSION = 1;
 
 export interface D1ResultLike<Row = Record<string, unknown>> {
   readonly results?: readonly Row[];
@@ -255,6 +256,10 @@ interface AuditRow {
   readonly event_json: string;
 }
 
+interface SchemaVersionRow {
+  readonly version?: number | string;
+}
+
 function cloneEvent(event: Readonly<AuditEvent>): Readonly<AuditEvent> {
   return Object.freeze({
     ...event,
@@ -285,27 +290,46 @@ function parseEvent(row: AuditRow): Readonly<AuditEvent> {
 export class SitesAuditSink implements AuditSink {
   readonly kind = "audit-sink" as const;
   readonly #database: D1DatabaseLike;
-  #initialized = false;
+  #ready: Promise<void> | null = null;
 
   constructor(database: D1DatabaseLike) {
     this.#database = database;
   }
 
   async ready(): Promise<this> {
-    if (!this.#initialized) {
-      const statements = SITES_AUDIT_MIGRATIONS.map((sql) => this.#database.prepare(sql));
-      statements.push(
-        this.#database
-          .prepare(
-            `/*md-audit-migration*/ INSERT OR IGNORE INTO md_audit_schema_migrations
-             (version, name, applied_at) VALUES (1, 'privacy-safe-audit-v1', ?1)`,
-          )
-          .bind(new Date().toISOString()),
-      );
-      await this.#database.batch(statements);
-      this.#initialized = true;
-    }
+    this.#ready ??= this.#ensureReady().catch((error) => {
+      this.#ready = null;
+      throw error;
+    });
+    await this.#ready;
     return this;
+  }
+
+  async #ensureReady(): Promise<void> {
+    try {
+      const result = await this.#database
+        .prepare(
+          `/*md-audit-schema-probe*/ SELECT COALESCE(MAX(version), 0) AS version
+           FROM md_audit_schema_migrations`,
+        )
+        .all<SchemaVersionRow>();
+      if (Number(result.results?.[0]?.version ?? 0) >= SITES_AUDIT_SCHEMA_VERSION) {
+        return;
+      }
+    } catch {
+      // The migration table is absent or an older D1 adapter does not expose
+      // the probe. Fall through to the idempotent schema batch below.
+    }
+    const statements = SITES_AUDIT_MIGRATIONS.map((sql) => this.#database.prepare(sql));
+    statements.push(
+      this.#database
+        .prepare(
+          `/*md-audit-migration*/ INSERT OR IGNORE INTO md_audit_schema_migrations
+           (version, name, applied_at) VALUES (1, 'privacy-safe-audit-v1', ?1)`,
+        )
+        .bind(new Date().toISOString()),
+    );
+    await this.#database.batch(statements);
   }
 
   async deliver(event: Readonly<AuditEvent>): Promise<"delivered" | "duplicate"> {
@@ -378,5 +402,5 @@ export class SitesAuditSink implements AuditSink {
 }
 
 export async function createSitesAuditSink(database: D1DatabaseLike): Promise<SitesAuditSink> {
-  return new SitesAuditSink(database).ready();
+  return new SitesAuditSink(database);
 }

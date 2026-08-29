@@ -639,6 +639,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
   for (const [path, contentType, expectedDimensions] of [
     ["/favicon-32x32.png", "image/png", [32, 32]],
     ["/apple-touch-icon.png", "image/png", [180, 180]],
+    ["/apple-touch-icon-precomposed.png", "image/png", [180, 180]],
   ]) {
     const response = await handler(new Request(`${origin}${path}`));
     assert.equal(response.status, 200);
