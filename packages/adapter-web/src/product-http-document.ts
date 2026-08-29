@@ -117,7 +117,7 @@ export async function productUiDocument(input: {
         kind: "list",
         collection: { kind: "loading" },
       },
-    }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
+    }, "/ui/mind-diary-ordinary-minds-list-client.js"), input.csrfToken);
   }
   if (input.pathname === "/") {
     const session = await readSession();

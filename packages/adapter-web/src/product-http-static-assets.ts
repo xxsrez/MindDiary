@@ -58,6 +58,12 @@ function staticAsset(pathname: string): { readonly body: BodyInit; readonly type
       type: "text/javascript; charset=utf-8",
     };
   }
+  if (pathname === "/ui/mind-diary-ordinary-minds-list-client.js") {
+    return {
+      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT}`,
+      type: "text/javascript; charset=utf-8",
+    };
+  }
   if (pathname === "/ui/mind-diary-collaboration-client.js") {
     return {
       body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT}`,

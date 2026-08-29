@@ -652,7 +652,7 @@ const server = createServer(async (request, response) => {
     if (url.pathname === "/" || url.pathname === "/minds") {
       const document = renderOrdinaryMindsManagementDocument(
         listModel(url.searchParams.get("state") ?? "ready"),
-        "/ui/mind-diary-ordinary-minds-client.js",
+        "/ui/mind-diary-ordinary-minds-list-client.js",
       );
       sendText(response, 200, "text/html; charset=utf-8", withCsrfMeta(document, csrfToken));
       return;

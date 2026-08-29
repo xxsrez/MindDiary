@@ -609,6 +609,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     ["/brand/mind-diary-mark.svg", "image/svg+xml; charset=utf-8", "Mind Diary mark"],
     ["/ui/mind-diary-onboarding-client.js", "text/javascript; charset=utf-8", "/api/v1/account"],
     ["/ui/mind-diary-token-client.js", "text/javascript; charset=utf-8", "/api/mcp/2025-11-25"],
+    ["/ui/mind-diary-ordinary-minds-list-client.js", "text/javascript; charset=utf-8", "/api/v1/minds"],
     ["/ui/mind-diary-connections-client.js", "text/javascript; charset=utf-8", "accessEndpoint"],
     ["/ui/mind-diary-visibility-client.js", "text/javascript; charset=utf-8", "data-public-catalog-retry"],
   ]) {
@@ -1011,7 +1012,9 @@ test("authenticated Home and Minds both defer collection work behind their safe 
   calls.length = 0;
   const minds = await handler(new Request(`${origin}/minds`));
   assert.equal(minds.status, 200);
-  assert.match(await minds.text(), /data-management-view="list"/u);
+  const mindsHtml = await minds.text();
+  assert.match(mindsHtml, /data-management-view="list"/u);
+  assert.match(mindsHtml, /mind-diary-ordinary-minds-list-client\.js/u);
   assert.deepEqual(calls, []);
 
   const listed = await handler(new Request(`${origin}/api/v1/minds`));

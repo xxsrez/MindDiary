@@ -105,7 +105,7 @@ test.afterAll(async () => {
 
 test("shipped client keeps Personal first and creates private metadata", async ({ page }) => {
   await page.goto(`${origin}/minds`);
-  await expect(page.locator('script[src="/ui/mind-diary-ordinary-minds-client.js"]')).toHaveCount(1);
+  await expect(page.locator('script[src="/ui/mind-diary-ordinary-minds-list-client.js"]')).toHaveCount(1);
   await expect(page.locator("[data-minds-list] [data-mind-card]").first()).toHaveAttribute(
     "data-mind-card",
     "me",
