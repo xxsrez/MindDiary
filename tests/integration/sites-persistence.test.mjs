@@ -103,8 +103,8 @@ class FakeD1Statement {
     return this;
   }
 
-  async run() {
-    return this.#database.run(this.#sql, this.#values);
+  async run(options) {
+    return this.#database.run(this.#sql, this.#values, options);
   }
 
   async all() {
@@ -138,6 +138,7 @@ class FakeD1Database {
   #appliedUploadIntentSchema = new Set();
   #failTag = null;
   #batchTail = Promise.resolve();
+  #batchPostCommitError = null;
   #activityWriteGate = null;
   #metadataAppendGate = null;
   #metadataReadGate = null;
@@ -167,11 +168,14 @@ class FakeD1Database {
       audit: new Map([...this.audit].map(([key, value]) => [key, { ...value }])),
       locatorHandles: new Map([...this.locatorHandles].map(([key, value]) => [key, { ...value }])),
     };
+    let results;
     try {
-      const results = [];
-      for (const statement of statements) results.push(await statement.run());
-      return results;
+      results = [];
+      for (const statement of statements) {
+        results.push(await statement.run({ deferCommitRejection: true }));
+      }
     } catch (error) {
+      this.#batchPostCommitError = null;
       this.metadataEvents = before.metadataEvents;
       this.metadataSnapshot = before.metadataSnapshot;
       this.metadataSnapshotHead = before.metadataSnapshotHead;
@@ -187,6 +191,12 @@ class FakeD1Database {
     } finally {
       release();
     }
+    if (this.#batchPostCommitError !== null) {
+      const error = this.#batchPostCommitError;
+      this.#batchPostCommitError = null;
+      throw error;
+    }
+    return results;
   }
 
   failNext(tag) {
@@ -214,6 +224,7 @@ class FakeD1Database {
   holdNextMetadataAppend({
     failAfterRelease = false,
     commitThenReject = false,
+    operation,
   } = {}) {
     let release;
     let markStarted;
@@ -224,6 +235,7 @@ class FakeD1Database {
       markStarted,
       failAfterRelease,
       commitThenReject,
+      operation,
     };
     return Object.freeze({ started, release });
   }
@@ -236,9 +248,16 @@ class FakeD1Database {
     }
   }
 
-  async run(sql, values) {
+  async run(sql, values, { deferCommitRejection = false } = {}) {
     let metadataAppendGate = null;
-    if (sql.includes("/*md-metadata-append*/") && this.#metadataAppendGate !== null) {
+    if (
+      sql.includes("/*md-metadata-append*/") &&
+      this.#metadataAppendGate !== null &&
+      (
+        this.#metadataAppendGate.operation === undefined ||
+        this.#metadataAppendGate.operation === values[2]
+      )
+    ) {
       metadataAppendGate = this.#metadataAppendGate;
       this.#metadataAppendGate = null;
       metadataAppendGate.markStarted();
@@ -277,7 +296,9 @@ class FakeD1Database {
         payload_json: values[3],
       });
       if (metadataAppendGate?.commitThenReject) {
-        throw new Error("synthetic committed D1 append response failure");
+        const error = new Error("synthetic committed D1 append response failure");
+        if (deferCommitRejection) this.#batchPostCommitError = error;
+        else throw error;
       }
       return { success: true, meta: { changes: 1 } };
     }
@@ -1927,6 +1948,58 @@ test("principal activity held upsert is physically removed by account delete", a
     },
   );
   assert.equal(result.spacesDeleted, 1);
+  assert.equal(database.principalActivities.size, 0);
+  assert.equal(
+    await (await createSitesMetadataStore(database))
+      .readPrincipalActivity(created.principalId),
+    null,
+  );
+});
+
+test("account delete reconciles a committed batch rejection without restoring activity", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  const created = await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(98),
+    { action: "create_isolated_account" },
+  );
+  await boundary.metadata.recordPrincipalActivity({
+    principalId: created.principalId,
+    surface: "web",
+    kind: "page",
+    observedAt: T5,
+  });
+  const deletion = accountDeletionService(boundary);
+  const impact = await deletion.getAccountDeletionImpact(
+    actor(created.principalId, "request_activity_batch_rejection_preview", T5),
+  );
+  const gate = database.holdNextMetadataAppend({
+    commitThenReject: true,
+    operation: "runAccountDeletionTransaction",
+  });
+  database.failNext("/*md-principal-activity-delete*/");
+  const deletionResult = deletion.deleteAccount(
+    actor(created.principalId, "request_activity_batch_rejection_commit", T5),
+    {
+      impactId: impact.impactId,
+      confirmation: impact.confirmation,
+      idempotencyKey: "delete-activity-committed-batch-rejection",
+    },
+  );
+  await gate.started;
+  gate.release();
+
+  assert.equal((await deletionResult).spacesDeleted, 1);
+  assert.equal(
+    database.metadataEvents.filter((event) =>
+      event.operation === "runAccountDeletionTransaction" &&
+      event.payload_json.includes("delete-activity-committed-batch-rejection")
+    ).length,
+    1,
+  );
   assert.equal(database.principalActivities.size, 0);
   assert.equal(
     await (await createSitesMetadataStore(database))
