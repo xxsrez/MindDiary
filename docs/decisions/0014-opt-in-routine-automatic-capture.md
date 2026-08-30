@@ -1,7 +1,9 @@
 # ADR-0014: opt-in routine automatic capture
 
-Статус: accepted, 2026-08-22. Решение дополняет ADR-0013, не меняя explicit
-write semantics обычного `commit_changeset`.
+Статус: accepted historical, 2026-08-22; target semantics superseded
+[ADR-0024](0024-principal-mind-usage-modes-and-automatic-save.md), 2026-08-30.
+Решение дополняло ADR-0013, не меняя explicit write semantics обычного
+`commit_changeset`.
 
 ## Контекст
 

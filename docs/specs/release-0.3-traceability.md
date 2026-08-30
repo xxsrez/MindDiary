@@ -1,5 +1,15 @@
 # Трассируемость требований Release 0.3
 
+> **Scope extension MD-372–MD-380, 2026-08-30.** Principal-owned Mind modes и
+> automatic OKF save добавлены поверх historical `MD-329`–`MD-367` registry.
+> Closed target contract находится в
+> `tests/fixtures/mind-usage-modes/contract.v1.json`; новая delivery chain:
+> `MD-373 → {MD-374, MD-380}`, `MD-374 → {MD-375, MD-376, MD-379}`,
+> `MD-380 → MD-379`, `{MD-376, MD-379} → MD-377`,
+> `{MD-375, MD-377} → MD-378`, а `MD-372` закрывается только joined evidence
+> всех дочерних результатов. Registry v1 ниже остаётся historical evidence
+> прежнего Release 0.3 scope и не доказывает новые runtime/UAT outcomes.
+
 Статус: accepted verification contract для MD-338, 2026-08-27.
 
 Документ связывает целевой scope `MD-329`–`MD-335` с владельцами,

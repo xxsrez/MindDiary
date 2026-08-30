@@ -1,0 +1,68 @@
+{
+  "$schema": "mind-diary/principal-mind-usage/v1",
+  "version": 1,
+  "source": "docs/specs/mind-usage-modes.md",
+  "decision": "docs/decisions/0024-principal-mind-usage-modes-and-automatic-save.md",
+  "ownership": "principal",
+  "defaultMode": "disabled",
+  "modes": ["disabled", "read", "read_write"],
+  "cardinality": {
+    "read": "0..N",
+    "read_write": "0..1"
+  },
+  "switchBehavior": "demote_previous_read_write_to_read_atomically",
+  "sharedAcrossCredentials": ["oauth_grant", "personal_token"],
+  "effectiveCapabilityChecks": [
+    "active_credential",
+    "credential_scope",
+    "current_acl_or_visibility",
+    "current_writer_role"
+  ],
+  "description": {
+    "appliesTo": ["ordinary_mind", "personal_mind"],
+    "modelVisible": true,
+    "trustedInstruction": false,
+    "requiredFor": ["read_write"],
+    "routes": ["read", "write"]
+  },
+  "agentRouting": {
+    "readTriggers": ["explicit_user_request", "description_match"],
+    "explicitRequestBypasses": ["description_match"],
+    "explicitRequestDoesNotBypass": ["usage_mode", "credential_scope", "current_access"],
+    "crossMindSearch": false,
+    "implicitPersonalMindFallback": false
+  },
+  "automaticSave": {
+    "enabledBy": "read_write",
+    "separateToggle": false,
+    "perWriteConfirmation": false,
+    "requiresUserNotification": true,
+    "requiresExplicitDiscussion": true,
+    "backgroundVacuum": false,
+    "privateKnowledgeAllowedAfterExplicitDiscussion": true,
+    "operations": ["create_file", "replace_file", "delete_file", "no_op"],
+    "canonicalTool": "commit_changeset",
+    "retiredTargetTool": "capture_knowledge",
+    "crossMindProvenance": ["source_mind", "source_revision", "source_locator"]
+  },
+  "okf": {
+    "version": "0.2",
+    "validateBeforeCommit": "full_bundle",
+    "validateAfterCommit": "full_exact_revision",
+    "atomicFiles": ["concepts", "index", "log"],
+    "preserveUnknownTypesAndFields": true
+  },
+  "retiredControls": [
+    "get_mind_bindings",
+    "set_read_mind_binding",
+    "set_write_mind_binding",
+    "credential_writable_target",
+    "capture_toggle"
+  ],
+  "migration": {
+    "capability": "principal-mind-usage/v1",
+    "ambiguousOutcome": "disabled",
+    "legacyWriteRefsRemapped": false,
+    "mixedRuntimeSemantics": false
+  }
+}

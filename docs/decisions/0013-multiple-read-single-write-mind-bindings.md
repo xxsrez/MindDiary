@@ -1,8 +1,9 @@
 # ADR-0013: multiple-read/single-write Mind bindings
 
-Статус: accepted historical Release 0.1/0.2, 2026-08-22; применимые части
-частично superseded для Release 0.3 через
-[ADR-0022](0022-site-controlled-credential-write-target.md). Решение изменяет
+Статус: accepted historical Release 0.1/0.2, 2026-08-22; target semantics
+superseded [ADR-0024](0024-principal-mind-usage-modes-and-automatic-save.md),
+2026-08-30. Ранний Release 0.3 replacement через ADR-0022 также historical.
+Решение изменяет
 principal-wide content access из
 [ADR-0003](0003-user-scoped-mcp-and-direct-commits.md), но сохраняет один MCP
 connection на principal, explicit single-Mind operations и immediate commits.

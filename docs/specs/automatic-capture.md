@@ -1,7 +1,11 @@
 # Automatic knowledge capture
 
-Статус: accepted historical Release 0.1/0.2 contract и локально реализованный
-candidate, обновлено 2026-08-27.
+Статус: historical Release 0.1/0.2 и ранний Release 0.3 contract, локально
+реализованный candidate обновлён 2026-08-27. Target semantics superseded
+MD-373 в [principal Mind usage contract](mind-usage-modes.md): `read_write`
+сам является consent на automatic save через `commit_changeset`; отдельного
+capture toggle, private-only/additive-only profile или `capture_knowledge`
+tool больше нет.
 Документ задаёт первый bounded Codex-first capture profile. Binding сам capture
 не включает; hosted UAT evidence остаётся отдельным release gate.
 

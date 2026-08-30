@@ -1,5 +1,13 @@
 # Архитектура Mind Diary
 
+> **Целевая архитектурная поправка Release 0.3 (MD-373, 2026-08-30).**
+> Read/write intent хранится в principal-owned `PrincipalMindUsageState`, а не
+> в credential-owned binding/target/capture aggregate. Все credentials видят
+> одну configured projection, сохраняя собственные effective scopes. Agent
+> routing и automatic save определены в
+> [режимах использования Mind](specs/mind-usage-modes.md); исторические
+> sequence/storage sections ниже остаются evidence до реализации MD-374–MD-380.
+
 Статус: proposal, обновлено 2026-08-27. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Authenticated web/control,

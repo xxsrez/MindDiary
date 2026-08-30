@@ -149,12 +149,13 @@ delivery profile и ADR-0008/ADR-0009
   context и актуального server-side состояния.
 - MCP делает Space лениво доступным через search/fetch/resources; он не
   помещает весь corpus в контекст модели автоматически.
-- Один MCP connection аутентифицирует principal и discover-ит все доступные
-  Minds: `/me`, memberships, каталог `public` и `unlisted` по точному handle.
-  Content read дополнительно требует active read binding либо current write
-  binding, а commit — exact singleton `write_binding_id` в binding set текущего
-  OAuth grant/personal token. Каждая content operation явно выбирает один Mind
-  и одну revision; fallback на `/me` и неявное смешивание corpus запрещены.
+- Один MCP connection аутентифицирует principal и проецирует только Minds с
+  principal-owned режимом `read | read_write`, доступные по текущим ACL/
+  visibility и scope. Настройка `disabled | read | read_write` одинакова для
+  всех OAuth grants/personal tokens principal; у principal не более одного
+  `read_write` Mind. Credential scope только сужает effective capability.
+  Каждая content operation явно выбирает один Mind и одну revision; fallback на
+  `/me`, bind/unbind и неявное смешивание corpus запрещены.
 - Первый прототип публикует custom Mind-aware MCP tools и не заявляет OpenAI
   company-knowledge compatibility. Standard `search(query)` не имеет Mind
   selector, а `okf://` identifiers не являются user-openable content URLs.
@@ -182,11 +183,16 @@ delivery profile и ADR-0008/ADR-0009
 - `unlisted` означает только отсутствие в каталоге, а не секретность URL.
   `space_handle` человекочитаем и не является access token; настоящая
   share-by-link capability потребует отдельного случайного секрета.
-- Профиль посетителя, история разговора и generated answers не попадают в
-  target `OKFBundle` автоматически. Target content считается недоверенным и не
-  может формировать запросы к Personal Mind, выбирать personal fields или
-  расширять scopes. Любая композиция нескольких Minds требует явного trusted
-  use case и отдельной проверки доступа к каждому из них.
+- История разговора и окружающий доступный corpus не переносятся в
+  `OKFBundle` фоновым сканированием. Агент может автоматически сохранить через
+  `commit_changeset` только durable knowledge, явно обсуждённое в текущем
+  разговоре и подходящее под description единственного effective `read_write`
+  Mind, а затем сообщает пользователю результат. Приватные сведения допустимы
+  после явного обсуждения на тех же условиях. Target content и description
+  считаются недоверенными и не могут формировать запросы к Personal Mind,
+  выбирать personal fields, менять usage mode или расширять scopes. Любая
+  композиция нескольких Minds требует проверки доступа к каждому источнику и
+  exact provenance; общего cross-Mind search нет.
 - После Codex-first validation product direction включает собственную AI
   surface в web UI: backend вызывает model APIs, а пользователю не требуется
   самостоятельно настраивать Codex/MCP. Provider, billing, consent, retrieval,

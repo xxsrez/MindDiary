@@ -6,12 +6,14 @@ authenticated web/control и Codex MCP flows. Документы ниже раз
 evidence, предлагаемый дизайн и ещё не проверенные расширенные workflows.
 
 Целевая product authority Release 0.3 описана прежде всего в
+[режимах использования Mind](specs/mind-usage-modes.md),
 [обзоре](overview.md#product-authority-после-release-01),
 [roadmap](roadmap.md#authority-contract-release-03),
 [доменной модели](specs/domain-model.md#content-plane-и-control-plane) и
 [архитектуре](architecture.md#целевая-authority-boundary-release-03). Historical
-Release 0.1/0.2 API, Connections и Mind bindings сохраняются как as-built; их
-operation disposition и migration принадлежат MD-337/MD-339.
+Release 0.1/0.2 API, Connections и Mind bindings, а также ранний
+credential-scoped target Release 0.3 сохраняются как historical as-built;
+principal-owned replacement принят MD-373 в ADR-0024.
 
 ## Начать отсюда
 
@@ -43,16 +45,17 @@ operation disposition и migration принадлежат MD-337/MD-339.
 11. [Compact admin IA и design contract](specs/compact-admin-information-architecture.md)
    — измеримые desktop/mobile layouts, density/tokens, route/session states,
    privacy/destructive disclosures и machine-check mapping для MD-347.
-12. [Credential write target Release 0.3](specs/credential-write-target.md) —
-   целевой Sites-only singleton write target, ACL-derived reads, lifecycle,
-   migration и compatibility contract; historical Release 0.1/0.2 bindings
-   сохранены в отдельной [спецификации](specs/mind-bindings.md).
+12. [Режимы использования Mind и автоматическое сохранение](specs/mind-usage-modes.md)
+   — целевой principal-owned `disabled | read | read_write`, единый writable
+   Mind, description routing, discussed-only automatic save и fail-closed
+   migration. Прежний [credential write target](specs/credential-write-target.md)
+   и [Mind bindings](specs/mind-bindings.md) сохранены как historical evidence.
 13. [Границы реализации](specs/implementation-boundaries.md) — trusted
    `ActorContext`, application ports/façades, transaction boundaries и
    enforceable dependency rules для будущего runtime.
 14. [Automatic knowledge capture](specs/automatic-capture.md) — historical
-   default-off capture profile и Release 0.3 граница: Site владеет policy и
-   target, Content MCP — только возможным exact-target content commit.
+   default-off capture profile, superseded единым `read_write` intent и
+   canonical `commit_changeset` из principal usage contract.
 15. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
@@ -227,11 +230,11 @@ operation disposition и migration принадлежат MD-337/MD-339.
   informational real Sites/Desktop canaries и запрет product test-login
   surface.
 - [ADR-0013: multiple-read/single-write Mind bindings](decisions/0013-multiple-read-single-write-mind-bindings.md)
-  — binding owner выбран по OAuth grant/personal token, приняты `0..N` read,
-  `0..1` write, versioned CAS/rebind и fail-closed migration без implicit `/me`.
+  — historical Release 0.1/0.2 binding contract; target semantics superseded
+  ADR-0024.
 - [ADR-0014: opt-in routine automatic capture](decisions/0014-opt-in-routine-automatic-capture.md)
-  — принят default-off per-credential policy, pin к exact write generation,
-  private/same-target initial profile и additive-only capture tool.
+  — historical per-credential capture policy; target semantics superseded
+  ADR-0024.
 - [ADR-0015: versioned BundleFile](decisions/0015-versioned-bundle-files.md) —
   исторически приняты post-MVP unified manifest v2, adapter-only native file
   transport, bounded quarantined staging и отдельный `MD-BUNDLE-ZIP-1` без
@@ -258,12 +261,15 @@ operation disposition и migration принадлежат MD-337/MD-339.
   header-safe `application/octet-stream` fallback, exact 256 MiB streaming и
   safe-raster-only inline policy без изменения OKF 0.2.
 - [ADR-0022: Sites-controlled credential write target](decisions/0022-site-controlled-credential-write-target.md)
-  — read bindings заменены current ACL/visibility, а per-credential singleton
-  write target управляется только через Sites control plane с CAS, active
-  credential lifecycle и fail-closed migration.
+  — historical early Release 0.3 credential target; principal-owned target
+  semantics superseded ADR-0024.
 - [ADR-0023: отдельный MCP Apps профиль для native file ingress](decisions/0023-dedicated-mcp-apps-file-ingress-profile.md)
   — route-specific `/api/mcp/apps`, app-only native stage, static picker UI и
   обязательный внешний hosted receipt без fabricated activation assertion.
+- [ADR-0024: пользовательские режимы Mind и автоматическое сохранение](decisions/0024-principal-mind-usage-modes-and-automatic-save.md)
+  — приняты principal-owned `disabled | read | read_write`, один writable Mind,
+  description routing и automatic discussed-only OKF save без binding/capture
+  controls.
 
 ## Исследования
 

@@ -1,5 +1,13 @@
 # Спецификация первого прототипа
 
+> **Target amendment Release 0.3 (MD-373, 2026-08-30).** Product intent на
+> уровне principal/Mind задаётся `disabled | read | read_write`; все credentials
+> используют одну настройку, а credential scope только сужает effective
+> capability. Единственный `read_write` Mind разрешает automatic discussed-only
+> OKF save через `commit_changeset`. Нормативная replacement specification —
+> [режимы использования Mind](mind-usage-modes.md). Historical acceptance и
+> as-built catalogs ниже не переписываются задним числом.
+
 Статус: proposal, обновлено 2026-08-27. Product requirements ниже приняты;
 Product Site и direct route/compatibility repair реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Обязательные authenticated web/control,

@@ -1,5 +1,12 @@
 # Roadmap и стратегия проверки Mind Diary
 
+> **Целевое уточнение Release 0.3 (MD-373, 2026-08-30).** Вместо
+> per-credential writable target принят principal-owned mode каждого Mind:
+> `disabled | read | read_write`, общий для всех OAuth grants и personal
+> tokens. Один `read_write` Mind включает automatic discussed-only save; точный
+> продуктовый контракт — [режимы использования Mind](specs/mind-usage-modes.md).
+> Historical формулировки target/binding ниже не меняют это решение.
+
 Статус: зафиксированная product direction владельца проекта, обновлено
 2026-08-27.
 Документ определяет последовательность проверки и развития продукта, но не

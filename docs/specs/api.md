@@ -1,5 +1,13 @@
 # REST и MCP API Mind Diary
 
+> **Target amendment MD-373, 2026-08-30.** Следующая schema generation заменяет
+> credential target principal-owned `usage_mode`; `list_minds` проецирует только
+> enabled Minds с `description`, `usage_mode` и effective capabilities.
+> Bind/unbind и `capture_knowledge` не входят в target catalog, automatic save
+> использует `commit_changeset`. Exact target contract —
+> [режимы использования Mind](mind-usage-modes.md); historical wire schemas
+> ниже сохраняются как evidence реализованных версий до MD-374–MD-380.
+
 Статус: proposal для верификации, обновлено 2026-08-27. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
 Product API и direct MCP route/compatibility repair реализованы, развёрнуты как

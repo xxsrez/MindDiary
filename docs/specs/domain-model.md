@@ -1,5 +1,13 @@
 # Доменная модель и доступ
 
+> **Target amendment MD-373, 2026-08-30.** К service metadata добавлен
+> principal-owned `usage_mode: disabled | read | read_write`; у principal не
+> более одного `read_write` Mind. Description теперь owner-editable и для
+> Personal Mind, model-visible как недоверенная routing category, но не входит
+> в OKF/revision. Полный нормативный контракт —
+> [режимы использования Mind](mind-usage-modes.md); противоречащие historical
+> binding/credential-target формулировки ниже не являются target authority.
+
 Статус: proposal, обновлено 2026-08-27. Product decisions первого прототипа
 приняты для первого прототипа; format-neutral BundleFile amendment принят
 отдельно для Release 0.2. Точные wire schemas принадлежат

@@ -1,5 +1,13 @@
 # Connections, Advanced MCP и Codex Help
 
+> **Target amendment MD-373, 2026-08-30.** Mind mode теперь настраивается на
+> странице Mind как `disabled | read | read_write` и принадлежит principal.
+> Connections и Advanced MCP больше не выбирают writable target и не содержат
+> capture toggle; они показывают только lifecycle/scopes и derived effective
+> capability. Нормативный replacement —
+> [режимы использования Mind](mind-usage-modes.md); historical UI ниже
+> сохраняется как evidence до MD-375/MD-377.
+
 Статус: accepted historical Release 0.1/0.2 evidence и реализованный локальный
 Release 0.3 target candidate, обновлено 2026-08-28. Access replacement принят
 в [MD-339 contract](credential-write-target.md), реализован MD-343; live UAT

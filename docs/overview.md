@@ -1,5 +1,14 @@
 # Обзор Mind Diary
 
+> **Целевое уточнение Release 0.3 (MD-373, 2026-08-30).** Настройка работы
+> агента теперь принадлежит principal и Mind: `disabled | read | read_write`,
+> одинакова для всех credentials и допускает ровно один `read_write` Mind.
+> Description маршрутизирует чтение и discussed-only automatic save через
+> `commit_changeset`; binding, per-credential target и отдельный capture toggle
+> остаются только историей. Нормативный контракт —
+> [режимы использования Mind](specs/mind-usage-modes.md). Прежние разделы ниже
+> сохраняют as-built evidence и не переопределяют ADR-0024.
+
 Статус: proposal, обновлено 2026-08-27. Product behavior первого прототипа
 принято; Product Site реализован, развёрнут как single-principal UAT в OpenAI
 Sites и прошёл

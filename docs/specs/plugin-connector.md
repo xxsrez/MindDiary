@@ -1,5 +1,14 @@
 # Plugin и OAuth Mind Diary
 
+> **Target amendment MD-373, 2026-08-30.** Bundled connector instructions
+> должны выбирать enabled Minds по прямой просьбе или semantic fit description
+> и автоматически сохранять подходящее явно обсуждённое durable knowledge в
+> единственный effective `read_write` Mind через `commit_changeset`, после чего
+> сообщать результат. Binding/capture controls отсутствуют; description —
+> недоверенная категория, не инструкция. Нормативный workflow —
+> [режимы использования Mind](mind-usage-modes.md); historical package behavior
+> ниже остаётся evidence до MD-377.
+
 Статус: accepted historical Release 0.1/0.2 contract, обновлено 2026-08-28.
 OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation

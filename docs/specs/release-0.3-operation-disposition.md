@@ -1,5 +1,14 @@
 # Реестр операций Release 0.3
 
+> **Superseding disposition MD-373, 2026-08-30.** Principal-owned
+> `disabled | read | read_write` заменяет credential target. Site меняет mode
+> на уровне Mind; `list_minds` публикует enabled projection; bind/unbind,
+> credential target controls, capture toggle и `capture_knowledge` удаляются,
+> а automatic save использует `commit_changeset`. Нормативный delta и migration
+> зафиксированы в [режимах использования Mind](mind-usage-modes.md) и его
+> machine contract. Таблицы/fixture v1 ниже остаются historical MD-337/MD-343
+> evidence до их runtime replacement в MD-374–MD-379.
+
 Статус: accepted operation-disposition contract, 2026-08-27. Документ
 фиксирует целевое распределение уже существующих входных операций после
 принятого разделения полномочий Release 0.3. Он не утверждает, что runtime,

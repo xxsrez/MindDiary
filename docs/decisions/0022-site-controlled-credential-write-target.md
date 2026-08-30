@@ -1,9 +1,9 @@
 # ADR-0022: Site-controlled credential write target без read bindings
 
-Статус: accepted, 2026-08-27. Решение MD-339 задаёт целевой access contract
-Release 0.3. Оно является нормативным контрактом, но не утверждением о
-реализованных storage records, routes, MCP schemas, migration или UAT
-deployment.
+Статус: accepted historical early Release 0.3, 2026-08-27; target semantics
+superseded [ADR-0024](0024-principal-mind-usage-modes-and-automatic-save.md),
+2026-08-30. Ниже сохранён нормативный для MD-339 contract и evidence, но он не
+задаёт текущую principal-owned модель.
 
 ADR частично заменяет
 [ADR-0013](0013-multiple-read-single-write-mind-bindings.md): отменяются

@@ -1,6 +1,8 @@
 # Credential-scoped writable target Release 0.3
 
-Статус: accepted target contract, локально реализован MD-343, 2026-08-28.
+Статус: historical early Release 0.3 contract, локально реализован MD-343,
+2026-08-28; target authority superseded MD-373 в
+[principal Mind usage contract](mind-usage-modes.md), 2026-08-30.
 Документ MD-339 определяет access/binding replacement для Release 0.3.
 Repository candidate включает durable state/migration, Sites REST/UI и
 write-path generation fence; hosted UAT evidence для exact candidate остаётся
@@ -8,7 +10,9 @@ write-path generation fence; hosted UAT evidence для exact candidate оста
 принадлежит MD-337; его wire fields и target error taxonomy являются
 authoritative для этой specification.
 
-Решение принято в
+Ниже сохранён прежний credential-scoped design и его evidence. Он не задаёт
+текущий target: mode теперь принадлежит principal, shared всеми credentials,
+а отдельного writable-target/capture control нет. Историческое решение принято в
 [ADR-0022](../decisions/0022-site-controlled-credential-write-target.md).
 [Historical Mind bindings](mind-bindings.md) остаются evidence Release
 0.1/0.2 и не являются target authority.
