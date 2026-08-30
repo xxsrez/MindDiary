@@ -178,6 +178,11 @@ class FakeD1Database {
       return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-principal-activity-upsert*/")) {
+      const expectedSequence = Number(values[6]);
+      const currentSequence = this.metadataEvents.at(-1)?.sequence ?? 0;
+      if (currentSequence !== expectedSequence) {
+        return { success: true, meta: { changes: 0 } };
+      }
       const current = this.principalActivities.get(values[0]);
       const next = {
         principal_id: values[0],
@@ -202,6 +207,19 @@ class FakeD1Database {
       }
       this.principalActivities.set(values[0], next);
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-principal-activity-delete-committed*/")) {
+      const event = this.metadataEvents.find((row) => row.sequence === Number(values[1]));
+      const committed = event !== undefined &&
+        event.target === values[2] &&
+        event.operation === values[3] &&
+        event.payload_json === values[4];
+      return {
+        success: true,
+        meta: {
+          changes: committed && this.principalActivities.delete(values[0]) ? 1 : 0,
+        },
+      };
     }
     if (sql.includes("/*md-principal-activity-delete*/")) {
       return {
@@ -489,6 +507,11 @@ class FakeD1Database {
           .filter((row) => row.sequence > Number(values[0]))
           .map((row) => ({ ...row })),
       };
+    }
+    if (sql.includes("/*md-metadata-append-readback*/")) {
+      const row = this.metadataEvents.find((event) =>
+        event.sequence === Number(values[0]));
+      return { success: true, results: row ? [{ ...row }] : [] };
     }
     if (sql.includes("/*md-metadata-events-migration*/")) {
       return {
