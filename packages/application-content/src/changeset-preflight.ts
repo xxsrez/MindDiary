@@ -27,6 +27,7 @@ import {
   okfFileKind,
   parseOkfFile,
   validateOkfBundle,
+  validateOkfProducerBundle,
   type OkfBundleValidation,
   type OkfDiagnostic,
 } from "@mind-diary/okf-codec";
@@ -132,6 +133,8 @@ export interface ChangesetPreflightRequest {
   readonly expectedRevisionId: RevisionId | null;
   readonly writeBindingId?: WriteMindBindingId;
   readonly automaticCaptureExpectedBindingVersion?: BindingVersion;
+  /** Trusted producer policy; never derived from an untrusted operations payload. */
+  readonly producerProfile?: boolean;
   /** Untrusted adapter input is deliberately validated inside the service. */
   readonly operations: unknown;
 }
@@ -1174,7 +1177,11 @@ export class ChangesetPreflightService {
       operation.type === "replace_bundle_file" ||
       operation.type === "delete_bundle_file"
     );
-    if (deltaReader !== null && currentRevisionId !== null && fullReferenceScan) {
+    if (
+      deltaReader !== null &&
+      currentRevisionId !== null &&
+      (fullReferenceScan || request.producerProfile === true)
+    ) {
       for (const [path, file] of working) {
         if (file.kind !== "markdown" || file.text !== undefined) continue;
         const loaded = await deltaReader.readRevisionFile(
@@ -1224,11 +1231,16 @@ export class ChangesetPreflightService {
     const markdownCandidates = candidateFiles.filter(
       (file): file is ChangesetCandidateFile => file.kind === "markdown",
     );
-    const okfValidation = deltaReader === null
-      ? validateOkfBundle(markdownCandidates.map((file) => ({
-          path: file.path,
-          text: file.text!,
-        })))
+    const okfValidation = deltaReader === null || request.producerProfile === true
+      ? (request.producerProfile === true
+          ? validateOkfProducerBundle(markdownCandidates.map((file) => ({
+              path: file.path,
+              text: file.text!,
+            })))
+          : validateOkfBundle(markdownCandidates.map((file) => ({
+              path: file.path,
+              text: file.text!,
+            }))))
       : (() => {
           const parsed = markdownCandidates
             .filter((file) => file.writeRequired)
@@ -1266,7 +1278,12 @@ export class ChangesetPreflightService {
     const referenceMarkdown = markdownCandidates
       .filter((file) =>
         file.text !== undefined &&
-        (deltaReader === null || fullReferenceScan || file.writeRequired))
+        (
+          deltaReader === null ||
+          fullReferenceScan ||
+          request.producerProfile === true ||
+          file.writeRequired
+        ))
       .map((file) => Object.freeze({ path: file.path, text: file.text! }));
     const referenceAnalysis = analyzeBundleFileReferences({
       markdown: referenceMarkdown,
@@ -1296,12 +1313,23 @@ export class ChangesetPreflightService {
         ...referenceWarnings,
       ]),
     });
-    if (!validation.valid) {
+    if (
+      !validation.valid ||
+      (request.producerProfile === true && validation.qualityWarnings.length > 0)
+    ) {
       return invalid(
         "okf_validation_failed",
-        "resulting full bundle does not pass OKF 0.2 validation",
+        request.producerProfile === true
+          ? "resulting full bundle does not pass the warning-free OKF 0.2 producer profile"
+          : "resulting full bundle does not pass OKF 0.2 validation",
         {
-          diagnostics: [...validation.conformanceErrors, ...validation.envelopeErrors],
+          diagnostics: request.producerProfile === true
+            ? [
+                ...validation.conformanceErrors,
+                ...validation.envelopeErrors,
+                ...validation.qualityWarnings,
+              ]
+            : [...validation.conformanceErrors, ...validation.envelopeErrors],
         },
       );
     }

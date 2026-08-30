@@ -44,6 +44,7 @@ for (const bundleRoot of bundleDirectories) {
 
 if (qualityWarnings.length > 0) {
   console.warn(qualityWarnings.map((warning) => `- warning: ${warning}`).join("\n"));
+  process.exitCode = 1;
 }
 const errors = [...harnessErrors, ...validationErrors];
 if (errors.length > 0) {

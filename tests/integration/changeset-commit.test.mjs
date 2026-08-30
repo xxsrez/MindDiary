@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
+  DeterministicOkfExportService,
   MindBindingApplicationService,
   MindBindingContentAuthorizer,
 } from "@mind-diary/application-content";
@@ -25,14 +26,38 @@ import {
   REVISION_AUTHORS,
   REVISIONS,
 } from "@mind-diary/test-fixtures";
-import { validateOkfBundle } from "@mind-diary/okf-codec";
+import {
+  validateOkfBundle,
+  validateOkfProducerBundle,
+} from "@mind-diary/okf-codec";
 
 const ENCODER = new TextEncoder();
+const DECODER = new TextDecoder();
 const FUTURE = "2026-11-03T12:00:00.000Z";
 const OBJECT_LIST_CUTOFF = "9999-12-31T23:59:59.999Z";
 
 function digest(text) {
   return `sha256:${createHash("sha256").update(text).digest("hex")}`;
+}
+
+function readZipFiles(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const files = [];
+  let offset = 0;
+  while (view.getUint32(offset, true) === 0x04034b50) {
+    assert.equal(view.getUint16(offset + 8, true), 0);
+    const size = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    files.push({
+      path: DECODER.decode(bytes.slice(nameStart, nameStart + nameLength)),
+      bytes: bytes.slice(dataStart, dataStart + size),
+    });
+    offset = dataStart + size;
+  }
+  return files;
 }
 
 function actor(principalId, tokenId, requestId) {
@@ -340,6 +365,142 @@ test("success writes immutable candidate objects and performs one revision/HEAD 
     historical.files.some((file) => file.path === "concepts/atomic.md"),
     false,
   );
+});
+
+test("MCP producer proposal fails closed on warnings and round-trips a valid immutable revision through export", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_producer_round_trip",
+    "request_producer_round_trip",
+  );
+  const service = env.service({
+    currentActor: editor,
+    nextRevisionId: "revision_producer_round_trip",
+  });
+  const before = await env.snapshot();
+  const warningBearing = await service.commit({
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "producer-warning-rejected",
+    summary: "Reject warning-bearing generated knowledge",
+    producerProfile: true,
+    operations: [{
+      type: "create_file",
+      path: "concepts/generated-warning.md",
+      text: "---\ntype: Generated Knowledge\nstatus: reviewed\n---\n\n# Warning\n",
+    }],
+  });
+  assert.equal(warningBearing.kind, "invalid");
+  assert.equal(warningBearing.error.code, "okf_validation_failed");
+  assert.deepEqual(
+    warningBearing.error.diagnostics.map((issue) => issue.code),
+    ["invalid_lifecycle_status"],
+  );
+  assert.deepEqual(await env.snapshot(), before);
+
+  const path = "concepts/generated-durable.md";
+  const title = "Generated durable knowledge";
+  const text = `---
+type: Generated Knowledge
+title: ${title}
+generated: { by: mind-diary/0.3, at: 2026-08-30T21:00:00Z }
+---
+
+# ${title}
+`;
+  assert.equal(
+    validateOkfProducerBundle([{ path, text }]).producerValid,
+    true,
+  );
+  const operations = changes(path, title);
+  operations[0] = { type: "create_file", path, text };
+  const committed = await service.commit({
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "producer-valid-round-trip",
+    summary: "Commit validated generated knowledge",
+    producerProfile: true,
+    operations,
+  });
+  assert.equal(committed.kind, "committed");
+  assert.equal(
+    committed.envelope.revision.revisionId,
+    "revision_producer_round_trip",
+  );
+
+  const exported = await new DeterministicOkfExportService({
+    materializer: env.coordinator,
+    digest: env.objects,
+  }).exportExactRevision({
+    spaceId: MINDS.ordinary.spaceId,
+    revisionId: committed.envelope.revision.revisionId,
+  });
+  const archiveFiles = readZipFiles(exported.bytes);
+  const exportedValidation = validateOkfProducerBundle(archiveFiles);
+  assert.equal(exportedValidation.producerValid, true);
+  assert.equal(
+    DECODER.decode(archiveFiles.find((file) => file.path === path).bytes),
+    text,
+  );
+  const historical = await env.coordinator.materialize(
+    MINDS.ordinary.spaceId,
+    REVISIONS.initial.revisionId,
+  );
+  assert.equal(historical.files.some((file) => file.path === path), false);
+});
+
+test("producer policy rollout preserves old idempotent replays without permitting a new warning-bearing commit", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_producer_rollout",
+    "request_producer_rollout",
+  );
+  const service = env.service({
+    currentActor: editor,
+    nextRevisionId: "revision_before_producer_policy",
+  });
+  const oldPayload = {
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "pre-policy-warning",
+    summary: "Historical warning-bearing commit",
+    operations: [{
+      type: "create_file",
+      path: "concepts/pre-policy-warning.md",
+      text: "---\ntype: Generated Knowledge\nstatus: reviewed\n---\n\n# Historical warning\n",
+    }],
+  };
+  const historicalCommit = await service.commit(oldPayload);
+  assert.equal(historicalCommit.kind, "committed");
+  const afterHistorical = await env.snapshot();
+
+  const replay = await service.commit({ ...oldPayload, producerProfile: true });
+  assert.equal(replay.kind, "committed");
+  assert.equal(replay.replayed, true);
+  assert.equal(
+    replay.envelope.revision.revisionId,
+    historicalCommit.envelope.revision.revisionId,
+  );
+  assert.deepEqual(await env.snapshot(), afterHistorical);
+
+  const rejected = await service.commit({
+    ...oldPayload,
+    expectedRevisionId: historicalCommit.envelope.revision.revisionId,
+    idempotencyKey: "post-policy-warning",
+    producerProfile: true,
+    operations: [{
+      ...oldPayload.operations[0],
+      path: "concepts/post-policy-warning.md",
+    }],
+  });
+  assert.equal(rejected.kind, "invalid");
+  assert.equal(rejected.error.code, "okf_validation_failed");
+  assert.deepEqual(await env.snapshot(), afterHistorical);
 });
 
 test("metadata transaction rolls back a staged revision/HEAD when its callback fails", async () => {

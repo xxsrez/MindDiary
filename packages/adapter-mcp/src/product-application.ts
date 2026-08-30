@@ -1154,6 +1154,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
           expectedRevisionId: input.expectedRevision as never,
           idempotencyKey: input.idempotencyKey as never,
           summary: input.summary as never,
+          producerProfile: true,
           operations: canonicalCommitOperations(input.operations) as never,
         });
         if (result.kind === "committed") {

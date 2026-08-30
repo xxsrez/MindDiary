@@ -273,6 +273,9 @@ principal-owned replacement принят MD-373 в ADR-0024.
 
 ## Исследования
 
+- [Состояние OKF на 2026-08-30](reports/2026-08-30-okf-status.md) — повторный
+  аудит отдельного официального repository, exact spec revision/hash,
+  timestamp-with-offset delta и permissive-consumer/strict-producer boundary.
 - [Статус native file route на 2026-08-28](reports/2026-08-28-native-file-route-implementation-status.md)
   — repository-кандидат MD-315/MD-316 с отдельным `/api/mcp/apps`, безопасным
   picker/context handoff и точным внешним blocker: installed Apps package и
@@ -287,8 +290,8 @@ principal-owned replacement принят MD-373 в ADR-0024.
 - [Поддержка Brain-масштаба: storage и capacity proposal на 2026-08-22](reports/2026-08-22-brain-scale-storage-and-capacity-proposal.md)
   — live Sites/task evidence, профиль текущего Brain, узкие места revision,
   search/import/export и поэтапный план для одного и нескольких крупных Minds.
-- [Состояние OKF на 2026-08-05](reports/2026-08-05-okf-status.md) — сверка
-  официальной спецификации с зафиксированным OKF 0.2 snapshot.
+- [Состояние OKF на 2026-08-05](reports/2026-08-05-okf-status.md) — historical
+  сверка прежнего `knowledge-catalog` snapshot, superseded аудитом 2026-08-30.
 - [Рыночная оценка Mind Diary на 2026-08-05](reports/2026-08-05-market-assessment.md)
   — самостоятельный decision memo о спросе, конкурентах, рисках и validation
   gates для Codex-first pilot.

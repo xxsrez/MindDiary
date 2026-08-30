@@ -2,6 +2,7 @@ import { parseFrontmatter, renderFrontmatter } from "./frontmatter.js";
 import { okfFileKind, validateCanonicalOkfPath } from "./path.js";
 import {
   OKF_AUDITED_SPEC_REVISION,
+  OKF_AUDITED_SPEC_SHA256,
   OKF_VERSION,
   type BinaryOkfFile,
   type CanonicalOkfFile,
@@ -9,6 +10,7 @@ import {
   type OkfConceptUpdate,
   type OkfDiagnostic,
   type OkfFileParseResult,
+  type OkfProducerBundleValidation,
   type OkfCodec,
   type OkfSourceFile,
   type ParsedOkfConcept,
@@ -163,11 +165,55 @@ function validActor(value: unknown): boolean {
   );
 }
 
-function validInstant(value: unknown): boolean {
+function validSourceAuthor(value: unknown): boolean {
   return (
-    typeof value === "string" &&
-    /^\d{4}-\d{2}-\d{2}T/u.test(value) &&
+    validActor(value) ||
+    (typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]*:\S+$/u.test(value))
+  );
+}
+
+function validInstant(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(?:Z|([+-])(\d{2}):?(\d{2}))$/u.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = match[6] === undefined ? 0 : Number(match[6]);
+  const offsetHour = match[9] === undefined ? 0 : Number(match[9]);
+  const offsetMinute = match[10] === undefined ? 0 : Number(match[10]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= (monthDays[month - 1] ?? 0) &&
+    (
+      hour <= 23 ||
+      (hour === 24 && minute === 0 && second === 0 && !/[1-9]/u.test(match[7] ?? ""))
+    ) &&
+    minute <= 59 &&
+    second <= 59 &&
+    offsetHour <= 23 &&
+    offsetMinute <= 59 &&
     !Number.isNaN(Date.parse(value))
+  );
+}
+
+function validUsageWindow(value: unknown): boolean {
+  if (!isRecord(value) || !validInstant(value.from) || !validInstant(value.to)) {
+    return false;
+  }
+  return Date.parse(value.from as string) <= Date.parse(value.to as string);
+}
+
+function validUsageCount(value: unknown): boolean {
+  return (
+    (typeof value === "bigint" && value >= 0n) ||
+    (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
   );
 }
 
@@ -214,12 +260,12 @@ function validateOptionalFamilies(
       ),
     );
   }
-  if (metadata.stale_after !== undefined && !validDate(metadata.stale_after)) {
+  if (metadata.stale_after !== undefined && !validInstant(metadata.stale_after)) {
     warnings.push(
       qualityWarning(
         path,
         "invalid_stale_after",
-        "stale_after should be an ISO YYYY-MM-DD date; the value was preserved.",
+        "stale_after should be an ISO 8601 datetime with an explicit UTC offset; the value was preserved.",
         { field: "stale_after" },
       ),
     );
@@ -235,7 +281,7 @@ function validateOptionalFamilies(
         qualityWarning(
           path,
           "invalid_generated_signal",
-          "generated should carry a conventional by actor and optional ISO datetime; the value was preserved.",
+          "generated should carry a conventional by actor and any at value must be an ISO 8601 datetime with an explicit UTC offset; the value was preserved.",
           { field: "generated" },
         ),
       );
@@ -243,24 +289,58 @@ function validateOptionalFamilies(
   }
   if (metadata.sources !== undefined) {
     const sources = metadata.sources;
-    if (
-      !Array.isArray(sources) ||
-      sources.some(
-        (source) =>
-          !isRecord(source) ||
-          typeof source.resource !== "string" ||
-          source.resource.trim().length === 0,
-      )
-    ) {
+    const sharedWindowValid = metadata.usage_window === undefined ||
+      validUsageWindow(metadata.usage_window);
+    if (!Array.isArray(sources) || sources.some((source) => {
+      if (
+        !isRecord(source) ||
+        typeof source.resource !== "string" ||
+        source.resource.trim().length === 0
+      ) return true;
+      if (source.author !== undefined && !validSourceAuthor(source.author)) return true;
+      if (source.last_modified !== undefined && !validInstant(source.last_modified)) {
+        return true;
+      }
+      if (source.usage_window !== undefined && !validUsageWindow(source.usage_window)) {
+        return true;
+      }
+      if (
+        source.usage_count !== undefined &&
+        !validUsageCount(source.usage_count)
+      ) return true;
+      return source.usage_count !== undefined &&
+        source.usage_window === undefined &&
+        metadata.usage_window === undefined;
+    })) {
       warnings.push(
         qualityWarning(
           path,
           "invalid_sources_signal",
-          "Each sources entry should carry a non-empty resource; the value was preserved.",
+          "Each sources entry should carry a resource and valid optional actor, usage and timestamp signals; the value was preserved.",
           { field: "sources" },
         ),
       );
     }
+    if (!sharedWindowValid) {
+      warnings.push(
+        qualityWarning(
+          path,
+          "invalid_usage_window_signal",
+          "usage_window should carry ordered from/to ISO 8601 datetimes with explicit UTC offsets; the value was preserved.",
+          { field: "usage_window" },
+        ),
+      );
+    }
+  }
+  if (metadata.sources === undefined && metadata.usage_window !== undefined) {
+    warnings.push(
+      qualityWarning(
+        path,
+        "invalid_usage_window_signal",
+        "usage_window requires sources and ordered from/to ISO 8601 datetimes with explicit UTC offsets; the value was preserved.",
+        { field: "usage_window" },
+      ),
+    );
   }
   if (metadata.verified !== undefined) {
     const entries = Array.isArray(metadata.verified)
@@ -271,14 +351,14 @@ function validateOptionalFamilies(
         (entry) =>
           !isRecord(entry) ||
           !validActor(entry.by) ||
-          (entry.at !== undefined && !validInstant(entry.at)),
+          !validInstant(entry.at),
       )
     ) {
       warnings.push(
         qualityWarning(
           path,
           "invalid_verified_signal",
-          "verified entries should carry a conventional by actor and optional ISO datetime; the value was preserved.",
+          "verified entries should carry a conventional by actor and an ISO 8601 at datetime with an explicit UTC offset; the value was preserved.",
           { field: "verified" },
         ),
       );
@@ -670,6 +750,16 @@ export function validateOkfBundle(
   };
 }
 
+export function validateOkfProducerBundle(
+  sources: readonly OkfSourceFile[],
+): OkfProducerBundleValidation {
+  const validation = validateOkfBundle(sources);
+  return Object.freeze({
+    ...validation,
+    producerValid: validation.valid && validation.qualityWarnings.length === 0,
+  });
+}
+
 export function renderOkfFile(file: ParsedOkfFile): CanonicalOkfFile {
   return { path: file.path, text: file.sourceText };
 }
@@ -714,10 +804,12 @@ export function readVerifiedEntries(
 export const OKF_0_2_CODEC = Object.freeze({
   version: OKF_VERSION,
   auditedSpecRevision: OKF_AUDITED_SPEC_REVISION,
+  auditedSpecSha256: OKF_AUDITED_SPEC_SHA256,
   parseFile: parseOkfFile,
   renderFile: renderOkfFile,
   encodeFile: encodeOkfFile,
   validateBundle: validateOkfBundle,
+  validateProducerBundle: validateOkfProducerBundle,
   updateConcept: updateOkfConcept,
 } satisfies OkfCodec);
 

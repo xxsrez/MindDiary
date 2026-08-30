@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   OKF_0_2_CODEC,
   OKF_AUDITED_SPEC_REVISION,
+  OKF_AUDITED_SPEC_SHA256,
   OKF_VERSION,
   encodeOkfFile,
   parseOkfFile,
@@ -12,6 +13,7 @@ import {
   updateOkfConcept,
   validateCanonicalOkfPath,
   validateOkfBundle,
+  validateOkfProducerBundle,
 } from "@mind-diary/okf-codec";
 
 function codes(result, category) {
@@ -24,8 +26,13 @@ test("version boundary resolves only the audited OKF 0.2 codec", () => {
   assert.equal(OKF_VERSION, "0.2");
   assert.equal(
     OKF_AUDITED_SPEC_REVISION,
-    "3fcbb9f828c2f23d109c855ee403c3a4c81f3a96",
+    "0b87c52c6ef999286c745e19998fdfcd03d5dbee",
   );
+  assert.equal(
+    OKF_AUDITED_SPEC_SHA256,
+    "26aa5da029278939f914e578107242d9607d4f2dc5fe153272b82f9ed1030101",
+  );
+  assert.equal(OKF_0_2_CODEC.auditedSpecSha256, OKF_AUDITED_SPEC_SHA256);
   assert.equal(resolveOkfCodec("0.2"), OKF_0_2_CODEC);
   assert.equal(resolveOkfCodec("0.1"), null);
   assert.equal(resolveOkfCodec("0.3"), null);
@@ -165,6 +172,72 @@ test("optional-family defects and broken links are quality warnings, not conform
       "invalid_verified_signal",
     ],
   );
+});
+
+test("all OKF temporal families require real ISO instants with explicit offsets", () => {
+  const valid = validateOkfBundle([{
+    path: "concepts/temporal-valid.md",
+    text: `---
+type: Temporal Contract
+stale_after: 2026-09-23T00:00:00Z
+generated: { by: process:writer, at: 2026-08-30T21:00:00+01:00 }
+sources:
+  - resource: https://example.invalid/source
+    author: team:owner
+    usage_count: 4
+    last_modified: 2026-08-29T11:10-0330
+usage_window: { from: 2026-08-01T00:00:00Z, to: 2026-08-30T23:59:59Z }
+verified: { by: human:reviewer, at: 2026-08-30T21:05:00Z }
+---
+
+# Temporal contract
+`,
+  }]);
+  assert.equal(valid.valid, true);
+  assert.deepEqual(valid.qualityWarnings, []);
+
+  const invalid = validateOkfBundle([{
+    path: "concepts/temporal-invalid.md",
+    text: `---
+type: Temporal Contract
+stale_after: 2026-02-29T00:00:00Z
+generated: { by: process:writer, at: 2026-08-30T21:00:00 }
+sources:
+  - resource: https://example.invalid/source
+    usage_count: 4
+    last_modified: 2026-02-30T00:00:00Z
+usage_window: { from: 2026-08-31T00:00:00Z, to: 2026-08-01T00:00:00Z }
+verified: { by: human:reviewer }
+---
+
+# Temporal contract
+`,
+  }]);
+  assert.equal(invalid.valid, true);
+  assert.deepEqual(
+    invalid.qualityWarnings.map((issue) => issue.code).sort(),
+    [
+      "invalid_generated_signal",
+      "invalid_sources_signal",
+      "invalid_stale_after",
+      "invalid_usage_window_signal",
+      "invalid_verified_signal",
+    ],
+  );
+});
+
+test("producer profile fails closed on preserved quality warnings", () => {
+  const source = [{
+    path: "concepts/generated.md",
+    text: "---\ntype: Generated Knowledge\nstatus: reviewed\n---\n\n# Generated\n",
+  }];
+  const consumer = validateOkfBundle(source);
+  const producer = validateOkfProducerBundle(source);
+  assert.equal(consumer.valid, true);
+  assert.equal(consumer.qualityWarnings.length, 1);
+  assert.equal(producer.valid, true);
+  assert.equal(producer.producerValid, false);
+  assert.deepEqual(producer.qualityWarnings, consumer.qualityWarnings);
 });
 
 test("invalid UTF-8 and ZIP bytes are envelope failures with no parsed final state", () => {

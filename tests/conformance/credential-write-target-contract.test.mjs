@@ -359,7 +359,8 @@ test("ADR preserves historical evidence while superseding only Release 0.3 acces
   assert.match(decision, /credential-scoped owner/u);
   assert.match(decision, /единственный writable destination/u);
   assert.match(decision, /Historical Release 0\.1\/0\.2 records и\s+evidence не переписываются/u);
-  assert.match(historicalDecision, /частично superseded для Release 0\.3/u);
+  assert.match(historicalDecision, /accepted historical Release 0\.1\/0\.2/u);
+  assert.match(historicalDecision, /superseded \[ADR-0024\]/u);
   assert.match(historicalDecision, /Сохраняются historical implementation и\s+evidence/u);
   assert.match(specification, /Repository candidate включает durable state\/migration/u);
   assert.match(specification, /Content MCP не публикует target-management или отдельный target-inspection/u);

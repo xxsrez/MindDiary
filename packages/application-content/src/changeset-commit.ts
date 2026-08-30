@@ -58,6 +58,8 @@ export interface CommitChangesetRequest {
   readonly summary: string;
   /** Trusted application-only context; never projected from commit_changeset input. */
   readonly automaticCapture?: Readonly<AutomaticCaptureCommitContext>;
+  /** Trusted application-only policy for agent/service-produced OKF. */
+  readonly producerProfile?: boolean;
   /** Untrusted adapter input is validated by changeset preflight. */
   readonly operations: unknown;
 }
@@ -136,6 +138,7 @@ interface ValidatedCommitPayload {
   readonly writeBindingId: WriteMindBindingId | null;
   readonly operations: readonly Readonly<ChangesetOperation>[];
   readonly automaticCapture: Readonly<AutomaticCaptureCommitContext> | null;
+  readonly producerProfile: boolean;
 }
 
 interface StagedSourceAuditReceipt {
@@ -267,6 +270,8 @@ function canonicalRequestSource(
   request: CommitChangesetRequest,
   validated: ValidatedCommitPayload,
 ): string {
+  // producerProfile is server policy, not caller payload: excluding it preserves
+  // exact retries of already-committed requests across the policy rollout.
   return `${JSON.stringify({
     format: "mind-diary-commit-changeset-request-v1",
     write_binding_id: validated.writeBindingId,
@@ -481,6 +486,7 @@ export class ChangesetCommitService {
                 }),
           }),
       operations: validated.operations,
+      producerProfile: validated.producerProfile,
     });
     if (preflight.kind !== "ready") return preflight;
 
@@ -1003,6 +1009,7 @@ export class ChangesetCommitService {
           : (request.writeBindingId as WriteMindBindingId),
       operations: operations.operations,
       automaticCapture: request.automaticCapture ?? null,
+      producerProfile: request.producerProfile === true,
     });
   }
 

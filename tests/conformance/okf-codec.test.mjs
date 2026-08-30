@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import test from "node:test";
-import { validateOkfBundle } from "@mind-diary/okf-codec";
+import {
+  validateOkfBundle,
+  validateOkfProducerBundle,
+} from "@mind-diary/okf-codec";
 
 const root = resolve(import.meta.dirname, "../..");
 
@@ -32,9 +35,35 @@ test("checked-in strict fixtures validate as complete bundles", async () => {
     assert.equal(result.valid, true, `${name}: ${JSON.stringify(result.diagnostics)}`);
     assert.equal(result.conforms, true);
     assert.equal(result.qualityWarnings.length, 0);
+    assert.equal(
+      validateOkfProducerBundle(await loadBundle(name)).producerValid,
+      true,
+    );
     assert.ok(result.files.some((file) => file.path === "index.md"));
     assert.ok(result.files.some((file) => file.path === "log.md"));
   }
+});
+
+test("generated producer bundle rejects advisory temporal defects without rejecting consumer round-trip", () => {
+  const files = [{
+    path: "generated.md",
+    text: `---
+type: Generated Knowledge
+generated: { by: process:mind-diary, at: 2026-08-30T21:00:00 }
+---
+
+# Generated
+`,
+  }];
+  const consumer = validateOkfBundle(files);
+  const producer = validateOkfProducerBundle(files);
+  assert.equal(consumer.valid, true);
+  assert.equal(consumer.conforms, true);
+  assert.equal(producer.producerValid, false);
+  assert.deepEqual(
+    producer.qualityWarnings.map((issue) => issue.code),
+    ["invalid_generated_signal"],
+  );
 });
 
 test("full-bundle validation catches invalid content outside a wiki subtree", () => {

@@ -1568,6 +1568,51 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   );
   const initialIndexDigest = initialBrowse.entries.find(({ path }) => path === "index.md")?.sha256;
   assert.match(initialIndexDigest, /^sha256:[0-9a-f]{64}$/u);
+  const warningCommit = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "starter-producer-warning",
+    method: "tools/call",
+    params: {
+      name: "commit_changeset",
+      arguments: {
+        mind: "/me",
+        expected_revision: initialRevisionId,
+        idempotency_key: "commit:starter-producer-warning",
+        summary: "Reject warning-bearing generated OKF",
+        operations: [{
+          type: "create_file",
+          path: "concepts/generated-warning.md",
+          text: "---\ntype: Generated Knowledge\nstatus: reviewed\n---\n\n# Warning\n",
+        }],
+      },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-starter-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  const warningCommitBody = await warningCommit.json();
+  assert.equal(warningCommit.status, 200, JSON.stringify(warningCommitBody));
+  assert.equal(warningCommitBody.result.isError, true);
+  assert.equal(
+    warningCommitBody.result.structuredContent.error.code,
+    "okf_validation_failed",
+  );
+  const afterWarning = await modernTool(
+    runtime,
+    secret,
+    "starter-list-after-producer-warning",
+    "list_minds",
+    {},
+  );
+  assert.equal(
+    afterWarning.minds.find(({ route }) => route === "/me").head.revision_id,
+    initialRevisionId,
+  );
   const operations = MIND_DIARY_STARTER_OKF_TEMPLATE.map((file) => {
     if (file.path === "index.md") {
       return {

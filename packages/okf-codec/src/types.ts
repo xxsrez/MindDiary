@@ -2,7 +2,9 @@ import type { RevisionId } from "@mind-diary/domain";
 
 export const OKF_VERSION = "0.2" as const;
 export const OKF_AUDITED_SPEC_REVISION =
-  "3fcbb9f828c2f23d109c855ee403c3a4c81f3a96" as const;
+  "0b87c52c6ef999286c745e19998fdfcd03d5dbee" as const;
+export const OKF_AUDITED_SPEC_SHA256 =
+  "26aa5da029278939f914e578107242d9607d4f2dc5fe153272b82f9ed1030101" as const;
 
 export type OkfVersion = typeof OKF_VERSION;
 export type OkfDiagnosticCategory =
@@ -89,6 +91,11 @@ export interface OkfBundleValidation {
   readonly qualityWarnings: readonly OkfDiagnostic[];
 }
 
+export interface OkfProducerBundleValidation extends OkfBundleValidation {
+  /** Agent/service producers fail closed on advisory defects they introduced. */
+  readonly producerValid: boolean;
+}
+
 export interface OkfConceptUpdate {
   /** Top-level fields to set. Unmentioned fields, including extensions, are retained. */
   readonly setFields?: Readonly<Record<string, unknown>>;
@@ -99,10 +106,14 @@ export interface OkfConceptUpdate {
 export interface OkfCodec {
   readonly version: OkfVersion;
   readonly auditedSpecRevision: typeof OKF_AUDITED_SPEC_REVISION;
+  readonly auditedSpecSha256: typeof OKF_AUDITED_SPEC_SHA256;
   parseFile(source: OkfSourceFile): OkfFileParseResult;
   renderFile(file: ParsedOkfFile): CanonicalOkfFile;
   encodeFile(file: ParsedOkfFile | CanonicalOkfFile): BinaryOkfFile;
   validateBundle(files: readonly OkfSourceFile[]): OkfBundleValidation;
+  validateProducerBundle(
+    files: readonly OkfSourceFile[],
+  ): OkfProducerBundleValidation;
   updateConcept(
     concept: ParsedOkfConcept,
     update: OkfConceptUpdate,

@@ -615,3 +615,33 @@ test("invalid resulting OKF rejects the full candidate and preserves visible sta
   assert.deepEqual(env.events, ["authorize", "content:read"]);
   assert.deepEqual(await env.snapshot(), before);
 });
+
+test("producer profile rejects preserved quality warnings while consumer preflight stays permissive", async () => {
+  const warningBearing = {
+    type: "create_file",
+    path: "concepts/generated-warning.md",
+    text: "---\ntype: Generated Knowledge\nstatus: reviewed\n---\n\n# Generated warning\n",
+  };
+  const consumer = await fixture();
+  const consumerResult = await consumer.service.preflight(
+    consumer.request([warningBearing]),
+  );
+  assert.equal(consumerResult.kind, "ready");
+  assert.deepEqual(
+    consumerResult.validation.qualityWarnings.map((issue) => issue.code),
+    ["invalid_lifecycle_status"],
+  );
+
+  const producer = await fixture();
+  const before = await producer.snapshot();
+  const producerResult = await producer.service.preflight(
+    producer.request([warningBearing], { producerProfile: true }),
+  );
+  assert.equal(producerResult.kind, "invalid");
+  assert.equal(producerResult.error.code, "okf_validation_failed");
+  assert.deepEqual(
+    producerResult.error.diagnostics.map((issue) => issue.code),
+    ["invalid_lifecycle_status"],
+  );
+  assert.deepEqual(await producer.snapshot(), before);
+});

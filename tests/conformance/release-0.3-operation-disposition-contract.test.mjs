@@ -992,7 +992,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "674ff8ff7df030d205ecb5e38de9ec1bf447ea67",
+          gitBlob: "84e2698b019d1ece303725f9616b182450d7ce77",
         },
         {
           role: "installed-skill-probe-source",

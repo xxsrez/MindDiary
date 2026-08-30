@@ -315,6 +315,7 @@ export class AutomaticCaptureService {
         path: validated.path,
         sourceRefs: validated.sources,
       }),
+      producerProfile: true,
       operations: Object.freeze([
         Object.freeze({
           type: "create_file" as const,

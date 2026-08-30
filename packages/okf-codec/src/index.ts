@@ -10,4 +10,5 @@ export {
   renderOkfFile,
   updateOkfConcept,
   validateOkfBundle,
+  validateOkfProducerBundle,
 } from "./validator.js";
