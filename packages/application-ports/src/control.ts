@@ -147,6 +147,7 @@ export interface PersonalMindProfileSnapshot {
   readonly personalMind: {
     readonly spaceId: SpaceId;
     readonly name: string;
+    readonly description: string | null;
     readonly visibility: "private";
     readonly metadataVersion: Version;
     readonly headRevisionId: RevisionId;
@@ -191,10 +192,40 @@ export type RenamePersonalProfileResult =
   | { readonly kind: "idempotency_conflict" }
   | { readonly kind: "not_found" | "invalid_record" };
 
+export interface UpdatePersonalMindDescriptionRequest {
+  readonly principalId: PrincipalId;
+  readonly description: string | null;
+  readonly expectedPersonalMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export type UpdatePersonalMindDescriptionResult =
+  | {
+      readonly kind: "updated";
+      readonly profile: Readonly<PersonalMindProfileSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "metadata_conflict";
+      readonly currentPersonalMetadataVersion: Version;
+    }
+  | {
+      readonly kind:
+        | "description_required_for_write"
+        | "idempotency_conflict"
+        | "not_found"
+        | "invalid_record";
+    };
+
 export interface PersonalMindMetadataTransaction {
   renamePersonalProfile(
     request: RenamePersonalProfileRequest,
   ): Promise<RenamePersonalProfileResult>;
+  updatePersonalMindDescription(
+    request: UpdatePersonalMindDescriptionRequest,
+  ): Promise<UpdatePersonalMindDescriptionResult>;
 }
 
 /** Atomic metadata-only Personal Mind profile and invariant boundary. */
@@ -471,6 +502,7 @@ export type RenameOrdinaryMindResult =
       readonly kind:
         | "mind_not_found"
         | "personal_mind"
+        | "description_required_for_write"
         | "forbidden"
         | "idempotency_conflict"
         | "invalid_record";

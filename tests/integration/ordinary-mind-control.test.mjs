@@ -685,7 +685,7 @@ test("description validation, CAS and ordinary-only authorization fail closed wi
   assert.deepEqual(await ordinaryState(env, created.mindId), stable);
 });
 
-test("legacy durable ordinary metadata reconstructs missing description as null without touching Personal Mind", async () => {
+test("legacy durable Mind metadata reconstructs missing descriptions as null", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Legacy Owner");
   const created = await env.ordinary.createSpaceWithOwner(
@@ -711,11 +711,11 @@ test("legacy durable ordinary metadata reconstructs missing description as null 
 
   const personal = await restored.readPersonalMindProfile(owner.principalId);
   assert.ok(personal);
-  assert.equal("description" in personal.personalMind, false);
+  assert.equal(personal.personalMind.description, null);
   const reconstructed = restored.exportDurableSnapshot();
   const personalSpace = reconstructed.knowledgeSpaces.get(owner.personalMind.mindId);
   assert.ok(personalSpace);
-  assert.equal("description" in personalSpace, false);
+  assert.equal(personalSpace.description, null);
 });
 
 test("rename replay, payload conflict, stale CAS, Personal target and unauthorized actor fail closed", async () => {

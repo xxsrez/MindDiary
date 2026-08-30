@@ -1,6 +1,6 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
 import type { ObjectStore, PersonalMindProfileSnapshot, PersonalMindStore } from "@mind-diary/application-ports";
-import { idempotencyKey, version } from "@mind-diary/domain";
+import { idempotencyKey, normalizeOrdinaryMindDescription, version } from "@mind-diary/domain";
 import type { PrincipalId, SpaceId } from "@mind-diary/domain";
 import { safeBootstrapRequestId, normalizedDisplayName } from "./account-bootstrap.js";
 
@@ -27,6 +27,7 @@ export type PersonalMindForbiddenLifecycleOperation =
 export type PersonalMindControlFailureCode =
   | "authentication_required"
   | "invalid_display_name"
+  | "invalid_description"
   | "invalid_profile_version"
   | "invalid_idempotency_key"
   | "invalid_lifecycle_operation"
@@ -34,6 +35,8 @@ export type PersonalMindControlFailureCode =
   | "personal_mind_not_found"
   | "personal_mind_operation_forbidden"
   | "profile_conflict"
+  | "metadata_conflict"
+  | "description_required_for_write"
   | "idempotency_conflict"
   | "personal_mind_unavailable";
 
@@ -54,6 +57,12 @@ export interface RenameAccountCommand {
   readonly idempotencyKey: string;
 }
 
+export interface UpdatePersonalMindDescriptionCommand {
+  readonly description: string | null;
+  readonly expectedMetadataVersion: number;
+  readonly idempotencyKey: string;
+}
+
 export interface PersonalMindProfileDescriptor {
   readonly principal: {
     readonly principalId: PrincipalId;
@@ -64,6 +73,7 @@ export interface PersonalMindProfileDescriptor {
     readonly mindId: SpaceId;
     readonly route: "/me";
     readonly name: string;
+    readonly description: string | null;
     readonly visibility: "private";
     readonly metadataVersion: number;
     readonly headRevisionId: PersonalMindProfileSnapshot["personalMind"]["headRevisionId"];
@@ -71,6 +81,11 @@ export interface PersonalMindProfileDescriptor {
 }
 
 export interface RenameAccountResult extends PersonalMindProfileDescriptor {
+  readonly replayed: boolean;
+}
+
+export interface UpdatePersonalMindDescriptionResult
+  extends PersonalMindProfileDescriptor {
   readonly replayed: boolean;
 }
 
@@ -159,6 +174,7 @@ function personalProfileDescriptor(
       mindId: profile.personalMind.spaceId,
       route: "/me",
       name: profile.personalMind.name,
+      description: profile.personalMind.description,
       visibility: "private",
       metadataVersion: profile.personalMind.metadataVersion,
       headRevisionId: profile.personalMind.headRevisionId,
@@ -334,6 +350,83 @@ export class PersonalMindControlService {
       }
       throw error;
     }
+  }
+
+  async updateMyMindDescription(
+    actor: ActorContext,
+    command: UpdatePersonalMindDescriptionCommand,
+  ): Promise<Readonly<UpdatePersonalMindDescriptionResult>> {
+    const principalId = registeredSitesPrincipal(actor);
+    if (principalId === null) {
+      throw new PersonalMindControlFailure(
+        "authentication_required",
+        "A registered Sites principal is required.",
+      );
+    }
+    const normalized = typeof command?.description === "string"
+      ? normalizeOrdinaryMindDescription(command.description)
+      : command?.description === null
+        ? Object.freeze({ kind: "valid" as const, value: null })
+        : Object.freeze({ kind: "invalid" as const });
+    if (normalized.kind !== "valid") {
+      throw new PersonalMindControlFailure(
+        "invalid_description",
+        "A valid Personal Mind description is required.",
+      );
+    }
+    const expectedMetadataVersion = personalProfileVersion(
+      command.expectedMetadataVersion,
+    );
+    const checkedIdempotencyKey = personalProfileIdempotencyKey(
+      command.idempotencyKey,
+    );
+    const canonicalRequestHash = await this.#digest.calculateSha256(
+      PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
+        format: "mind-diary-personal-mind-description-v1",
+        description: normalized.value,
+        expected_metadata_version: expectedMetadataVersion,
+      })}\n`),
+    );
+    const updated = await this.#personalMinds.runPersonalMindTransaction(
+      (transaction) => transaction.updatePersonalMindDescription({
+        principalId,
+        description: normalized.value,
+        expectedPersonalMetadataVersion: expectedMetadataVersion,
+        idempotencyKey: checkedIdempotencyKey,
+        canonicalRequestHash,
+        occurredAt: actor.occurredAtUtc,
+      }),
+    );
+    if (updated.kind === "updated") {
+      return Object.freeze({
+        ...personalProfileDescriptor(updated.profile),
+        replayed: updated.replayed,
+      });
+    }
+    if (updated.kind === "metadata_conflict") {
+      throw new PersonalMindControlFailure(
+        "metadata_conflict",
+        "Personal Mind metadata changed; re-read and retry.",
+      );
+    }
+    if (updated.kind === "description_required_for_write") {
+      throw new PersonalMindControlFailure(
+        "description_required_for_write",
+        "Change the Mind usage mode before clearing its writable description.",
+      );
+    }
+    if (updated.kind === "idempotency_conflict") {
+      throw new PersonalMindControlFailure(
+        "idempotency_conflict",
+        "The idempotency key was already used for another request.",
+      );
+    }
+    throw new PersonalMindControlFailure(
+      updated.kind === "not_found"
+        ? "personal_mind_not_found"
+        : "personal_mind_unavailable",
+      "Personal Mind description update is unavailable.",
+    );
   }
 
   /** Must run before any ordinary lifecycle command stages mutations. */

@@ -32,6 +32,7 @@ import type {
   MembershipMutationRecord,
   MutableMindBindingOwnerState,
   MutableCredentialWriteTargetOwnerState,
+  MutablePrincipalMindUsageOwnerState,
   OrdinaryMindDeletionCleanupMap,
   OrdinaryMindDeletionImpactMap,
   OrdinaryMindDeletionState,
@@ -89,6 +90,7 @@ export interface OrdinaryMindTransactionState {
     MindBindingOwnerId,
     Readonly<LegacyCredentialWriteTargetUpgradeSnapshot>
   >;
+  principalMindUsageOwners: Map<PrincipalId, MutablePrincipalMindUsageOwnerState>;
 }
 
 export function ordinaryMindDeletionState(

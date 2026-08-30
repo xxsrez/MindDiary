@@ -214,6 +214,7 @@ const TRANSACTION_METHODS = new Set([
   "runBundleFileDownloadGrantTransaction",
   "runMindBindingTransaction",
   "runCredentialWriteTargetTransaction",
+  "runPrincipalMindUsageTransaction",
   "runBundleFileStagingTransaction",
   "runCapacityTransaction",
 ]);
@@ -418,6 +419,9 @@ function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
     return sequence % MIND_BINDING_SNAPSHOT_CADENCE === 0;
   }
   if (event.method === "runCredentialWriteTargetTransaction") {
+    return sequence % MIND_BINDING_SNAPSHOT_CADENCE === 0;
+  }
+  if (event.method === "runPrincipalMindUsageTransaction") {
     return sequence % MIND_BINDING_SNAPSHOT_CADENCE === 0;
   }
   if (OBJECT_CLEANUP_CHECKPOINT_METHODS.has(event.method)) {

@@ -51,6 +51,10 @@ import type {
   PrincipalAccountSnapshot,
   PrincipalActivitySummary,
   PrincipalId,
+  PrincipalMindUsageGenerationId,
+  PrincipalMindUsageState,
+  PrincipalMindUsageTransaction,
+  PrincipalMindUsageWritePin,
   RegisterCredentialWriteTargetOwnerRequest,
   RegisterCredentialWriteTargetOwnerResult,
   PublicMindCatalogPageRequest,
@@ -60,6 +64,8 @@ import type {
   RevokeMindBindingOwnerResult,
   RevokeCredentialWriteTargetOwnerRequest,
   RevokeCredentialWriteTargetOwnerResult,
+  SetPrincipalMindUsageModeRequest,
+  SetPrincipalMindUsageModeResult,
   ServiceOperatorDirectoryPage,
   ServiceOperatorDirectoryQuery,
   ServiceOperatorPrincipalProjection,
@@ -77,6 +83,7 @@ import {
 import {
   BOUNDED_OPAQUE_ID,
   PUBLIC_CATALOG_CURSOR_QUERY,
+  SHA256_PATTERN,
   accountByBindingFromMaps,
   accountFromMaps,
   activeReservationAmounts,
@@ -92,6 +99,7 @@ import {
   cloneCapacityReservations,
   cloneCredentialWriteTargetOwners,
   cloneLegacyCredentialWriteTargetUpgrades,
+  clonePrincipalMindUsageOwners,
   cloneEnvelope,
   cloneIdempotencyRecords,
   cloneMindBindingOwners,
@@ -120,23 +128,31 @@ import {
   readMembershipReplay,
   recordMindBindingMutation,
   recordCredentialWriteTargetMutation,
+  recordPrincipalMindUsageMutation,
   replayCredentialWriteTargetMutation,
   replayMindBindingMutation,
   stageMindBindingAudit,
   stageCredentialWriteTargetAudit,
   stageCredentialWriteTargetRevokeAudit,
+  stagePrincipalMindUsageAudit,
   stageMindBindingRevokeAudit,
   validMindBindingMutationBase,
   validCredentialWriteTargetMutation,
+  replayPrincipalMindUsageMutation,
 } from "./metadata-store-internals.js";
 import {
   bindingVersion,
   clearCredentialWriteTarget,
   configureCredentialAutomaticCapture,
+  createFreshPrincipalMindUsageState,
+  freezePrincipalMindUsageState,
   isReservedTopLevelHandle,
+  normalizeOrdinaryMindDescription,
   parseCanonicalSpaceHandle,
+  principalMindUsageWritePinMatches,
   revokeCredentialWriteTarget,
   selectCredentialWriteTarget,
+  setPrincipalMindUsageMode,
   upgradeLegacyCredentialWriteTarget,
   version,
 } from "@mind-diary/application-ports";
@@ -932,6 +948,221 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
           this._auditOutbox,
         );
         return Object.freeze({ kind: "revoked", changed: true, replayed: false });
+      });
+    }
+
+  async readPrincipalMindUsage(
+      principalId: PrincipalId,
+    ): Promise<Readonly<PrincipalMindUsageState> | null> {
+      if (!BOUNDED_OPAQUE_ID.test(principalId)) return null;
+      const principal = this._principals.get(principalId);
+      if (principal?.state !== "active") return null;
+      const owner = this._principalMindUsageOwners.get(principalId);
+      return owner === undefined
+        ? null
+        : freezePrincipalMindUsageState(owner.state);
+    }
+
+  async validatePrincipalMindUsageWritePin(
+      pin: Readonly<PrincipalMindUsageWritePin>,
+    ): Promise<boolean> {
+      if (
+        !BOUNDED_OPAQUE_ID.test(pin.principalId) ||
+        !BOUNDED_OPAQUE_ID.test(pin.spaceId) ||
+        !BOUNDED_OPAQUE_ID.test(pin.generationId)
+      ) return false;
+      const principal = this._principals.get(pin.principalId);
+      const space = this._knowledgeSpaces.get(pin.spaceId);
+      const owner = this._principalMindUsageOwners.get(pin.principalId);
+      if (
+        principal?.state !== "active" ||
+        space?.state !== "active" ||
+        owner === undefined ||
+        !principalMindUsageWritePinMatches(owner.state, pin)
+      ) return false;
+      const membership = [...this._memberships.values()].find((candidate) =>
+        candidate.principalId === pin.principalId &&
+        candidate.spaceId === pin.spaceId &&
+        candidate.state === "active");
+      if (
+        membership === undefined ||
+        !["editor", "admin", "owner"].includes(membership.role) ||
+        typeof space.description !== "string"
+      ) return false;
+      const normalized = normalizeOrdinaryMindDescription(space.description);
+      return normalized.kind === "valid" && normalized.value !== null &&
+        normalized.value === space.description;
+    }
+
+  async runPrincipalMindUsageTransaction<Result>(
+      operation: (transaction: PrincipalMindUsageTransaction) => Promise<Result>,
+    ): Promise<Result> {
+      return this._runExclusive(async () => {
+        const owners = clonePrincipalMindUsageOwners(
+          this._principalMindUsageOwners,
+        );
+        const auditEvents = new Map(
+          [...this._auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
+        );
+        const auditOutbox = new Map(
+          [...this._auditOutbox].map(([id, message]) => [id, cloneAuditOutbox(message)]),
+        );
+        const generationUsed = (generationId: PrincipalMindUsageGenerationId) =>
+          [...owners.values()].some((owner) =>
+            owner.retiredGenerationIds.has(generationId) ||
+            owner.state.activeWriteGeneration?.generationId === generationId ||
+            [...owner.idempotency.values()].some((record) =>
+              record.result.state.activeWriteGeneration?.generationId === generationId));
+
+        const transaction: PrincipalMindUsageTransaction = Object.freeze({
+          kind: "principal-mind-usage-transaction" as const,
+          readPrincipalMindUsage: async (principalId: PrincipalId) => {
+            const principal = this._principals.get(principalId);
+            const owner = owners.get(principalId);
+            return principal?.state !== "active" || owner === undefined
+              ? null
+              : freezePrincipalMindUsageState(owner.state);
+          },
+          validatePrincipalMindUsageWritePin: async (
+            pin: Readonly<PrincipalMindUsageWritePin>,
+          ) => {
+            const principal = this._principals.get(pin.principalId);
+            const space = this._knowledgeSpaces.get(pin.spaceId);
+            const owner = owners.get(pin.principalId);
+            const membership = [...this._memberships.values()].find((candidate) =>
+              candidate.principalId === pin.principalId &&
+              candidate.spaceId === pin.spaceId &&
+              candidate.state === "active");
+            if (
+              principal?.state !== "active" ||
+              space?.state !== "active" ||
+              owner === undefined ||
+              membership === undefined ||
+              !["editor", "admin", "owner"].includes(membership.role) ||
+              typeof space.description !== "string" ||
+              !principalMindUsageWritePinMatches(owner.state, pin)
+            ) return false;
+            const normalized = normalizeOrdinaryMindDescription(space.description);
+            return normalized.kind === "valid" && normalized.value !== null &&
+              normalized.value === space.description;
+          },
+          setPrincipalMindUsageMode: async (
+            request: Readonly<SetPrincipalMindUsageModeRequest>,
+          ): Promise<SetPrincipalMindUsageModeResult> => {
+            if (
+              !BOUNDED_OPAQUE_ID.test(request.principalId) ||
+              !BOUNDED_OPAQUE_ID.test(request.spaceId) ||
+              !BOUNDED_OPAQUE_ID.test(request.generationId) ||
+              !BOUNDED_OPAQUE_ID.test(request.requestId) ||
+              !BOUNDED_OPAQUE_ID.test(request.auditEventId) ||
+              !BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) ||
+              !["disabled", "read", "read_write"].includes(request.usageMode) ||
+              !Number.isSafeInteger(request.expectedUsageVersion) ||
+              request.expectedUsageVersion < 0 ||
+              !SHA256_PATTERN.test(request.canonicalRequestHash) ||
+              !Number.isFinite(Date.parse(request.occurredAt))
+            ) return Object.freeze({ kind: "invalid_record" });
+            const principal = this._principals.get(request.principalId);
+            if (principal?.state !== "active") {
+              return Object.freeze({ kind: "principal_not_found" });
+            }
+            const space = this._knowledgeSpaces.get(request.spaceId);
+            if (space?.state !== "active") {
+              return Object.freeze({ kind: "mind_not_found" });
+            }
+            const membership = [...this._memberships.values()].find((candidate) =>
+              candidate.principalId === request.principalId &&
+              candidate.spaceId === request.spaceId &&
+              candidate.state === "active");
+            const canRead = membership !== undefined || space.visibility !== "private";
+            if (!canRead) return Object.freeze({ kind: "read_access_required" });
+            if (request.usageMode === "read_write") {
+              if (
+                membership === undefined ||
+                !["editor", "admin", "owner"].includes(membership.role)
+              ) return Object.freeze({ kind: "writer_access_required" });
+              const normalized = typeof space.description === "string"
+                ? normalizeOrdinaryMindDescription(space.description)
+                : Object.freeze({ kind: "valid" as const, value: null });
+              if (
+                normalized.kind !== "valid" ||
+                normalized.value === null ||
+                normalized.value !== space.description
+              ) return Object.freeze({ kind: "description_required" });
+            }
+            let owner = owners.get(request.principalId);
+            if (owner !== undefined) {
+              const replay = replayPrincipalMindUsageMutation(owner, request);
+              if (replay !== null) return replay;
+            } else {
+              owner = {
+                state: createFreshPrincipalMindUsageState({
+                  principalId: request.principalId,
+                  occurredAt: request.occurredAt,
+                }),
+                retiredGenerationIds: new Set(),
+                idempotency: new Map(),
+              };
+            }
+            const currentMode = owner.state.entries.find(
+              (entry) => entry.spaceId === request.spaceId,
+            )?.usageMode ?? "disabled";
+            if (
+              request.usageMode === "read_write" &&
+              currentMode !== "read_write" &&
+              generationUsed(request.generationId)
+            ) return Object.freeze({ kind: "generation_conflict" });
+            const transition = setPrincipalMindUsageMode(owner.state, {
+              principalId: request.principalId,
+              spaceId: request.spaceId,
+              usageMode: request.usageMode,
+              expectedUsageVersion: request.expectedUsageVersion,
+              generationId: request.generationId,
+              authority: {
+                canRead,
+                currentRole: membership?.role ?? null,
+                description: space.description ?? null,
+              },
+              occurredAt: request.occurredAt,
+            });
+            if (transition.kind !== "applied") {
+              return Object.freeze({ kind: transition.kind === "principal_mismatch"
+                ? "invalid_record"
+                : transition.kind });
+            }
+            if (
+              auditEvents.has(request.auditEventId) ||
+              auditOutbox.has(request.auditOutboxMessageId) ||
+              [...auditOutbox.values()].some(
+                (message) => message.auditEventId === request.auditEventId,
+              )
+            ) return Object.freeze({ kind: "effect_conflict" });
+            const previousGeneration = owner.state.activeWriteGeneration;
+            if (!owners.has(request.principalId)) {
+              owners.set(request.principalId, owner);
+            }
+            owner.state = transition.state;
+            if (
+              previousGeneration !== null &&
+              previousGeneration.generationId !==
+                transition.state.activeWriteGeneration?.generationId
+            ) owner.retiredGenerationIds.add(previousGeneration.generationId);
+            const result = Object.freeze({
+              kind: "applied" as const,
+              state: transition.state,
+              changed: transition.changed,
+              replayed: false,
+            });
+            stagePrincipalMindUsageAudit(request, result, auditEvents, auditOutbox);
+            recordPrincipalMindUsageMutation(owner, request, result);
+            return result;
+          },
+        });
+        const result = await operation(transaction);
+        this._principalMindUsageOwners = owners;
+        this._auditEvents = auditEvents;
+        this._auditOutbox = auditOutbox;
+        return result;
       });
     }
 

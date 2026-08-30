@@ -288,10 +288,18 @@ test("Personal Mind uses the ordinary space schema but is private and sole-owned
   });
 
   assert.equal(personal.snapshot().kind, "personal");
-  assert.equal("description" in personal.snapshot().space, false);
+  assert.equal(personal.snapshot().space.description, null);
+  assert.equal(
+    SpaceAggregate.restorePersonal({
+      space: { ...personalSpace, description: "Personal decisions" },
+      binding,
+      membership: owner,
+    }).snapshot().space.description,
+    "Personal decisions",
+  );
   expectDomainError("personal_description", () =>
     SpaceAggregate.restorePersonal({
-      space: { ...personalSpace, description: null },
+      space: { ...personalSpace, description: "  not normalized  " },
       binding,
       membership: owner,
     }),

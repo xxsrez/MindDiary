@@ -19,6 +19,7 @@ import type {
   MembershipMap,
   MutableCredentialWriteTargetOwnerState,
   MutableMindBindingOwnerState,
+  MutablePrincipalMindUsageOwnerState,
   ObjectReachabilityCounts,
   OrdinaryMindDeletionCleanupMap,
   OrdinaryMindDeletionImpactMap,
@@ -211,6 +212,11 @@ export abstract class RevisionMetadataStoreState {
   protected _legacyCredentialWriteTargetUpgrades = new Map<
       MindBindingOwnerId,
       Readonly<LegacyCredentialWriteTargetUpgradeSnapshot>
+  >();
+
+  protected _principalMindUsageOwners = new Map<
+      PrincipalId,
+      MutablePrincipalMindUsageOwnerState
     >();
 
   protected _activeHandlesByKey: ActiveHandleByKeyMap = new Map();

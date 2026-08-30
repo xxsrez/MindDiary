@@ -26,6 +26,7 @@ import {
   type OrdinaryMindSnapshot,
   type OwnershipTransferSnapshot,
   type PersonalMindProfileSnapshot,
+  type UpdatePersonalMindDescriptionRequest,
   type PersonalSpaceBinding,
   type Principal,
   type PrincipalAccountSnapshot,
@@ -67,8 +68,10 @@ export type InvitationMap = Map<
 
 export interface PersonalProfileIdempotencyRecord {
   readonly principalId: Principal["principalId"];
-  readonly key: RenamePersonalProfileRequest["idempotencyKey"];
-  readonly canonicalRequestHash: RenamePersonalProfileRequest["canonicalRequestHash"];
+  readonly key: RenamePersonalProfileRequest["idempotencyKey"] |
+    UpdatePersonalMindDescriptionRequest["idempotencyKey"];
+  readonly canonicalRequestHash: RenamePersonalProfileRequest["canonicalRequestHash"] |
+    UpdatePersonalMindDescriptionRequest["canonicalRequestHash"];
   readonly profile: Readonly<PersonalMindProfileSnapshot>;
 }
 
@@ -282,6 +285,7 @@ export function personalMindProfileFromAccount(
     personalMind: {
       spaceId: space.spaceId,
       name: space.name,
+      description: space.description ?? null,
       visibility: "private",
       metadataVersion: space.metadataVersion,
       headRevisionId: space.headRevisionId,
@@ -294,6 +298,13 @@ export function personalProfileIdempotencyKey(
   key: RenamePersonalProfileRequest["idempotencyKey"],
 ): string {
   return `${principalId}\u0000rename_account\u0000${key}`;
+}
+
+export function personalDescriptionIdempotencyKey(
+  principalId: Principal["principalId"],
+  key: UpdatePersonalMindDescriptionRequest["idempotencyKey"],
+): string {
+  return `${principalId}\u0000update_personal_description\u0000${key}`;
 }
 
 export function clonePersonalProfileIdempotencyRecords(

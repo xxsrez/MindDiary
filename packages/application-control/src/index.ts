@@ -6,7 +6,7 @@ export type { TokenLifecycleFailureCode, McpTokenDescriptor, PersonalTokenUiDesc
 export { ACCOUNT_BOOTSTRAP_ACTION, AccountBootstrapFailure, AccountBootstrapService } from "./account-bootstrap.js";
 export type { SitesIdentityBeforeRegistration, BootstrapAccountCommand, PersonalMindControlDescriptor, BootstrapAccountResult, AccountBootstrapFailureCode, AccountBootstrapSafeEvent, AccountBootstrapSafeLogger, AccountBootstrapDependencies } from "./account-bootstrap.js";
 export { PERSONAL_MIND_FORBIDDEN_LIFECYCLE_OPERATIONS, PersonalMindControlFailure, PersonalMindControlService } from "./personal-mind-control.js";
-export type { PersonalMindForbiddenLifecycleOperation, PersonalMindControlFailureCode, RenameAccountCommand, PersonalMindProfileDescriptor, RenameAccountResult, GuardOrdinaryLifecycleCommand, OrdinaryLifecycleTarget, PersonalMindControlSafeEvent, PersonalMindControlSafeLogger, PersonalMindControlDependencies } from "./personal-mind-control.js";
+export type { PersonalMindForbiddenLifecycleOperation, PersonalMindControlFailureCode, RenameAccountCommand, UpdatePersonalMindDescriptionCommand, PersonalMindProfileDescriptor, RenameAccountResult, UpdatePersonalMindDescriptionResult, GuardOrdinaryLifecycleCommand, OrdinaryLifecycleTarget, PersonalMindControlSafeEvent, PersonalMindControlSafeLogger, PersonalMindControlDependencies } from "./personal-mind-control.js";
 export { OrdinaryMindControlFailure, OrdinaryMindControlService } from "./ordinary-mind-control.js";
 export type { OrdinaryMindControlFailureCode, CreateOrdinaryMindCommand, RenameOrdinaryMindCommand, OrdinaryMindControlDescriptor, OrdinaryMindMutationResult, OrdinaryMindControlSafeEvent, OrdinaryMindControlSafeLogger, OrdinaryMindControlDependencies } from "./ordinary-mind-control.js";
 export { MIND_DELETION_IMPACT_LIFETIME_MINUTES, OrdinaryMindDeletionService } from "./ordinary-mind-deletion.js";
@@ -29,3 +29,5 @@ export { ControlReadFailure, ControlReadService, PrincipalActivityService, Servi
 export type { ControlPrivacySafeEvent, ControlReadFailureCode, ServiceOperatorDirectoryFailureCode } from "./control-read-and-observability.js";
 export { CredentialWriteTargetApplicationService } from "./credential-write-target.js";
 export type { CredentialWriteTargetDependencies, CredentialWriteTargetCaller, CredentialWriteTargetCommand, CredentialWriteTargetCommandResult } from "./credential-write-target.js";
+export { PrincipalMindUsageApplicationService } from "./principal-mind-usage.js";
+export type { PrincipalMindUsageDependencies, PrincipalMindUsageCommand, PrincipalMindUsageCommandResult } from "./principal-mind-usage.js";

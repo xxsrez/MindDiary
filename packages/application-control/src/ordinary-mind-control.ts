@@ -11,6 +11,7 @@ export type OrdinaryMindControlFailureCode =
   | "authentication_required"
   | "invalid_display_name"
   | "invalid_description"
+  | "description_required_for_write"
   | "invalid_request"
   | "invalid_handle"
   | "invalid_visibility"
@@ -583,6 +584,12 @@ export class OrdinaryMindControlService {
         throw new OrdinaryMindControlFailure(
           "forbidden",
           "Current Mind settings access is required.",
+        );
+      }
+      if (renamed.kind === "description_required_for_write") {
+        throw new OrdinaryMindControlFailure(
+          "description_required_for_write",
+          "Change the Mind usage mode before clearing its writable description.",
         );
       }
       throw new OrdinaryMindControlFailure(

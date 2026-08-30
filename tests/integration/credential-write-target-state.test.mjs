@@ -85,7 +85,8 @@ test("durable target state preserves retry identity but isolates fresh owners", 
   assert.equal(selected.state.activeGeneration.generationId, "target_generation_one");
 
   const snapshot = store.exportDurableSnapshot();
-  assert.equal(snapshot.v, 2);
+  assert.equal(snapshot.v, 3);
+  assert.ok(snapshot.principalMindUsageOwners instanceof Map);
   assert.equal("mindBindingOwners" in snapshot, false);
   assert.ok(snapshot.credentialWriteTargetOwners instanceof Map);
   store = InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot);
@@ -371,7 +372,7 @@ test("ambiguous v1 snapshot migrates fail-closed and never persists read records
   assert.equal(pending.legacy.candidateSpaceId, null);
 
   const forward = restored.exportDurableSnapshot();
-  assert.equal(forward.v, 2);
+  assert.equal(forward.v, 3);
   assert.equal("mindBindingOwners" in forward, false);
   restored = InMemoryRevisionMetadataStore.fromDurableSnapshot(forward);
   assert.equal(

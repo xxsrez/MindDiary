@@ -5,6 +5,7 @@ import {
   cloneLegacyCredentialWriteTargetUpgrades,
   migrateLegacyMindBindingOwners,
 } from "./credential-write-target-internals.js";
+import { clonePrincipalMindUsageOwners } from "./principal-mind-usage-internals.js";
 
 export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStoreState {
   /** Trusted adapter checkpoint; canonical objects remain outside this projection. */
@@ -22,7 +23,7 @@ export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStor
         ) legacyCredentialWriteTargetUpgrades.set(ownerId, evidence);
       }
       return {
-        v: 2,
+        v: 3,
         spaces: new Map(this._spaces),
         revisionsById: new Map(this._revisionsById),
         objectReachabilityCounts: Object.freeze({
@@ -74,6 +75,9 @@ export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStor
           cloneLegacyCredentialWriteTargetUpgrades(
             legacyCredentialWriteTargetUpgrades,
           ),
+        principalMindUsageOwners: clonePrincipalMindUsageOwners(
+          this._principalMindUsageOwners,
+        ),
         activeHandlesByKey: new Map(this._activeHandlesByKey),
         activeHandlesBySpace: new Map(this._activeHandlesBySpace),
         retiredHandles: new Map(this._retiredHandles),

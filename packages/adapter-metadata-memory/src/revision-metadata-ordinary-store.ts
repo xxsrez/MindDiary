@@ -9,6 +9,8 @@ import {
   type PrincipalAccountSnapshot,
   type RenamePersonalProfileRequest,
   type RenamePersonalProfileResult,
+  type UpdatePersonalMindDescriptionRequest,
+  type UpdatePersonalMindDescriptionResult,
 } from "@mind-diary/application-ports";
 
 import {
@@ -27,6 +29,7 @@ import {
   freezePersonalMindProfile,
   freezePrincipal,
   personalMindProfileFromAccount,
+  personalDescriptionIdempotencyKey,
   personalProfileIdempotencyKey,
   stageInitialRevisionIndexAgainst,
   validateAccountBootstrapRecords,
@@ -147,6 +150,86 @@ async runPersonalMindTransaction<Result>(
             );
             this._failPersonalProfileIfRequested("before_commit");
             return Object.freeze({ kind: "renamed", profile, replayed: false });
+          },
+          updatePersonalMindDescription: async (
+            request: UpdatePersonalMindDescriptionRequest,
+          ): Promise<UpdatePersonalMindDescriptionResult> => {
+            const idempotencyRecordKey = personalDescriptionIdempotencyKey(
+              request.principalId,
+              request.idempotencyKey,
+            );
+            let account: Readonly<PrincipalAccountSnapshot> | null;
+            try {
+              account = accountFromMaps(
+                request.principalId,
+                principals,
+                this._externalBindings,
+                knowledgeSpaces,
+                this._personalBindings,
+                this._memberships,
+              );
+            } catch {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            if (account === null) return Object.freeze({ kind: "not_found" });
+            const personalSpace = account.personalMind.space;
+            if (
+              request.description === null &&
+              this._principalMindUsageOwners.get(request.principalId)
+                ?.state.activeWriteGeneration?.spaceId === personalSpace.spaceId
+            ) {
+              return Object.freeze({ kind: "description_required_for_write" });
+            }
+            const previous = idempotencyRecords.get(idempotencyRecordKey);
+            if (previous !== undefined) {
+              if (previous.canonicalRequestHash !== request.canonicalRequestHash) {
+                return Object.freeze({ kind: "idempotency_conflict" });
+              }
+              return Object.freeze({
+                kind: "updated",
+                profile: freezePersonalMindProfile(previous.profile),
+                replayed: true,
+              });
+            }
+            if (personalSpace.metadataVersion !== request.expectedPersonalMetadataVersion) {
+              return Object.freeze({
+                kind: "metadata_conflict",
+                currentPersonalMetadataVersion: personalSpace.metadataVersion,
+              });
+            }
+            const updatedSpace = request.description === personalSpace.description
+              ? personalSpace
+              : freezeKnowledgeSpace({
+                  ...personalSpace,
+                  description: request.description,
+                  metadataVersion: version(personalSpace.metadataVersion + 1),
+                  updatedAt: request.occurredAt,
+                });
+            const candidateSpaces = new Map(knowledgeSpaces);
+            candidateSpaces.set(personalSpace.spaceId, updatedSpace);
+            let updatedAccount: Readonly<PrincipalAccountSnapshot> | null;
+            try {
+              updatedAccount = accountFromMaps(
+                request.principalId,
+                principals,
+                this._externalBindings,
+                candidateSpaces,
+                this._personalBindings,
+                this._memberships,
+              );
+            } catch {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            if (updatedAccount === null) return Object.freeze({ kind: "invalid_record" });
+            const profile = personalMindProfileFromAccount(updatedAccount);
+            knowledgeSpaces.set(personalSpace.spaceId, updatedSpace);
+            idempotencyRecords.set(idempotencyRecordKey, Object.freeze({
+              principalId: request.principalId,
+              key: request.idempotencyKey,
+              canonicalRequestHash: request.canonicalRequestHash,
+              profile,
+            }));
+            return Object.freeze({ kind: "updated", profile, replayed: false });
           },
         });
 

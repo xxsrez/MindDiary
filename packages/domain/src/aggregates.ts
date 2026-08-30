@@ -263,11 +263,23 @@ function validatePersonal(
   memberships: readonly SpaceMembership[],
   invitations: readonly SpaceInvitation[],
 ): void {
-  if (Object.prototype.hasOwnProperty.call(space, "description")) {
+  if (
+    !("description" in space) ||
+    !(space.description === null || typeof space.description === "string")
+  ) {
     throw new DomainInvariantError(
       "personal_description",
-      "Personal Mind cannot carry ordinary description metadata",
+      "Personal Mind description metadata is invalid",
     );
+  }
+  if (typeof space.description === "string") {
+    const normalized = normalizeOrdinaryMindDescription(space.description);
+    if (normalized.kind !== "valid" || normalized.value !== space.description) {
+      throw new DomainInvariantError(
+        "personal_description",
+        "Personal Mind description metadata is invalid",
+      );
+    }
   }
   if (!sameSpace(binding.spaceId, space.spaceId)) {
     throw new DomainInvariantError(
@@ -361,7 +373,9 @@ export class SpaceAggregate {
   }): SpaceAggregate {
     return new SpaceAggregate({
       kind: "personal",
-      space: input.space,
+      space: Object.prototype.hasOwnProperty.call(input.space, "description")
+        ? input.space
+        : { ...input.space, description: null },
       personalBinding: input.binding,
       memberships: [input.membership],
       invitations: [],

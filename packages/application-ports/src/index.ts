@@ -21,6 +21,7 @@ export type {
 export {
   DomainInvariantError,
   CREDENTIAL_WRITE_TARGET_CONTRACT_VERSION,
+  PRINCIPAL_MIND_USAGE_CONTRACT_VERSION,
   PrincipalAccount,
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
@@ -37,6 +38,8 @@ export {
   serializeRevisionManifest,
   roleHasCapability,
   bindingVersion,
+  mindUsageVersion,
+  normalizeOrdinaryMindDescription,
   clearCredentialWriteTarget,
   compareUnicodeScalarValues,
   configureCredentialAutomaticCapture,
@@ -44,6 +47,11 @@ export {
   revokeCredentialWriteTarget,
   selectCredentialWriteTarget,
   upgradeLegacyCredentialWriteTarget,
+  configuredMindUsageMode,
+  createFreshPrincipalMindUsageState,
+  freezePrincipalMindUsageState,
+  principalMindUsageWritePinMatches,
+  setPrincipalMindUsageMode,
   type CanonicalSpaceHandle,
   type HandlePolicyFailureReason,
   type VerifiedSpaceHost,
@@ -56,6 +64,12 @@ export type {
   CredentialWriteTargetGenerationId,
   CredentialWriteTargetLifecycleState,
   CredentialWriteTargetState,
+  MindUsageEntry,
+  MindUsageMode,
+  MindUsageVersion,
+  PrincipalMindUsageGenerationId,
+  PrincipalMindUsageState,
+  PrincipalMindWriteGeneration,
   SpaceInvitation,
   KnowledgeSpace,
   MindBindingOwnerId,
@@ -84,5 +98,6 @@ export * from "./upload-intents.js";
 export * from "./revisions.js";
 export * from "./authorization.js";
 export * from "./credential-write-targets.js";
+export * from "./principal-mind-usage.js";
 export * from "./tokens.js";
 export * from "./observability.js";

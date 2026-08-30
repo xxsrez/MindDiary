@@ -16,6 +16,7 @@ import type {
   MembershipMap,
   MutableMindBindingOwnerState,
   MutableCredentialWriteTargetOwnerState,
+  MutablePrincipalMindUsageOwnerState,
   OrdinaryMindDeletionCleanupMap,
   OrdinaryMindDeletionImpactMap,
   OrdinaryMindIdempotencyRecord,
@@ -55,6 +56,7 @@ import type {
   ObjectCleanupCheckpointStore,
   OrdinaryMindStore,
   PersonalMindStore,
+  PrincipalMindUsageStore,
   PrincipalActivitySummary,
   PrincipalId,
   PublicMindCatalogStore,
@@ -72,9 +74,12 @@ import {
   clonePrincipalActivity,
   cloneCredentialWriteTargetOwners,
   cloneLegacyCredentialWriteTargetUpgrades,
+  clonePrincipalMindUsageOwners,
+  migrateLegacyCredentialTargetsToPrincipalUsage,
   migrateLegacyMindBindingOwners,
   validCredentialWriteTargetOwnersSnapshot,
   validLegacyCredentialWriteTargetUpgradesSnapshot,
+  validPrincipalMindUsageOwnersSnapshot,
 } from "./metadata-store-internals.js";
 import { RevisionMetadataSupportStore } from "./revision-metadata-support-store.js";
 
@@ -93,6 +98,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
     MembershipControlStore,
     ControlReadStore,
     CredentialWriteTargetStore,
+    PrincipalMindUsageStore,
     ServiceOperatorDirectoryStore,
     MindBindingStore {
   /** Restores a checkpoint produced by exportDurableSnapshot, failing closed on corruption. */
@@ -112,10 +118,10 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         "publicMindCatalogSnapshots", "authorizationStates",
       ] as const;
       if (
-        (snapshot.v !== 1 && snapshot.v !== 2) ||
+        (snapshot.v !== 1 && snapshot.v !== 2 && snapshot.v !== 3) ||
         !mapFields.every((field) => snapshot[field] instanceof Map) ||
         (snapshot.v === 1 && !(snapshot.mindBindingOwners instanceof Map)) ||
-        (snapshot.v === 2 &&
+        ((snapshot.v === 2 || snapshot.v === 3) &&
           (!(snapshot.credentialWriteTargetOwners instanceof Map) ||
             !(snapshot.legacyCredentialWriteTargetUpgrades instanceof Map) ||
             !validCredentialWriteTargetOwnersSnapshot(
@@ -129,6 +135,11 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
                 (snapshot.legacyCredentialWriteTargetUpgrades as Map<MindBindingOwnerId, unknown>)
                   .has(ownerId),
               ))) ||
+        (snapshot.v === 3 &&
+          (!(snapshot.principalMindUsageOwners instanceof Map) ||
+            !validPrincipalMindUsageOwnersSnapshot(
+              snapshot.principalMindUsageOwners as Map<PrincipalId, unknown>,
+            ))) ||
         !(snapshot.publicMindCatalogSpaceIds instanceof Set) ||
         !Number.isSafeInteger(snapshot.publicMindCatalogGeneration) ||
         (snapshot.publicMindCatalogGeneration as number) < 0 ||
@@ -214,15 +225,8 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         : new Map();
       restored._externalBindings = new Map(snapshot.externalBindings as ExternalBindingMap);
       restored._personalBindings = new Map(snapshot.personalBindings as PersonalBindingMap);
-      const personalSpaceIds = new Set(
-        [...restored._personalBindings.values()].map((binding) => binding.spaceId),
-      );
       restored._knowledgeSpaces = new Map(
         [...(snapshot.knowledgeSpaces as KnowledgeSpaceMap)].map(([spaceId, space]) => {
-          if (personalSpaceIds.has(spaceId)) {
-            const { description: _ordinaryDescription, ...personalSpace } = space;
-            return [spaceId, Object.freeze(personalSpace)] as const;
-          }
           return [
             spaceId,
             Object.freeze({ ...space, description: space.description ?? null }),
@@ -268,6 +272,19 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         // A forward snapshot never revives the removed legacy authority model.
         restored._mindBindingOwners = new Map();
       }
+      restored._principalMindUsageOwners = snapshot.v === 3
+        ? clonePrincipalMindUsageOwners(
+            snapshot.principalMindUsageOwners as Map<
+              PrincipalId,
+              MutablePrincipalMindUsageOwnerState
+            >,
+          )
+        : migrateLegacyCredentialTargetsToPrincipalUsage(
+            restored._credentialWriteTargetOwners,
+            restored._legacyCredentialWriteTargetUpgrades,
+            restored._knowledgeSpaces,
+            restored._memberships,
+          );
       restored._activeHandlesByKey = new Map(snapshot.activeHandlesByKey as ActiveHandleByKeyMap);
       restored._activeHandlesBySpace = new Map(snapshot.activeHandlesBySpace as ActiveHandleBySpaceMap);
       restored._retiredHandles = new Map(snapshot.retiredHandles as RetiredHandleMap);

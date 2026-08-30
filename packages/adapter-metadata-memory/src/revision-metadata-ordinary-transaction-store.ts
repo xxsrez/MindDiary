@@ -21,6 +21,7 @@ import {
   cloneMindBindingOwners,
   cloneCredentialWriteTargetOwners,
   cloneLegacyCredentialWriteTargetUpgrades,
+  clonePrincipalMindUsageOwners,
   cloneOrdinaryMindDeletionCleanups,
   cloneOrdinaryMindDeletionImpacts,
   cloneOrdinaryMindIdempotencyRecords,
@@ -156,6 +157,9 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
           cloneLegacyCredentialWriteTargetUpgrades(
             this._legacyCredentialWriteTargetUpgrades,
           );
+        let principalMindUsageOwners = clonePrincipalMindUsageOwners(
+          this._principalMindUsageOwners,
+        );
 
         const state: OrdinaryMindTransactionState = {
           principals,
@@ -192,6 +196,7 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
           mindBindingOwners,
           credentialWriteTargetOwners,
           legacyCredentialWriteTargetUpgrades,
+          principalMindUsageOwners,
         };
 
         const transaction: OrdinaryMindMetadataTransaction = Object.freeze({
@@ -241,6 +246,7 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
         this._credentialWriteTargetOwners = state.credentialWriteTargetOwners;
         this._legacyCredentialWriteTargetUpgrades =
           state.legacyCredentialWriteTargetUpgrades;
+        this._principalMindUsageOwners = state.principalMindUsageOwners;
         this._authorizationStates.clear();
         state.authorizationStates.forEach((state, key) =>
           this._authorizationStates.set(key, state));

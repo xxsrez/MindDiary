@@ -10,6 +10,7 @@ import type {
   MembershipId,
   MindBindingOwnerId,
   OutboxMessageId,
+  PrincipalMindUsageGenerationId,
   PrincipalId,
   RequestId,
   RevisionId,
@@ -28,6 +29,7 @@ import type { BundleFileMediaType } from "./revisions.js";
 declare const versionBrand: unique symbol;
 declare const bindingVersionBrand: unique symbol;
 declare const revisionNumberBrand: unique symbol;
+declare const mindUsageVersionBrand: unique symbol;
 declare const exportDownloadSecretVerifierBrand: unique symbol;
 
 export type Version = number & { readonly [versionBrand]: "version" };
@@ -36,6 +38,9 @@ export type BindingVersion = number & {
 };
 export type RevisionNumber = number & {
   readonly [revisionNumberBrand]: "revision-number";
+};
+export type MindUsageVersion = number & {
+  readonly [mindUsageVersionBrand]: "mind-usage-version";
 };
 export type ExportDownloadSecretVerifier = string & {
   readonly [exportDownloadSecretVerifierBrand]: "export-download-secret-verifier";
@@ -55,6 +60,9 @@ export const INVITATION_STATES = [
 export const ACCESS_TOKEN_STATES = ["active", "revoked", "expired"] as const;
 export const CREDENTIAL_WRITE_TARGET_CONTRACT_VERSION =
   "credential-write-target/v1" as const;
+export const PRINCIPAL_MIND_USAGE_CONTRACT_VERSION =
+  "principal-mind-usage/v1" as const;
+export const MIND_USAGE_MODES = ["disabled", "read", "read_write"] as const;
 export const CREDENTIAL_KINDS = ["oauth_grant", "personal_token"] as const;
 export const CREDENTIAL_WRITE_TARGET_LIFECYCLE_STATES = [
   "active",
@@ -106,6 +114,7 @@ export type CredentialWriteTargetLifecycleState =
 export type MindBindingSetState = (typeof MIND_BINDING_SET_STATES)[number];
 export type MindBindingState = (typeof MIND_BINDING_STATES)[number];
 export type AutomaticCaptureMode = (typeof AUTOMATIC_CAPTURE_MODES)[number];
+export type MindUsageMode = (typeof MIND_USAGE_MODES)[number];
 export type JobState = (typeof JOB_STATES)[number];
 export type IdempotencyState = (typeof IDEMPOTENCY_STATES)[number];
 export type OutboxState = (typeof OUTBOX_STATES)[number];
@@ -155,8 +164,8 @@ export interface KnowledgeSpace {
   readonly normalizedHandle: string;
   readonly name: string;
   /**
-   * Ordinary-Mind service metadata only. Legacy ordinary records may omit the
-   * field and are reconstructed as null; Personal Mind records must omit it.
+   * Routing category metadata shared by ordinary and Personal Minds. Legacy
+   * records may omit the field and are reconstructed as null.
    */
   readonly description?: string | null;
   readonly visibility: Visibility;
@@ -260,6 +269,35 @@ export interface CredentialWriteTargetState {
   readonly upgradedAt: UtcInstant | null;
   readonly updatedAt: UtcInstant;
   readonly revokedAt: UtcInstant | null;
+}
+
+/** Principal-owned write generation; credential and legacy binding IDs are never authority. */
+export interface PrincipalMindWriteGeneration {
+  readonly generationId: PrincipalMindUsageGenerationId;
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly generation: number;
+  readonly selectedAt: UtcInstant;
+}
+
+export interface MindUsageEntry {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly usageMode: Exclude<MindUsageMode, "disabled">;
+  readonly entryVersion: Version;
+  readonly writeGeneration: Readonly<PrincipalMindWriteGeneration> | null;
+  readonly updatedAt: UtcInstant;
+}
+
+/** One authoritative usage snapshot shared by every credential of a principal. */
+export interface PrincipalMindUsageState {
+  readonly principalId: PrincipalId;
+  readonly contractVersion: typeof PRINCIPAL_MIND_USAGE_CONTRACT_VERSION;
+  readonly usageVersion: MindUsageVersion;
+  readonly entries: readonly Readonly<MindUsageEntry>[];
+  readonly activeWriteGeneration: Readonly<PrincipalMindWriteGeneration> | null;
+  readonly createdAt: UtcInstant;
+  readonly updatedAt: UtcInstant;
 }
 
 /** @deprecated Compatibility-only record for pre credential-write-target/v1 replay. */
@@ -535,6 +573,13 @@ export function bindingVersion(value: number): BindingVersion {
     throw new TypeError("binding versions must be non-negative safe integers");
   }
   return value as BindingVersion;
+}
+
+export function mindUsageVersion(value: number): MindUsageVersion {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError("Mind usage versions must be non-negative safe integers");
+  }
+  return value as MindUsageVersion;
 }
 
 export function revisionNumber(value: number): RevisionNumber {

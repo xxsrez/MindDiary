@@ -372,6 +372,7 @@ export class AccountBootstrapService {
           spaceHandle: parsedHandle.canonicalHandle,
           normalizedHandle: parsedHandle.canonicalHandle,
           name: displayName,
+          description: null,
           visibility: "private" as const,
           state: "active" as const,
           metadataVersion: version(1),
