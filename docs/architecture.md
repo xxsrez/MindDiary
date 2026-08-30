@@ -865,9 +865,15 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   context; последующие navigation обновляют bounded payload, но не наследуют
   чужой `waitUntil` lifetime. Operator read накладывает эту projection на
   canonical principal directory; legacy activity из старого snapshot остаётся
-  читаемой. Account
-  deletion удаляет canonical principal/activity и очищает projection, а строка
-  без существующего principal никогда не становится видимой.
+  читаемой. Observation захватывает immutable canonical view вместе с exact
+  metadata sequence/generation, а physical upsert проходит только пока current
+  D1 sequence совпадает с этим fence. Поэтому unrelated canonical mutation
+  может безопасно отбросить best-effort observation, но stale writer не может
+  воскресить activity удалённого principal. Победивший account-deletion event
+  и physical projection delete выполняются одной D1 mutation; delete проверяет
+  exact sequence и полный deletion-event envelope/payload, так что CAS loser не
+  удаляет строку живого principal. Post-commit cleanup остаётся только
+  идемпотентным fallback и не меняет canonical success на reported failure.
   Initial revision index effects входят в account/Mind create transaction, а
   bounded request-triggered reconciler подбирает due jobs и backfill-ит legacy
   active HEAD без state/job после restart/redeploy.
@@ -927,9 +933,16 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   Canonical `md_metadata_events` append не обрывается локальным timeout: без
   cancellation или authoritative provider outcome такой timeout неоднозначно
   разделял бы late commit и failure и мог бы спровоцировать повторную mutation.
-  Поэтому write queue ждёт точный D1 result, тогда как reads и производные
-  snapshot checkpoints остаются bounded; late failure не публикует success, а
-  late success восстанавливается из единственного durable event после restart.
+  Поэтому write queue удерживает mutation tail до settlement D1 append, тогда
+  как обычные reads и производные snapshot checkpoints остаются bounded. Если
+  provider отклонил append promise после возможного commit, adapter выполняет
+  authoritative exact read-back ожидаемого sequence и сравнивает полный
+  canonical envelope: `target`, `operation` и `payload_json`. Exact match
+  означает committed success; чужая строка означает CAS loss и безопасный
+  retry; подтверждённое отсутствие означает safe failure без durable side
+  effect. Производный snapshot остаётся self-healing: его сбой после committed
+  event не превращает mutation в reported failure, а restart replay-ит ровно
+  один canonical event.
   Пустые
   staged-file и Markdown-import cleanup passes вообще не добавляют canonical
   event. Последовательные warm mutations получают detached CAS base клонированием

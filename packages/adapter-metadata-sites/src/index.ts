@@ -166,6 +166,41 @@ interface PrincipalActivityRow {
   readonly last_activity_kind: string;
 }
 
+function accountDeletionPrincipalId(
+  event: DurableEvent,
+  result: unknown,
+): PrincipalId | null {
+  if (
+    event.kind !== "transaction" ||
+    event.method !== "runAccountDeletionTransaction" ||
+    typeof result !== "object" ||
+    result === null ||
+    !("kind" in result) ||
+    (result.kind !== "deleted" && result.kind !== "cleanup_pending")
+  ) return null;
+  const deletion = event.calls.find((call) => call.method === "deleteAccountCascade");
+  const request = deletion?.args[0];
+  if (
+    typeof request !== "object" ||
+    request === null ||
+    !("principalId" in request) ||
+    typeof request.principalId !== "string"
+  ) return null;
+  return request.principalId as PrincipalId;
+}
+
+function isExactDurableEvent(
+  row: DurableEventRow,
+  sequence: number,
+  event: DurableEvent,
+  payloadJson: string,
+): boolean {
+  return row.sequence === sequence &&
+    row.target === event.target &&
+    row.operation === event.method &&
+    row.payload_json === payloadJson;
+}
+
 const TRANSACTION_METHODS = new Set([
   "runAccountBootstrapTransaction",
   "runPersonalMindTransaction",
@@ -538,11 +573,13 @@ export class SitesMetadataStore {
     // then serialize only the independent activity projection write. Keeping
     // D1 I/O off #tail prevents a deferred page observation from head-of-line
     // blocking the next authenticated navigation.
+    const expectedSequence = this.#sequence;
     const view = this.#cloneMetadata(this.#metadata);
     await view.recordPrincipalActivity(request);
     const summary = await view.readPrincipalActivity(request.principalId);
     if (summary === null) return;
-    await this.#activityExclusive(() => this.#upsertPrincipalActivity(summary));
+    await this.#activityExclusive(() =>
+      this.#upsertPrincipalActivity(summary, expectedSequence));
   }
 
   async readPrincipalActivity(
@@ -970,7 +1007,13 @@ export class SitesMetadataStore {
       const result = await methodOf(target, method)(...args);
       if (isEmptyRecoveryDirectCall(method, result)) return result;
       const event: DurableEvent = { v: 1, kind: "direct", target: targetName, method, args };
-      if (await this.#append(loaded.sequence, event, loaded.metadata, loaded.tokens)) {
+      if (await this.#append(
+        loaded.sequence,
+        event,
+        loaded.metadata,
+        loaded.tokens,
+        result,
+      )) {
         this.#metadata = loaded.metadata;
         this.#tokens = loaded.tokens;
         this.#sequence = loaded.sequence + 1;
@@ -1031,7 +1074,13 @@ export class SitesMetadataStore {
         method,
         calls,
       };
-      if (await this.#append(loaded.sequence, event, loaded.metadata, loaded.tokens)) {
+      if (await this.#append(
+        loaded.sequence,
+        event,
+        loaded.metadata,
+        loaded.tokens,
+        result,
+      )) {
         this.#metadata = loaded.metadata;
         this.#tokens = loaded.tokens;
         this.#sequence = loaded.sequence + 1;
@@ -1084,13 +1133,11 @@ export class SitesMetadataStore {
     event: DurableEvent,
     metadata: InMemoryRevisionMetadataStore,
     tokens: InMemoryMcpTokenStore,
+    mutationResult: unknown,
   ): Promise<boolean> {
     const sequence = expectedSequence + 1;
-    // D1 promises do not expose cancellation. Timing out this canonical write
-    // would let the caller observe failure while the same INSERT can still
-    // commit, making an automatic retry ambiguous. Reads and derived writes
-    // remain bounded, but the fenced event append must reach its exact result.
-    const result = await this.#database
+    const payloadJson = encode(event);
+    const append = this.#database
       .prepare(
         `/*md-metadata-append*/ INSERT INTO md_metadata_events
          (sequence, target, operation, payload_json, committed_at)
@@ -1101,12 +1148,56 @@ export class SitesMetadataStore {
         sequence,
         event.target,
         event.method,
-        encode(event),
+        payloadJson,
         new Date().toISOString(),
         expectedSequence,
-      )
-      .run();
-    if (changes(result) !== 1) return false;
+      );
+    const deletedPrincipalId = accountDeletionPrincipalId(event, mutationResult);
+    // D1 promises do not expose cancellation. Timing out this canonical write
+    // would let the caller observe failure while the same INSERT can still
+    // commit, making an automatic retry ambiguous. Reads and derived writes
+    // remain bounded, but the fenced event append must reach its exact result.
+    let appendOutcome: D1ResultLike;
+    try {
+      if (deletedPrincipalId === null) {
+        appendOutcome = await append.run();
+      } else {
+        const [appendResult] = await this.#database.batch([
+          append,
+          this.#database
+            .prepare(
+              `/*md-principal-activity-delete-committed*/ DELETE FROM md_principal_activity
+               WHERE principal_id = ?1
+                 AND EXISTS (
+                   SELECT 1 FROM md_metadata_events
+                   WHERE sequence = ?2
+                     AND target = ?3
+                     AND operation = ?4
+                     AND payload_json = ?5
+                 )`,
+            )
+            .bind(
+              deletedPrincipalId,
+              sequence,
+              event.target,
+              event.method,
+              payloadJson,
+            ),
+        ]);
+        appendOutcome = appendResult ?? { success: false, meta: { changes: 0 } };
+      }
+    } catch (error) {
+      // A rejected provider promise does not prove that the INSERT failed: the
+      // D1 transaction may already have committed. Resolve the exact sequence
+      // without a local timeout before either reporting failure or retrying.
+      const committed = await this.#readCanonicalEvent(sequence);
+      if (committed === null) throw error;
+      if (!isExactDurableEvent(committed, sequence, event, payloadJson)) {
+        return false;
+      }
+      appendOutcome = { success: true, meta: { changes: 1 } };
+    }
+    if (changes(appendOutcome) !== 1) return false;
     if (shouldCheckpointEvent(event, sequence)) {
       try {
         await this.#persistSnapshot(sequence, metadata, tokens);
@@ -1118,6 +1209,21 @@ export class SitesMetadataStore {
       }
     }
     return true;
+  }
+
+  async #readCanonicalEvent(sequence: number): Promise<DurableEventRow | null> {
+    const result = await this.#database
+      .prepare(
+        `/*md-metadata-append-readback*/ SELECT sequence, target, operation, payload_json
+         FROM md_metadata_events WHERE sequence = ?1`,
+      )
+      .bind(sequence)
+      .all<DurableEventRow>();
+    const rows = result.results ?? [];
+    if (rows.length > 1) {
+      throw new Error("Sites metadata append readback is not unique");
+    }
+    return rows[0] ?? null;
   }
 
   async #persistSnapshot(
@@ -1170,6 +1276,7 @@ export class SitesMetadataStore {
 
   async #upsertPrincipalActivity(
     summary: Readonly<PrincipalActivitySummary>,
+    expectedSequence: number,
   ): Promise<void> {
     await this.#boundedD1(
       this.#database
@@ -1177,7 +1284,8 @@ export class SitesMetadataStore {
         `/*md-principal-activity-upsert*/ INSERT INTO md_principal_activity
          (principal_id, last_web_seen_at, last_mcp_seen_at, last_activity_at,
           last_activity_surface, last_activity_kind)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6
+         WHERE COALESCE((SELECT MAX(sequence) FROM md_metadata_events), 0) = ?7
          ON CONFLICT(principal_id) DO UPDATE SET
            last_web_seen_at = CASE
              WHEN excluded.last_web_seen_at IS NOT NULL AND
@@ -1216,6 +1324,7 @@ export class SitesMetadataStore {
           summary.lastActivityAt,
           summary.lastActivitySurface,
           summary.lastActivityKind,
+          expectedSequence,
         )
         .run(),
       "principal activity write",

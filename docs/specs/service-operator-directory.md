@@ -128,9 +128,21 @@ principal directory. Optional activity field старого snapshot остаё�
 backward-compatible источником до первого нового observation.
 
 Projection не является request log, product/query surface или источником
-authentication/authorization. Account cascade удаляет activity из canonical
-state и projection; даже при сбое best-effort physical cleanup строка без
-существующего principal не разрешается read path и удаляется при exact read.
+authentication/authorization. Каждая observation захватывает immutable
+canonical view и соответствующий ему exact metadata sequence/generation.
+Physical upsert выполняется только если current canonical sequence всё ещё
+равен захваченному; unrelated canonical mutation может консервативно отбросить
+best-effort observation, а stale writer после account deletion не может
+воскресить строку.
+
+Победивший canonical account-deletion event и физическое удаление строки
+`md_principal_activity` составляют одну атомарную D1 mutation. Conditional
+cleanup проверяет exact sequence и полный deletion-event envelope/payload,
+поэтому проигравший CAS не удаляет activity живого principal. Post-commit
+cleanup допустим только как идемпотентный fallback и не превращает уже
+зафиксированное canonical deletion в reported failure. После завершённого
+account deletion linkable activity физически отсутствует, а не только скрыта
+read path.
 
 ## Verification
 
@@ -140,8 +152,11 @@ Repository acceptance требует как минимум двух principals �
   Owner/Admin получают `404`;
 - successful web и MCP results обновляют свои timestamps, а denied/failed — нет;
 - delayed/retried observations монотонны, `never_active` остаётся отличимым;
+- stale observation после account deletion или unrelated canonical mutation
+  не создаёт activity; observation, записанная до deletion, физически удаляется
+  тем же победившим canonical commit;
 - search/filter/sort/cursor/empty-state deterministic;
-- account deletion удаляет summary;
+- account deletion атомарно удаляет canonical summary и physical projection;
 - privacy regression не находит forbidden fields в state, responses, audit и
   telemetry.
 

@@ -211,12 +211,20 @@ class FakeD1Database {
     return Object.freeze({ started, release });
   }
 
-  holdNextMetadataAppend({ failAfterRelease = false } = {}) {
+  holdNextMetadataAppend({
+    failAfterRelease = false,
+    commitThenReject = false,
+  } = {}) {
     let release;
     let markStarted;
     const wait = new Promise((resolve) => { release = resolve; });
     const started = new Promise((resolve) => { markStarted = resolve; });
-    this.#metadataAppendGate = { wait, markStarted, failAfterRelease };
+    this.#metadataAppendGate = {
+      wait,
+      markStarted,
+      failAfterRelease,
+      commitThenReject,
+    };
     return Object.freeze({ started, release });
   }
 
@@ -229,12 +237,13 @@ class FakeD1Database {
   }
 
   async run(sql, values) {
+    let metadataAppendGate = null;
     if (sql.includes("/*md-metadata-append*/") && this.#metadataAppendGate !== null) {
-      const gate = this.#metadataAppendGate;
+      metadataAppendGate = this.#metadataAppendGate;
       this.#metadataAppendGate = null;
-      gate.markStarted();
-      await gate.wait;
-      if (gate.failAfterRelease) {
+      metadataAppendGate.markStarted();
+      await metadataAppendGate.wait;
+      if (metadataAppendGate.failAfterRelease) {
         throw new Error("synthetic delayed D1 append failure");
       }
     }
@@ -267,6 +276,9 @@ class FakeD1Database {
         operation: values[2],
         payload_json: values[3],
       });
+      if (metadataAppendGate?.commitThenReject) {
+        throw new Error("synthetic committed D1 append response failure");
+      }
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-metadata-snapshot-write*/")) {
@@ -307,6 +319,11 @@ class FakeD1Database {
         gate.markStarted();
         await gate.wait;
       }
+      const expectedSequence = Number(values[6]);
+      const currentSequence = this.metadataEvents.at(-1)?.sequence ?? 0;
+      if (currentSequence !== expectedSequence) {
+        return { success: true, meta: { changes: 0 } };
+      }
       const current = this.principalActivities.get(values[0]);
       const next = {
         principal_id: values[0],
@@ -333,6 +350,19 @@ class FakeD1Database {
       }
       this.principalActivities.set(values[0], next);
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-principal-activity-delete-committed*/")) {
+      const event = this.metadataEvents.find((row) => row.sequence === Number(values[1]));
+      const committed = event !== undefined &&
+        event.target === values[2] &&
+        event.operation === values[3] &&
+        event.payload_json === values[4];
+      return {
+        success: true,
+        meta: {
+          changes: committed && this.principalActivities.delete(values[0]) ? 1 : 0,
+        },
+      };
     }
     if (sql.includes("/*md-principal-activity-delete*/")) {
       return {
@@ -622,6 +652,11 @@ class FakeD1Database {
           .map((row) => ({ ...row })),
       };
     }
+    if (sql.includes("/*md-metadata-append-readback*/")) {
+      const row = this.metadataEvents.find((event) =>
+        event.sequence === Number(values[0]));
+      return { success: true, results: row ? [{ ...row }] : [] };
+    }
     if (sql.includes("/*md-metadata-events-migration*/")) {
       this.metadataReadLog.push("migration");
       return { success: true, results: this.metadataEvents.map((row) => ({ ...row })) };
@@ -815,7 +850,7 @@ test("canonical metadata append waits past the read timeout and restart replay s
   assert.equal(database.metadataEvents.length, 1);
 });
 
-test("canonical metadata append reports a late D1 failure without a durable event", async () => {
+test("canonical metadata append confirms a pre-commit late failure and retries safely", async () => {
   const database = new FakeD1Database();
   const store = await createSitesMetadataStore(database, { d1TimeoutMs: 25 });
   const gate = database.holdNextMetadataAppend({ failAfterRelease: true });
@@ -843,6 +878,94 @@ test("canonical metadata append reports a late D1 failure without a durable even
   assert.equal(database.metadataEvents.length, 0);
   const restarted = await createSitesMetadataStore(database);
   assert.deepEqual(await restarted.listMcpTokenMetadata(principalId), []);
+
+  assert.equal((await store.createMcpToken({
+    tokenId: "token_delayed_append_failure",
+    principalId,
+    name: "Delayed append failure",
+    verifier: `hmac-sha256:v1:${"e".repeat(64)}`,
+    displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read"],
+    createdAt: T0,
+    expiresAt: "2026-11-06T08:00:00.000Z",
+  })).kind, "created");
+  assert.equal(database.metadataEvents.length, 1);
+  assert.deepEqual(
+    (await (await createSitesMetadataStore(database))
+      .listMcpTokenMetadata(principalId)).map((token) => token.tokenId),
+    ["token_delayed_append_failure"],
+  );
+});
+
+test("canonical metadata append readback accepts commit-then-reject exactly once", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database, { d1TimeoutMs: 25 });
+  const gate = database.holdNextMetadataAppend({ commitThenReject: true });
+  const principalId = opaqueId("principal_committed_append_rejection");
+  const mutation = store.createMcpToken({
+    tokenId: "token_committed_append_rejection",
+    principalId,
+    name: "Committed append rejection",
+    verifier: `hmac-sha256:v1:${"f".repeat(64)}`,
+    displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read"],
+    createdAt: T0,
+    expiresAt: "2026-11-06T08:00:00.000Z",
+  });
+  await gate.started;
+  gate.release();
+
+  assert.equal((await mutation).kind, "created");
+  assert.equal(database.metadataEvents.length, 1);
+  const restarted = await createSitesMetadataStore(database);
+  assert.deepEqual(
+    (await restarted.listMcpTokenMetadata(principalId)).map((token) => token.tokenId),
+    ["token_committed_append_rejection"],
+  );
+  assert.equal(database.metadataEvents.length, 1);
+});
+
+test("canonical metadata append readback treats a foreign envelope as CAS loss", async () => {
+  const database = new FakeD1Database();
+  const first = await createSitesMetadataStore(database);
+  const second = await createSitesMetadataStore(database);
+  const gate = database.holdNextMetadataAppend({ failAfterRelease: true });
+  const firstPrincipalId = opaqueId("principal_append_cas_first");
+  const secondPrincipalId = opaqueId("principal_append_cas_second");
+  const firstMutation = first.createMcpToken({
+    tokenId: "token_append_cas_first",
+    principalId: firstPrincipalId,
+    name: "CAS first",
+    verifier: `hmac-sha256:v1:${"1".repeat(64)}`,
+    displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read"],
+    createdAt: T0,
+    expiresAt: "2026-11-06T08:00:00.000Z",
+  });
+  await gate.started;
+  assert.equal((await second.createMcpToken({
+    tokenId: "token_append_cas_second",
+    principalId: secondPrincipalId,
+    name: "CAS second",
+    verifier: `hmac-sha256:v1:${"2".repeat(64)}`,
+    displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read"],
+    createdAt: T0,
+    expiresAt: "2026-11-06T08:00:00.000Z",
+  })).kind, "created");
+  gate.release();
+
+  assert.equal((await firstMutation).kind, "created");
+  assert.equal(database.metadataEvents.length, 2);
+  const restarted = await createSitesMetadataStore(database);
+  assert.deepEqual(
+    (await restarted.listMcpTokenMetadata(firstPrincipalId)).map((token) => token.tokenId),
+    ["token_append_cas_first"],
+  );
+  assert.deepEqual(
+    (await restarted.listMcpTokenMetadata(secondPrincipalId)).map((token) => token.tokenId),
+    ["token_append_cas_second"],
+  );
 });
 
 class FakeR2Body {
@@ -1032,6 +1155,20 @@ function deletionIds() {
     nextImpactId: () => `impact_sites_${++impacts}`,
     nextDeletedPrincipalId: () => `deleted_principal_sites_${++deletedPrincipals}`,
   };
+}
+
+function accountDeletionService(boundary, metadata = boundary.metadata) {
+  return new AccountDeletionService({
+    accounts: metadata,
+    tokens: metadata,
+    objects: boundary.objects,
+    index: boundary.index,
+    audit: boundary.audit,
+    exportArchives: boundary.exportArchives,
+    ids: deletionIds(),
+    clock: { now: () => T5 },
+    host: HOST,
+  });
 }
 
 async function idempotentCommitRecord(store, namespace, revisionId) {
@@ -1747,6 +1884,219 @@ test("deferred principal activity does not block canonical metadata reads", asyn
     (await boundary.metadata.readPrincipalActivity(created.principalId)).lastWebSeenAt,
     new Date(Date.parse(T0) + 30_000).toISOString(),
   );
+});
+
+test("principal activity held upsert is physically removed by account delete", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  const created = await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(93),
+    { action: "create_isolated_account" },
+  );
+  const deleterMetadata = await createSitesMetadataStore(database);
+  const deletion = accountDeletionService(boundary, deleterMetadata);
+  const impact = await deletion.getAccountDeletionImpact(
+    actor(created.principalId, "request_activity_delete_preview_before", T5),
+  );
+  await boundary.metadata.readAccount(created.principalId);
+
+  const gate = database.holdNextActivityWrite();
+  const activity = boundary.metadata.recordPrincipalActivity({
+    principalId: created.principalId,
+    surface: "web",
+    kind: "page",
+    observedAt: T5,
+  });
+  await gate.started;
+  gate.release();
+  await activity;
+  assert.equal(database.principalActivities.size, 1);
+
+  // Prove that the canonical D1 batch performed physical deletion: the
+  // idempotent post-commit fallback may fail without changing the result.
+  database.failNext("/*md-principal-activity-delete*/");
+  const result = await deletion.deleteAccount(
+    actor(created.principalId, "request_activity_delete_commit_after", T5),
+    {
+      impactId: impact.impactId,
+      confirmation: impact.confirmation,
+      idempotencyKey: "delete-activity-before-account",
+    },
+  );
+  assert.equal(result.spacesDeleted, 1);
+  assert.equal(database.principalActivities.size, 0);
+  assert.equal(
+    await (await createSitesMetadataStore(database))
+      .readPrincipalActivity(created.principalId),
+    null,
+  );
+});
+
+test("principal activity survives a non-winning account delete transaction", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  const created = await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(97),
+    { action: "create_isolated_account" },
+  );
+  await boundary.metadata.recordPrincipalActivity({
+    principalId: created.principalId,
+    surface: "web",
+    kind: "page",
+    observedAt: T5,
+  });
+  const eventCount = database.metadataEvents.length;
+
+  const result = await boundary.metadata.runAccountDeletionTransaction((transaction) =>
+    transaction.deleteAccountCascade({
+      principalId: created.principalId,
+      impactId: "impact_missing_activity_delete",
+      idempotencyKey: idempotencyKey("non-winning-activity-delete"),
+      deletedPrincipalId: "deleted_principal_missing_activity_delete",
+      tokenStateFingerprint: "missing-token-fingerprint",
+      occurredAt: T5,
+    }));
+  assert.equal(result.kind, "account_not_found");
+  assert.equal(database.metadataEvents.length, eventCount + 1);
+  assert.equal(database.principalActivities.size, 1);
+  assert.equal(
+    (await (await createSitesMetadataStore(database))
+      .readPrincipalActivity(created.principalId)).lastWebSeenAt,
+    T5,
+  );
+});
+
+test("stale principal activity released after account delete cannot resurrect", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  const created = await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(94),
+    { action: "create_isolated_account" },
+  );
+  const deleterMetadata = await createSitesMetadataStore(database);
+  const deletion = accountDeletionService(boundary, deleterMetadata);
+  const impact = await deletion.getAccountDeletionImpact(
+    actor(created.principalId, "request_stale_activity_delete_preview", T5),
+  );
+  await boundary.metadata.readAccount(created.principalId);
+
+  const gate = database.holdNextActivityWrite();
+  const staleActivity = boundary.metadata.recordPrincipalActivity({
+    principalId: created.principalId,
+    surface: "mcp",
+    kind: "content_read",
+    observedAt: T5,
+  });
+  await gate.started;
+  const result = await deletion.deleteAccount(
+    actor(created.principalId, "request_stale_activity_delete_commit", T5),
+    {
+      impactId: impact.impactId,
+      confirmation: impact.confirmation,
+      idempotencyKey: "delete-account-before-stale-activity-release",
+    },
+  );
+  assert.equal(result.spacesDeleted, 1);
+  gate.release();
+  await staleActivity;
+
+  assert.equal(database.principalActivities.size, 0);
+  assert.equal(
+    await (await createSitesMetadataStore(database))
+      .readPrincipalActivity(created.principalId),
+    null,
+  );
+});
+
+test("stale principal activity late settlement after timeout cannot resurrect", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  const created = await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(96),
+    { action: "create_isolated_account" },
+  );
+  const deleterMetadata = await createSitesMetadataStore(database);
+  const deletion = accountDeletionService(boundary, deleterMetadata);
+  const impact = await deletion.getAccountDeletionImpact(
+    actor(created.principalId, "request_late_activity_delete_preview", T5),
+  );
+  const activityWriter = await createSitesMetadataStore(database, { d1TimeoutMs: 25 });
+
+  const gate = database.holdNextActivityWrite();
+  const lateActivity = activityWriter.recordPrincipalActivity({
+    principalId: created.principalId,
+    surface: "web",
+    kind: "control_read",
+    observedAt: T5,
+  });
+  await gate.started;
+  await assert.rejects(lateActivity, (error) =>
+    error?.code === "metadata_d1_timeout" &&
+    error?.message === "D1 principal activity write timed out");
+  const result = await deletion.deleteAccount(
+    actor(created.principalId, "request_late_activity_delete_commit", T5),
+    {
+      impactId: impact.impactId,
+      confirmation: impact.confirmation,
+      idempotencyKey: "delete-account-before-late-activity-settlement",
+    },
+  );
+  assert.equal(result.spacesDeleted, 1);
+  gate.release();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(database.principalActivities.size, 0);
+  assert.equal(
+    await (await createSitesMetadataStore(database))
+      .readPrincipalActivity(created.principalId),
+    null,
+  );
+});
+
+test("activity observation is a safe no-op after unrelated canonical mutation", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  const created = await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(95),
+    { action: "create_isolated_account" },
+  );
+  const first = boundary.metadata;
+  const principalId = created.principalId;
+  const second = await createSitesMetadataStore(database);
+  const gate = database.holdNextActivityWrite();
+  const observation = first.recordPrincipalActivity({
+    principalId,
+    surface: "web",
+    kind: "page",
+    observedAt: T5,
+  });
+  await gate.started;
+  assert.equal((await second.reserveHandle({
+    host: HOST,
+    handle: "activity-unrelated-sequence",
+    spaceId: opaqueId("space_activity_unrelated_sequence"),
+  })).kind, "reserved");
+  gate.release();
+  await observation;
+
+  assert.equal(database.principalActivities.size, 0);
+  assert.equal(await (await createSitesMetadataStore(database))
+    .readPrincipalActivity(principalId), null);
 });
 
 test("corrupt materialized metadata snapshot fails closed", async () => {
