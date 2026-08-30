@@ -104,6 +104,57 @@ test("a cold runtime timeout returns bounded 503s without retaining request cont
   assert.equal(attempts, 1);
 });
 
+test("late cold-start work waits for the next live request context", async () => {
+  const environment = {};
+  let attempts = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const dispatched = [];
+  const worker = createMindDiaryProductWorker({
+    runtimeInitializationTimeoutMs: 25,
+    async createRuntime({ schedule }) {
+      attempts += 1;
+      await gate;
+      schedule({ kind: "revision_index", id: "job_from_cold_start" });
+      return {
+        async fetch() { return new Response("ok"); },
+        async recoverBackground() {},
+        async dispatchBackground(work) { dispatched.push(work); },
+      };
+    },
+    readConfig() { return { publicOrigin: ORIGIN }; },
+    async fallbackFetch() { return new Response("fallback", { status: 404 }); },
+  });
+  const request = () => new Request(`${ORIGIN}/minds`, {
+    headers: { accept: "text/html" },
+  });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const waits = [];
+    const response = await worker.fetch(request(), environment, {
+      waitUntil: (promise) => waits.push(promise),
+    });
+    assert.equal(response.status, 503);
+    assert.equal(waits.length, 0);
+  }
+  assert.equal(attempts, 1);
+
+  release();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(dispatched, []);
+
+  const waits = [];
+  const response = await worker.fetch(request(), environment, {
+    waitUntil: (promise) => waits.push(promise),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(attempts, 1);
+  assert.equal(waits.length, 1);
+  await waits[0];
+  assert.deepEqual(dispatched, [{ kind: "revision_index", jobId: "job_from_cold_start" }]);
+});
+
 test("production Worker disables best-effort Web activity writes by default", async () => {
   let createdOptions;
   const worker = createMindDiaryProductWorker({
@@ -131,7 +182,7 @@ test("foreground reads never inherit scheduled work from request recovery", asyn
   const waits = [];
   const worker = createMindDiaryProductWorker({
     recoveryCoordinator: new RequestRecoveryCoordinator({ delay: async () => undefined }),
-    async createRuntime(capturedSchedule) {
+    async createRuntime({ schedule: capturedSchedule }) {
       schedule = capturedSchedule;
       return {
         async fetch() { return new Response("ok"); },

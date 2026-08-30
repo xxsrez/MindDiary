@@ -272,6 +272,10 @@ export function createMindDiaryProductWorker(options) {
           },
         });
         const runtime = await acquired.runtime;
+        const initializationScheduled = acquired.drainInitializationScheduled();
+        if (initializationScheduled.length > 0) {
+          context.waitUntil(Promise.allSettled(initializationScheduled));
+        }
         return recoveryCoordinator.respond({
           request,
           environment,

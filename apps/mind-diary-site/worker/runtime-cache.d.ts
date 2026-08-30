@@ -3,7 +3,9 @@ export const RUNTIME_INITIALIZATION_TIMEOUT_MS: number;
 export interface RuntimeCacheHandle<Runtime> {
   /** Request-bounded view of the shared initialization flight. */
   readonly runtime: Promise<Runtime>;
-  /** Removes only work captured by this generation; no request context is retained. */
+  /** Dispatches cold-start work only when a live request adopts it. */
+  drainInitializationScheduled(): readonly Promise<unknown>[];
+  /** Dispatches post-initialization work owned by the current operation. */
   drainScheduled(): readonly Promise<unknown>[];
 }
 

@@ -95,7 +95,7 @@ test("a timed-out request leaves the sole initialization flight shared with an e
 
   release();
   assert.deepEqual(await retry.runtime, { generation: 1 });
-  const scheduled = retry.drainScheduled();
+  const scheduled = retry.drainInitializationScheduled();
   assert.equal(scheduled.length, 1);
   await Promise.all(scheduled);
   assert.deepEqual(dispatched, [[1, "job-from-late-initialization"]]);
@@ -110,6 +110,85 @@ test("a timed-out request leaves the sole initialization flight shared with an e
     { generation: 1 },
   );
   assert.equal(attempts, 1);
+});
+
+test("in-flight A to B to A configuration changes rejoin each exact fingerprint", async () => {
+  const cache = new IsolateRuntimeCache();
+  const environment = {};
+  let attemptsA = 0;
+  let concurrentA = 0;
+  let maximumConcurrentA = 0;
+  let releaseA;
+  let releaseFirstB;
+  const gateA = new Promise((resolve) => { releaseA = resolve; });
+  const gateFirstB = new Promise((resolve) => { releaseFirstB = resolve; });
+  const discardedDispatches = [];
+
+  const createA = async () => {
+    attemptsA += 1;
+    concurrentA += 1;
+    maximumConcurrentA = Math.max(maximumConcurrentA, concurrentA);
+    await gateA;
+    concurrentA -= 1;
+    return { fingerprint: "a", generation: attemptsA };
+  };
+  let attemptsB = 0;
+  const createB = async (schedule) => {
+    attemptsB += 1;
+    if (attemptsB === 1) {
+      schedule({ id: "obsolete-b-work" });
+      await gateFirstB;
+    }
+    return { fingerprint: "b", generation: attemptsB };
+  };
+  const dispatch = async (_runtime, work) => { discardedDispatches.push(work.id); };
+
+  const firstA = cache.acquire({
+    environment,
+    fingerprint: "a",
+    create: createA,
+    dispatch,
+  });
+  await Promise.resolve();
+  assert.equal(attemptsA, 1);
+
+  const firstB = cache.acquire({
+    environment,
+    fingerprint: "b",
+    create: createB,
+    dispatch,
+  });
+  await Promise.resolve();
+  assert.equal(attemptsB, 1);
+
+  const rejoinedA = cache.acquire({
+    environment,
+    fingerprint: "a",
+    create: createA,
+    dispatch,
+  });
+  await Promise.resolve();
+  assert.equal(attemptsA, 1);
+  assert.equal(maximumConcurrentA, 1);
+
+  releaseA();
+  assert.equal(await firstA.runtime, await rejoinedA.runtime);
+  assert.equal(maximumConcurrentA, 1);
+
+  releaseFirstB();
+  assert.deepEqual(await firstB.runtime, { fingerprint: "b", generation: 1 });
+  await Promise.resolve();
+
+  const cleanB = cache.acquire({
+    environment,
+    fingerprint: "b",
+    create: createB,
+    dispatch,
+  });
+  assert.deepEqual(await cleanB.runtime, { fingerprint: "b", generation: 2 });
+  assert.equal(attemptsB, 2);
+  assert.deepEqual(cleanB.drainInitializationScheduled(), []);
+  assert.deepEqual(discardedDispatches, []);
 });
 
 test("late initialization failure evicts only after settlement and permits a clean retry", async () => {
