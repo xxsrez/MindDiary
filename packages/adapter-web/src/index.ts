@@ -19,6 +19,7 @@ export * from "./operator-directory.js";
 export * from "./account-deletion.js";
 export * from "./invitations-membership.js";
 export * from "./visibility-catalog.js";
+export * from "./mind-usage.js";
 
 import { WEB_CONTROL_REQUEST_SECURITY_POLICY } from "./request-security.js";
 
@@ -52,8 +53,12 @@ export const WEB_CONTROL_ROUTES = [
   ["GET", "/api/v1/account/deletion-impact"],
   ["DELETE", "/api/v1/account"],
   ["GET", "/api/v1/minds"],
+  ["GET", "/api/v1/mind-usage"],
   ["POST", "/api/v1/minds"],
   ["GET", "/api/v1/minds/{mind_ref}"],
+  ["GET", "/api/v1/minds/{mind_ref}/usage"],
+  ["PUT", "/api/v1/minds/{mind_ref}/usage"],
+  ["PATCH", "/api/v1/minds/me/description"],
   ["GET", "/api/v1/minds/{mind_ref}/capacity"],
   ["POST", "/api/v1/minds/{mind_ref}/exports"],
   ["GET", "/api/v1/export-jobs/{job_id}"],
@@ -83,10 +88,8 @@ export const WEB_CONTROL_ROUTES = [
   ["DELETE", "/api/v1/invitations/{invitation_id}"],
   ["GET", "/api/v1/mcp-tokens"],
   ["POST", "/api/v1/mcp-tokens"],
-  ["PATCH", "/api/v1/mcp-tokens/{personal_token_ref}/mind-access"],
   ["DELETE", "/api/v1/mcp-tokens/{personal_token_ref}"],
   ["GET", "/api/v1/connections"],
   ["GET", "/api/v1/connections/{connection_ref}"],
-  ["PATCH", "/api/v1/connections/{connection_ref}/mind-access"],
   ["DELETE", "/api/v1/connections/{connection_ref}"],
 ] as const;

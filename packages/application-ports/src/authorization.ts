@@ -311,6 +311,8 @@ export type AuthorizationDenialCode =
   | "historical_read_only"
   | "authorization_state_changed"
   | "credential_access_upgrade_required"
+  | "writable_mind_required"
+  | "writable_mind_stale"
   | "mind_binding_required"
   | "write_binding_required"
   | "write_binding_stale"

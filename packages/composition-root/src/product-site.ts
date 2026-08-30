@@ -69,7 +69,6 @@ import {
   RevisionIndexStatusService,
 } from "@mind-diary/application-background";
 import {
-  AutomaticCaptureService,
   BUNDLE_FILE_LIMITS,
   BundleFileStagingService,
   BundleFileDownloadService,
@@ -89,7 +88,6 @@ import {
   createLocalFileUploadIntentSecretCodec,
   MarkdownImportService,
   MindBrowseService,
-  MindBindingApplicationService,
   MindBindingContentAuthorizer,
   MindDiscoveryService,
   MindHistoryService,
@@ -97,7 +95,6 @@ import {
   MindValidationService,
   TrustedServerGeneratedIngressService,
   type McpBearerAuthenticator,
-  type SitesIdentityActorContext,
 } from "@mind-diary/application-content";
 import {
   AccountBootstrapService,
@@ -112,6 +109,7 @@ import {
   OrdinaryMindDeletionService,
   OwnershipTransferService,
   PersonalMindControlService,
+  PrincipalMindUsageApplicationService,
   PublicMindCatalogService,
   PrincipalActivityService,
   ServiceOperatorDirectoryService,
@@ -322,6 +320,15 @@ function ids(capture?: {
       capture?.auditOutbox?.(id);
       return id;
     },
+    nextPrincipalMindUsageGenerationId: () =>
+      nextOpaque("mind-usage-generation"),
+    nextPrincipalMindUsageAuditEventId: () =>
+      nextOpaque("audit-mind-usage"),
+    nextPrincipalMindUsageOutboxMessageId: () => {
+      const id = nextOpaque("outbox-mind-usage");
+      capture?.auditOutbox?.(id);
+      return id;
+    },
     nextPersonalSpaceHandle: () => `personal-${crypto.randomUUID()}`,
     nextAuditEventId: () => nextOpaque("audit"),
     nextOutboxMessageId: () => {
@@ -508,6 +515,11 @@ class ProductControlApplication {
         return this.services.bootstrap.bootstrapAccount(actor as never, asRecord(input) as never);
       case "rename_account":
         return this.services.personal.renameAccount(actor as never, asRecord(input) as never);
+      case "update_personal_mind_description":
+        return this.services.personal.updateMyMindDescription(
+          actor as never,
+          asRecord(input) as never,
+        );
       case "get_account_deletion_impact":
         return this.services.accountDeletion.getAccountDeletionImpact(actor as never);
       case "delete_account":
@@ -945,6 +957,11 @@ export async function createProductSiteRuntime(
     configuredOperatorPrincipalIds.add(principalId as PrincipalId);
   }
   const activity = new PrincipalActivityService(metadata);
+  const mindUsage = new PrincipalMindUsageApplicationService({
+    usage: metadata,
+    ids: generated,
+    digest: objects,
+  });
   const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   const indexStatus = new RevisionIndexStatusService(metadata);
@@ -954,13 +971,6 @@ export async function createProductSiteRuntime(
     now,
   });
 
-  const bindings = new MindBindingApplicationService({
-    authorizer,
-    bindings: metadata,
-    writeAuthority: "credential_write_target",
-    ids: generated,
-    digest: objects,
-  });
   const credentialWriteTargets = new CredentialWriteTargetApplicationService({
     targets: metadata,
     ids: generated,
@@ -1176,12 +1186,6 @@ export async function createProductSiteRuntime(
     revisionIds: generated,
     effectIds: generated,
   });
-  const automaticCapture = new AutomaticCaptureService({
-    authorizer: contentAuthorizer,
-    bindings: metadata,
-    revisions,
-    commits,
-  });
   const exports = new ExportJobApplicationService({
     authorizer,
     backgroundAuthorizer,
@@ -1205,19 +1209,6 @@ export async function createProductSiteRuntime(
   });
   const mcpApplicationDependencies = {
     discovery,
-    bindings: {
-      read: (request) => bindings.read(request),
-      mutateRead: (request) =>
-        runWithCapturedWork(
-          () => bindings.mutateRead(request),
-          (result) => result.kind === "applied" && !result.replayed,
-        ),
-      mutateWrite: (request) =>
-        runWithCapturedWork(
-          () => bindings.mutateWrite(request),
-          (result) => result.kind === "applied" && !result.replayed,
-        ),
-    },
     browse,
     search: observedSearch,
     history,
@@ -1242,13 +1233,6 @@ export async function createProductSiteRuntime(
         }
         return result;
       },
-    },
-    capture: {
-      capture: (request) =>
-        runWithCapturedWork(
-          () => automaticCapture.capture(request),
-          (result) => result.kind === "captured",
-        ),
     },
   } satisfies ConstructorParameters<typeof ProductMcpContentApplication>[0];
   const directMcpApplication = new ProductMcpContentApplication(
@@ -1643,153 +1627,6 @@ export async function createProductSiteRuntime(
     consistentRead,
   });
 
-  const listResolvedWritableTargets = async (
-    actor: ProductWebActor,
-    credentials: readonly Readonly<{
-      readonly ownerId: string;
-      readonly credentialKind: "oauth_grant" | "personal_token";
-      readonly scopes: readonly ("content:read" | "content:write")[];
-      readonly state: "active" | "revoked";
-    }>[],
-  ) => {
-    if (actor.authentication.kind !== "sites_identity") return Object.freeze([]);
-    const sitesActor = actor as SitesIdentityActorContext;
-    const snapshots = await Promise.all(credentials.map(async (credential) => {
-      const snapshot = await credentialWriteTargets.read({
-        actor: sitesActor,
-        bindingOwnerId: credential.ownerId as MindBindingOwnerId,
-        credentialScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
-      });
-      if (snapshot === null) return null;
-      if (snapshot.kind === "pending_upgrade") {
-        return Object.freeze({
-          ownerId: credential.ownerId,
-          credentialKind: credential.credentialKind,
-          lifecycleState: "pending_upgrade" as const,
-          targetVersion: 0,
-          targetMindId: null,
-        });
-      }
-      if (snapshot.state.credentialKind !== credential.credentialKind) return null;
-      return Object.freeze({
-        ownerId: credential.ownerId,
-        credentialKind: snapshot.state.credentialKind,
-        lifecycleState: credential.state === "active"
-          ? snapshot.state.lifecycleState
-          : "revoked" as const,
-        targetVersion: Number(snapshot.state.targetVersion),
-        targetMindId: snapshot.state.activeGeneration === null
-          ? null
-          : String(snapshot.state.activeGeneration.spaceId),
-      });
-    }));
-    return Object.freeze(
-      snapshots.filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null),
-    );
-  };
-
-  const mutateResolvedWritableTarget = async (
-    actor: ProductWebActor,
-    credential: Readonly<{
-      readonly ownerId: string;
-      readonly credentialKind: "oauth_grant" | "personal_token";
-      readonly scopes: readonly ("content:read" | "content:write")[];
-      readonly state: "active" | "revoked";
-    }>,
-    input: Readonly<Record<string, unknown>>,
-  ) => {
-    if (actor.authentication.kind !== "sites_identity") {
-      throw Object.assign(new Error("Sites identity is required."), { code: "authentication_required" });
-    }
-    const sitesActor = actor as SitesIdentityActorContext;
-    const ownerId = typeof input.binding_owner_id === "string" ? input.binding_owner_id : null;
-    const action = input.action;
-    if (
-      credential.state !== "active" || ownerId !== credential.ownerId ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(credential.ownerId) ||
-      !(action === "select_write" || action === "clear_write")
-    ) {
-      throw Object.assign(new Error("Invalid writable-target mutation."), { code: "invalid_request" });
-    }
-    const allowedKeys = new Set([
-      "action",
-      "binding_owner_id",
-      "expectedTargetVersion",
-      "idempotencyKey",
-      ...(action === "select_write" ? ["mindRef"] : []),
-    ]);
-    if (
-      Object.keys(input).some((key) => !allowedKeys.has(key)) ||
-      !Number.isSafeInteger(input.expectedTargetVersion) ||
-      Number(input.expectedTargetVersion) < 0 ||
-      typeof input.idempotencyKey !== "string" ||
-      input.idempotencyKey.length === 0
-    ) {
-      throw Object.assign(new Error("Invalid writable-target mutation fields."), { code: "invalid_request" });
-    }
-    if (
-      action === "select_write" &&
-      !credential.scopes.includes("content:write")
-    ) {
-      throw Object.assign(new Error("Write scope is required."), { code: "write_step_up_required" });
-    }
-    const caller = Object.freeze({
-      actor: sitesActor,
-      bindingOwnerId: ownerId as MindBindingOwnerId,
-      credentialScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
-    });
-    let spaceId: unknown;
-    if (action === "select_write") {
-      const mindRef = typeof input.mindRef === "string" ? input.mindRef : null;
-      if (mindRef === null || !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)) {
-        throw Object.assign(new Error("Invalid writable target."), { code: "invalid_request" });
-      }
-      const resolved = await control.execute({
-        operation: "get_mind_info",
-        actor,
-        input: Object.freeze({ mind_ref: mindRef.slice(1) }),
-      });
-      spaceId = (resolved as { readonly mindId?: unknown }).mindId;
-    }
-    const result = await runWithCapturedWork(
-      () => credentialWriteTargets.mutate(action === "select_write"
-          ? {
-              ...caller,
-              operation: "select",
-              spaceId: spaceId as never,
-              expectedTargetVersion: Number(input.expectedTargetVersion),
-              idempotencyKey: String(input.idempotencyKey),
-            }
-          : {
-              ...caller,
-              operation: "clear",
-              expectedTargetVersion: Number(input.expectedTargetVersion),
-              idempotencyKey: String(input.idempotencyKey),
-            }),
-      (value) => value.kind === "applied" && !value.replayed,
-    );
-    if (result.kind === "applied") {
-      return Object.freeze({
-        changed: result.changed,
-        replayed: result.replayed,
-        targetVersion: Number(result.state.targetVersion),
-      });
-    }
-    if (result.kind === "invalid") {
-      throw Object.assign(new Error("Writable-target mutation is invalid."), { code: "invalid_request" });
-    }
-    const code = result.kind === "target_version_conflict"
-      ? "target_conflict"
-      : result.kind === "write_scope_required"
-        ? "write_step_up_required"
-        : result.kind === "writer_access_required"
-          ? "target_ineligible"
-          : result.kind === "idempotency_conflict"
-            ? "idempotency_conflict"
-            : "credential_not_found";
-    throw Object.assign(new Error("Writable-target mutation was not applied."), { code });
-  };
-
   const restrictedUatGeneratedSourceHandler =
     restrictedUatGeneratedSourceTest === undefined
       ? async (_request: Request): Promise<Response | null> => null
@@ -1815,6 +1652,7 @@ export async function createProductSiteRuntime(
   const web = createProductWebHttpHandler({
     applicationOrigin: options.publicOrigin,
     csrf,
+    mindUsage,
     performance: {
       record(event) {
         if (event.benchmarkCorrelationId !== null) {
@@ -1917,14 +1755,6 @@ export async function createProductSiteRuntime(
           ) return null;
           throw error;
         }
-      },
-    },
-    writableTargets: {
-      listResolved(actor, credentials) {
-        return listResolvedWritableTargets(actor, credentials);
-      },
-      mutateResolved(actor, credential, input) {
-        return mutateResolvedWritableTarget(actor, credential, input);
       },
     },
     ...(options.webActivityEnabled === false ? {} : { activity }),

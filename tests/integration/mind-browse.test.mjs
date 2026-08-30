@@ -15,6 +15,7 @@ import {
 import {
   AccountBootstrapService,
   OrdinaryMindDeletionService,
+  PrincipalMindUsageApplicationService,
 } from "@mind-diary/application-control";
 import {
   CAPABILITIES,
@@ -65,6 +66,22 @@ function actor(principalId, requestId = "request_browse", occurredAtUtc = CHANGE
     deploymentCapabilities: CAPABILITIES,
     requestId,
     occurredAtUtc,
+  };
+}
+
+function mcpActor(principalId, tokenId = "token_browse_usage") {
+  return {
+    kind: "registered_principal",
+    principalId,
+    authentication: {
+      kind: "mcp_token",
+      tokenId,
+      bindingOwnerId: `owner_${tokenId}`,
+      effectiveScopes: ["content:read"],
+    },
+    deploymentCapabilities: CAPABILITIES,
+    requestId: `request_${tokenId}`,
+    occurredAtUtc: CHANGED_AT,
   };
 }
 
@@ -148,6 +165,33 @@ function harness() {
     host: HOST,
     locators,
   });
+  const credentialAccess = Object.freeze({
+    async authorizeCredentialContentAccess() {
+      return Object.freeze({ kind: "allowed" });
+    },
+  });
+  const mcpBrowse = new MindBrowseService({
+    store: metadata,
+    objects: observedObjects,
+    host: HOST,
+    locators,
+    credentialAccess,
+  });
+  let usageGeneration = 0;
+  let usageAudit = 0;
+  let usageOutbox = 0;
+  const usage = new PrincipalMindUsageApplicationService({
+    usage: metadata,
+    digest: objects,
+    ids: {
+      nextPrincipalMindUsageGenerationId: () =>
+        `usage_browse_generation_${++usageGeneration}`,
+      nextPrincipalMindUsageAuditEventId: () =>
+        `usage_browse_audit_${++usageAudit}`,
+      nextPrincipalMindUsageOutboxMessageId: () =>
+        `usage_browse_outbox_${++usageOutbox}`,
+    },
+  });
   const deletion = new OrdinaryMindDeletionService({
     ordinaryMinds: metadata,
     objects,
@@ -172,6 +216,8 @@ function harness() {
     bootstrap,
     revisions,
     browse,
+    mcpBrowse,
+    usage,
     deletion,
     nextSpaceId: () => `space_browse_${++space}`,
     nextMembershipId: () => `membership_browse_owner_${++membership}`,
@@ -437,6 +483,84 @@ test("browse reads only the requested manifest page, parses frontmatter, and nev
   assert.deepEqual(root.entries.map((entry) => entry.path), ["index.md"]);
   assert.equal(root.entries[0].kind, "index");
   assert.equal(env.observedObjects.reads(), 3);
+});
+
+test("disabled Mind invalidates previously issued fetch and resource locators before object reads", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Usage Browse Owner");
+  const mind = await createMind(env, owner, "usage-browse");
+  const enabled = await env.usage.mutate({
+    actor: actor(owner.principalId, "request_enable_usage_browse"),
+    spaceId: mind.mindId,
+    usageMode: "read",
+    expectedUsageVersion: 0,
+    idempotencyKey: "enable-usage-browse",
+  });
+  assert.equal(enabled.kind, "applied");
+  env.metadata.setCurrentAuthorizationStateForTest(
+    {
+      principalId: owner.principalId,
+      spaceId: mind.mindId,
+      tokenId: "token_browse_usage",
+    },
+    {
+      principal: { principalId: owner.principalId, state: "active" },
+      space: {
+        spaceId: mind.mindId,
+        state: "active",
+        visibility: "private",
+        accessVersion: version(1),
+      },
+      membership: {
+        principalId: owner.principalId,
+        spaceId: mind.mindId,
+        role: "owner",
+        state: "active",
+        version: version(1),
+      },
+      token: {
+        tokenId: "token_browse_usage",
+        principalId: owner.principalId,
+        state: "active",
+        scopes: ["content:read"],
+        version: version(1),
+        expiresAt: "2027-08-07T00:00:00.000Z",
+      },
+    },
+  );
+  const currentActor = mcpActor(owner.principalId);
+  const listed = await env.mcpBrowse.browseEntries(currentActor, {
+    mind: mind.handle,
+    path: "concepts",
+    limit: 1,
+  });
+  assert.equal(listed.entries.length, 1);
+
+  const disabled = await env.usage.mutate({
+    actor: actor(owner.principalId, "request_disable_usage_browse"),
+    spaceId: mind.mindId,
+    usageMode: "disabled",
+    expectedUsageVersion: 1,
+    idempotencyKey: "disable-usage-browse",
+  });
+  assert.equal(disabled.kind, "applied");
+  env.observedObjects.reset();
+  await assert.rejects(
+    env.mcpBrowse.fetch(currentActor, { id: listed.entries[0].entryId }),
+    expectFailure("locator_not_found"),
+  );
+  await assert.rejects(
+    env.mcpBrowse.readResource(currentActor, listed.entries[0].resourceUri),
+    expectFailure("resource_not_found"),
+  );
+  await assert.rejects(
+    env.mcpBrowse.browseEntries(currentActor, {
+      mind: mind.handle,
+      path: "concepts",
+    }),
+    expectFailure("mind_not_found"),
+  );
+  assert.equal(env.observedObjects.reads(), 0);
 });
 
 test("browse materializes a scaled page with bounded concurrency and deterministic order", async () => {

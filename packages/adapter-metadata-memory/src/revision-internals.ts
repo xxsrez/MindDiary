@@ -165,9 +165,9 @@ export function consumeStagedBundleFilesAgainst(
       return Object.freeze({ kind: "not_verified", stagedFileId });
     }
     if (
-      record.bindingOwnerId !== request.bindingOwnerId ||
-      record.writeBindingId !== request.writeBindingId ||
-      record.writeBindingGeneration !== request.writeBindingGeneration ||
+      record.principalId !== request.principalId ||
+      record.principalMindUsageGenerationId !==
+        request.principalMindUsageGenerationId ||
       record.spaceId !== request.spaceId
     ) return Object.freeze({ kind: "binding_mismatch", stagedFileId });
     selected.push(record);
@@ -601,6 +601,15 @@ export const STAGED_COMMIT_AUDIT_METADATA_KEYS = [
   ...COMMIT_AUDIT_METADATA_KEYS,
   "staged_source_receipts",
 ] as const;
+export const SOURCE_REFERENCE_COMMIT_AUDIT_METADATA_KEYS = [
+  ...COMMIT_AUDIT_METADATA_KEYS,
+  "source_reference_count",
+  "source_reference_digest",
+] as const;
+export const SOURCE_REFERENCE_STAGED_COMMIT_AUDIT_METADATA_KEYS = [
+  ...SOURCE_REFERENCE_COMMIT_AUDIT_METADATA_KEYS,
+  "staged_source_receipts",
+] as const;
 export const CAPTURE_STAGED_COMMIT_AUDIT_METADATA_KEYS = [
   ...CAPTURE_COMMIT_AUDIT_METADATA_KEYS,
   "staged_source_receipts",
@@ -691,14 +700,26 @@ export function validCommitAuditMetadata(
     keys.every((key, index) => key === COMMIT_AUDIT_METADATA_KEYS[index]);
   const stagedOnly = keys.length === STAGED_COMMIT_AUDIT_METADATA_KEYS.length &&
     keys.every((key, index) => key === STAGED_COMMIT_AUDIT_METADATA_KEYS[index]);
+  const sourceReferenceOnly =
+    keys.length === SOURCE_REFERENCE_COMMIT_AUDIT_METADATA_KEYS.length &&
+    keys.every(
+      (key, index) => key === SOURCE_REFERENCE_COMMIT_AUDIT_METADATA_KEYS[index],
+    );
+  const sourceReferenceStaged =
+    keys.length === SOURCE_REFERENCE_STAGED_COMMIT_AUDIT_METADATA_KEYS.length &&
+    keys.every(
+      (key, index) =>
+        key === SOURCE_REFERENCE_STAGED_COMMIT_AUDIT_METADATA_KEYS[index],
+    );
   const captureStaged =
     keys.length === CAPTURE_STAGED_COMMIT_AUDIT_METADATA_KEYS.length &&
     keys.every(
       (key, index) => key === CAPTURE_STAGED_COMMIT_AUDIT_METADATA_KEYS[index],
     );
   const capture = captureOnly || captureStaged;
-  const staged = stagedOnly || captureStaged;
-  if (!ordinaryOnly && !capture && !stagedOnly) {
+  const staged = stagedOnly || captureStaged || sourceReferenceStaged;
+  const sourceReferenced = sourceReferenceOnly || sourceReferenceStaged;
+  if (!ordinaryOnly && !capture && !stagedOnly && !sourceReferenced) {
     return false;
   }
   const revision = envelope.revision;
@@ -719,6 +740,14 @@ export function validCommitAuditMetadata(
     metadata.manifest_hash === revision.manifestHash &&
     (!staged || validStagedSourceAuditReceipts(
       metadata.staged_source_receipts,
+    )) &&
+    (!sourceReferenced || (
+      typeof metadata.source_reference_count === "number" &&
+      Number.isSafeInteger(metadata.source_reference_count) &&
+      metadata.source_reference_count >= 1 &&
+      metadata.source_reference_count <= 8 &&
+      typeof metadata.source_reference_digest === "string" &&
+      SHA256_PATTERN.test(metadata.source_reference_digest)
     )) &&
     (!capture || (
       metadata.capture_mode === "routine_non_sensitive" &&

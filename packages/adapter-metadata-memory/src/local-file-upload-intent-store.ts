@@ -19,14 +19,19 @@ function finiteInstant(value: string): boolean {
   return Number.isFinite(Date.parse(value));
 }
 
-const RECORD_KEYS = new Set([
+const REQUIRED_RECORD_KEYS = new Set([
   "formatVersion", "intentId", "namespaceHash", "canonicalRequestHash",
-  "principalId", "tokenId", "bindingOwnerId", "spaceId", "writeBindingId",
+  "principalId", "tokenId", "bindingOwnerId", "spaceId",
   "sourceKind", "displayFilename", "claimedMediaType", "expectedSize",
   "expectedSha256", "idempotencyKey", "state", "claimId", "leaseExpiresAt",
   "stagedFileId", "stageReplayed", "rejectionCode", "createdAt", "expiresAt",
   "consumedAt",
 ]);
+const OPTIONAL_RECORD_KEYS = new Set([
+  "principalMindUsageGenerationId",
+  "writeBindingId",
+]);
+const RECORD_KEYS = new Set([...REQUIRED_RECORD_KEYS, ...OPTIONAL_RECORD_KEYS]);
 const BOUNDED_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/u;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const MEDIA_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u;
@@ -42,7 +47,7 @@ function validFilename(value: unknown): value is string {
 function validStored(record: Readonly<LocalFileUploadIntentRecord>): boolean {
   if (
     Object.keys(record).some((key) => !RECORD_KEYS.has(key)) ||
-    Object.keys(record).length !== RECORD_KEYS.size ||
+    [...REQUIRED_RECORD_KEYS].some((key) => !(key in record)) ||
     record.formatVersion !== 1 ||
     !BOUNDED_ID.test(record.intentId) ||
     !SHA256.test(record.namespaceHash) ||
@@ -51,7 +56,10 @@ function validStored(record: Readonly<LocalFileUploadIntentRecord>): boolean {
     !BOUNDED_ID.test(record.tokenId) ||
     !BOUNDED_ID.test(record.bindingOwnerId) ||
     !BOUNDED_ID.test(record.spaceId) ||
-    !BOUNDED_ID.test(record.writeBindingId) ||
+    (record.writeBindingId !== undefined &&
+      !BOUNDED_ID.test(record.writeBindingId)) ||
+    (record.principalMindUsageGenerationId !== undefined &&
+      !BOUNDED_ID.test(record.principalMindUsageGenerationId)) ||
     (record.sourceKind !== "local_path" &&
       record.sourceKind !== "workspace/generated_artifact") ||
     !validFilename(record.displayFilename) ||
@@ -92,6 +100,7 @@ function validStored(record: Readonly<LocalFileUploadIntentRecord>): boolean {
 
 function validNew(record: Readonly<LocalFileUploadIntentRecord>): boolean {
   return validStored(record) &&
+    record.principalMindUsageGenerationId !== undefined &&
     record.state === "active" &&
     record.claimId === null;
 }
@@ -105,6 +114,8 @@ function sameReplayIdentity(
     current.principalId === incoming.principalId &&
     current.bindingOwnerId === incoming.bindingOwnerId &&
     current.spaceId === incoming.spaceId &&
+    current.principalMindUsageGenerationId ===
+      incoming.principalMindUsageGenerationId &&
     current.writeBindingId === incoming.writeBindingId &&
     current.sourceKind === incoming.sourceKind &&
     current.displayFilename === incoming.displayFilename &&

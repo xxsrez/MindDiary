@@ -610,6 +610,14 @@ export class MindHistoryService {
     spaceId: SpaceId,
     concealCapabilityDenial: boolean,
   ): Promise<AllowedAuthorization> {
+    try {
+      await this.#discovery.requireEnabledMindUsage(actor, spaceId);
+    } catch (error) {
+      if (error instanceof MindDiscoveryFailure) {
+        throw new MindHistoryFailure("mind_not_found", "Mind was not found.");
+      }
+      throw error;
+    }
     const decision = await this.#authorizer.authorize({
       actor,
       spaceId,

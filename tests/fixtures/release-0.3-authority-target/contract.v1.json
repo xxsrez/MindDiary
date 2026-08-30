@@ -9,7 +9,6 @@
   "hostedJoinSchema": "mind-diary/uat-release-0.3-authority-target-evidence/v1",
   "toolInventory": [
     "browse_entries",
-    "capture_knowledge",
     "commit_changeset",
     "create_file_upload_intent",
     "fetch",

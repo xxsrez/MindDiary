@@ -1,5 +1,14 @@
 # Browser и UAT-проверка Settings / Connections
 
+> **Current Web amendment MD-373/MD-375, 2026-08-30.** Выбор Minds теперь
+> принадлежит principal: на странице каждого Mind задаётся
+> `disabled | read | read_write`, одинаковый для всех OAuth connections и
+> personal tokens. Connections и Advanced MCP показывают только lifecycle,
+> credential scopes и derived effective capability; отдельные credential-owned
+> Mind selection/capture controls удалены. Старые поля и assertion names
+> квитанции MD-358 ниже сохранены только как историческая форма evidence и не
+> подтверждают current Web contract.
+
 Статус: operational contract для MD-358, 2026-08-28. Локальная
 детерминированная проверка реализована; hosted acceptance требует прямых
 same-run наблюдений exact deployment через Sites connector, Codex in-app
@@ -7,10 +16,11 @@ Browser и fresh Codex/plugin client.
 
 ## Назначение и граница
 
-Проверка соединяет обычный OAuth `Connections` и personal-token путь
-`Advanced MCP` на одном exact candidate. Она подтверждает, что оба credential
-profile получают одинаковый Site-owned lifecycle writable target, а ordinary
-Connections не раскрывает protocol/credential internals.
+Проверка соединяет обычный OAuth `Connections`, personal-token путь
+`Advanced MCP` и настройку Minds на одном exact candidate. Она подтверждает,
+что оба credential profile получают одну principal-owned конфигурацию Minds,
+а scopes только сужают effective capability. Ordinary Connections не выбирает
+Mind и не раскрывает protocol/credential internals.
 
 Локальная квитанция не подтверждает Sites deployment, real OAuth consent,
 hosted persistence, provider cleanup или браузерную сессию пользователя. Даже
@@ -27,7 +37,7 @@ password/MFA/passkey существующего restricted-UAT account и явн
 Закрытый machine contract находится в
 `tests/fixtures/settings-connections-uat/contract.v1.json`.
 
-## Локальный exact-candidate gate
+## Historical MD-358 local exact-candidate gate
 
 Gate запускается после одного build на чистом `HEAD`. Output — новый файл в
 существующем owner-only temporary directory с exact mode `0700`, вне repository
@@ -55,14 +65,12 @@ Runner последовательно:
    Codex 0.150.1 установленный HTTP server обязан иметь
    `auth_status: o_auth`, что означает доступный OAuth flow, но не выполненный
    вход и не наличие сохранённой credential;
-3. исполняет точечные OAuth, personal-token, target-state, Product Site MCP,
-   native staging и UI contract suites;
+3. исполняет frozen OAuth, personal-token, historical target-state, Product
+   Site MCP, native staging и UI contract suites MD-358;
 4. запускает pinned Playwright `1.62.1` и Chromium `151.0.7922.34` revision
    `1234` на существующем MD-300-style server-bound Connections fixture;
-5. требует точный registry browser tests для empty/ready/paginated Connections,
-   стабильного `/help/codex`, ACL-derived summary без read selector, Site-owned
-   target controls, revoke/reconnect, personal-token show-once/target/history,
-   redaction и fail-closed error states;
+5. требует frozen registry browser tests MD-358 для Connections, Help,
+   personal-token lifecycle, redaction и fail-closed states;
 6. закрывает fixture processes/browser contexts, уничтожает synthetic OAuth
    adapters и удаляет temporary inputs.
 
@@ -86,6 +94,34 @@ profile остаётся отдельным intentional `18`-tool contract.
 Локальный result не подменяет in-app Browser, real Codex OAuth или post-redeploy
 read-back независимо от полноты synthetic matrix.
 
+Checked-in `mind-diary/settings-connections-local-evidence/v1` и
+`mind-diary/settings-connections-uat-contract/v1` появились до MD-373. Их
+старые `target_*`, `*_empty_target` и похожие row names можно использовать
+только для воспроизводимости уже собранного MD-358 evidence. Fresh acceptance
+не трактует эти names как существующий UI или authority: current доказательство
+даёт principal usage projection и отсутствие credential-specific controls.
+
+### Current MD-375 local supplement
+
+Перед UAT exact candidate проходит полный repository gate из
+[release profile](ship-work-release-profile.md).
+Дополнительно current Web evidence обязано включать passing results следующих
+точечных consumers:
+
+```bash
+node --test \
+  tests/unit/connections-experience-ui.test.mjs \
+  tests/unit/mcp-token-management-ui.test.mjs \
+  tests/integration/product-site.test.mjs
+npx playwright test \
+  tests/browser/connections/connections.spec.mjs \
+  tests/browser/mind-usage/mind-usage.spec.mjs
+```
+
+Эти тесты проверяют scope/lifecycle-only credential pages, три account-wide
+mode, singleton switch, CAS/read-back/conflict и отсутствие старых
+credential-specific Mind controls. Они не являются hosted evidence.
+
 ## Hosted prerequisites
 
 До первого mutable UAT action orchestrating agent в одном непрерывном run сам
@@ -102,7 +138,8 @@ read-back независимо от полноты synthetic matrix.
 6. accepted provider-boundary receipt той же project/version/deployment/archive;
 7. short-lived sessions `UAT-MIND-ROLE` и `UAT-ORDINARY`, Codex in-app Browser
    и fresh Codex/plugin context exact version;
-8. baseline, в котором нет per-run grant/token/target/Mind.
+8. baseline, в котором нет per-run grant/token/Mind, а configured usage modes
+   текущего principal прочитаны и зафиксированы без внутренних IDs.
 
 Mismatch candidate, archive, deployment, actor fingerprint, plugin/client
 version или baseline останавливает run до mutation. Переданный ID, старый
@@ -119,30 +156,43 @@ approval не являются prerequisite evidence.
 1. Проверить `/help/codex` в состояниях no connection, active и revoked:
    route/link/copy остаются доступны и не становятся wizard/progress state.
 2. Fresh OAuth создаёт active connection на exact plugin/client, показывает
-   concise current-ACL summary и не показывает read selector, attach/detach,
-   raw IDs или protocol scopes.
-3. Fresh/reconnected credential начинает с empty writable target.
-4. На Site выбрать, переключить и очистить target через current
-   `target_version`; Codex/MCP не управляет этим state.
-5. После controlled redeploy connection и выбранный target сохраняются.
-6. Revoke скрывает ordinary detail/list row, а следующий MCP request получает
-   denial. Reconnect создаёт новый credential owner и empty target, не переносит
-   прежнюю generation/capture.
+   client lifecycle и credential scopes и не показывает Mind selector,
+   attach/detach, raw IDs или отдельную automatic-save policy.
+3. На `/minds` прочитать все доступные Minds с name, routing description,
+   configured mode и effective availability. Новый principal начинает с
+   `disabled`; пустой description допускает только direct-request `read` и не
+   допускает `read_write`.
+4. Через current `expected_usage_version` включить несколько `read` Minds и
+   один `read_write`. Переключение второго Mind в `read_write` атомарно
+   переводит прежний writable Mind в `read`; Codex/MCP не меняет этот state.
+5. Второй OAuth credential того же principal видит ту же configured projection.
+   Read-only либо потерявший ACL credential получает только суженный effective
+   result, не отдельную конфигурацию.
+6. После controlled redeploy connection и principal usage modes сохраняются.
+7. Revoke скрывает ordinary detail/list row, а следующий MCP request получает
+   denial. Reconnect создаёт новый credential, но не сбрасывает и не копирует
+   principal usage: fresh connection видит те же current modes.
 
 ### Advanced MCP personal token
 
 1. Создать отдельный named token; secret доступен ровно один раз и не попадает
    в receipt.
-2. Подтвердить empty target, затем Site select/switch/clear через independent
-   token target version.
-3. После controlled redeploy token и current target сохраняются.
-4. Revoke закрывает следующий MCP request. Reissue создаёт новый owner с empty
-   target и не переносит старую generation/capture.
+2. Подтвердить, что token page показывает только lifecycle/scopes и ссылку на
+   account-wide Mind modes, без отдельного Mind selector или automatic-save
+   toggle.
+3. Через `list_minds` прочитать ту же configured projection, что у OAuth
+   connection. Для read-only token `usage_mode: read_write` остаётся видимым,
+   но `effective.can_write=false`.
+4. После controlled redeploy token и principal usage modes сохраняются.
+5. Revoke закрывает следующий MCP request. Reissue меняет только credential
+   lifecycle и scopes; principal usage modes остаются прежними.
 
 ### Privacy и cleanup
 
 Ordinary projection сканируется на email, credential/token/grant/binding IDs,
-owner/generation, raw body, cookie/header, private content и URL secrets.
+owner/generation, raw body, cookie/header, private content и URL secrets. Также
+проверяется отсутствие credential-owned Mind controls и внутренних Mind IDs в
+mode read-back.
 Persisted evidence содержит только opaque actor/run fingerprints, classifications,
 exact versions и hashes.
 
@@ -150,14 +200,17 @@ Cleanup продолжается после product failure и обязан до
 
 - revoke всех per-run OAuth grants и personal tokens;
 - denial следующего request каждым credential;
-- отсутствие credential и target на product side;
+- отсутствие per-run credentials на product side;
 - отсутствие credential на provider side;
 - удаление run Mind и exact route absence;
-- возврат restricted pool к исходным role/token/audience/allowlist baselines.
+- возврат restricted pool к исходным role/token/audience/allowlist baselines;
+- read-back исходных principal usage modes либо отсутствие удалённого run Mind
+  в usage projection.
 
 Timeout или потерянный response сначала разрешается deployment/credential/
-target/Mind read-back того же run fingerprint. До reconciliation повторная
-выдача credential запрещена; classification — `unknown_external_outcome`.
+usage-version/Mind/HEAD read-back того же run fingerprint. До reconciliation
+повторная выдача credential или mode mutation запрещена; classification —
+`unknown_external_outcome`.
 
 ## Offline structural join
 
@@ -189,6 +242,11 @@ Browser input schema
 matrix Help/OAuth/personal-token/redeploy/privacy/cleanup и exact actor/plugin/
 client lineage. Raw responses и secrets запрещены.
 
+Поля этой v1 matrix с `target_*` names являются historical slots. Offline
+joiner проверяет их форму для воспроизводимости MD-358, но не умеет сам
+доказать current principal modes. Поэтому его result остаётся только
+структурным дополнением к direct current Web/MCP read-back.
+
 Join fail closed проверяет archive bytes, candidate, source mirror,
 deployment/version,
 readiness actors, provider boundary, local receipt, plugin/client versions,
@@ -215,6 +273,12 @@ Sites calls, fresh Codex/plugin operations и in-app Browser journeys. Он
 связывает hashes/refs raw tool outputs, local receipt и structural join с exact
 candidate/version/deployments, actor/run fingerprints, закрытой matrix и
 cleanup absence read-back.
+
+Для current candidate закрытая matrix дополнительно включает default
+`disabled`, несколько `read`, singleton/atomic switch `read_write`, одинаковую
+configured projection разных credentials, scope/ACL narrowing, description
+gate, persistence after redeploy и отсутствие Mind controls на обеих credential
+pages. Legacy target rows без этих direct observations не дают terminal PASS.
 
 Repository script намеренно не создаёт и не валидирует hosted PASS: authority
 опирается на direct same-run observations, а не на форму файла. Без них MD-358

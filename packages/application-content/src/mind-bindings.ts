@@ -885,9 +885,10 @@ function credentialAccessDenied(
 }
 
 /**
- * Uses current ACL directly for reads in the new profile and enforces the
- * credential-owned generation for writes. Transactional rechecks fence rebind
- * from commit and export-start effects.
+ * Uses credential lifecycle plus current ACL/scope for every content
+ * capability in the current profile. Write destination and generation fencing
+ * belong to the principal Mind usage services, not this credential wrapper.
+ * The legacy profile continues to enforce read/write Mind bindings.
  */
 export class MindBindingContentAuthorizer
   implements Authorizer, CredentialContentAccessAuthorizer {
@@ -983,10 +984,7 @@ export class MindBindingContentAuthorizer
     delegate: Authorizer,
     request: AuthorizationRequest,
   ): Promise<AuthorizationDecision> {
-    if (
-      this.#readAuthority === "current_acl" &&
-      request.capability !== "content:write"
-    ) {
+    if (this.#readAuthority === "current_acl") {
       const credential = await this.#authorizeCredentialContentAccessWith(
         bindings,
         request.actor,
@@ -1008,10 +1006,7 @@ export class MindBindingContentAuthorizer
     transaction: AuthorizationTransaction,
     expected: AuthorizationStamp,
   ): Promise<AuthorizationDecision> {
-    if (
-      this.#readAuthority === "current_acl" &&
-      request.capability !== "content:write"
-    ) {
+    if (this.#readAuthority === "current_acl") {
       const credential = await this.#authorizeCredentialContentAccessWith(
         transaction,
         request.actor,

@@ -150,10 +150,23 @@ export function apiOperation(method: string, pathname: string): {
     if (method === "GET") return { operation: "list_minds", path: {} };
     if (method === "POST") return { operation: "create_space_with_owner", path: {} };
   }
+  if (method === "GET" && one === "mind-usage" && tail.length === 1) {
+    return { operation: "get_mind_usage", path: {} };
+  }
   if (method === "GET" && one === "public-minds" && tail.length === 1) return { operation: "list_public_minds", path: {} };
   if (one === "minds" && two !== null) {
     const path = { mind_ref: two };
     if (tail.length === 2 && method === "GET") return { operation: "get_mind_info", path };
+    if (three === "usage" && tail.length === 3 && method === "GET") {
+      return { operation: "get_mind_usage", path };
+    }
+    if (three === "usage" && tail.length === 3 && method === "PUT") {
+      return { operation: "set_mind_usage", path };
+    }
+    if (
+      two === "me" && three === "description" && tail.length === 3 &&
+      method === "PATCH"
+    ) return { operation: "update_personal_mind_description", path };
     if (three === "capacity" && tail.length === 3 && method === "GET") return { operation: "get_capacity_usage", path };
     if (three === "exports" && tail.length === 3 && method === "POST") return { operation: "start_export", path };
     if (three === "markdown-import-plans" && tail.length === 3 && method === "POST") return { operation: "plan_markdown_import", path };
@@ -203,17 +216,11 @@ export function apiOperation(method: string, pathname: string): {
     if (tail.length === 1 && method === "GET") return { operation: "list_personal_token_page", path: {} };
     if (tail.length === 1 && method === "POST") return { operation: "issue_mcp_token", path: {} };
     if (two !== null && tail.length === 2 && method === "DELETE") return { operation: "revoke_personal_token", path: { personal_token_ref: two } };
-    if (two !== null && three === "mind-access" && tail.length === 3 && method === "PATCH") {
-      return { operation: "mutate_personal_token_access", path: { personal_token_ref: two } };
-    }
   }
   if (one === "connections") {
     if (tail.length === 1 && method === "GET") return { operation: "list_connections", path: {} };
     if (two !== null && tail.length === 2 && method === "GET") return { operation: "get_connection", path: { connection_ref: two } };
     if (two !== null && tail.length === 2 && method === "DELETE") return { operation: "revoke_connection", path: { connection_ref: two } };
-    if (two !== null && three === "mind-access" && tail.length === 3 && method === "PATCH") {
-      return { operation: "mutate_connection_access", path: { connection_ref: two } };
-    }
   }
   return null;
 }
@@ -235,6 +242,7 @@ export function applicationErrorStatus(code: string): number {
   if (code === "rate_limited") return 429;
   if (code === "search_index_unavailable") return 503;
   if (code === "binding_state_unavailable") return 503;
+  if (code === "mind_usage_unavailable") return 503;
   if (code === "capacity_accounting_untrusted") return 503;
   if (
     code === "okf_validation_failed" ||
@@ -249,6 +257,7 @@ export function applicationErrorStatus(code: string): number {
   ) return 422;
   if (
     code === "handle_unavailable" ||
+    code === "usage_conflict" ||
     code === "write_step_up_required" ||
     code === "deletion_impact_changed" ||
     code === "deletion_impact_expired" ||
@@ -257,6 +266,11 @@ export function applicationErrorStatus(code: string): number {
     code === "ownership_state_changed" ||
     code.includes("conflict")
   ) return 409;
+  if (
+    code === "description_required" ||
+    code === "description_required_for_write" ||
+    code === "usage_not_allowed"
+  ) return 422;
   if (code.includes("not_found") || code.endsWith("_unavailable")) return 404;
   if (code.startsWith("invalid_")) return 400;
   return 403;

@@ -3,6 +3,7 @@ import {
   PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT,
   PRODUCT_EXPORT_CLIENT_JAVASCRIPT,
   PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT,
+  PRODUCT_MIND_USAGE_CLIENT_JAVASCRIPT,
   PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT,
   PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT,
   PRODUCT_UI_APPLE_TOUCH_ICON_PNG,
@@ -43,7 +44,7 @@ function staticAsset(pathname: string): { readonly body: BodyInit; readonly type
   if (pathname === "/brand/mind-diary-mark.svg") return { body: PRODUCT_UI_MARK_SVG, type: "image/svg+xml; charset=utf-8" };
   if (pathname === "/ui/mind-diary-onboarding-client.js") {
     return {
-      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_EXPORT_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}`,
+      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_MIND_USAGE_CLIENT_JAVASCRIPT}\n${PRODUCT_EXPORT_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}`,
       type: "text/javascript; charset=utf-8",
     };
   }
@@ -54,13 +55,13 @@ function staticAsset(pathname: string): { readonly body: BodyInit; readonly type
   ) return { body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_UI_CLIENT_JAVASCRIPT}`, type: "text/javascript; charset=utf-8" };
   if (pathname === "/ui/mind-diary-ordinary-minds-client.js") {
     return {
-      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT}\n${PRODUCT_EXPORT_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}\n${PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT}`,
+      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT}\n${PRODUCT_MIND_USAGE_CLIENT_JAVASCRIPT}\n${PRODUCT_EXPORT_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}\n${PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT}`,
       type: "text/javascript; charset=utf-8",
     };
   }
   if (pathname === "/ui/mind-diary-ordinary-minds-list-client.js") {
     return {
-      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT}`,
+      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT}\n${PRODUCT_MIND_USAGE_CLIENT_JAVASCRIPT}`,
       type: "text/javascript; charset=utf-8",
     };
   }

@@ -188,8 +188,8 @@ function intentFailure(code: string): Response {
   switch (code) {
     case "file_ingress_source_unavailable":
     case "insufficient_scope":
-    case "write_binding_required":
-    case "write_binding_stale":
+    case "writable_mind_required":
+    case "writable_mind_stale":
       return unavailable();
     case "file_ingress_intent_expired":
       return problem(410, code);
@@ -244,7 +244,6 @@ function stageFailure(
       ? problem(413, "bundle_file_size_limit_exceeded")
       : problem(400, "invalid_request");
   }
-  if (result.code === "binding_mismatch") return unavailable();
   if (result.code === "idempotency_conflict") {
     return problem(409, "file_ingress_intent_conflict");
   }

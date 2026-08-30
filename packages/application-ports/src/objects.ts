@@ -4,6 +4,8 @@ import {
   type ExportArchiveRecord,
   type MarkdownMediaType,
   type MindBindingOwnerId,
+  type PrincipalId,
+  type PrincipalMindUsageGenerationId,
   type JobId,
   type Sha256Digest,
   type SpaceId,
@@ -22,6 +24,7 @@ import {
 import {
   type AuthorizationTransaction,
 } from "./authorization.js";
+import type { PrincipalMindUsageReader } from "./principal-mind-usage.js";
 
 export interface ImmutableObjectWriteRequest {
   readonly bytes: Uint8Array;
@@ -352,8 +355,17 @@ export interface StagedBundleFileRecord {
   readonly bindingOwnerId: MindBindingOwnerId;
   /** Safe source provenance; transport identifiers never cross this boundary. */
   readonly sourceKind: FileIngressSourceKind;
-  readonly writeBindingId: WriteMindBindingId;
-  readonly writeBindingGeneration: BindingVersion;
+  /**
+   * Principal-owned destination fence for current producers. Legacy records
+   * omit these fields and are never consumable by the principal-mounted
+   * commit path.
+   */
+  readonly principalId?: PrincipalId;
+  readonly principalMindUsageGenerationId?: PrincipalMindUsageGenerationId;
+  /** @deprecated Retained only to deserialize pre-usage-mode staged records. */
+  readonly writeBindingId?: WriteMindBindingId;
+  /** @deprecated Retained only to deserialize pre-usage-mode staged records. */
+  readonly writeBindingGeneration?: BindingVersion;
   readonly spaceId: SpaceId;
   readonly displayFilename: string;
   readonly mediaType: BundleFileMediaType;
@@ -374,6 +386,7 @@ export type CreateStagedBundleFileResult =
 
 export interface BundleFileStagingTransaction
   extends AuthorizationTransaction,
+    PrincipalMindUsageReader,
     IdempotencyTransaction,
     CapacityReservationTransaction {
   readStagedBundleFile(
@@ -388,9 +401,8 @@ export interface BundleFileStagingTransaction
 
 export interface ConsumeStagedBundleFilesRequest {
   readonly stagedFileIds: readonly StagedBundleFileId[];
-  readonly bindingOwnerId: MindBindingOwnerId;
-  readonly writeBindingId: WriteMindBindingId;
-  readonly writeBindingGeneration: BindingVersion;
+  readonly principalId: PrincipalId;
+  readonly principalMindUsageGenerationId: PrincipalMindUsageGenerationId;
   readonly spaceId: SpaceId;
   readonly consumedAt: UtcInstant;
 }

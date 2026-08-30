@@ -19,6 +19,10 @@ import {
   type ProductWebRegisteredActor,
 } from "./product-web-activity.js";
 
+import {
+  type ProductWebMindUsageApplication,
+} from "./mind-usage.js";
+
 export type RegisteredSitesActor = ProductWebRegisteredActor;
 export type ProductWebActor = RegisteredSitesActor | SitesIdentityBeforeRegistration;
 
@@ -29,6 +33,8 @@ export interface ProductSitesSessionSnapshot {
   };
   readonly personalMind: {
     readonly name: string;
+    readonly description?: string | null;
+    readonly metadataVersion?: number;
     readonly headRevisionId: string;
   };
 }
@@ -158,7 +164,6 @@ export interface ProductWebOAuthConnections {
   }>): Promise<Readonly<{
     readonly items: readonly {
       readonly connectionRef: string;
-      readonly bindingOwnerId: string;
       readonly clientName: string;
       readonly scopes: readonly ("content:read" | "content:write")[];
       readonly createdAt: string;
@@ -168,7 +173,6 @@ export interface ProductWebOAuthConnections {
   }>>;
   read(principalId: string, connectionRef: string): Promise<Readonly<{
     readonly connectionRef: string;
-    readonly bindingOwnerId: string;
     readonly clientName: string;
     readonly scopes: readonly ("content:read" | "content:write")[];
     readonly createdAt: string;
@@ -177,9 +181,7 @@ export interface ProductWebOAuthConnections {
   revoke(principalId: string, connectionRef: string): Promise<boolean>;
 }
 
-export interface ProductWebPersonalTokenRecord extends PersonalTokenItem {
-  readonly bindingOwnerId: string;
-}
+export interface ProductWebPersonalTokenRecord extends PersonalTokenItem {}
 
 export interface ProductWebPersonalTokens {
   listPage(
@@ -197,40 +199,6 @@ export interface ProductWebPersonalTokens {
     actor: RegisteredSitesActor,
     personalTokenRef: string,
   ): Promise<Readonly<ProductWebPersonalTokenRecord> | null>;
-}
-
-export interface ProductWebCredentialWriteTargetOwner {
-  readonly ownerId: string;
-  readonly credentialKind: "oauth_grant" | "personal_token";
-  readonly lifecycleState: "active" | "pending_upgrade" | "revoked" | "deleted";
-  readonly targetVersion: number;
-  readonly targetMindId: string | null;
-}
-
-export interface ProductWebCredentialWriteTargets {
-  listResolved(
-    actor: RegisteredSitesActor,
-    credentials: readonly Readonly<{
-      readonly ownerId: string;
-      readonly credentialKind: "oauth_grant" | "personal_token";
-      readonly scopes: readonly ("content:read" | "content:write")[];
-      readonly state: "active" | "revoked";
-    }>[],
-  ): Promise<readonly ProductWebCredentialWriteTargetOwner[]>;
-  mutateResolved(
-    actor: RegisteredSitesActor,
-    credential: Readonly<{
-      readonly ownerId: string;
-      readonly credentialKind: "oauth_grant" | "personal_token";
-      readonly scopes: readonly ("content:read" | "content:write")[];
-      readonly state: "active" | "revoked";
-    }>,
-    request: Readonly<Record<string, unknown>>,
-  ): Promise<Readonly<{
-    readonly changed: boolean;
-    readonly replayed: boolean;
-    readonly targetVersion: number;
-  }>>;
 }
 
 export type ProductWebPerformanceOperation =
@@ -258,7 +226,7 @@ export interface ProductWebHttpHandlerDependencies {
   readonly control: ProductWebControlApplication;
   readonly oauthConnections?: ProductWebOAuthConnections;
   readonly personalTokens?: ProductWebPersonalTokens;
-  readonly writableTargets?: ProductWebCredentialWriteTargets;
+  readonly mindUsage?: ProductWebMindUsageApplication;
   readonly activity?: ProductWebActivityRecorder;
   readonly performance?: ProductWebPerformanceRecorder;
   /** Optional hosted-only coalescing window; defaults to zero to protect navigation latency. */

@@ -208,10 +208,6 @@ const handler = createProductWebHttpHandler({
     async read() { return null; },
     async revoke() { return false; },
   },
-  writableTargets: {
-    async listResolved() { return []; },
-    async mutateResolved() { throw new Error("unused"); },
-  },
 });
 
 async function nodeRequest(request) {

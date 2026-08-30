@@ -11,7 +11,7 @@ import {
 
 const START = "2026-08-25T12:00:00.000Z";
 const SPACE = "space_upload_intent";
-const BINDING = "write_binding_upload_intent";
+const GENERATION = "usage_generation_upload_intent";
 const OWNER = "md_oauth_grant_upload_intent";
 const AUTHORIZATION_RECORD_ID = "md_oauth_access_upload_intent";
 const SHA_A = `sha256:${"a".repeat(64)}`;
@@ -37,15 +37,13 @@ function actor(tokenId = AUTHORIZATION_RECORD_ID) {
   });
 }
 
-function bindingSnapshot(spaceId = SPACE, writeBindingId = BINDING) {
+function usageSnapshot(spaceId = SPACE, generationId = GENERATION) {
   return Object.freeze({
-    bindingSet: Object.freeze({ state: "active" }),
-    readBindings: Object.freeze([]),
-    writeBinding: Object.freeze({
-      state: "active",
+    principalId: "principal_upload_intent",
+    activeWriteGeneration: Object.freeze({
+      principalId: "principal_upload_intent",
       spaceId,
-      writeBindingId,
-      generation: 1,
+      generationId,
     }),
   });
 }
@@ -55,8 +53,8 @@ function stagedRecord(request, suffix, size = request.expectedSize) {
     stagedFileId: `staged_upload_${suffix}`,
     bindingOwnerId: OWNER,
     sourceKind: request.sourceKind,
-    writeBindingId: request.writeBindingId,
-    writeBindingGeneration: 1,
+    principalId: request.actor.principalId,
+    principalMindUsageGenerationId: GENERATION,
     spaceId: request.spaceId,
     displayFilename: request.displayFilename,
     mediaType: request.claimedMediaType,
@@ -74,7 +72,7 @@ async function harness(options = {}) {
   let now = START;
   let intentId = 0;
   let claimId = 0;
-  let binding = bindingSnapshot();
+  let usage = usageSnapshot();
   let authorization = "allowed";
   const activeTokens = options.activeTokens ?? null;
   const intents = options.intents ?? new InMemoryLocalFileUploadIntentStore();
@@ -125,9 +123,15 @@ async function harness(options = {}) {
           : { kind: "denied", code: "forbidden", retryable: false };
       },
     },
-    bindings: {
-      async readMindBindingSet() {
-        return binding;
+    usage: {
+      async readPrincipalMindUsage() {
+        return usage;
+      },
+      async validatePrincipalMindUsageWritePin(pin) {
+        const generation = usage?.activeWriteGeneration;
+        return generation?.principalId === pin.principalId &&
+          generation?.spaceId === pin.spaceId &&
+          generation?.generationId === pin.generationId;
       },
     },
     intents,
@@ -149,7 +153,7 @@ async function harness(options = {}) {
     stageCalls,
     staged,
     setNow(value) { now = value; },
-    setBinding(value) { binding = value; },
+    setUsage(value) { usage = value; },
     setAuthorization(value) { authorization = value; },
   };
 }
@@ -157,7 +161,6 @@ async function harness(options = {}) {
 async function createIntent(env, input) {
   return env.service.create(actor(), SPACE, {
     source_kind: "local_path",
-    write_binding_id: BINDING,
     display_filename: "artifact.bin",
     expected_size: 0,
     expected_sha256: SHA_A,
@@ -187,7 +190,7 @@ test("format-neutral intents stage synthetic DOCX, HEIC, EPUB, OPUS, HTML, noteb
       expected_sha256: await digest(bytes),
       idempotency_key: `format-${filename}`,
     });
-    assert.equal(created.kind, "ready");
+    assert.equal(created.kind, "ready", JSON.stringify(created));
     const result = await env.service.upload({
       capability: created.uploadCapability,
       requestId: `request_${filename}`,
@@ -201,6 +204,45 @@ test("format-neutral intents stage synthetic DOCX, HEIC, EPUB, OPUS, HTML, noteb
   const serialized = JSON.stringify(records);
   assert.doesNotMatch(serialized, /mdupload_v1_|\/Users\/|private\/tmp|bearer|bytes/iu);
   assert.equal(records.every((record) => record.formatVersion === 1), true);
+  assert.equal(records.every((record) =>
+    record.principalMindUsageGenerationId === GENERATION), true);
+  assert.equal(records.every((record) => record.writeBindingId === undefined), true);
+});
+
+test("legacy binding-owned intent rows remain readable but cannot stage without a principal usage pin", async () => {
+  const source = await harness();
+  const created = await createIntent(source, {
+    idempotency_key: "legacy-binding-row",
+  });
+  assert.equal(created.kind, "ready");
+  const snapshot = source.intents.exportDurableSnapshot();
+  const current = [...snapshot.records.values()][0];
+  const {
+    principalMindUsageGenerationId: _principalMindUsageGenerationId,
+    ...legacyFields
+  } = current;
+  const legacy = Object.freeze({
+    ...legacyFields,
+    writeBindingId: "legacy_write_binding_upload_intent",
+  });
+  const intents = InMemoryLocalFileUploadIntentStore.fromDurableSnapshot({
+    v: 1,
+    records: new Map([[legacy.intentId, legacy]]),
+  });
+  const restored = await intents.readLocalFileUploadIntent(legacy.intentId);
+  assert.equal(restored.writeBindingId, "legacy_write_binding_upload_intent");
+  assert.equal(restored.principalMindUsageGenerationId, undefined);
+
+  const env = await harness({ intents });
+  assert.deepEqual(await env.service.upload({
+    capability: created.uploadCapability,
+    requestId: "request_legacy_binding_row",
+    stream: (async function* () {})(),
+  }), {
+    kind: "intent_invalid",
+    code: "file_ingress_source_unavailable",
+  });
+  assert.equal(env.stageCalls.length, 0);
 });
 
 test("intent transport stays structurally streaming beyond 146215108 bytes and rejects oversize before staging", async () => {
@@ -293,7 +335,6 @@ test("size/digest failures, interruption, replay, wrong binding/Mind, revoke and
     SPACE,
     {
       source_kind: "local_path",
-      write_binding_id: BINDING,
       display_filename: "artifact.bin",
       expected_size: bytes.byteLength,
       expected_sha256: await digest(bytes),
@@ -325,19 +366,18 @@ test("size/digest failures, interruption, replay, wrong binding/Mind, revoke and
 
   assert.equal((await env.service.create(actor(), "space_wrong", {
     source_kind: "local_path",
-    write_binding_id: BINDING,
     display_filename: "wrong.bin",
     expected_size: 0,
     expected_sha256: SHA_A,
     idempotency_key: "wrong-mind",
-  })).code, "write_binding_stale");
+  })).code, "writable_mind_required");
   const guarded = await createIntent(env, { idempotency_key: "guarded" });
-  env.setBinding(bindingSnapshot(SPACE, "other_binding"));
+  env.setUsage(usageSnapshot(SPACE, "other_generation"));
   assert.equal((await env.service.status({
     capability: guarded.uploadCapability,
     requestId: "wrong_binding",
   })).code, "file_ingress_source_unavailable");
-  env.setBinding(bindingSnapshot());
+  env.setUsage(usageSnapshot());
   env.setAuthorization("denied");
   assert.equal((await env.service.status({
     capability: guarded.uploadCapability,
@@ -384,7 +424,6 @@ test("exact replay atomically follows the current OAuth access record and preser
   const env = await harness({ activeTokens });
   const request = {
     source_kind: "workspace/generated_artifact",
-    write_binding_id: BINDING,
     display_filename: "rotated.bin",
     expected_size: 0,
     expected_sha256: SHA_A,

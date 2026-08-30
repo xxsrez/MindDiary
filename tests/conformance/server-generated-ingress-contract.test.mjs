@@ -71,7 +71,15 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
   assert.match(retryEvidence, /application\/pdf; charset=binary/u);
   assert.match(retryEvidence, /allocatedReservationsBeforeWrongMedia/u);
   assert.match(retryEvidence, /collectStagedBundleFilesForGc/u);
-  assert.match(retryEvidence, /expected_target_version/u);
+  assert.match(retryEvidence, /usage_mode: "disabled"/u);
+  assert.match(retryEvidence, /usage_mode: "read_write"/u);
+  assert.match(retryEvidence, /expected_usage_version: 1/u);
+  assert.match(retryEvidence, /expected_usage_version: 2/u);
+  assert.match(source, /generationId: target\.generationId/u);
+  assert.match(
+    stagingSource,
+    /expectedWritePin\.generationId !== currentWritePin\.generationId/u,
+  );
   assert.match(retryEvidence, /writable_target_unavailable/u);
 });
 

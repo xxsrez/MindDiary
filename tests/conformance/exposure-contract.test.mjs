@@ -36,7 +36,6 @@ const expectedMcpTools = [
   "get_bundle_file_download",
   "commit_changeset",
   "reconcile_changeset",
-  "capture_knowledge",
 ];
 
 test("browser contract exposes control metadata and no raw content routes", () => {

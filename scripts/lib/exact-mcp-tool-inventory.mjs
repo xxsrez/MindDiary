@@ -9,6 +9,7 @@ const INVENTORY_PATH = new URL(
 );
 const EXPECTED_SCHEMA = "mind-diary/file-ingress-hosted-tool-inventory/v1";
 const EXPECTED_SOURCE = "mind-diary-hosted-mcp-tools-list";
+const EXPECTED_TOOL_COUNT = 18;
 
 function schemaHash(value) {
   return `sha256:${createHash("sha256").update(canonical(value)).digest("hex")}`;
@@ -20,14 +21,14 @@ function loadExpectedInventory() {
     value?.schema !== EXPECTED_SCHEMA ||
     value?.source !== EXPECTED_SOURCE ||
     !Array.isArray(value.entries) ||
-    value.entries.length !== 19
+    value.entries.length !== EXPECTED_TOOL_COUNT
   ) {
     throw new TypeError("Exact MCP tool inventory fixture is invalid.");
   }
   const entries = value.entries.map((entry) => Object.freeze({ ...entry }));
   const names = entries.map(({ name }) => name);
   if (
-    new Set(names).size !== 19 ||
+    new Set(names).size !== EXPECTED_TOOL_COUNT ||
     names.some((name) => typeof name !== "string") ||
     names.some((name, index) => index > 0 && name <= names[index - 1])
   ) {

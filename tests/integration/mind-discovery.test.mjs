@@ -11,6 +11,8 @@ import {
 import {
   AccountBootstrapService,
   OrdinaryMindControlService,
+  PersonalMindControlService,
+  PrincipalMindUsageApplicationService,
   VisibilityControlService,
 } from "@mind-diary/application-control";
 import {
@@ -80,6 +82,23 @@ function auditIds() {
   };
 }
 
+function usageIds() {
+  let generation = 0;
+  let audit = 0;
+  let outbox = 0;
+  return {
+    nextPrincipalMindUsageGenerationId: () => `usage_discovery_generation_${++generation}`,
+    nextPrincipalMindUsageAuditEventId: () => `usage_discovery_audit_${++audit}`,
+    nextPrincipalMindUsageOutboxMessageId: () => `usage_discovery_outbox_${++outbox}`,
+  };
+}
+
+const credentialAccess = Object.freeze({
+  async authorizeCredentialContentAccess() {
+    return Object.freeze({ kind: "allowed" });
+  },
+});
+
 function harness() {
   const metadata = new InMemoryRevisionMetadataStore();
   const objects = new InMemoryObjectStore();
@@ -99,6 +118,15 @@ function harness() {
     objects,
     auditIds: auditIds(),
   });
+  const personal = new PersonalMindControlService({
+    personalMinds: metadata,
+    digest: objects,
+  });
+  const usage = new PrincipalMindUsageApplicationService({
+    usage: metadata,
+    digest: objects,
+    ids: usageIds(),
+  });
   const revisions = new CanonicalRevisionCoordinator({
     objects,
     revisions: metadata,
@@ -110,6 +138,8 @@ function harness() {
     bootstrap,
     ordinary,
     visibility,
+    personal,
+    usage,
     revisions,
     discovery,
   };
@@ -125,8 +155,90 @@ async function createAccount(env, index, displayName) {
 async function createMind(env, owner, handle, name = handle) {
   return env.ordinary.createSpaceWithOwner(
     actor(owner.principalId, `request_create_${handle}`),
-    { name, handle, idempotencyKey: `create-${handle}` },
+    {
+      name,
+      handle,
+      description: `Durable knowledge for ${name}`,
+      idempotencyKey: `create-${handle}`,
+    },
   );
+}
+
+function mcpActor(
+  principalId,
+  tokenId,
+  scopes = ["content:read"],
+  requestId = `request_${tokenId}`,
+) {
+  return {
+    kind: "registered_principal",
+    principalId,
+    authentication: {
+      kind: "mcp_token",
+      tokenId,
+      bindingOwnerId: `owner_${tokenId}`,
+      effectiveScopes: scopes,
+    },
+    deploymentCapabilities: CAPABILITIES,
+    requestId,
+    occurredAtUtc: CHANGED_AT,
+  };
+}
+
+async function authorizeMcpMind(env, principalId, spaceId, tokenId, scopes, options = {}) {
+  const snapshot = await env.metadata.readResolvedSpace(spaceId);
+  const profile = await env.metadata.readPersonalMindProfile(principalId);
+  const isPersonal = profile?.personalMind.spaceId === spaceId;
+  const visibility = options.visibility ?? snapshot?.space.visibility ?? "private";
+  env.metadata.setCurrentAuthorizationStateForTest(
+    { principalId, spaceId, tokenId },
+    {
+      principal: { principalId, state: "active" },
+      space: {
+        spaceId,
+        state: "active",
+        visibility,
+        accessVersion: options.accessVersion === undefined
+          ? snapshot?.space.accessVersion ?? version(1)
+          : version(options.accessVersion),
+      },
+      membership: options.baseline === true
+        ? null
+        : {
+            principalId,
+            spaceId,
+            role: options.role ?? (isPersonal ? "owner" : "editor"),
+            state: "active",
+            version: version(1),
+          },
+      token: {
+        tokenId,
+        principalId,
+        state: "active",
+        scopes,
+        version: version(1),
+        expiresAt: "2027-08-07T00:00:00.000Z",
+      },
+    },
+  );
+}
+
+async function setUsage(env, principalId, spaceId, usageMode, expectedUsageVersion, key) {
+  return env.usage.mutate({
+    actor: actor(principalId, `request_usage_${key}`),
+    spaceId,
+    usageMode,
+    expectedUsageVersion,
+    idempotencyKey: key,
+  });
+}
+
+function mcpDiscovery(store = null) {
+  return new MindDiscoveryService({
+    store: store ?? new InMemoryRevisionMetadataStore(),
+    host: HOST,
+    credentialAccess,
+  });
 }
 
 async function currentMind(env, mindId) {
@@ -464,4 +576,258 @@ test("mismatched resolved metadata cannot redirect a descriptor to another space
     expectFailure("mind_not_found"),
   );
   assert.equal(mind.handle, "source-space");
+});
+
+test("MCP discovery projects only principal-enabled Minds with Personal description and shared writable mount", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Usage Owner");
+  const enabled = await createMind(env, owner, "enabled-notes", "Enabled Notes");
+  const disabled = await createMind(env, owner, "disabled-notes", "Disabled Notes");
+  const profile = await env.metadata.readPersonalMindProfile(owner.principalId);
+  assert.ok(profile);
+  await env.personal.updateMyMindDescription(actor(owner.principalId), {
+    description: "Private durable working preferences",
+    expectedMetadataVersion: profile.personalMind.metadataVersion,
+    idempotencyKey: "describe-personal-for-mcp",
+  });
+
+  assert.equal(
+    (await setUsage(
+      env,
+      owner.principalId,
+      owner.personalMind.mindId,
+      "read",
+      0,
+      "enable-personal-read",
+    )).kind,
+    "applied",
+  );
+  const writable = await setUsage(
+    env,
+    owner.principalId,
+    enabled.mindId,
+    "read_write",
+    1,
+    "enable-ordinary-write",
+  );
+  assert.equal(writable.kind, "applied");
+
+  for (const token of [
+    { id: "token_usage_read", scopes: ["content:read"] },
+    { id: "token_usage_write", scopes: ["content:read", "content:write"] },
+  ]) {
+    for (const spaceId of [owner.personalMind.mindId, enabled.mindId, disabled.mindId]) {
+      await authorizeMcpMind(env, owner.principalId, spaceId, token.id, token.scopes, {
+        role: "owner",
+      });
+    }
+  }
+
+  const discovery = mcpDiscovery(env.metadata);
+  const readActor = mcpActor(owner.principalId, "token_usage_read");
+  const listed = await discovery.listMinds(readActor, { limit: 10 });
+  assert.deepEqual(listed.minds.map(({ route }) => route), ["/me", "/enabled-notes"]);
+  assert.equal(listed.minds[0].description, "Private durable working preferences");
+  assert.equal(listed.minds[0].usageMode, "read");
+  assert.deepEqual(listed.minds[0].effective, { canRead: true, canWrite: false });
+  assert.deepEqual(listed.minds[0].writableMount, { active: false, generation: null });
+  assert.equal(listed.minds[0].settingsVersion, 2);
+
+  const enabledDescriptor = listed.minds[1];
+  assert.equal(enabledDescriptor.description, "Durable knowledge for Enabled Notes");
+  assert.equal(enabledDescriptor.usageMode, "read_write");
+  assert.deepEqual(enabledDescriptor.effective, { canRead: true, canWrite: false });
+  assert.equal(enabledDescriptor.settingsVersion, 2);
+  assert.deepEqual(enabledDescriptor.writableMount, {
+    active: true,
+    generation: writable.state.activeWriteGeneration.generationId,
+  });
+  assert.equal(enabledDescriptor.contentCapabilities, undefined);
+
+  const writeDescriptor = await discovery.resolveMind(
+    mcpActor(
+      owner.principalId,
+      "token_usage_write",
+      ["content:read", "content:write"],
+    ),
+    "enabled-notes",
+  );
+  assert.deepEqual(writeDescriptor.effective, { canRead: true, canWrite: true });
+  assert.equal(
+    writeDescriptor.writableMount.generation,
+    enabledDescriptor.writableMount.generation,
+  );
+
+  for (const selector of ["disabled-notes", "missing-notes"]) {
+    await assert.rejects(
+      discovery.resolveMind(readActor, selector),
+      expectFailure("mind_not_found"),
+    );
+  }
+  await assert.rejects(
+    discovery.getMindInfo(readActor, disabled.mindId, { kind: "head" }),
+    expectFailure("mind_not_found"),
+  );
+  await assert.rejects(
+    discovery.getMindInfo(readActor, "/disabled-notes", { kind: "head" }),
+    expectFailure("mind_not_found"),
+  );
+
+  assert.equal(
+    (await setUsage(
+      env,
+      owner.principalId,
+      disabled.mindId,
+      "read",
+      2,
+      "enable-disabled-as-read-only",
+    )).kind,
+    "applied",
+  );
+  const readOnlyInfo = await discovery.getMindInfo(
+    mcpActor(
+      owner.principalId,
+      "token_usage_write",
+      ["content:read", "content:write"],
+    ),
+    "/disabled-notes",
+    { kind: "head" },
+  );
+  assert.equal(readOnlyInfo.mind.route, "/disabled-notes");
+  assert.equal(readOnlyInfo.mind.description, "Durable knowledge for Disabled Notes");
+  assert.equal(readOnlyInfo.mind.usageMode, "read");
+  assert.deepEqual(readOnlyInfo.mind.effective, { canRead: true, canWrite: false });
+  assert.equal(readOnlyInfo.mind.settingsVersion, 3);
+  assert.deepEqual(readOnlyInfo.mind.writableMount, {
+    active: false,
+    generation: null,
+  });
+  assert.equal(readOnlyInfo.contentCapabilities.includes("browse"), true);
+  assert.equal(readOnlyInfo.contentCapabilities.includes("commit"), false);
+});
+
+test("enabled public and unlisted Minds remain readable through current visibility grants", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Public Owner");
+  const viewer = await createAccount(env, 2, "Visibility Viewer");
+  const published = await createMind(env, owner, "enabled-public", "Enabled Public");
+  const unlisted = await createMind(env, owner, "enabled-unlisted", "Enabled Unlisted");
+  await makeVisible(env, owner, published, "public", "enabled-public");
+  await makeVisible(env, owner, unlisted, "unlisted", "enabled-unlisted");
+  assert.equal(
+    (await setUsage(env, viewer.principalId, published.mindId, "read", 0, "read-public"))
+      .kind,
+    "applied",
+  );
+  assert.equal(
+    (await setUsage(env, viewer.principalId, unlisted.mindId, "read", 1, "read-unlisted"))
+      .kind,
+    "applied",
+  );
+  for (const [spaceId, visibility] of [
+    [published.mindId, "public"],
+    [unlisted.mindId, "unlisted"],
+  ]) {
+    await authorizeMcpMind(
+      env,
+      viewer.principalId,
+      spaceId,
+      "token_visibility_read",
+      ["content:read"],
+      { baseline: true, visibility },
+    );
+  }
+
+  const listed = await mcpDiscovery(env.metadata).listMinds(
+    mcpActor(viewer.principalId, "token_visibility_read"),
+    { limit: 10 },
+  );
+  assert.deepEqual(listed.minds.map(({ route }) => route), [
+    "/enabled-public",
+    "/enabled-unlisted",
+  ]);
+  assert.equal(listed.minds.every(({ access }) => access.kind === "visibility"), true);
+  assert.equal(listed.minds.every(({ usageMode }) => usageMode === "read"), true);
+});
+
+test("MCP list cursor is invalidated when principal settings version or writable mount changes", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Cursor Owner");
+  const ordinary = await createMind(env, owner, "cursor-notes", "Cursor Notes");
+  await setUsage(env, owner.principalId, owner.personalMind.mindId, "read", 0, "cursor-me");
+  await setUsage(env, owner.principalId, ordinary.mindId, "read", 1, "cursor-mind");
+  for (const spaceId of [owner.personalMind.mindId, ordinary.mindId]) {
+    await authorizeMcpMind(
+      env,
+      owner.principalId,
+      spaceId,
+      "token_cursor",
+      ["content:read", "content:write"],
+      { role: "owner" },
+    );
+  }
+  const discovery = mcpDiscovery(env.metadata);
+  const currentActor = mcpActor(
+    owner.principalId,
+    "token_cursor",
+    ["content:read", "content:write"],
+  );
+  const first = await discovery.listMinds(currentActor, { limit: 1 });
+  assert.ok(first.nextCursor);
+  await setUsage(env, owner.principalId, ordinary.mindId, "read_write", 2, "cursor-switch");
+  await assert.rejects(
+    discovery.listMinds(currentActor, { cursor: first.nextCursor, limit: 1 }),
+    expectFailure("invalid_cursor"),
+  );
+});
+
+test("malformed principal usage state fails closed before descriptor projection", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Corrupt Owner");
+  const mind = await createMind(env, owner, "corrupt-usage", "Corrupt Usage");
+  const applied = await setUsage(
+    env,
+    owner.principalId,
+    mind.mindId,
+    "read_write",
+    0,
+    "corrupt-source",
+  );
+  assert.equal(applied.kind, "applied");
+  await authorizeMcpMind(
+    env,
+    owner.principalId,
+    mind.mindId,
+    "token_corrupt_usage",
+    ["content:read", "content:write"],
+    { role: "owner" },
+  );
+  let proxy;
+  proxy = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "withConsistentRead") return undefined;
+      if (property === "readPrincipalMindUsage") {
+        return async () => ({
+          ...applied.state,
+          activeWriteGeneration: null,
+        });
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const discovery = mcpDiscovery(proxy);
+  const currentActor = mcpActor(
+    owner.principalId,
+    "token_corrupt_usage",
+    ["content:read", "content:write"],
+  );
+  await assert.rejects(
+    discovery.listMinds(currentActor, { limit: 10 }),
+    expectFailure("discovery_unavailable"),
+  );
+  await assert.rejects(
+    discovery.resolveMind(currentActor, "corrupt-usage"),
+    expectFailure("discovery_unavailable"),
+  );
 });

@@ -6,6 +6,7 @@ import {
   MCP_TARGET_PROTOCOL,
   MCP_LEGACY_CODEX_PROTOCOL,
   MCP_LEGACY_CODEX_ENDPOINT,
+  MCP_AGENT_INSTRUCTIONS,
 } from "./tool-definitions.js";
 
 import {
@@ -289,8 +290,7 @@ export function createLegacyCodexMcpHttpHandler(
                     title: "Mind Diary",
                     version: "0.1.0",
                   },
-                  instructions:
-                    "Use list_minds to discover currently accessible Minds. Every read explicitly selects one Mind and revision from current access; there is no attach step, implicit /me, or cross-Mind fallback. Manage the writable target and export only on the authenticated Mind Diary Site.",
+                  instructions: MCP_AGENT_INSTRUCTIONS,
                 },
               })
             : jsonRpcError(rpc.id, -32602, "Invalid params", 400);

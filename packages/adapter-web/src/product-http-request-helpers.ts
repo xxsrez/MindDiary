@@ -6,7 +6,6 @@ import {
 import {
   MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK,
   MIND_DIARY_CODEX_STARTER_PLAYBOOK,
-  type MindBindingUiMind,
 } from "./token-management.js";
 
 import {
@@ -27,17 +26,13 @@ import {
 import {
   type ConnectionDetail,
   type ConnectionListItem,
-  type SafeConnectionMind,
-  type SafeCredentialAccess,
+  type PersonalTokenItem,
 } from "./connections.js";
 
 import {
-  type RegisteredSitesActor,
   type ProductSitesIdentityResolution,
-  type ProductWebControlApplication,
-  type ProductWebCredentialWriteTargetOwner,
-  type ProductWebCredentialWriteTargets,
   type ProductWebOAuthConnections,
+  type ProductWebPersonalTokenRecord,
   type ProductWebPerformanceRecorder,
 } from "./product-http-contracts.js";
 
@@ -131,6 +126,11 @@ function safeErrorMessage(code: string): string {
   if (code === "account_bootstrap_conflict") return "Account setup changed in another request. Reload the current account state before trying again.";
   if (code === "profile_conflict") return "The profile changed in another session. Reload the current account state before saving again.";
   if (code === "invalid_request") return "The request is invalid.";
+  if (code === "usage_conflict") return "Mind usage changed in another session. Reload the current settings before trying again.";
+  if (code === "description_required") return "Add a routing description before allowing automatic writes.";
+  if (code === "description_required_for_write") return "Change the Mind mode before clearing its writable routing description.";
+  if (code === "usage_not_allowed") return "Current Mind access does not allow that usage mode.";
+  if (code === "mind_usage_unavailable") return "Mind usage settings are temporarily unavailable.";
   if (code === "not_found") return "The resource was not found.";
   if (code === "connection_not_found") return "The connection was not found.";
   if (code === "personal_token_not_found") return "The personal token was not found.";
@@ -255,14 +255,12 @@ function positiveInteger(value: unknown): number | null {
   return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
 }
 
-function nonnegativeInteger(value: unknown): number | null {
-  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
-}
-
 export interface ProductUiSession {
   readonly displayName: string;
   readonly profileVersion: number;
   readonly personalMindName: string;
+  readonly personalMindDescription: string | null;
+  readonly personalMindMetadataVersion: number | null;
   readonly personalMindHeadRevisionId: string;
 }
 
@@ -328,6 +326,8 @@ export function uiSession(value: unknown): ProductUiSession | null {
   const displayName = requiredString(principal?.displayName);
   const profileVersion = positiveInteger(principal?.profileVersion);
   const personalMindName = requiredString(personalMind?.name);
+  const personalMindDescription = ordinaryDescription(personalMind?.description);
+  const personalMindMetadataVersion = positiveInteger(personalMind?.metadataVersion);
   const personalMindHeadRevisionId = requiredString(personalMind?.headRevisionId);
   return displayName === null || profileVersion === null || personalMindName === null ||
       personalMindHeadRevisionId === null
@@ -336,6 +336,8 @@ export function uiSession(value: unknown): ProductUiSession | null {
         displayName,
         profileVersion,
         personalMindName,
+        personalMindDescription: personalMindDescription ?? null,
+        personalMindMetadataVersion,
         personalMindHeadRevisionId,
       });
 }
@@ -592,83 +594,8 @@ export function safeInvitationOverview(value: unknown): Readonly<{
   return Object.freeze({ invitations });
 }
 
-interface ProductBindingUiCandidate {
-  readonly mindId: string;
-  readonly mind: MindBindingUiMind;
-}
-
-function bindingUiCandidate(value: unknown): ProductBindingUiCandidate | null {
-  const source = record(value);
-  const access = record(source?.access);
-  const mindId = requiredString(source?.mindId);
-  const route = requiredString(source?.route);
-  const name = requiredString(source?.name);
-  const visibility = source?.visibility;
-  const role = access?.role;
-  if (
-    mindId === null || route === null || name === null ||
-    !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(route) ||
-    !(visibility === "private" || visibility === "unlisted" || visibility === "public")
-  ) return null;
-  return Object.freeze({
-    mindId,
-    mind: Object.freeze({
-      name,
-      route,
-      visibility,
-      canWrite: role === "editor" || role === "admin" || role === "owner",
-    }),
-  });
-}
-
-function safeCredentialAccess(
-  owner: ProductWebCredentialWriteTargetOwner | undefined,
-  candidates: ReadonlyMap<string, MindBindingUiMind>,
-  canRead: boolean,
-): SafeCredentialAccess | null {
-  if (
-    owner === undefined ||
-    !Number.isSafeInteger(owner.targetVersion) ||
-    owner.targetVersion < 0
-  ) return null;
-  if (
-    owner.lifecycleState !== "active" &&
-    owner.lifecycleState !== "pending_upgrade"
-  ) return null;
-  if (owner.lifecycleState === "pending_upgrade") {
-    return Object.freeze({
-      targetVersion: owner.targetVersion,
-      readableMinds: Object.freeze([]) as readonly SafeConnectionMind[],
-      writableMind: null,
-      writableTargetState: owner.credentialKind === "personal_token"
-        ? "reissue_required" as const
-        : "reconsent_required" as const,
-      eligibleMinds: Object.freeze([]) as readonly SafeConnectionMind[],
-    });
-  }
-  const readableMinds = canRead
-    ? Object.freeze([...candidates.values()]) as readonly SafeConnectionMind[]
-    : Object.freeze([]) as readonly SafeConnectionMind[];
-  const writeCandidate = owner.targetMindId === null
-    ? null
-    : candidates.get(owner.targetMindId) ?? null;
-  const writableTargetState = owner.targetMindId === null
-    ? "not_selected" as const
-    : writeCandidate === null
-      ? "unavailable" as const
-      : "selected" as const;
-  return Object.freeze({
-    targetVersion: owner.targetVersion,
-    readableMinds,
-    writableMind: writeCandidate,
-    writableTargetState,
-    eligibleMinds: Object.freeze([...candidates.values()]) as readonly SafeConnectionMind[],
-  });
-}
-
 export function safeConnectionListItem(
   connection: Awaited<ReturnType<ProductWebOAuthConnections["listPage"]>>["items"][number],
-  access: SafeCredentialAccess,
 ): ConnectionListItem {
   const canWrite = connection.scopes.includes("content:write");
   return Object.freeze({
@@ -678,20 +605,29 @@ export function safeConnectionListItem(
     lastUsedAt: connection.lastUsedAt,
     canRead: connection.scopes.includes("content:read"),
     canWrite,
-    readableMindCount: access.readableMinds.length,
-    writableMindSelected:
-      canWrite && (access.writableTargetState === "selected" || access.writableTargetState === "unavailable"),
   });
 }
 
 export function safeConnectionDetail(
   connection: Awaited<ReturnType<ProductWebOAuthConnections["read"]>>,
-  access: SafeCredentialAccess,
 ): ConnectionDetail | null {
   if (connection === null) return null;
+  return safeConnectionListItem(connection);
+}
+
+export function safePersonalTokenItem(
+  record: ProductWebPersonalTokenRecord,
+): PersonalTokenItem {
   return Object.freeze({
-    ...safeConnectionListItem(connection, access),
-    access,
+    personalTokenRef: record.personalTokenRef,
+    name: record.name,
+    displayPrefix: record.displayPrefix,
+    scopes: Object.freeze([...record.scopes]),
+    state: record.state,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+    lastUsedAt: record.lastUsedAt,
+    revokedAt: record.revokedAt,
   });
 }
 
@@ -757,150 +693,4 @@ export function safePublicCatalogCursor(value: unknown): string | null | undefin
   return typeof value === "string" && PUBLIC_CATALOG_CURSOR_PATTERN.test(value)
     ? value
     : undefined;
-}
-
-async function safeBindingCandidates(
-  control: ProductWebControlApplication,
-  actor: RegisteredSitesActor,
-): Promise<ReadonlyMap<string, MindBindingUiMind>> {
-  const listed = await control.execute({
-    operation: "list_minds",
-    actor,
-    input: Object.freeze({}),
-  });
-  if (!Array.isArray(listed)) throw new TypeError("safe Mind list projection is unavailable");
-  const candidates = new Map<string, MindBindingUiMind>();
-  for (const value of listed) {
-    const candidate = bindingUiCandidate(value);
-    if (candidate !== null) candidates.set(candidate.mindId, candidate.mind);
-  }
-  return candidates;
-}
-
-export async function safeWritableTargetAccessByOwner(
-  control: ProductWebControlApplication,
-  writableTargets: ProductWebCredentialWriteTargets,
-  actor: RegisteredSitesActor,
-  credentials: readonly Readonly<{
-    readonly ownerId: string;
-    readonly credentialKind: "oauth_grant" | "personal_token";
-    readonly scopes: readonly ("content:read" | "content:write")[];
-    readonly state: "active" | "revoked";
-  }>[],
-): Promise<ReadonlyMap<string, SafeCredentialAccess>> {
-  if (credentials.length === 0) return new Map();
-  const owners = await writableTargets.listResolved(actor, credentials);
-  const byOwner = new Map(owners.map((owner) => [owner.ownerId, owner] as const));
-  const resolvedOwners = credentials.map((credential) => byOwner.get(credential.ownerId) ?? (
-    credential.state === "active"
-      ? Object.freeze({
-          ownerId: credential.ownerId,
-          credentialKind: credential.credentialKind,
-          lifecycleState: "pending_upgrade" as const,
-          targetVersion: 0,
-          targetMindId: null,
-        })
-      : undefined
-  ));
-  const candidates = resolvedOwners.some((owner) => owner?.lifecycleState === "active")
-    ? await safeBindingCandidates(control, actor)
-    : new Map<string, MindBindingUiMind>();
-  const projections = new Map<string, SafeCredentialAccess>();
-  for (const [index, credential] of credentials.entries()) {
-    const owner = resolvedOwners[index];
-    const access = safeCredentialAccess(
-      owner,
-      candidates,
-      credential.scopes.includes("content:read"),
-    );
-    if (access === null) throw new TypeError("safe Mind access projection is unavailable");
-    projections.set(credential.ownerId, access);
-  }
-  return projections;
-}
-
-export async function mutateCredentialWritableTarget(input: {
-  readonly actor: RegisteredSitesActor;
-  readonly writableTargets: ProductWebCredentialWriteTargets;
-  readonly control: ProductWebControlApplication;
-  readonly ownerId: string;
-  readonly credentialKind: "oauth_grant" | "personal_token";
-  readonly scopes: readonly ("content:read" | "content:write")[];
-  readonly request: Readonly<Record<string, unknown>>;
-  readonly presentationKey: "connection_ref" | "personal_token_ref";
-}): Promise<Readonly<{ readonly changed: boolean; readonly replayed: boolean }>> {
-  const action = input.request.action;
-  const expectedTargetVersion = nonnegativeInteger(input.request.expectedTargetVersion);
-  const idempotencyKey = requiredString(input.request.idempotencyKey);
-  if (action === "attach_read" || action === "detach_read") {
-    throw Object.assign(new Error("Read access follows current ACL and cannot be selected."), {
-      code: "operation_removed",
-    });
-  }
-  if (
-    expectedTargetVersion === null ||
-    idempotencyKey === null ||
-    !["select_write", "clear_write"].includes(String(action))
-  ) {
-    throw Object.assign(new Error("Invalid access mutation."), { code: "invalid_request" });
-  }
-  const actionKeys = action === "select_write" ? ["mindRef"] : [];
-  const allowed = new Set([
-    "action",
-    "expectedTargetVersion",
-    "idempotencyKey",
-    input.presentationKey,
-    ...actionKeys,
-  ]);
-  if (Object.keys(input.request).some((key) => !allowed.has(key))) {
-    throw Object.assign(new Error("Invalid access mutation."), { code: "invalid_request" });
-  }
-  const mindRef = input.request.mindRef;
-  if (
-    (action === "select_write" &&
-      (typeof mindRef !== "string" || !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef))) ||
-    (action === "clear_write" && mindRef !== undefined)
-  ) {
-    throw Object.assign(new Error("Invalid access mutation."), { code: "invalid_request" });
-  }
-  if (
-    action === "select_write" &&
-    !input.scopes.includes("content:write")
-  ) {
-    throw Object.assign(new Error("Write permission is required."), {
-      code: "write_step_up_required",
-    });
-  }
-  const owners = await input.writableTargets.listResolved(input.actor, [Object.freeze({
-    ownerId: input.ownerId,
-    credentialKind: input.credentialKind,
-    scopes: input.scopes,
-    state: "active" as const,
-  })]);
-  const owner = owners.find((candidate) => candidate.ownerId === input.ownerId);
-  if (owner === undefined || owner.lifecycleState !== "active") {
-    throw Object.assign(new Error("Credential was not found."), { code: "credential_not_found" });
-  }
-  if (action === "select_write") {
-    const candidates = await safeBindingCandidates(input.control, input.actor);
-    const target = [...candidates.values()].find((mind) => mind.route === mindRef);
-    if (target === undefined || !target.canWrite) {
-      throw Object.assign(new Error("Writable Mind is not eligible."), {
-        code: "target_ineligible",
-      });
-    }
-  }
-  const result = await input.writableTargets.mutateResolved(input.actor, Object.freeze({
-    ownerId: input.ownerId,
-    credentialKind: input.credentialKind,
-    scopes: input.scopes,
-    state: "active" as const,
-  }), Object.freeze({
-    action,
-    binding_owner_id: input.ownerId,
-    expectedTargetVersion,
-    idempotencyKey,
-    ...(typeof mindRef === "string" ? { mindRef } : {}),
-  }));
-  return Object.freeze({ changed: result.changed, replayed: result.replayed });
 }

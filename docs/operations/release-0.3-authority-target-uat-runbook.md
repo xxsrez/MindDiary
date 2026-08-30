@@ -1,4 +1,12 @@
-# Проверка ACL reads и singleton write target Release 0.3
+# Проверка ACL reads и singleton `read_write` Mind Release 0.3
+
+> **Current Web amendment MD-373/MD-375, 2026-08-30.** Principal задаёт для
+> каждого Mind
+> `disabled | read | read_write`, общий для всех OAuth connections и personal
+> tokens, с единственным `read_write` Mind. Connections и Advanced MCP остаются
+> lifecycle/scopes-only. Machine contract MD-344 и его `target_*` поля ниже
+> сохранены как историческое evidence прежней модели и не доказывают current
+> Web behavior без principal-usage read-back.
 
 Статус: accepted operational verification contract для `MD-344`.
 
@@ -24,10 +32,12 @@ observation той же версии и deployment.
 - Synthetic identity существует только как constructor-injected test adapter.
   Ни один production runtime switch, header, URL или stored identity mapping не
   допускается.
-- Site управляет target. MCP только читает доступные сейчас Minds и выполняет
-  content calls с явными Mind, revision, HEAD и idempotency.
+- Site управляет principal Mind usage. MCP только читает enabled доступные
+  Minds и выполняет content calls с явными Mind, revision, HEAD и idempotency;
+  mode mutation в MCP отсутствует.
 - Оба web surface обязательны: OAuth connection и personal token Advanced MCP.
-  Проверка одного из них не заменяет второй.
+  Проверка одного из них не заменяет второй; оба показывают только
+  lifecycle/scopes и одинаковую principal-owned usage projection через MCP.
 
 Закрытый machine contract находится в
 `tests/fixtures/release-0.3-authority-target/contract.v1.json`.
@@ -74,7 +84,13 @@ Local receipt фиксирует hashes двух probe receipts, каждого 
 каждого contract/source file. `hosted_status` всегда равен `not-run`; другое
 значение делает квитанцию недействительной.
 
-Локальный gate подтверждает:
+Это frozen MD-344 receipt прежней target-модели. Упоминания target generation,
+empty target, capture и credential owner в его registry описывают только
+историческую проверку/migration. Fresh MD-375 acceptance дополнительно требует
+current Web/API evidence `principal-mind-usage/v1`, singleton `read_write` и
+отсутствия credential-level controls; historical PASS не заменяет эти строки.
+
+Локальный gate подтверждает исторический MD-344 contract:
 
 - Personal, membership, public, unlisted и private discovery;
 - немедленное действие membership, visibility и revoke;
@@ -103,9 +119,9 @@ Local receipt фиксирует hashes двух probe receipts, каждого 
 `blocked_by_dependency`; hosted mutations не начинаются.
 
 Создать один synthetic run Mind через обычный Site command path. Для свежих,
-reconnect и reissue cases создаются новые grants/tokens/targets, но не новые
-accounts. Все content fixtures — сгенерированный Markdown без пользовательских
-данных.
+reconnect и reissue cases создаются новые grants/tokens, но не новые accounts и
+не отдельный credential-owned selection state. Все content fixtures —
+сгенерированный Markdown без пользовательских данных.
 
 ## 3. Прямые hosted-наблюдения
 
@@ -129,42 +145,55 @@ read-back предыдущего, а не локальное предполож�
 - После membership/visibility изменения следующий новый MCP request отражает
   новое состояние. После revoke следующий request denied.
 
-### Credentials и target lifecycle
+### Credentials и principal Mind usage
 
 Для каждого случая фиксируется только classification и opaque artifact hash:
 
-- fresh OAuth — target version `0`, writable Mind отсутствует;
-- legacy OAuth — pending upgrade и non-disclosing
-  `credential_access_upgrade_required`;
-- same-owner unambiguous OAuth upgrade — тот же selected Mind, новая opaque
-  generation, capture disabled;
-- reconnect OAuth — новый owner и empty target;
-- fresh personal token — empty target;
-- legacy personal token — pending upgrade, только reissue;
-- personal-token reissue — новый owner и empty target;
-- revoke/reconnect/reissue не переносят target или capture.
+- новый principal — все Minds `disabled`, `usage_version=0`;
+- несколько Minds можно независимо перевести в `read`;
+- ровно один Mind можно перевести в `read_write`, только с непустым routing
+  description и current writer role;
+- второй `read_write` одним CAS атомарно демотирует прежний Mind в `read`;
+- два OAuth grants и personal token видят одинаковые configured modes;
+- read-only credential видит configured `read_write`, но получает
+  `effective.can_write=false`;
+- revoke/reconnect/reissue меняют только credential lifecycle/scopes и не
+  меняют principal usage;
+- Connections и Advanced MCP не содержат credential-owned Mind selector,
+  bind/unbind или отдельный automatic-save toggle.
 
-Проверить owner isolation: Site target route другого principal не читает и не
-изменяет owner state. Browser не передаёт owner или generation как authority.
+Проверить principal isolation: route другого principal не читает и не изменяет
+usage state. Browser передаёт только safe `mind_ref`, mode,
+`expected_usage_version` и idempotency key; principal, `space_id`, role и write
+generation остаются server authority.
 
 ### Writes и immutable revision read-back
 
-1. На обоих web surfaces выбрать exact run Mind через target-version CAS.
-2. Снять HEAD, выполнить один `commit_changeset` с exact target, generation,
-   `expected_revision` и новым idempotency key.
+1. На странице exact run Mind задать `read_write` через usage-version CAS и
+   прочитать результат через OAuth и personal-token MCP profiles.
+2. Снять HEAD, выполнить один `commit_changeset` с exact Mind,
+   `expected_revision` и новым idempotency key; write generation pin-ится
+   server-side и не приходит из browser/client.
 3. Независимо прочитать новый revision через HEAD, history и exact fetch;
    hashes content должны совпасть.
 4. Повторить тот же idempotency key: новый revision не появляется.
 5. Отправить stale HEAD: `revision_conflict`, HEAD и history не меняются.
-6. Переключить target и отправить подготовленный write в прежний Mind:
-   `writable_target_mismatch`; HEAD/history обоих Minds не меняются.
-7. Потерять writer role: следующий write denied; clear target остаётся
-   reduce-only и выполняется через current target version.
+6. Атомарно переключить `read_write` на другой Mind и отправить подготовленный
+   write в прежний Mind: write отклоняется как current writable-Mind mismatch;
+   HEAD/history обоих Minds не меняются.
+7. Потерять writer role: следующий write denied. Reduce-only изменение mode
+   выполняется на Site через current `expected_usage_version`; credential page
+   не получает control action.
 
 Hosted observation считается полным только при exact matrices
 `credentialCases`, `authorityCases`, обоих `webSurfaces`, двух catalogs и
 `immutableRevision`. Файл создаётся runner-ом из прямых ответов этого run;
 редактируемый вручную checklist доказательством не является.
+
+Имена `target_*` внутри frozen MD-344 schema остаются историческими carrier
+fields. Для current acceptance каждый такой row сопровождается direct
+principal-usage evidence; один legacy schema join без этого дополнения не
+считается MD-375 PASS.
 
 ## 4. Cleanup и recovery
 
@@ -178,15 +207,15 @@ Hosted observation считается полным только при exact mat
 5. сравнить custom audience и operator allowlist с readiness receipt.
 
 После timeout или потерянного ответа новые writes останавливаются. Сначала
-прочитать deployment state, target version, HEAD/history и существующие
-receipts по тому же run fingerprint. До этого retry запрещён. Классификация —
-`unknown_external_outcome`, а не pass или product defect.
+прочитать deployment state, `usage_version`, configured modes, HEAD/history и
+существующие receipts по тому же run fingerprint. До этого retry запрещён.
+Классификация — `unknown_external_outcome`, а не pass или product defect.
 
 Concrete defect содержит: failing case ID, expected classification, observed
 classification, candidate, deployment, безопасный request correlation и hashes
 before/after read-back. Raw response, identity и content не сохраняются.
 
-## 5. Machine join
+## 5. Исторический MD-344 machine join
 
 Final output также должен быть новым private temp file. Поле `schema` находится
 на верхнем уровне и обязано быть равно
@@ -215,11 +244,18 @@ Join fail-closed проверяет:
 `invalid_join_input_receipt`. Поэтому локальные тесты, fixture или mock не могут
 создать `r03.target.uat-joined`.
 
+Этот join сохраняет provenance старого contract, но не содержит достаточной
+формы для current principal usage. Для MD-375 он принимается только вместе с
+direct same-run evidence из раздела 3; сам по себе historical joined receipt
+не является current Web PASS.
+
 ## Терминальный результат
 
-`PASS` допустим только для валидной joined receipt
+`PASS` current candidate допустим только при одновременном наличии валидной
+historical joined receipt
 `mind-diary/uat-release-0.3-authority-target-evidence/v1` exact deployed
-candidate. Иначе результат один из:
+candidate и direct same-run principal-usage evidence из раздела 3. Одна старая
+target matrix не подтверждает MD-375. Иначе результат один из:
 
 - `product_defect` — контракт нарушен прямым наблюдением;
 - `service_fault` — проверка не дошла до надёжного product result;

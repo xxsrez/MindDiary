@@ -19,7 +19,7 @@ function record(overrides = {}) {
     tokenId: "md_oauth_access_sites_upload",
     bindingOwnerId: "md_oauth_grant_sites_upload",
     spaceId: "space_sites_upload",
-    writeBindingId: "write_binding_sites_upload",
+    principalMindUsageGenerationId: "usage_generation_sites_upload",
     sourceKind: "local_path",
     displayFilename: "fixture.epub",
     claimedMediaType: "application/epub+zip",

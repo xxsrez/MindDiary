@@ -215,7 +215,6 @@ test("publishes strict commit schemas and truthful annotations", () => {
   assert.deepEqual([...definitions.keys()], [
     "commit_changeset",
     "reconcile_changeset",
-    "capture_knowledge",
   ]);
 
   const commit = definitions.get("commit_changeset");
@@ -248,9 +247,18 @@ test("publishes strict commit schemas and truthful annotations", () => {
     destructiveHint: true,
     openWorldHint: false,
   });
-  assert.match(commit.description, /preview exact paths and visibility impact/u);
-  assert.match(commit.description, /obtain explicit confirmation/u);
-  assert.match(commit.description, /re-read HEAD/u);
+  assert.equal(commit.inputSchema.properties.source_references.maxItems, 8);
+  assert.equal(
+    commit.inputSchema.properties.source_references.items.additionalProperties,
+    false,
+  );
+  assert.deepEqual(
+    commit.inputSchema.properties.source_references.items.required,
+    ["mind", "revision", "path"],
+  );
+  assert.match(commit.description, /explicitly discussed/u);
+  assert.match(commit.description, /source_references/u);
+  assert.match(commit.description, /read and validate the exact complete committed revision/u);
   assert.match(commit.description, /revision_conflict/u);
 
   const reconcile = definitions.get("reconcile_changeset");
@@ -270,42 +278,16 @@ test("publishes strict commit schemas and truthful annotations", () => {
     ["missing", "committed"],
   );
 
-  const capture = definitions.get("capture_knowledge");
-  assert.equal(capture.inputSchema.additionalProperties, false);
-  assert.deepEqual(capture.inputSchema.required, [
-    "mind",
-    "expected_revision",
-    "idempotency_key",
-    "classification",
-    "capture_kind",
-    "capture_key",
-    "title",
-    "description",
-    "body",
-    "sources",
-  ]);
-  assert.equal(
-    capture.inputSchema.properties.classification.const,
-    "routine_non_sensitive",
-  );
-  assert.deepEqual(capture.annotations, {
-    readOnlyHint: false,
-    destructiveHint: false,
-    openWorldHint: false,
-  });
-  assert.match(capture.description, /exact private Site-selected writable target/u);
-  assert.match(capture.description, /Never use this tool for sensitive, cross-Mind/u);
-
 });
 
-test("history tool descriptions keep historical restore read-only and require a fresh confirmed commit", () => {
+test("history tool descriptions keep historical reads enabled, exact, and read-only", () => {
   const definitions = new Map(
     MCP_READ_TOOL_DEFINITIONS.map((definition) => [definition.name, definition]),
   );
-  assert.match(definitions.get("list_revisions").description, /restore preview/u);
-  assert.match(definitions.get("list_revisions").description, /never makes history writable/u);
+  assert.match(definitions.get("list_revisions").description, /enabled explicit Mind/u);
+  assert.match(definitions.get("list_revisions").description, /history never becomes writable/u);
   assert.match(definitions.get("get_revision").description, /Historical reads remain read-only/u);
-  assert.match(definitions.get("get_revision").description, /confirmed commit_changeset against a fresh current HEAD/u);
+  assert.match(definitions.get("get_revision").description, /exact source Mind\/revision\/locator provenance/u);
 });
 
 test("tools/list advertises write scope for step-up while enforcing read-only tokens", async () => {
@@ -313,7 +295,7 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   const writable = await result(await fixture.send(rpc("tools/list")));
   assert.deepEqual(
     writable.tools.map((definition) => definition.name),
-    ["commit_changeset", "reconcile_changeset", "capture_knowledge"],
+    ["commit_changeset", "reconcile_changeset"],
   );
   assert.equal(writable.tools[0].inputSchema.additionalProperties, false);
 
@@ -322,7 +304,7 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   );
   assert.deepEqual(
     readable.tools.map((definition) => definition.name),
-    ["commit_changeset", "reconcile_changeset", "capture_knowledge"],
+    ["commit_changeset", "reconcile_changeset"],
   );
   assert.deepEqual(readable.tools[0].securitySchemes, [
     { type: "oauth2", scopes: ["content:write"] },

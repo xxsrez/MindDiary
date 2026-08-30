@@ -13,12 +13,24 @@ export type {
   ProductWebOAuthConnections,
   ProductWebPersonalTokenRecord,
   ProductWebPersonalTokens,
-  ProductWebCredentialWriteTargetOwner,
-  ProductWebCredentialWriteTargets,
   ProductWebPerformanceOperation,
   ProductWebPerformanceRecorder,
   ProductWebHttpHandlerDependencies,
 } from "./product-http-contracts.js";
+
+export type {
+  MindUsageUiItem,
+  MindUsageUiMode,
+  MindUsageUiProjection,
+  ProductWebMindUsageApplication,
+} from "./mind-usage.js";
+
+export {
+  mutateMindUsage,
+  readMindUsageProjection,
+  renderMindUsageCollection,
+  renderMindUsagePanel,
+} from "./mind-usage.js";
 
 export {
   createProductUiStaticAssetResponse,

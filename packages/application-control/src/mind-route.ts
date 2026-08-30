@@ -38,6 +38,7 @@ export interface PersonalMindRouteDescriptor {
   readonly mindId: SpaceId;
   readonly route: "/me";
   readonly name: string;
+  readonly description: string | null;
   readonly isPersonal: true;
   readonly visibility: "private";
   readonly discovery: "personal";
@@ -152,6 +153,7 @@ function personalRouteDescriptor(
     mindId: profile.personalMind.spaceId,
     route: "/me",
     name: profile.personalMind.name,
+    description: profile.personalMind.description,
     isPersonal: true,
     visibility: "private",
     discovery: "personal",

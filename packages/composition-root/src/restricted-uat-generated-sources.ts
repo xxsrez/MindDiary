@@ -10,7 +10,6 @@ import {
 import type {
   MindBindingOwnerId,
   UtcInstant,
-  WriteMindBindingId,
 } from "@mind-diary/domain";
 import type { BoundedInMemoryIngressPort } from "./bounded-in-memory-ingress.js";
 
@@ -249,25 +248,27 @@ export function createRestrictedUatGeneratedSourceHandler(dependencies: Readonly
     }
 
     const bindingOwnerId = metadataToken.tokenId as unknown as MindBindingOwnerId;
-    const target = await dependencies.metadata.readCredentialWriteTarget(
-      bindingOwnerId,
-      principalId,
-    );
-    const generation = target?.kind === "current"
-      ? target.state.activeGeneration
-      : null;
+    const usage = await dependencies.metadata.readPrincipalMindUsage(principalId);
+    const generation = usage?.activeWriteGeneration ?? null;
+    const usageEntry = generation === null
+      ? null
+      : usage?.entries.find((entry) => entry.spaceId === generation.spaceId) ?? null;
     if (
-      target?.kind !== "current" ||
-      target.state.lifecycleState !== "active" ||
-      target.state.bindingOwnerId !== bindingOwnerId ||
-      target.state.principalId !== principalId ||
       generation === null ||
-      generation.bindingOwnerId !== bindingOwnerId
+      generation.principalId !== principalId ||
+      usageEntry?.principalId !== principalId ||
+      usageEntry.usageMode !== "read_write" ||
+      usageEntry.writeGeneration?.generationId !== generation.generationId ||
+      !await dependencies.metadata.validatePrincipalMindUsageWritePin({
+        principalId,
+        spaceId: generation.spaceId,
+        generationId: generation.generationId,
+      })
     ) {
       return problem(
         409,
         "writable_target_required",
-        "The dedicated credential must have one current writable target.",
+        "The principal must have one current writable Mind.",
       );
     }
 
@@ -338,10 +339,8 @@ export function createRestrictedUatGeneratedSourceHandler(dependencies: Readonly
       const serverBytes = Uint8Array.from(UAT_SERVER_GENERATED_PDF);
       const serverSha256 = await dependencies.objects.calculateSha256(serverBytes);
       const common = Object.freeze({ actor, spaceId: generation.spaceId });
-      const writeBindingId = generation.generationId as unknown as WriteMindBindingId;
       const boundedCommon = Object.freeze({
         ...common,
-        writeBindingId,
         displayFilename: "uat-generated-bounded.png",
         claimedMediaType: "image/png",
       });
@@ -375,14 +374,6 @@ export function createRestrictedUatGeneratedSourceHandler(dependencies: Readonly
         boundedDigestMismatch.kind === "invalid" &&
           boundedDigestMismatch.code === "expected_sha256_mismatch",
       );
-      const boundedStaleTarget = await dependencies.boundedInMemoryIngress.stage({
-        ...boundedCommon,
-        writeBindingId: "uat_stale_target_generation" as never,
-        idempotencyKey: `${idempotencyPrefix}:bounded-stale-target` as never,
-        bytes: UAT_BOUNDED_PNG_PREFIX,
-      });
-      expect("bounded-stale-target-rejected", boundedStaleTarget.kind === "denied");
-
       const boundedStageRequest = Object.freeze({
         ...boundedCommon,
         idempotencyKey: `${idempotencyPrefix}:bounded` as never,
@@ -526,7 +517,6 @@ export function createRestrictedUatGeneratedSourceHandler(dependencies: Readonly
       const commitRequest = Object.freeze({
         actor,
         spaceId: generation.spaceId,
-        writeBindingId: generation.generationId,
         expectedRevisionId: initialHead,
         idempotencyKey: `${idempotencyPrefix}:commit`,
         summary: "Publish restricted UAT deterministic generated-source fixtures",

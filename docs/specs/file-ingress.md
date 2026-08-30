@@ -3,7 +3,8 @@
 Статус: accepted contract boundary, 2026-08-23; Release 0.2 readable-path
 profile принят 2026-08-26. `normative_status: accepted`;
 `implementation_status: implemented_repository_for_disk_workspace`;
-`connector_reference_status: implemented_repository_google_drive`.
+`connector_reference_status: implemented_repository_google_drive`;
+`principal_usage_staging_status: implemented_repository`.
 Общий portable boundary принят, обязательный Release 0.2 slice использует
 packaged local companion для `local_path` и `workspace/generated_artifact`,
 MD-305 hosted one-use upload-intent service и format-neutral streaming
@@ -28,6 +29,12 @@ application port; он не становится HTTP/MCP surface и не выд
 support до отдельного late-UAT evidence. Repository ports, schemas и локальные
 tests сами по себе не являются support claim.
 
+Release 0.3 principal-owned staging amendment принят 2026-08-30 в
+[ADR-0024](../decisions/0024-principal-mind-usage-modes-and-automatic-save.md)
+и [Mind usage contract](mind-usage-modes.md). Он заменяет активную
+credential-owned writable-target authority ниже; прежние binding-поля и
+сценарии сохранены только как явно помеченная историческая совместимость.
+
 Release applicability: portable boundary остаётся accepted, но
 [ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
 переносит universal file-ingress capability в post-MVP. Все source-specific
@@ -49,15 +56,47 @@ ordinary per-file ingress остаётся частью Codex content flow: comp
 может принять явно выбранный source, а Content MCP — провести bounded
 admission, stage и reconcile как подготовку exact-target content commit.
 Transport и source authorization остаются adapter-owned, input —
-server-approved; MCP не создаёт bulk import session, не меняет writable target
+server-approved; MCP не создаёт bulk import session, не меняет `usage_mode`
+или active writable mount
 и не получает Connection, connector или provider control.
 
 Existing MCP upload/stage/reconcile descriptions ниже остаются historical
-0.1/0.2 compatibility, а не target operation register. MD-336 не решает, какие
-exact tools сохраняются: disposition принадлежит MD-337; writable-target/
-binding representation and migration приняты в
-[MD-339 contract](credential-write-target.md). MD-336 не меняет runtime,
-schemas, storage or UAT claims.
+0.1/0.2 compatibility, а не target operation register. Historical
+[MD-339 contract](credential-write-target.md) сохраняется как evidence
+прежней credential-owned модели, но target authority Release 0.3 теперь задают
+ADR-0024 и principal-owned Mind usage contract. Fresh runtime не рекламирует и
+не принимает client binding fields; cached legacy операции могут только
+вернуть side-effect-free retired result.
+
+### Release 0.3 principal-owned mount-generation amendment
+
+Для любого fresh stage, upload-intent, connector или generated-source ingress
+server сначала разрешает authenticated actor в immutable `principal_id`, затем
+читает единственный active `read_write` Mind этого principal. Credential scope,
+status и current ACL/role всё ещё обязательны, но только сужают capability и не
+выбирают destination.
+
+- Application request может содержать exact Mind/`space_id` только как
+  fail-closed assertion ожидаемого назначения. Server обязан получить тот же
+  Space из principal-owned state; несовпадение не перенаправляется в Personal,
+  предыдущий или другой доступный Mind.
+- Fresh client/MCP/connector request не содержит `write_binding_id`,
+  `binding_owner_id`, credential target version, principal usage generation или
+  replacement generation. Generation создаётся Site control plane и передаётся
+  только внутри trusted application context.
+- Новый `staged_file_ref` фиксируется на
+  `principal_id + space_id + principal_mind_usage_generation_id`. Stage
+  проверяет pin до чтения provider/source bytes и повторяет его в transaction;
+  commit повторно проверяет тот же pin вместе с scope, current role, quota,
+  idempotency и HEAD CAS.
+- Switch/disable writable Mind, generation drift, credential revoke/expiry или
+  потеря роли дают typed fail-closed outcome и нулевой target fallback.
+  Legacy staged/upload-intent row без exact principal generation остаётся
+  читаемой для безопасной диагностики, но не может быть consumed, restaged или
+  remapped в новую generation.
+- Сохраняемый внутренний credential/grant partition допустим только как
+  storage/quota/revocation compatibility detail. Он не является selector,
+  model-visible instruction или клиентским authority field.
 
 ## Цель и граница
 
@@ -120,7 +159,8 @@ explicit readable absolute path on the current Codex execution host
   Provider file ID, temporary URL, absolute local path, workspace path и raw
   request body заканчиваются на owning adapter boundary.
 - Service-owned `staged_file_ref` — единственный locator staging state. Он
-  pinned к `binding_owner_id + space_id + write_binding_id` и не является
+  pinned к `principal_id + space_id + principal_mind_usage_generation_id` и не
+  является
   provider object ID, local path, URL или capability для другого Mind.
 - `source_kind` хранится как closed enum без provider/account secret. Он
   описывает provenance class, но не становится authorization identity.
@@ -148,8 +188,10 @@ source owner / provider / local process
 VerifiedFileInput { source_kind, bytes, safe filename, detected metadata }
         │  application-owned digest, MIME/path/quota/static gate
         ▼
-staged_file_ref { owner + Space + write generation + digest + metadata + state }
-        │  exact active binding + expected HEAD + idempotency
+staged_file_ref {
+  principal + Space + usage generation + digest + metadata + state
+}
+        │  exact active read_write mount + expected HEAD + idempotency
         ▼
 atomic commit_changeset -> one immutable revision or no visible revision
 ```
@@ -166,9 +208,9 @@ commit остаётся `revision_id + path`, как в BundleFile specification
 
 ```text
 staged_file_ref
-binding_owner_id
+principal_id
 space_id
-write_binding_id
+principal_mind_usage_generation_id
 source_kind
 sha256
 size
@@ -178,8 +220,10 @@ state: quarantined | verified | rejected | consumed | expired
 created_at / expires_at / consumed_at?
 ```
 
-`binding_owner_id`, `space_id` и `write_binding_id` проверяются заново при
-stage, list, commit и cleanup. Provider account, `file_id`, temporary URL,
+`principal_id`, `space_id` и `principal_mind_usage_generation_id` проверяются
+заново при stage, commit и consume. Cleanup может использовать внутренний
+grant partition только для bounded storage accounting, но не для выбора Mind.
+Provider account, `file_id`, temporary URL,
 absolute path, bytes и connector credentials не сохраняются в этом record.
 The record does not change OKF frontmatter or the v4 manifest: only a
 successful commit adds the canonical `kind: opaque` entry.
@@ -217,7 +261,7 @@ every source after transport-specific admission:
 | One staged/canonical BundleFile | 268,435,456 bytes (256 MiB), inclusive | Byte 268,435,457 fails before canonical HEAD mutation |
 | BundleFile operations in one changeset | 20 | One staged ref per file operation; no duplicate ref |
 | Staged bytes referenced by one changeset | 268,435,456 bytes (256 MiB) | Permits one maximum-size file; Markdown/resulting revision limits still apply |
-| Outstanding verified staged bytes per binding owner | 268,435,456 bytes (256 MiB) | Includes all source kinds in that owner namespace |
+| Outstanding verified staged bytes per internal staging namespace | 268,435,456 bytes (256 MiB) | Includes all source kinds; namespace is quota/revocation metadata, never destination authority |
 | Verified staged-ref TTL | 3,600 seconds (60 minutes) | Expiry is service time; ref is not reader-visible |
 | One-use upload intent TTL | 600 seconds (10 minutes) | Intent is separate from `staged_file_ref`; no replay after expiry |
 | Retained canonical objects per Space | 2,147,483,648 bytes (2 GiB) | Lower applicable capacity limit wins |
@@ -296,9 +340,11 @@ reconcile and request hashing, so parameters such as
 `application/pdf; charset=binary` are equivalent to `application/pdf`.
 
 Before opening the producer, the port uses existing stage reconciliation with
-the current actor, server-derived credential owner, Space and exact active
-target generation plus source kind, idempotency key and safe receipt. The
-caller supplies neither owner nor generation. `missing` is the only outcome
+the current actor, server-resolved principal, exact active `read_write` Space
+and principal usage generation plus source kind, idempotency key and safe
+receipt. The caller supplies neither principal nor generation; an asserted
+Space must exactly match the server-resolved mount. `missing` is the only
+outcome
 that may invoke the producer. An existing matching success returns its original
 `staged_file_ref`; changed metadata/digest/size returns
 `idempotency_conflict`; authorization, expiry, consumed/rejected state and
@@ -306,13 +352,12 @@ storage failures fail closed. Therefore an uncertain same-key retry performs
 no generation, reservation or object upload.
 
 The resolved generation is passed only through trusted application context.
-The shared staging authorization checks the same credential owner, generation
+The shared staging authorization checks the same principal, usage generation
 and Space before reservation, then repeats that check inside the metadata
-transaction against the pinned target-version stamp. Clear, switch, revoke or
-target corruption between reconcile and stage therefore returns a canonical
-`writable_target_required | writable_target_mismatch |
-writable_target_unavailable` outcome; it never redirects bytes to another
-Mind and leaves no hidden staged state.
+transaction. Disable/switch, revoke, access loss or state corruption between
+reconcile and stage therefore returns a canonical
+`writable_mind_required | writable_mind_stale` outcome; it never redirects
+bytes to another Mind and leaves no hidden staged state.
 
 The route races producer acquisition and every pending chunk against caller
 cancellation and the lease. Cancellation, timeout, producer exception,
@@ -327,8 +372,8 @@ record or object remains, so the same key can be retried with a corrected,
 internally consistent safe receipt.
 
 Success returns only the service-owned `staged_file_ref`. It does not advance
-HEAD: quota, exact writable-target authorization, idempotency, explicit atomic
-changeset, immutable history, exact download, actor-owned Web export and orphan
+HEAD: quota, exact principal mount-generation authorization, idempotency,
+explicit atomic changeset, immutable history, exact download, actor-owned Web export and orphan
 cleanup remain the existing BundleFile lifecycle. Content MCP gains neither a
 `server_generated` stage/export tool nor export administration. Until MD-290
 installs one privacy-safe producer use case and records exact-candidate late
@@ -343,8 +388,9 @@ wiring blocker.
 
 ### Idempotency and reconcile
 
-- Stage idempotency is namespaced by credential owner, exact target generation,
-  Space, operation and key. The canonical payload hash includes `source_kind`,
+- Stage idempotency is namespaced by principal, Space, operation and key, while
+  the canonical payload pins exact principal usage generation. The hash also
+  includes `source_kind`,
   exact bytes digest/size and safe canonical metadata. Same key and same payload return the same
   `staged_file_ref`/expiry; a changed source, snapshot, metadata or digest
   returns `idempotency_conflict`.
@@ -357,9 +403,10 @@ wiring blocker.
 - Upload intents are one-use. Exact replay of the same idempotency key may
   recover the same intent before expiry; a changed payload or second consumer
   returns `file_ingress_intent_conflict`. OAuth access-record rotation within
-  the same still-active principal/grant/exact target generation atomically refreshes the
-  replayed intent authorization reference; it cannot change body identity or
-  resurrect a revoked credential owner or target.
+  the same still-active principal/grant/exact principal usage generation
+  atomically refreshes the
+  replayed intent authorization reference; it cannot change body identity,
+  change the principal-owned mount or resurrect a revoked credential.
 - A successful `commit_changeset` consumes every referenced staged ref in its
   single HEAD transaction. An unknown commit outcome is reconciled with the
   exact commit key/payload through `reconcileCommit`; replay returns the same
@@ -392,7 +439,8 @@ enter durable state or model-visible structured output.
 `ui/update-model-context` передаёт модели только explicit `mind`, выбранный до
 picker target `path` и opaque `staged_file_ref`. Этот context не выполняет
 commit и не является authorization binding: следующий `commit_changeset`
-по-прежнему независимо валидирует exact path, current target generation, ACL,
+по-прежнему независимо валидирует exact path, current principal usage
+generation, ACL,
 HEAD и staged ref. Если host отклоняет context update, widget честно сообщает,
 что stage состоялся, но продолжать changeset нельзя до повторной передачи
 receipt; provider object при этом не попадает в разговор.
@@ -404,7 +452,7 @@ selection → provider envelope → stage receipt; only then is `verified`
 appropriate. Schema or widget presence does not activate a fallback.
 
 Read-only credentials do not gain staging by seeing the tool definition. The
-server checks token scope, current write binding, current ACL and exact Mind
+server checks token scope, current principal-owned `read_write` mount, current ACL and exact Mind
 again on every call. Compatibility framing does not create a second source
 contract or bypass the same application gate.
 
@@ -445,7 +493,7 @@ Stable errors are split by boundary:
 | Advisory MIME is missing, unknown, invalid or conflicts | `bundle_file_media_mismatch` diagnostic + `application/octet-stream` | Storage continues; serving remains download-only. An internal route that supplies an exact expected MIME receipt instead rejects a detected mismatch before object promotion |
 | Stage/commit idempotency payload changed | `idempotency_conflict` | Re-read/reconcile; new key only for a genuinely new operation |
 | One staged ref is used by more than one file operation | `duplicate_staged_bundle_file_reference` | Build a changeset with one distinct verified ref per target path |
-| Binding generation or HEAD changed | `staged_file_binding_stale` / `revision_conflict` | Re-read current binding/HEAD and build a new confirmed operation |
+| Principal usage generation or HEAD changed | `writable_mind_stale` / `revision_conflict` | Refresh enabled Minds/current HEAD and build a new exact operation; never reuse a legacy binding generation |
 
 The first two generic ingress codes are shared adapter codes; the intent codes
 are implemented by the MD-305 repository candidate. Current native
@@ -498,12 +546,14 @@ This contract preserves the old boundaries:
   recorded as an export snapshot rather than invented original bytes. Grant,
   object/revision/ownership locators, export endpoint and credentials terminate
   inside the adapter. Before grant resolution or provider metadata, application
-  resolves the exact active writable target from the authenticated MCP actor
-  and web-owned credential state. Connector stage accepts no caller-supplied
-  credential owner, target generation or target version; it passes the resolved
-  generation only through trusted application context into shared staging.
-  Missing, mismatched, revoked or concurrently changed targets use the canonical
-  `writable_target_*` taxonomy and never redirect bytes or touch the provider.
+  resolves the exact active principal-owned `read_write` mount from the
+  authenticated MCP actor and Site-owned usage state. Connector stage accepts
+  no caller-supplied principal, binding owner, target generation or target
+  version; it passes the resolved principal usage generation only through
+  trusted application context into shared staging. Missing, mismatched,
+  revoked or concurrently changed mounts use the canonical
+  `writable_mind_required | writable_mind_stale` taxonomy and never redirect
+  bytes or touch the provider.
   Hosted support remains `not_available` until MD-319 runs the exact-provider
   UAT contract.
   Revoke, ownership/version drift and changed export bytes discovered during
@@ -517,7 +567,7 @@ This contract preserves the old boundaries:
 Open questions intentionally left for child implementation decisions:
 
 - Hosted local-companion UAT must prove the MD-305 one-use HMAC capability,
-  OAuth grant/write-binding invalidation, exact 256 MiB streaming and
+  OAuth revoke plus principal usage-generation invalidation, exact 256 MiB streaming and
   GET reconciliation on the exact candidate. Repository tests do not prove
   Sites routing or a real companion/client installation.
 - Which hosted producer wiring and runtime limits are required before the local

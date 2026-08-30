@@ -5,8 +5,6 @@ import {
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
   DeterministicOkfExportService,
-  MindBindingApplicationService,
-  MindBindingContentAuthorizer,
 } from "@mind-diary/application-content";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
@@ -205,9 +203,67 @@ function changes(path, title) {
   ];
 }
 
+function principalMountedMetadata(metadata) {
+  const mounted = new Map();
+  let generation = 0;
+  const select = (principalId, spaceId) => {
+    const generationId = `usage_generation_commit_${++generation}`;
+    mounted.set(principalId, Object.freeze({ principalId, spaceId, generationId }));
+    return generationId;
+  };
+  const ensure = (principalId, spaceId) => {
+    const current = mounted.get(principalId);
+    return current ?? Object.freeze({
+      principalId,
+      spaceId,
+      generationId: select(principalId, spaceId),
+    });
+  };
+  const readUsage = async (principalId) => {
+    const current = mounted.get(principalId);
+    if (current === undefined) return null;
+    return Object.freeze({
+      principalId,
+      entries: Object.freeze([Object.freeze({
+        principalId,
+        spaceId: current.spaceId,
+        usageMode: "read_write",
+        writeGeneration: current,
+      })]),
+      activeWriteGeneration: current,
+    });
+  };
+  const validatePin = async (pin) => {
+    const current = mounted.get(pin.principalId);
+    return current !== undefined &&
+      current.spaceId === pin.spaceId &&
+      current.generationId === pin.generationId;
+  };
+  const wrapTransaction = (transaction) => Object.freeze({
+    ...transaction,
+    readPrincipalMindUsage: readUsage,
+    validatePrincipalMindUsageWritePin: validatePin,
+  });
+  const store = new Proxy(metadata, {
+    get(target, property) {
+      if (property === "readPrincipalMindUsage") return readUsage;
+      if (property === "validatePrincipalMindUsageWritePin") return validatePin;
+      if (property === "runContentCommitTransaction") {
+        return (operation) => target.runContentCommitTransaction((transaction) =>
+          operation(wrapTransaction(transaction)));
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return Object.freeze({ store, select, ensure });
+}
+
 async function fixture() {
   const objects = new InMemoryObjectStore();
-  const metadata = new InMemoryRevisionMetadataStore();
+  const rawMetadata = new InMemoryRevisionMetadataStore();
+  const usage = principalMountedMetadata(rawMetadata);
+  const metadata = usage.store;
   const coordinator = new CanonicalRevisionCoordinator({
     objects,
     revisions: metadata,
@@ -237,6 +293,7 @@ async function fixture() {
     capacityLimits,
   }) => {
     grant(currentActor);
+    usage.ensure(currentActor.principalId, MINDS.ordinary.spaceId);
     return new ChangesetCommitService({
       authorizer,
       metadata,
@@ -281,7 +338,7 @@ async function fixture() {
         head?.files.map((file) => [file.path, file.text]) ?? [],
     };
   };
-  return { objects, metadata, coordinator, grant, service, snapshot };
+  return { objects, metadata, coordinator, grant, service, snapshot, usage };
 }
 
 test("commit capacity rejection happens before canonical object writes", async () => {
@@ -889,82 +946,26 @@ test("two Editors racing from one HEAD get one winner and one explicit conflict 
   );
 });
 
-test("concurrent write rebind fences a prepared commit before revision, audit, or index effects", async () => {
+test("concurrent writable Mind switch fences a prepared commit before revision, audit, or index effects", async () => {
   const env = await fixture();
-  const bindingOwnerId = "binding_owner_commit_race";
-  const editorBase = actor(
+  const editor = actor(
     PRINCIPALS.editor.principalId,
-    "token_binding_commit_race",
-    "request_binding_commit_race",
+    "token_usage_commit_race",
+    "request_usage_commit_race",
   );
-  const editor = {
-    ...editorBase,
-    authentication: {
-      ...editorBase.authentication,
-      bindingOwnerId,
-    },
-  };
   env.grant(editor);
-  const otherSpaceId = "space_binding_commit_other";
-  const state = authorizationState(editor);
-  env.metadata.setCurrentAuthorizationStateForTest(
-    {
-      principalId: editor.principalId,
-      spaceId: otherSpaceId,
-      tokenId: editor.authentication.tokenId,
-    },
-    {
-      ...state,
-      space: { ...state.space, spaceId: otherSpaceId },
-      membership: { ...state.membership, spaceId: otherSpaceId },
-    },
-  );
-
-  let readId = 0;
-  let writeId = 0;
-  let auditId = 0;
-  let outboxId = 0;
+  const otherSpaceId = "space_usage_commit_other";
   const baseAuthorizer = new CapabilityAuthorizer(env.metadata);
-  const bindings = new MindBindingApplicationService({
-    authorizer: baseAuthorizer,
-    bindings: env.metadata,
-    writeAuthority: "legacy_mind_binding",
-    digest: env.objects,
-    ids: {
-      nextReadMindBindingId: () => `read_binding_commit_${++readId}`,
-      nextWriteMindBindingId: () => `write_binding_commit_${++writeId}`,
-      nextMindBindingAuditEventId: () => `audit_binding_commit_${++auditId}`,
-      nextMindBindingOutboxMessageId: () => `outbox_binding_commit_${++outboxId}`,
-    },
-  });
-  const initial = await bindings.mutateWrite({
-    actor: editor,
-    action: "bind",
-    spaceId: MINDS.ordinary.spaceId,
-    expectedBindingVersion: 0,
-    idempotencyKey: "bind-initial-commit-target",
-  });
-  assert.equal(initial.kind, "applied");
-  const staleWriteBindingId = initial.bindings.writeBinding.writeBindingId;
-
-  const bindingAuthorizer = new MindBindingContentAuthorizer({
-    delegate: baseAuthorizer,
-    bindings: env.metadata,
-    readAuthority: "legacy_mind_binding",
-  });
+  const initialGeneration = env.usage.select(
+    editor.principalId,
+    MINDS.ordinary.spaceId,
+  );
   const racedObjects = objectStoreWithFirstPutHook(env.objects, async () => {
-    const rebound = await bindings.mutateWrite({
-      actor: editor,
-      action: "bind",
-      spaceId: otherSpaceId,
-      expectedBindingVersion: 1,
-      idempotencyKey: "rebind-during-prepared-commit",
-    });
-    assert.equal(rebound.kind, "applied");
-    assert.equal(rebound.previousWriteBinding.writeBindingId, staleWriteBindingId);
+    const replacement = env.usage.select(editor.principalId, otherSpaceId);
+    assert.notEqual(replacement, initialGeneration);
   });
   const raced = new ChangesetCommitService({
-    authorizer: bindingAuthorizer,
+    authorizer: baseAuthorizer,
     metadata: env.metadata,
     revisions: env.coordinator,
     objects: racedObjects,
@@ -974,14 +975,13 @@ test("concurrent write rebind fences a prepared commit before revision, audit, o
   const denied = await raced.commit({
     actor: editor,
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: staleWriteBindingId,
     expectedRevisionId: REVISIONS.initial.revisionId,
-    idempotencyKey: "commit-with-stale-binding-generation",
-    summary: "Must be fenced by concurrent rebind",
-    operations: changes("concepts/binding-race.md", "Binding race"),
+    idempotencyKey: "commit-with-stale-usage-generation",
+    summary: "Must be fenced by concurrent writable Mind switch",
+    operations: changes("concepts/usage-race.md", "Usage race"),
   });
   assert.equal(denied.kind, "denied");
-  assert.equal(denied.decision.code, "write_binding_stale");
+  assert.equal(denied.decision.code, "writable_mind_stale");
 
   const afterDenied = await env.snapshot();
   assert.equal(afterDenied.head, REVISIONS.initial.revisionId);
@@ -998,19 +998,13 @@ test("concurrent write rebind fences a prepared commit before revision, audit, o
     false,
   );
 
-  const reboundHome = await bindings.mutateWrite({
-    actor: editor,
-    action: "bind",
-    spaceId: MINDS.ordinary.spaceId,
-    expectedBindingVersion: 2,
-    idempotencyKey: "rebind-back-for-fresh-commit",
-  });
-  assert.equal(reboundHome.kind, "applied");
-  const currentWriteBindingId =
-    reboundHome.bindings.writeBinding.writeBindingId;
-  assert.notEqual(currentWriteBindingId, staleWriteBindingId);
+  const currentGeneration = env.usage.select(
+    editor.principalId,
+    MINDS.ordinary.spaceId,
+  );
+  assert.notEqual(currentGeneration, initialGeneration);
   const current = new ChangesetCommitService({
-    authorizer: bindingAuthorizer,
+    authorizer: baseAuthorizer,
     metadata: env.metadata,
     revisions: env.coordinator,
     objects: env.objects,
@@ -1020,11 +1014,10 @@ test("concurrent write rebind fences a prepared commit before revision, audit, o
   const committed = await current.commit({
     actor: editor,
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: currentWriteBindingId,
     expectedRevisionId: REVISIONS.initial.revisionId,
-    idempotencyKey: "commit-with-current-binding-generation",
-    summary: "Commit with current binding",
-    operations: changes("concepts/binding-current.md", "Binding current"),
+    idempotencyKey: "commit-with-current-usage-generation",
+    summary: "Commit with current writable Mind",
+    operations: changes("concepts/usage-current.md", "Usage current"),
   });
   assert.equal(committed.kind, "committed");
   assert.equal(
@@ -1039,24 +1032,16 @@ test("concurrent write rebind fences a prepared commit before revision, audit, o
     ).length,
     1,
   );
-  const reboundAfterCommit = await bindings.mutateWrite({
-    actor: editor,
-    action: "bind",
-    spaceId: otherSpaceId,
-    expectedBindingVersion: 3,
-    idempotencyKey: "rebind-after-successful-commit",
-  });
-  assert.equal(reboundAfterCommit.kind, "applied");
+  env.usage.select(editor.principalId, otherSpaceId);
   const staleReplay = await current.commit({
     actor: editor,
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: currentWriteBindingId,
     expectedRevisionId: REVISIONS.initial.revisionId,
-    idempotencyKey: "commit-with-current-binding-generation",
-    summary: "Commit with current binding",
-    operations: changes("concepts/binding-current.md", "Binding current"),
+    idempotencyKey: "commit-with-current-usage-generation",
+    summary: "Commit with current writable Mind",
+    operations: changes("concepts/usage-current.md", "Usage current"),
   });
   assert.equal(staleReplay.kind, "denied");
-  assert.equal(staleReplay.decision.code, "write_binding_stale");
+  assert.equal(staleReplay.decision.code, "writable_mind_required");
   assert.equal((await env.snapshot()).revisions.length, 2);
 });

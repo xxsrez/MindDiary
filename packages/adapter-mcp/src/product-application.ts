@@ -1,12 +1,10 @@
 import type {
-  AutomaticCaptureService,
   BundleFileStagingService,
   BundleFileDownloadService,
   ChangesetCommitService,
   FileIngressCapability,
   FileIngressCoordinator,
   LocalFileUploadIntentService,
-  MindBindingApplicationService,
   MindBrowseService,
   MindDiscoveryService,
   MindHistoryService,
@@ -36,6 +34,7 @@ import {
 type AuthenticatedActor = Parameters<
   McpContentApplication["listTools"]
 >[0]["actor"];
+type MindInfo = Awaited<ReturnType<MindDiscoveryService["getMindInfo"]>>;
 
 export interface ProductMcpApplicationDependencies {
   readonly discovery: Pick<MindDiscoveryService, "listMinds" | "resolveMind" | "getMindInfo">;
@@ -43,10 +42,6 @@ export interface ProductMcpApplicationDependencies {
   readonly search: Pick<MindSearchService, "searchEntries">;
   readonly history: Pick<MindHistoryService, "listRevisions" | "getRevision">;
   readonly validation: Pick<MindValidationService, "validateMind">;
-  readonly bindings: Pick<
-    MindBindingApplicationService,
-    "read" | "mutateRead" | "mutateWrite"
-  >;
   readonly commits: Pick<ChangesetCommitService, "commit">;
   readonly staging?: Pick<BundleFileStagingService, "stageStream">;
   readonly uploadIntents?: Pick<LocalFileUploadIntentService, "create">;
@@ -57,7 +52,6 @@ export interface ProductMcpApplicationDependencies {
   >;
   readonly bundleFileDownloads: Pick<BundleFileDownloadService, "issue">;
   readonly nativeFileRoute?: NativeFileParameterRoute;
-  readonly capture: Pick<AutomaticCaptureService, "capture">;
   readonly scheduleCommitEffects?: () => void | Promise<void>;
 }
 
@@ -309,8 +303,6 @@ function stageFailureCode(code: string): string {
       return "invalid_bundle_file_name";
     case "outstanding_staged_byte_limit_exceeded":
       return "staging_quota_exceeded";
-    case "binding_mismatch":
-      return "staged_file_binding_stale";
     case "invalid_idempotency_key":
       return "invalid_request";
     default:
@@ -318,60 +310,38 @@ function stageFailureCode(code: string): string {
   }
 }
 
-const CAPTURE_KEY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
-const CAPTURE_KINDS = new Set(["fact", "decision", "source_note"]);
-
-function validCaptureSources(value: unknown): boolean {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 8) return false;
-  return value.every((item) => {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
-    const record = item as Readonly<Record<string, unknown>>;
-    if (record.kind === "user_statement") return hasExactKeys(record, ["kind"]);
-    return record.kind === "target_entry" &&
-      hasExactKeys(record, ["kind", "revisionId", "path"]) &&
-      stringValue(record.revisionId) !== null &&
-      stringValue(record.path) !== null;
-  });
-}
-
-function validCaptureInput(input: Readonly<Record<string, unknown>>): boolean {
-  return hasExactKeys(input, [
-    "mind",
-    "expectedRevision",
-    "idempotencyKey",
-    "classification",
-    "captureKind",
-    "captureKey",
-    "title",
-    "description",
-    "body",
-    "sources",
-  ]) &&
-    stringValue(input.mind) !== null &&
-    stringValue(input.expectedRevision) !== null &&
-    idempotencyKeyValue(input.idempotencyKey) &&
-    input.classification === "routine_non_sensitive" &&
-    typeof input.captureKind === "string" && CAPTURE_KINDS.has(input.captureKind) &&
-    typeof input.captureKey === "string" && CAPTURE_KEY_PATTERN.test(input.captureKey) &&
-    stringValue(input.title) !== null &&
-    stringValue(input.description) !== null &&
-    stringValue(input.body) !== null &&
-    validCaptureSources(input.sources);
-}
-
 function validChangesetInput(input: Readonly<Record<string, unknown>>): boolean {
-  return hasExactKeys(input, [
+  const keys = [
     "mind",
     "expectedRevision",
     "idempotencyKey",
     "summary",
     "operations",
-  ]) &&
+    ...(input.sourceReferences === undefined ? [] : ["sourceReferences"]),
+  ];
+  return hasExactKeys(input, keys) &&
     stringValue(input.mind) !== null &&
     stringValue(input.expectedRevision) !== null &&
     idempotencyKeyValue(input.idempotencyKey) &&
     typeof input.summary === "string" &&
-    Array.isArray(input.operations) && input.operations.length > 0;
+    Array.isArray(input.operations) && input.operations.length > 0 &&
+    (input.sourceReferences === undefined || (
+      Array.isArray(input.sourceReferences) &&
+      input.sourceReferences.length <= 8 &&
+      input.sourceReferences.every((reference) =>
+        reference !== null &&
+        typeof reference === "object" &&
+        !Array.isArray(reference) &&
+        hasExactKeys(reference as Readonly<Record<string, unknown>>, [
+          "mind",
+          "revision",
+          "path",
+        ]) &&
+        stringValue((reference as Readonly<Record<string, unknown>>).mind) !== null &&
+        stringValue((reference as Readonly<Record<string, unknown>>).revision) !== null &&
+        stringValue((reference as Readonly<Record<string, unknown>>).path) !== null
+      )
+    ));
 }
 
 /** Complete custom Mind-aware content application behind the MCP HTTP adapters. */
@@ -382,70 +352,40 @@ export class ProductMcpContentApplication implements McpContentApplication {
     this.#dependencies = dependencies;
   }
 
-  async #resolveWritableTarget(
+  async #resolveSourceReferences(
     actor: AuthenticatedActor,
-    spaceId: string,
-  ): Promise<
-    | Readonly<{ kind: "ready"; writeBindingId: string; targetVersion: number }>
-    | Readonly<{ kind: "error"; result: unknown }>
-  > {
-    const current = await this.#dependencies.bindings.read({ actor });
-    if (current.kind === "writable_target_required") {
+    sourceReferences: unknown,
+  ): Promise<readonly Readonly<{
+    spaceId: string;
+    revisionId: string;
+    path: string;
+  }>[]> {
+    if (!Array.isArray(sourceReferences)) return Object.freeze([]);
+    return Object.freeze(await Promise.all(sourceReferences.map(async (reference) => {
+      const value = reference as Readonly<Record<string, unknown>>;
+      const info = await this.#dependencies.discovery.getMindInfo(
+        actor,
+        value.mind,
+        { kind: "revision", revisionId: value.revision as never },
+      );
       return Object.freeze({
-        kind: "error",
-        result: this.#writableTargetError(actor.requestId, "writable_target_required"),
+        spaceId: info.mind.mindId,
+        revisionId: info.resolvedRevision.revisionId,
+        path: value.path as string,
       });
-    }
-    if (
-      current.kind !== "ready" ||
-      current.bindings.bindingSet.state !== "active"
-    ) {
-      return Object.freeze({
-        kind: "error",
-        result: this.#writableTargetError(actor.requestId, "writable_target_unavailable"),
-      });
-    }
-    const write = current.bindings.writeBinding;
-    if (write === null) {
-      return Object.freeze({
-        kind: "error",
-        result: this.#writableTargetError(actor.requestId, "writable_target_required"),
-      });
-    }
-    if (write.state !== "active") {
-      return Object.freeze({
-        kind: "error",
-        result: this.#writableTargetError(actor.requestId, "writable_target_unavailable"),
-      });
-    }
-    if (write.spaceId !== spaceId) {
-      return Object.freeze({
-        kind: "error",
-        result: this.#writableTargetError(actor.requestId, "writable_target_mismatch"),
-      });
-    }
-    return Object.freeze({
-      kind: "ready",
-      writeBindingId: write.writeBindingId,
-      targetVersion: current.bindings.bindingSet.bindingVersion,
-    });
+    })));
   }
 
-  #writableTargetError(
+  #writableMindError(
     requestId: AuthenticatedActor["requestId"],
-    code:
-      | "writable_target_required"
-      | "writable_target_mismatch"
-      | "writable_target_unavailable",
+    code: "writable_mind_required" | "writable_mind_stale",
     retryable = false,
   ) {
     const messages = Object.freeze({
-      writable_target_required:
-        "Select one writable Mind in the Site connection settings before writing.",
-      writable_target_mismatch:
-        "The requested Mind is not the writable target selected for this credential.",
-      writable_target_unavailable:
-        "The selected writable Mind or credential is no longer available.",
+      writable_mind_required:
+        "Configure one read_write Mind in the Site settings before writing.",
+      writable_mind_stale:
+        "The principal's writable Mind changed or is no longer available; refresh list_minds.",
     });
     return createMcpToolErrorResult(
       requestId,
@@ -453,6 +393,42 @@ export class ProductMcpContentApplication implements McpContentApplication {
       messages[code],
       retryable,
     );
+  }
+
+  async #writeMindInfo(
+    actor: AuthenticatedActor,
+    mind: unknown,
+  ): Promise<Readonly<
+    | { readonly kind: "ready"; readonly info: MindInfo }
+    | { readonly kind: "error"; readonly result: unknown }
+  >> {
+    let info: MindInfo;
+    try {
+      info = await this.#dependencies.discovery.getMindInfo(
+        actor,
+        mind,
+        { kind: "head" },
+      );
+    } catch {
+      return Object.freeze({
+        kind: "error" as const,
+        result: this.#writableMindError(actor.requestId, "writable_mind_required"),
+      });
+    }
+    if (info.contentCapabilities.includes("commit")) {
+      return Object.freeze({ kind: "ready" as const, info });
+    }
+    return Object.freeze({
+      kind: "error" as const,
+      result: info.mind.usageMode === "read"
+        ? this.#writableMindError(actor.requestId, "writable_mind_required")
+        : createMcpToolErrorResult(
+            actor.requestId,
+            "forbidden",
+            "The requested operation is not allowed.",
+            false,
+          ),
+    });
   }
 
   async listTools(_request: {
@@ -547,6 +523,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
     ) {
       return Object.freeze({ kind: "allowed" as const });
     }
+    const writeTool = request.name === "commit_changeset" ||
+      request.name === "reconcile_changeset" ||
+      request.name === "create_file_upload_intent" ||
+      request.name === "stage_bundle_file" ||
+      request.name === "reconcile_file_stage" ||
+      request.name === "open_bundle_file_picker";
     try {
       const input = camelInput(request.arguments);
       if (request.name === "resolve_mind") {
@@ -558,21 +540,21 @@ export class ProductMcpContentApplication implements McpContentApplication {
         targetMind(input),
         input.revisionSelector,
       );
-      const required =
-        request.name === "commit_changeset" ||
-          request.name === "reconcile_changeset" ||
-          request.name === "capture_knowledge" ||
-          request.name === "create_file_upload_intent" ||
-          request.name === "stage_bundle_file" ||
-          request.name === "reconcile_file_stage"
-          ? "commit"
-          : null;
+      const required = writeTool ? "commit" : null;
       if (required !== null && !info.contentCapabilities.includes(required)) {
-        return Object.freeze({ kind: "denied" as const, code: "forbidden" });
+        return Object.freeze({
+          kind: "denied" as const,
+          code: info.mind.usageMode === "read"
+            ? "writable_mind_required"
+            : "forbidden",
+        });
       }
       return Object.freeze({ kind: "allowed" as const });
     } catch {
-      return Object.freeze({ kind: "denied" as const, code: "mind_not_found" });
+      return Object.freeze({
+        kind: "denied" as const,
+        code: writeTool ? "writable_mind_required" : "mind_not_found",
+      });
     }
   }
 
@@ -701,24 +683,8 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
-        const info = await this.#dependencies.discovery.getMindInfo(
-          request.actor,
-          input.mind,
-          { kind: "head" },
-        );
-        if (!info.contentCapabilities.includes("commit")) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "forbidden",
-            "The requested operation is not allowed.",
-            false,
-          );
-        }
-        const target = await this.#resolveWritableTarget(
-          request.actor,
-          info.mind.mindId,
-        );
-        if (target.kind === "error") return target.result;
+        const writeMind = await this.#writeMindInfo(request.actor, input.mind);
+        if (writeMind.kind === "error") return writeMind.result;
         return createMcpToolSuccessResult(
           { status: "ready" },
           "Opened the private file picker for the selected writable Mind.",
@@ -756,34 +722,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
-        let info;
-        try {
-          info = await this.#dependencies.discovery.getMindInfo(
-            request.actor,
-            input.mind,
-            { kind: "head" },
-          );
-        } catch {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "mind_not_found",
-            "The requested Mind is unavailable.",
-            false,
-          );
-        }
-        if (!info.contentCapabilities.includes("commit")) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "forbidden",
-            "The requested operation is not allowed.",
-            false,
-          );
-        }
-        const target = await this.#resolveWritableTarget(
-          request.actor,
-          info.mind.mindId,
-        );
-        if (target.kind === "error") return target.result;
+        const writeMind = await this.#writeMindInfo(request.actor, input.mind);
+        if (writeMind.kind === "error") return writeMind.result;
+        const { info } = writeMind;
         const {
           mind: _mind,
           ...intentArguments
@@ -791,10 +732,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
         const created = await this.#dependencies.uploadIntents.create(
           request.actor,
           info.mind.mindId,
-          Object.freeze({
-            ...intentArguments,
-            write_binding_id: target.writeBindingId,
-          }),
+          Object.freeze(intentArguments),
         );
         if (created.kind === "denied") {
           const decision = created.decision as Readonly<{
@@ -810,14 +748,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
         }
         if (created.kind === "invalid") {
           if (
-            created.code === "write_binding_required" ||
-            created.code === "write_binding_stale"
+            created.code === "writable_mind_required" ||
+            created.code === "writable_mind_stale"
           ) {
-            return this.#writableTargetError(
+            return this.#writableMindError(
               request.actor.requestId,
-              created.code === "write_binding_required"
-                ? "writable_target_required"
-                : "writable_target_unavailable",
+              created.code,
             );
           }
           return createMcpToolErrorResult(
@@ -891,24 +827,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
-        const info = await this.#dependencies.discovery.getMindInfo(
-          request.actor,
-          input.mind,
-          { kind: "head" },
-        );
-        if (!info.contentCapabilities.includes("commit")) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "forbidden",
-            "The requested operation is not allowed.",
-            false,
-          );
-        }
-        const target = await this.#resolveWritableTarget(
-          request.actor,
-          info.mind.mindId,
-        );
-        if (target.kind === "error") return target.result;
+        const writeMind = await this.#writeMindInfo(request.actor, input.mind);
+        if (writeMind.kind === "error") return writeMind.result;
+        const { info } = writeMind;
         let downloaded;
         try {
           downloaded = await nativeFileRoute.download(input.file);
@@ -931,7 +852,6 @@ export class ProductMcpContentApplication implements McpContentApplication {
         const staged = await staging.stageStream({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          writeBindingId: target.writeBindingId as never,
           sourceKind: "session_attachment",
           displayFilename: nativeFileRoute.routeKind === "openai_mcp_apps"
             ? "selected-file"
@@ -949,15 +869,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
             retryable?: unknown;
           }>;
           if (
-            decision.code === "write_binding_required" ||
-            decision.code === "write_binding_stale" ||
-            decision.code === "binding_state_unavailable"
+            decision.code === "writable_mind_required" ||
+            decision.code === "writable_mind_stale"
           ) {
-            return this.#writableTargetError(
+            return this.#writableMindError(
               request.actor.requestId,
-              decision.code === "write_binding_required"
-                ? "writable_target_required"
-                : "writable_target_unavailable",
+              decision.code,
               decision.retryable === true,
             );
           }
@@ -969,12 +886,6 @@ export class ProductMcpContentApplication implements McpContentApplication {
           );
         }
         if (staged.kind === "invalid") {
-          if (staged.code === "binding_mismatch") {
-            return this.#writableTargetError(
-              request.actor.requestId,
-              "writable_target_unavailable",
-            );
-          }
           const code = stageFailureCode(staged.code);
           return createMcpToolErrorResult(
             request.actor.requestId,
@@ -1022,28 +933,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
-        const info = await this.#dependencies.discovery.getMindInfo(
-          request.actor,
-          input.mind,
-          { kind: "head" },
-        );
-        if (!info.contentCapabilities.includes("commit")) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "forbidden",
-            "The requested operation is not allowed.",
-            false,
-          );
-        }
-        const target = await this.#resolveWritableTarget(
-          request.actor,
-          info.mind.mindId,
-        );
-        if (target.kind === "error") return target.result;
+        const writeMind = await this.#writeMindInfo(request.actor, input.mind);
+        if (writeMind.kind === "error") return writeMind.result;
+        const { info } = writeMind;
         const reconciled = await this.#dependencies.ingress.reconcileStage({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          writeBindingId: target.writeBindingId as never,
           sourceKind: input.sourceKind,
           displayFilename: input.displayFilename,
           claimedMediaType: input.claimedMediaType,
@@ -1066,15 +961,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
             retryable?: unknown;
           }>;
           if (
-            decision.code === "write_binding_required" ||
-            decision.code === "write_binding_stale" ||
-            decision.code === "binding_state_unavailable"
+            decision.code === "writable_mind_required" ||
+            decision.code === "writable_mind_stale"
           ) {
-            return this.#writableTargetError(
+            return this.#writableMindError(
               request.actor.requestId,
-              decision.code === "write_binding_required"
-                ? "writable_target_required"
-                : "writable_target_unavailable",
+              decision.code,
               decision.retryable === true,
             );
           }
@@ -1086,12 +978,6 @@ export class ProductMcpContentApplication implements McpContentApplication {
           );
         }
         if (reconciled.kind === "invalid") {
-          if (reconciled.code === "binding_mismatch") {
-            return this.#writableTargetError(
-              request.actor.requestId,
-              "writable_target_unavailable",
-            );
-          }
           const code = stageFailureCode(reconciled.code);
           return createMcpToolErrorResult(
             request.actor.requestId,
@@ -1133,29 +1019,32 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
-        const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, { kind: "head" });
-        if (!info.contentCapabilities.includes("commit")) {
+        const writeMind = await this.#writeMindInfo(request.actor, input.mind);
+        if (writeMind.kind === "error") return writeMind.result;
+        const { info } = writeMind;
+        let sourceReferences;
+        try {
+          sourceReferences = await this.#resolveSourceReferences(
+            request.actor,
+            input.sourceReferences,
+          );
+        } catch {
           return createMcpToolErrorResult(
             request.actor.requestId,
-            "forbidden",
-            "The requested operation is not allowed.",
+            "mind_not_found",
+            "One or more source references are unavailable.",
             false,
           );
         }
-        const target = await this.#resolveWritableTarget(
-          request.actor,
-          info.mind.mindId,
-        );
-        if (target.kind === "error") return target.result;
         const result = await this.#dependencies.commits.commit({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          writeBindingId: target.writeBindingId as never,
           expectedRevisionId: input.expectedRevision as never,
           idempotencyKey: input.idempotencyKey as never,
           summary: input.summary as never,
           producerProfile: true,
           operations: canonicalCommitOperations(input.operations) as never,
+          sourceReferences,
         });
         if (result.kind === "committed") {
           await this.#dependencies.scheduleCommitEffects?.();
@@ -1181,16 +1070,13 @@ export class ProductMcpContentApplication implements McpContentApplication {
             : result.kind === "invalid"
               ? result.error.code
               : result.kind;
-        if (
-          code === "write_binding_required" ||
-          code === "write_binding_stale" ||
-          code === "binding_state_unavailable"
-        ) {
-          return this.#writableTargetError(
+        if (code === "writable_mind_required" || code === "writable_mind_stale") {
+          return createMcpToolErrorResult(
             request.actor.requestId,
-            code === "write_binding_required"
-              ? "writable_target_required"
-              : "writable_target_unavailable",
+            code,
+            code === "writable_mind_required"
+              ? "Configure one read_write Mind on the Mind Diary Site, then refresh list_minds."
+              : "The writable Mind changed or lost authority; refresh list_minds and rebuild from the current HEAD.",
             result.kind === "denied" && result.decision.retryable,
           );
         }
@@ -1212,32 +1098,32 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
-        const info = await this.#dependencies.discovery.getMindInfo(
-          request.actor,
-          input.mind,
-          { kind: "head" },
-        );
-        if (!info.contentCapabilities.includes("commit")) {
+        const writeMind = await this.#writeMindInfo(request.actor, input.mind);
+        if (writeMind.kind === "error") return writeMind.result;
+        const { info } = writeMind;
+        let sourceReferences;
+        try {
+          sourceReferences = await this.#resolveSourceReferences(
+            request.actor,
+            input.sourceReferences,
+          );
+        } catch {
           return createMcpToolErrorResult(
             request.actor.requestId,
-            "forbidden",
-            "The requested operation is not allowed.",
+            "mind_not_found",
+            "One or more source references are unavailable.",
             false,
           );
         }
-        const target = await this.#resolveWritableTarget(
-          request.actor,
-          info.mind.mindId,
-        );
-        if (target.kind === "error") return target.result;
         const result = await this.#dependencies.ingress.reconcileCommit({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          writeBindingId: target.writeBindingId as never,
           expectedRevisionId: input.expectedRevision as never,
           idempotencyKey: input.idempotencyKey as never,
           summary: input.summary as never,
+          producerProfile: true,
           operations: canonicalCommitOperations(input.operations) as never,
+          sourceReferences,
         });
         if (result.kind === "missing") {
           return createMcpToolSuccessResult(
@@ -1267,16 +1153,13 @@ export class ProductMcpContentApplication implements McpContentApplication {
           : result.kind === "invalid"
             ? result.error.code
             : result.kind;
-        if (
-          code === "write_binding_required" ||
-          code === "write_binding_stale" ||
-          code === "binding_state_unavailable"
-        ) {
-          return this.#writableTargetError(
+        if (code === "writable_mind_required" || code === "writable_mind_stale") {
+          return createMcpToolErrorResult(
             request.actor.requestId,
-            code === "write_binding_required"
-              ? "writable_target_required"
-              : "writable_target_unavailable",
+            code,
+            code === "writable_mind_required"
+              ? "Configure one read_write Mind on the Mind Diary Site, then refresh list_minds."
+              : "The writable Mind changed or lost authority; refresh list_minds before reconciliation.",
             result.kind === "denied" && result.decision.retryable,
           );
         }
@@ -1286,111 +1169,6 @@ export class ProductMcpContentApplication implements McpContentApplication {
           "The changeset outcome could not be reconciled.",
           result.kind === "denied" && result.decision.retryable,
           output as Readonly<Record<string, unknown>>,
-        );
-      }
-      case "capture_knowledge": {
-        if (!validCaptureInput(input)) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "invalid_capture_request",
-            "The capture arguments are invalid or outside the routine non-sensitive policy.",
-            false,
-          );
-        }
-        const info = await this.#dependencies.discovery.getMindInfo(
-          request.actor,
-          input.mind,
-          { kind: "head" },
-        );
-        if (!info.contentCapabilities.includes("commit")) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "forbidden",
-            "The requested operation is not allowed.",
-            false,
-          );
-        }
-        const target = await this.#resolveWritableTarget(
-          request.actor,
-          info.mind.mindId,
-        );
-        if (target.kind === "error") return target.result;
-        const result = await this.#dependencies.capture.capture({
-          actor: request.actor,
-          spaceId: info.mind.mindId,
-          writeBindingId: target.writeBindingId as never,
-          expectedBindingVersion: target.targetVersion,
-          expectedRevisionId: input.expectedRevision,
-          idempotencyKey: input.idempotencyKey,
-          classification: input.classification,
-          captureKind: input.captureKind,
-          captureKey: input.captureKey,
-          title: input.title,
-          description: input.description,
-          body: input.body,
-          sources: input.sources,
-        });
-        if (result.kind === "captured" || result.kind === "no_op") {
-          if (result.kind === "captured") {
-            await this.#dependencies.scheduleCommitEffects?.();
-          }
-          const capturedInfo = await this.#dependencies.discovery.getMindInfo(
-            request.actor,
-            input.mind,
-            { kind: "revision", revisionId: result.revisionId },
-          );
-          return createMcpToolSuccessResult(
-            snakeOutput({
-              status: result.kind,
-              mind: capturedInfo.mind,
-              path: result.path,
-              previousRevisionId:
-                result.kind === "captured" ? result.previousRevisionId : null,
-              revision: capturedInfo.resolvedRevision,
-              indexStatus: result.kind === "captured" ? "queued" : "unchanged",
-              replayed: result.kind === "captured" ? result.replayed : false,
-            }),
-            result.kind === "captured"
-              ? "Captured one routine Memory in a new immutable revision."
-              : "The exact routine Memory already exists; no revision was created.",
-          );
-        }
-        const code = result.kind === "denied"
-          ? result.decision.code
-          : result.kind === "invalid"
-              ? result.error.code
-              : result.kind;
-        if (
-          code === "write_binding_required" ||
-          code === "write_binding_stale" ||
-          code === "binding_state_unavailable" ||
-          code === "capture_binding_stale"
-        ) {
-          return this.#writableTargetError(
-            request.actor.requestId,
-            code === "write_binding_required"
-              ? "writable_target_required"
-              : "writable_target_unavailable",
-            result.kind === "denied" && result.decision.retryable,
-          );
-        }
-        const messages: Readonly<Record<string, string>> = Object.freeze({
-          invalid_capture_request: "The capture arguments are invalid or outside the routine non-sensitive policy.",
-          capture_disabled: "Automatic capture is disabled for this credential.",
-          capture_binding_stale: "The automatic capture policy is not pinned to this current write binding generation.",
-          capture_target_visibility_blocked: "Automatic capture is available only for a private target Mind.",
-          capture_confirmation_required: "This source requires explicit user confirmation and a normal changeset.",
-          capture_conflict: "The stable capture key already names different content; no overwrite was attempted.",
-          capture_target_not_ready: "The target Mind is not ready for automatic capture.",
-          revision_conflict: "HEAD changed; inspect the current revision before considering a new capture.",
-        });
-        return createMcpToolErrorResult(
-          request.actor.requestId,
-          code,
-          messages[code] ?? "The routine Memory was not captured.",
-          result.kind === "revision_conflict" ||
-            (result.kind === "denied" && result.decision.retryable),
-          snakeOutput(result) as Readonly<Record<string, unknown>>,
         );
       }
     }

@@ -154,7 +154,11 @@ test("restricted UAT installs one deterministic generated-source caller without 
       "x-csrf-token": csrf,
       "idempotency-key": "mind:generated-uat",
     },
-    body: JSON.stringify({ name: "Generated UAT", handle: "generated-uat" }),
+    body: JSON.stringify({
+      name: "Generated UAT",
+      handle: "generated-uat",
+      description: "Deterministic generated-source UAT evidence",
+    }),
   }));
   assert.equal(createdMind.status, 200, await createdMind.clone().text());
 
@@ -178,19 +182,18 @@ test("restricted UAT installs one deterministic generated-source caller without 
   const personalTokenRef = issuedData.token.personal_token_ref;
 
   const selected = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
+    `${ORIGIN}/api/v1/minds/generated-uat/usage`,
     {
-      method: "PATCH",
+      method: "PUT",
       headers: {
         origin: ORIGIN,
         "content-type": "application/json",
         "x-csrf-token": csrf,
-        "idempotency-key": "target:generated-uat",
+        "idempotency-key": "usage:generated-uat",
       },
       body: JSON.stringify({
-        action: "select_write",
-        mind_ref: "/generated-uat",
-        expected_target_version: 0,
+        usage_mode: "read_write",
+        expected_usage_version: 0,
       }),
     },
   ));
@@ -244,7 +247,7 @@ test("restricted UAT installs one deterministic generated-source caller without 
   assert.equal(matrix.status, "passed");
   assert.equal(matrix.commit.one_revision, true);
   assert.equal(matrix.commit.replayed, true);
-  assert.equal(matrix.assertions.length, 15);
+  assert.equal(matrix.assertions.length, 14);
   assert.equal(matrix.assertions.every(({ status }) => status === "passed"), true);
   assert.equal(matrix.staged.bounded_in_memory.size, 4_194_304);
   assert.ok(matrix.staged.server_generated.size > 0);

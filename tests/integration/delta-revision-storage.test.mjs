@@ -75,6 +75,47 @@ function authorizationState(currentActor) {
   };
 }
 
+function principalMountedMetadata(metadata) {
+  const generation = Object.freeze({
+    principalId: PRINCIPALS.editor.principalId,
+    spaceId: MINDS.ordinary.spaceId,
+    generationId: "usage_generation_delta_storage",
+  });
+  const readUsage = async (principalId) => principalId === generation.principalId
+    ? Object.freeze({
+        principalId,
+        entries: Object.freeze([Object.freeze({
+          principalId,
+          spaceId: generation.spaceId,
+          usageMode: "read_write",
+          writeGeneration: generation,
+        })]),
+        activeWriteGeneration: generation,
+      })
+    : null;
+  const validatePin = async (pin) =>
+    pin.principalId === generation.principalId &&
+    pin.spaceId === generation.spaceId &&
+    pin.generationId === generation.generationId;
+  const wrapTransaction = (transaction) => Object.freeze({
+    ...transaction,
+    readPrincipalMindUsage: readUsage,
+    validatePrincipalMindUsageWritePin: validatePin,
+  });
+  return new Proxy(metadata, {
+    get(target, property) {
+      if (property === "readPrincipalMindUsage") return readUsage;
+      if (property === "validatePrincipalMindUsageWritePin") return validatePin;
+      if (property === "runContentCommitTransaction") {
+        return (operation) => target.runContentCommitTransaction((transaction) =>
+          operation(wrapTransaction(transaction)));
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 function countedStore(objects) {
   const metrics = {
     markdownReadBytes: 0,
@@ -166,7 +207,7 @@ async function seedLargeV3(objects, metadata, fileCount = 2_000) {
 
 test("small add/update/delete over a large v3 Mind read no unchanged content and write only delta plus manifest", async () => {
   const objects = new InMemoryObjectStore();
-  const metadata = new InMemoryRevisionMetadataStore();
+  const metadata = principalMountedMetadata(new InMemoryRevisionMetadataStore());
   const initial = await seedLargeV3(objects, metadata);
   const counted = countedStore(objects);
   const revisions = new CanonicalRevisionCoordinator({
@@ -298,7 +339,7 @@ test("small add/update/delete over a large v3 Mind read no unchanged content and
 
 test("failed v3 HEAD transition leaves only collectable orphans and manifest tamper fails closed", async () => {
   const objects = new InMemoryObjectStore();
-  const metadata = new InMemoryRevisionMetadataStore();
+  const metadata = principalMountedMetadata(new InMemoryRevisionMetadataStore());
   await seedLargeV3(objects, metadata, 8);
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   const currentActor = actor();
@@ -361,7 +402,7 @@ test("failed v3 HEAD transition leaves only collectable orphans and manifest tam
 
 test("legacy v2 corpus stays exact-readable while its first v3 change remains a small delta", async () => {
   const objects = new InMemoryObjectStore();
-  const metadata = new InMemoryRevisionMetadataStore();
+  const metadata = principalMountedMetadata(new InMemoryRevisionMetadataStore());
   const legacyCoordinator = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   const files = Array.from({ length: 500 }, (_, index) => ({
     path: `concepts/legacy-${String(index).padStart(4, "0")}.md`,

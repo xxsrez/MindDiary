@@ -71,7 +71,7 @@ async function expectNoHorizontalOverflow(page) {
     documentWidth: document.documentElement.scrollWidth,
     bodyWidth: document.body.scrollWidth,
     panels: [...document.querySelectorAll(
-      "main, .md-token-card, .md-setup-card, .md-binding-panel, dialog",
+      "main, .md-token-card, .md-setup-card, .md-credential-mode-panel, dialog",
     )]
       .filter((element) => {
         const style = getComputedStyle(element);
@@ -158,12 +158,11 @@ for (const definition of fixtureDefinitions) {
       if (definition.count > 0) {
         const hydratedCard = page.locator("[data-connections-collection] .md-token-card").first();
         const hydratedReadSummary = hydratedCard
-          .locator("dt", { hasText: /^Can read$/u })
+          .locator("dt", { hasText: /^Read scope$/u })
           .locator("..").locator("dd");
-        await expect(hydratedReadSummary).toHaveText("1 available");
-        await expect(hydratedReadSummary).not.toContainText("selected");
+        await expect(hydratedReadSummary).toHaveText("Granted");
         await expect(page.locator("[data-connections-collection]")).not.toContainText(
-          /read selector|attach|detach/iu,
+          /writable target|read selector|attach|detach|bind|unbind/iu,
         );
 
         const ref = `conn_v1_${"1".padStart(32, "0")}`;
@@ -176,14 +175,16 @@ for (const definition of fixtureDefinitions) {
           level: 1,
           name: "Codex Marketplace on a deliberately narrow mobile viewport",
         })).toBeVisible();
-        const readHeading = page.getByRole("heading", { level: 2, name: "Can read" });
+        const readHeading = page.getByRole("heading", { level: 2, name: "Credential scopes" });
         await expect(readHeading).toBeVisible();
-        await expect(page.getByRole("heading", { level: 2, name: "Can add and change" })).toBeVisible();
-        await expect(page.getByText("3 Minds are readable with your current access.", { exact: false })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 2, name: "Mind modes belong to your account" })).toBeVisible();
+        await expect(page.getByText("Every Connection and personal token sees the same configured", { exact: false })).toBeVisible();
         const readSummary = readHeading.locator("..");
-        await expect(readSummary).toContainText("Access follows current membership and visibility automatically.");
+        await expect(readSummary).toContainText("Scopes only narrow the account-wide Mind modes");
         await expect(readSummary.locator("li, select, button")).toHaveCount(0);
-        await expect(readSummary).not.toContainText(/read selector|attach|detach/iu);
+        await expect(page.getByRole("link", { name: "Manage Mind modes" }))
+          .toHaveAttribute("href", "/minds#mind-usage-heading");
+        await expect(page.locator("main")).not.toContainText(/writable target|read selector|attach|detach|bind|unbind/iu);
         await expect(page.getByRole("button", { name: "Revoke connection" })).toBeVisible();
         await expectNoHorizontalOverflow(page);
       }
@@ -208,18 +209,13 @@ for (const definition of fixtureDefinitions) {
       await expect(page.getByRole("heading", { level: 2, name: "Install Mind Diary" })).toBeVisible();
       await expect(page.getByRole("heading", {
         level: 2,
-        name: "Discover readable Minds and start",
+        name: "Choose readable Minds and start",
       })).toBeVisible();
-      await expect(page.getByLabel("Desktop").getByText(
-        "Readable Minds follow your current memberships and visibility automatically; there is no read attachment step.",
-      )).toBeVisible();
+      await expect(page.getByText("A fresh Task receives only enabled Minds", { exact: false })).toBeVisible();
       await expect(page.getByText("Writing is optional.", { exact: false })).toBeVisible();
-      await expect(page.getByText("select at most one writable Mind", { exact: false })).toBeVisible();
-      await expect(page.getByText(
-        "Only the Mind Diary Site can select, switch, or clear this target; Codex cannot manage it through content MCP.",
-      )).toBeVisible();
-      await expect(page.getByText(/Choose readable Minds|attach at least one Mind/u)).toHaveCount(0);
-      await expect(page.getByText("Revoke and reconnect only when the existing connection is no longer usable.")).toBeVisible();
+      await expect(page.getByText("choose Read and write for exactly one described Mind", { exact: false })).toBeVisible();
+      await expect(page.getByText("one account-wide choice is shared by every Connection and personal token", { exact: false })).toBeVisible();
+      await expect(page.locator("main")).not.toContainText(/writable target|attach at least one Mind|bind|unbind/iu);
       const accessibilityTree = await page.locator("main").ariaSnapshot();
       expect(accessibilityTree).toContain('heading "Use Mind Diary with Codex"');
       expect(accessibilityTree).toContain('link "Connections"');
@@ -377,13 +373,6 @@ test("keyboard-only connection journey exposes progress, revoke, and reconnect s
   await page.keyboard.press("Enter");
   await openConnection;
 
-  await tabUntil(page, '[data-access-action="clear_write"]');
-  const accessReload = page.waitForNavigation({ waitUntil: "load" });
-  await page.keyboard.press("Enter");
-  await expect(page.locator("[data-access-panel]")).toHaveAttribute("aria-busy", "true");
-  await expect(page.getByRole("status").filter({ hasText: "Saving current Mind access" })).toBeVisible();
-  await accessReload;
-
   await tabUntil(page, "[data-revoke-connection]");
   const returnToConnections = page.waitForURL(`${fixture.origin}/settings/connections`);
   await page.keyboard.press("Enter");
@@ -405,7 +394,7 @@ test("keyboard-only connection journey exposes progress, revoke, and reconnect s
   await context.close();
 });
 
-test("Advanced MCP owns the personal-token target, history, and revoke journey", async ({
+test("Advanced MCP shows credential scope without a token target and keeps revoke history", async ({
   browser,
 }) => {
   const fixture = fixtures.find((candidate) => candidate.count === 1);
@@ -414,28 +403,13 @@ test("Advanced MCP owns the personal-token target, history, and revoke journey",
   await page.goto(`${fixture.origin}/settings/developer/mcp?state=active`);
 
   const token = page.locator("[data-personal-token]").first();
-  await expect(token.getByRole("heading", { name: "Readable access" })).toBeVisible();
-  await expect(token.getByText("there is no read selector", { exact: false })).toBeVisible();
-  await expect(token.getByRole("heading", { name: "Writable target" })).toBeVisible();
-  await tabUntil(page, '[data-personal-token] [data-access-action="clear_write"]');
-  const clearReload = page.waitForNavigation({ waitUntil: "load" });
-  await page.keyboard.press("Enter");
-  await clearReload;
-  await expect(page.locator("[data-personal-token]").first()).toContainText("Not selected");
-  await expect(page.locator("[data-personal-token]").first()).toContainText(
-    "My Mind is never selected automatically.",
-  );
-
-  const selector = page.locator('[data-personal-token] select[name="mind_ref"]').first();
-  await selector.selectOption("/me");
-  await selector.focus();
-  await page.keyboard.press("Tab");
-  const selectReload = page.waitForNavigation({ waitUntil: "load" });
-  await page.keyboard.press("Enter");
-  await selectReload;
-  await expect(page.locator("[data-personal-token]").first()).toContainText(
-    "Personal notes with a deliberately long mobile label",
-  );
+  await expect(token.getByRole("heading", { name: "Credential scope" })).toBeVisible();
+  await expect(token.getByRole("heading", { name: "Account-wide Mind modes" })).toBeVisible();
+  await expect(token.getByText("This token does not own a separate Mind choice", { exact: false })).toBeVisible();
+  await expect(token.getByRole("link", { name: "Manage Mind modes" }))
+    .toHaveAttribute("href", "/minds#mind-usage-heading");
+  await expect(token).not.toContainText(/writable target|bind|unbind|capture/iu);
+  await expect(token.locator("select, [data-access-action]")).toHaveCount(0);
 
   const revoke = page.locator("[data-personal-token]").first()
     .getByRole("button", { name: "Revoke token" });
@@ -447,13 +421,13 @@ test("Advanced MCP owns the personal-token target, history, and revoke journey",
   await page.goto(`${fixture.origin}/settings/developer/mcp?state=revoked`);
   await expect(page.locator("[data-personal-token]")).toHaveCount(1);
   await expect(page.locator("[data-personal-token]").first()).toContainText("revoked");
-  await expect(page.locator("[data-access-panel]")).toHaveCount(0);
+  await expect(page.locator("[data-principal-mind-usage-notice]")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Revoke token" })).toHaveCount(0);
 
   await page.goto(`${fixture.origin}/settings/developer/mcp?state=expired`);
   await expect(page.locator("[data-personal-token]")).toHaveCount(1);
   await expect(page.locator("[data-personal-token]").first()).toContainText("expired");
-  await expect(page.locator("[data-access-panel]")).toHaveCount(0);
+  await expect(page.locator("[data-principal-mind-usage-notice]")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
   await context.close();
 });
@@ -483,10 +457,8 @@ test("Advanced MCP dialog receives and restores focus without exposing raw ident
   await expect(page.locator("[data-personal-token]").first()).toContainText(
     "Keyboard-created fixture token",
   );
-  await expect(page.locator("[data-personal-token]").first()).toContainText("Not selected");
-  await expect(page.locator("[data-personal-token]").first()).toContainText(
-    "My Mind is never selected automatically.",
-  );
+  await expect(page.locator("[data-personal-token]").first()).toContainText("Account-wide Mind modes");
+  await expect(page.locator("[data-personal-token]").first()).not.toContainText(/writable target|Not selected|bind|unbind/iu);
   await expect(page.locator("body")).not.toContainText("[deterministic one-time fixture value]");
   await expect(page.locator("body")).not.toContainText(/(?:token|grant|binding)_[A-Za-z0-9._:-]{8,}/u);
   expect(page.url()).not.toMatch(/ptok_v1_|mdp_v1_|secret|token_id|binding_owner/u);

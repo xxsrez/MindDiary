@@ -16,25 +16,27 @@ import test from "node:test";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
+  AccountBootstrapService,
+  OrdinaryMindControlService,
+  PrincipalMindUsageApplicationService,
+} from "@mind-diary/application-control";
+import {
   BundleFileStagingService,
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
   LocalFileCompanion,
-  MindBindingContentAuthorizer,
 } from "@mind-diary/application-content";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import {
   CAPABILITIES,
   REVISION_MANIFEST_FORMAT_V4,
-  bindingVersion,
+  verifiedSpaceHost,
   version,
 } from "@mind-diary/domain";
 import {
-  CANONICAL_REVISION_FILES,
   FIXED_NOW,
   MINDS,
   PRINCIPALS,
-  REVISION_AUTHORS,
   REVISIONS,
 } from "@mind-diary/test-fixtures";
 import { createNodeLocalCompanionFileSystem } from "../../scripts/local-companion-node-filesystem.mjs";
@@ -46,8 +48,6 @@ const LATER = "2026-08-25T13:00:00.000Z";
 const EXPIRY = "2026-11-05T12:00:00.000Z";
 const TOKEN_ID = "token_local_companion";
 const BINDING_OWNER_ID = "binding_owner_local_companion";
-const WRITE_BINDING_ID = "write_binding_local_companion";
-const HASH = `sha256:${"a".repeat(64)}`;
 
 function sha(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -400,7 +400,6 @@ test("local companion stream enters canonical staging and commits manifest v4", 
           const result = await env.staging.stageStream({
             actor: env.currentActor,
             spaceId: MINDS.ordinary.spaceId,
-            writeBindingId: WRITE_BINDING_ID,
             sourceKind: prepared.source_kind,
             stream,
             maxBytes: 268_435_456,
@@ -440,7 +439,6 @@ test("local companion stream enters canonical staging and commits manifest v4", 
     const committed = await env.commits.commit({
       actor: env.currentActor,
       spaceId: MINDS.ordinary.spaceId,
-      writeBindingId: WRITE_BINDING_ID,
       expectedRevisionId: REVISIONS.initial.revisionId,
       idempotencyKey: "local-companion-v4-commit",
       summary: "MD-272 manifest v4 regression",
@@ -472,6 +470,76 @@ function json(data) {
 async function applicationHarness() {
   const metadata = new InMemoryRevisionMetadataStore();
   const objects = new InMemoryObjectStore();
+  const bootstrap = new AccountBootstrapService({
+    accounts: metadata,
+    objects,
+    ids: {
+      nextPrincipalId: () => PRINCIPALS.editor.principalId,
+      nextExternalBindingId: () => "external_binding_local_companion",
+      nextSpaceId: () => "space_personal_local_companion",
+      nextMembershipId: () => "membership_personal_local_companion",
+      nextRevisionId: () => "revision_personal_local_companion",
+      nextIndexJobId: () => "job_personal_local_companion",
+      nextPersonalSpaceHandle: () => "personal-local-companion",
+    },
+  });
+  const account = await bootstrap.bootstrapAccount({
+    kind: "sites_identity_before_registration",
+    authentication: { kind: "sites_identity", verifiedByPlatform: true },
+    provider: "openai-sites",
+    normalizedBinding: "local-companion@example.com",
+    suggestedDisplayName: "Local Companion",
+    deploymentCapabilities: CAPABILITIES,
+    requestId: "request_local_companion_bootstrap",
+    occurredAtUtc: FIXED_NOW,
+  }, { action: "create_isolated_account" });
+  assert.equal(account.principalId, PRINCIPALS.editor.principalId);
+  const sitesActor = {
+    kind: "registered_principal",
+    principalId: account.principalId,
+    authentication: { kind: "sites_identity" },
+    deploymentCapabilities: CAPABILITIES,
+    requestId: "request_local_companion_create_mind",
+    occurredAtUtc: FIXED_NOW,
+  };
+  const ordinary = new OrdinaryMindControlService({
+    ordinaryMinds: metadata,
+    objects,
+    ids: {
+      nextSpaceId: () => MINDS.ordinary.spaceId,
+      nextMembershipId: () => "membership_local_companion",
+      nextRevisionId: () => REVISIONS.initial.revisionId,
+      nextIndexJobId: () => "job_local_companion",
+    },
+    host: verifiedSpaceHost("mind-diary.invalid"),
+  });
+  const mind = await ordinary.createSpaceWithOwner(sitesActor, {
+    name: "Local companion fixtures",
+    handle: MINDS.ordinary.handle,
+    description: "Durable local companion file fixtures",
+    idempotencyKey: "create-local-companion-mind",
+  });
+  assert.equal(mind.mindId, MINDS.ordinary.spaceId);
+  let usageId = 0;
+  const usage = new PrincipalMindUsageApplicationService({
+    usage: metadata,
+    digest: objects,
+    ids: {
+      nextPrincipalMindUsageGenerationId: () =>
+        `usage_generation_local_companion_${++usageId}`,
+      nextPrincipalMindUsageAuditEventId: () =>
+        `usage_audit_local_companion_${usageId}`,
+      nextPrincipalMindUsageOutboxMessageId: () =>
+        `usage_outbox_local_companion_${usageId}`,
+    },
+  });
+  assert.equal((await usage.mutate({
+    actor: sitesActor,
+    spaceId: mind.mindId,
+    usageMode: "read_write",
+    expectedUsageVersion: 0,
+    idempotencyKey: "enable-local-companion-writes",
+  })).kind, "applied");
   const currentActor = {
     kind: "registered_principal",
     principalId: PRINCIPALS.editor.principalId,
@@ -485,25 +553,18 @@ async function applicationHarness() {
     requestId: "request_local_companion",
     occurredAtUtc: FIXED_NOW,
   };
+  const currentAuthorization = await metadata.readCurrentAuthorizationState({
+    principalId: currentActor.principalId,
+    spaceId: MINDS.ordinary.spaceId,
+    tokenId: null,
+  });
+  assert.ok(currentAuthorization);
   metadata.setCurrentAuthorizationStateForTest({
     principalId: currentActor.principalId,
     spaceId: MINDS.ordinary.spaceId,
     tokenId: TOKEN_ID,
   }, {
-    principal: { principalId: PRINCIPALS.editor.principalId, state: "active" },
-    space: {
-      spaceId: MINDS.ordinary.spaceId,
-      state: "active",
-      visibility: "private",
-      accessVersion: version(1),
-    },
-    membership: {
-      principalId: PRINCIPALS.editor.principalId,
-      spaceId: MINDS.ordinary.spaceId,
-      role: "editor",
-      state: "active",
-      version: version(1),
-    },
+    ...currentAuthorization,
     token: {
       tokenId: TOKEN_ID,
       principalId: PRINCIPALS.editor.principalId,
@@ -513,37 +574,8 @@ async function applicationHarness() {
       expiresAt: EXPIRY,
     },
   });
-  const bound = await metadata.runMindBindingTransaction((transaction) =>
-    transaction.applyWriteMindBinding({
-      bindingOwnerId: BINDING_OWNER_ID,
-      principalId: PRINCIPALS.editor.principalId,
-      action: "bind",
-      spaceId: MINDS.ordinary.spaceId,
-      writeBindingId: WRITE_BINDING_ID,
-      expectedBindingVersion: bindingVersion(0),
-      idempotencyKey: "bind-local-companion",
-      canonicalRequestHash: HASH,
-      requestId: "request_bind_local_companion",
-      auditEventId: "audit_bind_local_companion",
-      auditOutboxMessageId: "outbox_bind_local_companion",
-      occurredAt: FIXED_NOW,
-    }));
-  assert.equal(bound.kind, "applied");
   const coordinator = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
-  await coordinator.commit({
-    spaceId: MINDS.ordinary.spaceId,
-    expectedRevisionId: null,
-    revisionId: REVISIONS.initial.revisionId,
-    committedAt: REVISIONS.initial.committedAt,
-    committedBy: REVISION_AUTHORS.active,
-    summary: "Local companion fixture",
-    files: CANONICAL_REVISION_FILES,
-  });
-  const authorizer = new MindBindingContentAuthorizer({
-    delegate: new CapabilityAuthorizer(metadata),
-    bindings: metadata,
-    readAuthority: "legacy_mind_binding",
-  });
+  const authorizer = new CapabilityAuthorizer(metadata);
   const staging = new BundleFileStagingService({
     authorizer,
     metadata,

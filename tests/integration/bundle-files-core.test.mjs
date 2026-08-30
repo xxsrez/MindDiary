@@ -48,6 +48,7 @@ const EXPIRY = "2026-11-05T12:00:00.000Z";
 const TOKEN_ID = "token_bundle_file";
 const BINDING_OWNER_ID = "binding_owner_bundle_file";
 const WRITE_BINDING_ID = "write_binding_bundle_file";
+const MOUNT_GENERATION_ID = "usage_generation_bundle_file";
 const HASH = `sha256:${"a".repeat(64)}`;
 const PNG = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -213,6 +214,43 @@ async function bindWrite(metadata) {
   assert.equal(result.kind, "applied");
 }
 
+function principalMountedMetadata(metadata) {
+  const mountedState = Object.freeze({
+    principalId: PRINCIPALS.editor.principalId,
+    activeWriteGeneration: Object.freeze({
+      principalId: PRINCIPALS.editor.principalId,
+      spaceId: MINDS.ordinary.spaceId,
+      generationId: MOUNT_GENERATION_ID,
+    }),
+  });
+  const readUsage = async (principalId) =>
+    principalId === PRINCIPALS.editor.principalId ? mountedState : null;
+  const validatePin = async (pin) =>
+    pin.principalId === PRINCIPALS.editor.principalId &&
+    pin.spaceId === MINDS.ordinary.spaceId &&
+    pin.generationId === MOUNT_GENERATION_ID;
+  const wrapTransaction = (transaction) => Object.freeze({
+    ...transaction,
+    readPrincipalMindUsage: readUsage,
+    validatePrincipalMindUsageWritePin: validatePin,
+  });
+  return new Proxy(metadata, {
+    get(target, property) {
+      if (property === "readPrincipalMindUsage") return readUsage;
+      if (property === "validatePrincipalMindUsageWritePin") return validatePin;
+      if (
+        property === "runBundleFileStagingTransaction" ||
+        property === "runContentCommitTransaction"
+      ) {
+        return (operation) => target[property]((transaction) =>
+          operation(wrapTransaction(transaction)));
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 async function harness({ capacityLimits } = {}) {
   const metadata = new InMemoryRevisionMetadataStore();
   const objects = new InMemoryObjectStore();
@@ -226,7 +264,8 @@ async function harness({ capacityLimits } = {}) {
     authorizationState(),
   );
   await bindWrite(metadata);
-  const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
+  const mountedMetadata = principalMountedMetadata(metadata);
+  const revisions = new CanonicalRevisionCoordinator({ objects, revisions: mountedMetadata });
   await revisions.commit({
     spaceId: MINDS.ordinary.spaceId,
     expectedRevisionId: null,
@@ -236,21 +275,25 @@ async function harness({ capacityLimits } = {}) {
     summary: "BundleFile fixture",
     files: CANONICAL_REVISION_FILES,
   });
-  const authorizer = new MindBindingContentAuthorizer({
-    delegate: new CapabilityAuthorizer(metadata),
-    bindings: metadata,
-    readAuthority: "legacy_mind_binding",
-  });
+  const authorizer = new CapabilityAuthorizer(metadata);
   let stagedIds = 0;
   const staging = new BundleFileStagingService({
     authorizer,
-    metadata,
+    metadata: mountedMetadata,
     objects,
     clock: { now: () => LATER },
     ids: { nextStagedBundleFileId: () => `staged_bundle_${++stagedIds}` },
     ...(capacityLimits === undefined ? {} : { capacityLimits }),
   });
-  return { metadata, objects, revisions, authorizer, staging, currentActor };
+  return {
+    metadata: mountedMetadata,
+    rawMetadata: metadata,
+    objects,
+    revisions,
+    authorizer,
+    staging,
+    currentActor,
+  };
 }
 
 test("staging capacity admission rejects before any temporary object write", async () => {
@@ -1202,7 +1245,7 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
       revisionSelector: { kind: "revision", revisionId: REVISIONS.next.revisionId },
       path: "assets/diagram.png",
     }),
-    (error) => error?.code === "bundle_file_not_found",
+    (error) => error?.code === "mind_not_found",
   );
   assert.equal(
     env.metadata.exportDurableSnapshot().bundleFileDownloadGrants.size,
@@ -1565,7 +1608,12 @@ test("staging verifies image, PDF and ZIP metadata and fails closed on foreign o
     bytes: PNG,
     idempotencyKey: "stage-foreign",
   });
-  assert.equal(foreign.kind, "denied");
+  assert.equal(foreign.kind, "staged");
+  assert.equal(foreign.record.principalId, env.currentActor.principalId);
+  assert.equal(
+    foreign.record.principalMindUsageGenerationId,
+    MOUNT_GENERATION_ID,
+  );
 
   const expired = new BundleFileStagingService({
     authorizer: env.authorizer,
@@ -1592,6 +1640,10 @@ test("staging metadata failure removes the uncommitted provider object", async (
   const staging = new BundleFileStagingService({
     authorizer: env.authorizer,
     metadata: {
+      readPrincipalMindUsage: (principalId) =>
+        env.metadata.readPrincipalMindUsage(principalId),
+      validatePrincipalMindUsageWritePin: (pin) =>
+        env.metadata.validatePrincipalMindUsageWritePin(pin),
       runCapacityTransaction: (operation) =>
         env.metadata.runCapacityTransaction(operation),
       releaseCapacityReservation: (request) =>

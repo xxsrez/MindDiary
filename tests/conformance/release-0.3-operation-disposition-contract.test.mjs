@@ -17,19 +17,16 @@ import {
   MCP_LEGACY_CODEX_PROTOCOL,
   MCP_MOVED_EXPORT_TOOLS,
   MCP_RETIRED_BINDING_TOOLS,
+  MCP_RETIRED_CAPTURE_TOOLS,
   MCP_RETIRED_SITES_ENDPOINT,
   MCP_RESOURCE_CAPABILITIES,
   MCP_TOOL_DEFINITIONS,
   createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
 } from "../../packages/adapter-mcp/dist/index.js";
-import {
-  createProductWebHttpHandler,
-  WEB_CONTROL_ROUTES,
-} from "../../packages/adapter-web/dist/index.js";
+import { WEB_CONTROL_ROUTES } from "../../packages/adapter-web/dist/index.js";
 import {
   PRODUCT_UI_ROUTES,
-  mutateCredentialWritableTarget,
 } from "../../packages/adapter-web/dist/product-http-request-helpers.js";
 
 const root = new URL("../../", import.meta.url);
@@ -39,14 +36,6 @@ const fixture = JSON.parse(await readFile(
 ));
 const specification = await readFile(
   new URL("docs/specs/release-0.3-operation-disposition.md", root),
-  "utf8",
-);
-const connectionsServer = await readFile(
-  new URL("packages/adapter-web/src/connections.ts", root),
-  "utf8",
-);
-const connectionsClient = await readFile(
-  new URL("packages/adapter-web/assets/connections-client.js", root),
   "utf8",
 );
 const oauthAdapter = await readFile(
@@ -114,76 +103,6 @@ function contractActor() {
     requestId: "request_operation_contract",
     occurredAtUtc: "2026-08-27T00:00:00.000Z",
   });
-}
-
-function contractSitesActor() {
-  return Object.freeze({
-    kind: "registered_principal",
-    principalId: "principal_sites_operation_contract",
-    authentication: Object.freeze({ kind: "sites_identity" }),
-    deploymentCapabilities: Object.freeze(["content:read", "content:write"]),
-    requestId: "request_sites_operation_contract",
-    occurredAtUtc: "2026-08-27T00:00:00.000Z",
-  });
-}
-
-function targetSitesHandler(scopes, mutateErrorCode = null) {
-  const actor = contractSitesActor();
-  const connectionRef = `conn_v1_${"a".repeat(32)}`;
-  const ownerId = "legacy_target_owner_contract";
-  let mutationCalls = 0;
-  const handler = createProductWebHttpHandler({
-    applicationOrigin: "https://mind-diary.invalid",
-    resolveIdentity: () => ({ kind: "authenticated", actor }),
-    csrf: { issue: () => "csrf-contract", verify: () => true },
-    control: {
-      execute(request) {
-        if (request.operation === "list_minds") return [];
-        throw new Error(`unexpected control operation: ${request.operation}`);
-      },
-    },
-    oauthConnections: {
-      async listPage() {
-        return { items: [], nextCursor: null };
-      },
-      async read(_principalId, presentedRef) {
-        return presentedRef === connectionRef
-          ? {
-              connectionRef,
-              bindingOwnerId: ownerId,
-              clientName: "Legacy contract connection",
-              scopes,
-              createdAt: "2026-08-27T00:00:00.000Z",
-              lastUsedAt: null,
-            }
-          : null;
-      },
-      async revoke() { return true; },
-    },
-    writableTargets: {
-      async listResolved() {
-        return [{
-          ownerId,
-          credentialKind: "oauth_grant",
-          lifecycleState: "active",
-          targetVersion: 8,
-          targetMindId: "space_legacy",
-        }];
-      },
-      async mutateResolved() {
-        mutationCalls += 1;
-        if (mutateErrorCode !== null) {
-          throw Object.assign(new Error("target mutation failed"), { code: mutateErrorCode });
-        }
-        return { changed: true, replayed: false, targetVersion: 9 };
-      },
-    },
-  });
-  return {
-    connectionRef,
-    handler,
-    mutationCalls: () => mutationCalls,
-  };
 }
 
 function protocolHarness() {
@@ -333,7 +252,7 @@ test("operation-disposition fixture is a closed versioned contract", () => {
     "authority",
     "profiles",
     "credentialAccessCompatibility",
-    "credentialTargetActions",
+    "principalMindUsage",
     "restRoutes",
     "auxiliaryHttpRoutes",
     "uiRoutes",
@@ -354,11 +273,11 @@ test("operation-disposition fixture is a closed versioned contract", () => {
     sitesControl: [
       "account",
       "mind_metadata",
+      "mind_usage",
       "visibility",
       "membership",
       "ownership",
       "connections",
-      "writable_target",
       "credentials",
       "bulk_import",
       "bulk_export",
@@ -377,7 +296,7 @@ test("operation-disposition fixture is a closed versioned contract", () => {
     implicitPersonalMindFallback: false,
     implicitCrossMind: false,
     readBindingRequired: false,
-    writableTargetSelectedOn: "sites",
+    writableMindSelectedOn: "principal_mind_usage_on_sites",
   });
   for (const [name, profile] of Object.entries(fixture.profiles)) {
     assertExactKeys(profile, ["target", "actor", "checks", "errors", "compatibility"], name);
@@ -386,110 +305,35 @@ test("operation-disposition fixture is a closed versioned contract", () => {
   }
 });
 
-test("credential target actions keep recovery-safe clear distinct from select", () => {
-  assert.deepEqual(fixture.profiles["credential-control"].checks, [
-    "credential_owner_authority",
-    "target_version_cas",
+test("principal Mind usage exposes one three-mode CAS and one writable singleton", () => {
+  assert.deepEqual(fixture.profiles["mind-usage-control"].checks, [
+    "sites_identity",
+    "principal_owned_settings",
+    "current_acl",
+    "usage_version_cas",
+    "singleton_read_write",
     "idempotency",
   ]);
-  assert.deepEqual(fixture.credentialTargetActions.implementedRuntime, {
-    inputVersionField: "expected_target_version",
-    actionEnum: ["select_write", "clear_write"],
-    readProjection: "current_acl",
-    clearWriteRequires: ["active_credential", "expected_target_version", "idempotency"],
+  assert.deepEqual(fixture.principalMindUsage.implementedRuntime, {
+    inputVersionField: "expected_usage_version",
+    modeEnum: ["disabled", "read", "read_write"],
+    scope: "principal",
+    singleWritable: true,
     staleExpectedVersion: {
       httpStatus: 409,
-      code: "target_conflict",
-      targetStateChange: "none",
+      code: "usage_version_conflict",
+      stateChange: "none",
       metadataDisclosure: "none",
     },
   });
-  assert.equal(fixture.credentialTargetActions.runtimeStatus, "target-implemented");
-  assert.deepEqual(fixture.credentialTargetActions.clear_write.mustNotRequire, [
-    "target_acl",
+  assert.equal(fixture.principalMindUsage.runtimeStatus, "principal-usage-implemented");
+  assert.deepEqual(fixture.principalMindUsage.read_write.checks, [
+    "current_read_access",
     "current_writer_role",
-    "target_eligibility",
+    "authorized_description",
+    "expected_usage_version",
+    "idempotency",
   ]);
-});
-
-test("Sites target helper and handler use target CAS and recovery-safe clear", async () => {
-  let directMutationCalls = 0;
-  let controlCalls = 0;
-  const direct = await mutateCredentialWritableTarget({
-    actor: contractSitesActor(),
-    writableTargets: {
-      async listResolved(_actor, credentials) {
-        return [{
-          ownerId: credentials[0].ownerId,
-          credentialKind: "oauth_grant",
-          lifecycleState: "active",
-          targetVersion: 8,
-          targetMindId: "space_hidden",
-        }];
-      },
-      async mutateResolved(_actor, _credential, input) {
-        directMutationCalls += 1;
-        assert.equal(input.action, "clear_write");
-        assert.equal(input.expectedTargetVersion, 8);
-        return { changed: true, replayed: false, targetVersion: 9 };
-      },
-    },
-    control: {
-      execute() {
-        controlCalls += 1;
-        throw new Error("recovery-safe clear must not inspect target ACL");
-      },
-    },
-    ownerId: "target_owner_contract",
-    credentialKind: "oauth_grant",
-    scopes: ["content:read"],
-    request: {
-      action: "clear_write",
-      expectedTargetVersion: 8,
-      idempotencyKey: "target-helper-clear",
-    },
-    presentationKey: "connection_ref",
-  });
-  assert.deepEqual(direct, { changed: true, replayed: false });
-  assert.equal(directMutationCalls, 1);
-  assert.equal(controlCalls, 0);
-
-  async function clearWriteRequest(environment, idempotencyKey, action = "clear_write") {
-    return environment.handler(new Request(
-      `https://mind-diary.invalid/api/v1/connections/${environment.connectionRef}/mind-access`,
-      {
-        method: "PATCH",
-        headers: {
-          origin: "https://mind-diary.invalid",
-          "x-csrf-token": "csrf-contract",
-          "content-type": "application/json",
-          "idempotency-key": idempotencyKey,
-        },
-        body: JSON.stringify({
-          action,
-          expected_target_version: 8,
-          ...(action === "attach_read" ? { mind_ref: "/me" } : {}),
-        }),
-      },
-    ));
-  }
-
-  const readOnly = targetSitesHandler(["content:read"]);
-  const cleared = await clearWriteRequest(readOnly, "target-handler-scope");
-  assert.equal(cleared.status, 200);
-  assert.equal(readOnly.mutationCalls(), 1);
-
-  const removed = targetSitesHandler(["content:read", "content:write"]);
-  const oldReadAction = await clearWriteRequest(removed, "target-handler-removed", "attach_read");
-  assert.equal(oldReadAction.status, 400);
-  assert.equal((await oldReadAction.json()).error.code, "operation_removed");
-  assert.equal(removed.mutationCalls(), 0);
-
-  const stale = targetSitesHandler(["content:read", "content:write"], "target_conflict");
-  const staleVersion = await clearWriteRequest(stale, "target-handler-stale");
-  assert.equal(staleVersion.status, 409);
-  assert.equal((await staleVersion.json()).error.code, "target_conflict");
-  assert.equal(stale.mutationCalls(), 1);
 });
 
 
@@ -504,7 +348,7 @@ test("every exported first-party REST route has exactly one disposition", () => 
     assert.ok(["keep", "change", "move", "remove"].includes(route.disposition), route.key);
     assert.match(specification, new RegExp(route.key.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"), route.key);
   }
-  assert.equal(current.length, 43);
+  assert.equal(current.length, 45);
 });
 
 test("auxiliary capability, delivery, OAuth, MCP, and retired Sites routes are explicit", () => {
@@ -586,11 +430,12 @@ test("all current MCP tools have a disposition and the target catalog is exact",
       "get_mind_bindings",
       "set_read_mind_binding",
       "set_write_mind_binding",
+      "capture_knowledge",
       "start_export",
       "get_export_status",
     ],
   );
-  assert.equal(fixture.targetMcpCatalog.length, 19);
+  assert.equal(fixture.targetMcpCatalog.length, 18);
   for (const tool of fixture.mcpTools) {
     assertExactKeys(tool, ["name", "disposition", "profile", "mindScope", "owner"], tool.name);
     assert.ok(profiles.has(tool.profile), `${tool.name}: unknown profile`);
@@ -607,7 +452,7 @@ test("all current MCP tools have a disposition and the target catalog is exact",
   }
 });
 
-test("cached binding compatibility is versioned, unadvertised and side-effect-free", () => {
+test("cached binding and capture compatibility is versioned, unadvertised and side-effect-free", () => {
   assert.deepEqual(fixture.retiredMcpCompatibility, {
     $schema: "mind-diary/mcp-operation-retired/v1",
     advertised: false,
@@ -616,24 +461,29 @@ test("cached binding compatibility is versioned, unadvertised and side-effect-fr
     operations: {
       get_mind_bindings: {
         code: "operation_retired_from_content_mcp",
-        remediation: "inspect_access_on_site",
+        remediation: "inspect_mind_usage_on_site",
         retryable: false,
       },
       set_read_mind_binding: {
         code: "operation_retired_from_content_mcp",
-        remediation: "read_access_follows_current_acl",
+        remediation: "manage_mind_usage_on_site",
         retryable: false,
       },
       set_write_mind_binding: {
         code: "operation_retired_from_content_mcp",
-        remediation: "manage_writable_target_on_site",
+        remediation: "manage_mind_usage_on_site",
+        retryable: false,
+      },
+      capture_knowledge: {
+        code: "operation_retired_from_content_mcp",
+        remediation: "use_commit_changeset",
         retryable: false,
       },
     },
   });
   assert.deepEqual(
     Object.keys(fixture.retiredMcpCompatibility.operations),
-    [...MCP_RETIRED_BINDING_TOOLS],
+    [...MCP_RETIRED_BINDING_TOOLS, ...MCP_RETIRED_CAPTURE_TOOLS],
   );
 });
 
@@ -645,10 +495,21 @@ test("machine-readable schema diff removes binding fields without removing expli
     "reconcile_file_stage",
     "commit_changeset",
     "reconcile_changeset",
-    "capture_knowledge",
   ]);
   for (const diff of toolDiffs) {
-    assertExactKeys(diff, ["operation", "removeRequired", "keepRequired", "addRequired"], diff.operation);
+    assertExactKeys(
+      diff,
+      [
+        "operation",
+        "removeRequired",
+        "keepRequired",
+        "addRequired",
+        ...(["commit_changeset", "reconcile_changeset"].includes(diff.operation)
+          ? ["addOptional"]
+          : []),
+      ],
+      diff.operation,
+    );
     const currentRequired = definitions.get(diff.operation).inputSchema.required;
     for (const field of diff.removeRequired) {
       assert.equal(currentRequired.includes(field), false, `${diff.operation}: ${field} remains exposed`);
@@ -659,6 +520,13 @@ test("machine-readable schema diff removes binding fields without removing expli
     const targetRequired = currentRequired.concat(diff.addRequired);
     assert.ok(targetRequired.includes("mind"), `${diff.operation}: explicit mind must remain required`);
     assert.equal(targetRequired.includes("write_binding_id"), false, diff.operation);
+    if (diff.addOptional !== undefined) {
+      assert.deepEqual(diff.addOptional, ["source_references"]);
+      assert.ok(
+        Object.hasOwn(definitions.get(diff.operation).inputSchema.properties, "source_references"),
+        `${diff.operation}: source_references is not exposed`,
+      );
+    }
   }
   const capabilityDiff = fixture.schemaDiffs.find(
     ({ operation }) => operation === "get_file_ingress_capabilities",
@@ -673,54 +541,22 @@ test("machine-readable schema diff removes binding fields without removing expli
     JSON.stringify(definitions.get("get_file_ingress_capabilities").outputSchema),
     /requires_writable_target/u,
   );
-  const currentServerActions = [...new Set(
-    [...connectionsServer.matchAll(/data-access-action="([a-z_]+)"/gu)]
-      .map((match) => match[1]),
-  )].sort();
-  assert.deepEqual(currentServerActions, [
-    "clear_write",
-    "select_write",
-  ]);
-  assert.match(connectionsServer, /data-target-version="\$\{access\.targetVersion\}"/u);
-  assert.match(connectionsServer, /\/api\/v1\/connections\/\$\{connectionRef\}/u);
-  assert.match(connectionsServer, /\/api\/v1\/mcp-tokens\/\$\{input\.personalTokenRef\}/u);
-  assert.match(connectionsClient, /panel\.dataset\.targetVersion/u);
-  assert.match(connectionsClient, /expected_target_version:\s*expected/u);
-  assert.doesNotMatch(connectionsClient, /expected_binding_version/u);
-  const restDiffs = fixture.schemaDiffs.filter(({ operation }) => operation.startsWith("PATCH "));
-  assert.equal(restDiffs.length, 2);
-  assert.deepEqual(
-    restDiffs.map(({ operation }) => operation),
-    fixture.credentialTargetActions.appliesTo,
+  const usageDiff = fixture.schemaDiffs.find(
+    ({ operation }) => operation === "PUT /api/v1/minds/{mind_ref}/usage",
   );
-  for (const diff of restDiffs) {
-    assert.ok(fixture.restRoutes.some(({ key }) => key === diff.operation), diff.operation);
-    assert.equal(diff.implementationOwner, "MD-343", diff.operation);
-    assert.equal(
-      fixture.restRoutes.find(({ key }) => key === diff.operation)?.owner,
-      "MD-343",
-      diff.operation,
-    );
-    assert.deepEqual([...diff.keepEnum].sort(), currentServerActions);
-    for (const removed of diff.removeEnum) assert.equal(currentServerActions.includes(removed), false);
-    assert.deepEqual(diff.removeEnum, ["attach_read", "detach_read"]);
-    assert.deepEqual(diff.keepEnum, ["select_write", "clear_write"]);
-    assert.deepEqual(diff.renameFields, {
-      expected_binding_version: "expected_target_version",
-    });
-    assert.deepEqual(diff.staleExpectedTargetVersion, {
-      code: "target_conflict",
-      httpStatus: 409,
-      targetStateChange: "none",
-      metadataDisclosure: "none",
-      lastWriteWins: false,
-      surface: "sites-control",
-      contentMcpError: false,
-    });
-  }
+  assert.deepEqual(usageDiff, {
+    operation: "PUT /api/v1/minds/{mind_ref}/usage",
+    implementationOwner: "MD-374",
+    modeEnum: ["disabled", "read", "read_write"],
+    versionField: "expected_usage_version",
+    singletonWritable: true,
+  });
+  assert.ok(fixture.restRoutes.some(({ key }) => key === usageDiff.operation));
+  assert.equal(fixture.principalMindUsage.appliesTo.includes(usageDiff.operation), true);
+  assert.equal(fixture.restRoutes.some(({ key }) => /\/mind-access$/u.test(key)), false);
 });
 
-test("binding errors retire cleanly and target errors apply only to write/ingress", () => {
+test("binding errors retire cleanly and writable-Mind errors apply only to write/ingress", () => {
   assert.deepEqual(fixture.retiredReadErrors, ["mind_binding_required"]);
   assert.deepEqual(fixture.retiredWriteErrors, [
     "write_binding_required",
@@ -729,19 +565,18 @@ test("binding errors retire cleanly and target errors apply only to write/ingres
     "binding_state_unavailable",
   ]);
   assert.deepEqual(fixture.targetWriteErrors, [
-    "writable_target_required",
-    "writable_target_mismatch",
-    "writable_target_unavailable",
+    "writable_mind_required",
+    "writable_mind_stale",
   ]);
   assert.equal(fixture.targetWriteErrors.includes("target_conflict"), false);
   const retired = new Set([...fixture.retiredReadErrors, ...fixture.retiredWriteErrors]);
   for (const code of fixture.targetWriteErrors) assert.equal(retired.has(code), false, code);
   for (const tool of fixture.mcpTools) {
     if (tool.profile === "content-read") {
-      assert.equal(tool.mindScope.includes("selected-target"), false, tool.name);
+      assert.equal(tool.mindScope.includes("principal-read-write"), false, tool.name);
     }
     if (tool.profile === "content-write" || tool.profile === "content-ingress") {
-      assert.match(tool.mindScope, /selected.*target/u, tool.name);
+      assert.match(tool.mindScope, /principal-read-write/u, tool.name);
     }
   }
 });
@@ -765,7 +600,7 @@ test("legacy credentials fail closed before ACL-derived reads with one non-discl
   );
   assert.equal(
     fixture.profiles["content-read"].compatibility,
-    "same-name-current-profile-no-read-binding",
+    "same-name-principal-usage-profile",
   );
 });
 
@@ -932,7 +767,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "f46ccfaf8b5b5586eada79876c5a822af614bfb3",
+      gitBlob: "330dd1279f8fb84fa0e5dc99886db64d38caae39",
     },
     {
       surface: "plugin-label",
@@ -956,7 +791,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
 test("plugin/help migration has closed owners and exact current source evidence", async () => {
   assertExactKeys(
     fixture.migrationOwners,
-    ["MD-339", "MD-343", "MD-359", "integration-owner"],
+    ["MD-374", "MD-376", "MD-379", "MD-359", "integration-owner"],
     "migration owners",
   );
   assert.deepEqual(fixture.pluginHelp, [
@@ -974,7 +809,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "package-probe-source",
         path: "scripts/run-oauth-direct-plugin-probe.mjs",
-        gitBlob: "763c8e4b9cca5e12211a1fabb7ec0e6aa7baae40",
+        gitBlob: "b86de99f6e882715d9d66696012058cf7ccfd865",
       }],
     },
     {
@@ -984,37 +819,40 @@ test("plugin/help migration has closed owners and exact current source evidence"
       requirements: [
         "explicit_mind",
         "explicit_revision_when_historical",
+        "description_relevance",
         "no_binding_tools",
         "no_mcp_export",
-        "site_target_control",
+        "site_mind_usage",
+        "automatic_commit_changeset",
       ],
       sourceEvidence: [
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "84e2698b019d1ece303725f9616b182450d7ce77",
+          gitBlob: "9383d91917489f2f527cdc8311dbb70c0f973237",
         },
         {
           role: "installed-skill-probe-source",
           path: "scripts/run-oauth-direct-plugin-probe.mjs",
-          gitBlob: "763c8e4b9cca5e12211a1fabb7ec0e6aa7baae40",
+          gitBlob: "b86de99f6e882715d9d66696012058cf7ccfd865",
         },
       ],
     },
     {
       surface: "/help/codex",
       disposition: "change",
-      owner: "MD-339",
+      owner: "MD-376",
       requirements: [
         "install",
         "authenticate_read",
-        "read_explicit_mind",
-        "select_write_target_on_site_only_when_writing",
+        "read_enabled_explicit_mind",
+        "configure_principal_mind_usage_on_site",
+        "automatic_commit_changeset",
       ],
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "f46ccfaf8b5b5586eada79876c5a822af614bfb3",
+        gitBlob: "330dd1279f8fb84fa0e5dc99886db64d38caae39",
       }],
     },
     {
@@ -1026,12 +864,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-playbook-source",
           path: "packages/adapter-web/src/token-management.ts",
-          gitBlob: "25b5e1c7c1a50e7705812b3e3565b6157d867009",
+          gitBlob: "8f6c6174c9b77975b338001d8a5db4d4ca475be7",
         },
         {
           role: "help-route-source",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "cc06f9dae5008737f039c2a5d2516d1ed4e3f2cb",
+          gitBlob: "4cff03c81598673cb36308f8d46996c61fbb1c1a",
         },
       ],
     },

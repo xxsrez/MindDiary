@@ -4,9 +4,11 @@ import test from "node:test";
 import { CAPABILITIES } from "@mind-diary/domain";
 import {
   MCP_CONTENT_TOOLS,
+  MCP_AGENT_INSTRUCTIONS,
   MCP_LEGACY_CODEX_PROTOCOL,
   MCP_MOVED_EXPORT_TOOLS,
   MCP_RETIRED_BINDING_TOOLS,
+  MCP_RETIRED_CAPTURE_TOOLS,
   MCP_TOOL_DEFINITIONS,
   createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
@@ -147,10 +149,11 @@ function assertNoApplicationCalls(calls) {
   });
 }
 
-test("fresh modern and compatibility discovery omit binding mutations and export admin", async () => {
+test("fresh modern and compatibility discovery omit retired binding/capture mutations and export admin", async () => {
   assert.deepEqual(MCP_TOOL_DEFINITIONS.map(({ name }) => name), MCP_CONTENT_TOOLS);
   for (const retired of [
     ...MCP_RETIRED_BINDING_TOOLS,
+    ...MCP_RETIRED_CAPTURE_TOOLS,
     ...MCP_MOVED_EXPORT_TOOLS,
   ]) {
     assert.equal(MCP_CONTENT_TOOLS.includes(retired), false, retired);
@@ -166,9 +169,10 @@ test("fresh modern and compatibility discovery omit binding mutations and export
   const discover = (await payload(await env.sendModern(
     modernRpc("server/discover", { id: 0 }),
   ))).result;
+  assert.equal(discover.instructions, MCP_AGENT_INSTRUCTIONS);
   assert.match(discover.instructions, /current access/u);
-  assert.match(discover.instructions, /authenticated Mind Diary Site/u);
-  assert.doesNotMatch(discover.instructions, /get_mind_bindings|set_read_mind_binding|set_write_mind_binding/u);
+  assert.match(discover.instructions, /writable_mount\.active=true/u);
+  assert.doesNotMatch(discover.instructions, /get_mind_bindings|set_read_mind_binding|set_write_mind_binding|capture_knowledge/u);
 
   const modern = (await payload(await env.sendModern(modernRpc("tools/list")))).result;
   assert.deepEqual(modern.tools.map(({ name }) => name), advertisedNames);
@@ -184,9 +188,10 @@ test("fresh modern and compatibility discovery omit binding mutations and export
     },
   }))).result;
   assert.equal(initialize.protocolVersion, MCP_LEGACY_CODEX_PROTOCOL);
+  assert.equal(initialize.instructions, MCP_AGENT_INSTRUCTIONS);
   assert.match(initialize.instructions, /current access/u);
-  assert.match(initialize.instructions, /authenticated Mind Diary Site/u);
-  assert.doesNotMatch(initialize.instructions, /get_mind_bindings|set_read_mind_binding|set_write_mind_binding/u);
+  assert.match(initialize.instructions, /writable_mount\.active=true/u);
+  assert.doesNotMatch(initialize.instructions, /get_mind_bindings|set_read_mind_binding|set_write_mind_binding|capture_knowledge/u);
 
   const compatibility = (await payload(await env.sendCompatibility({
     jsonrpc: "2.0",
@@ -199,15 +204,19 @@ test("fresh modern and compatibility discovery omit binding mutations and export
   assertNoApplicationCalls(env.calls);
 });
 
-test("exact cached binding calls return the same versioned fail-closed result without side effects", async () => {
+test("exact cached binding and capture calls return the same versioned fail-closed result without side effects", async () => {
   const env = harness();
   const expectedRemediation = {
-    get_mind_bindings: "inspect_access_on_site",
-    set_read_mind_binding: "read_access_follows_current_acl",
-    set_write_mind_binding: "manage_writable_target_on_site",
+    get_mind_bindings: "inspect_mind_usage_on_site",
+    set_read_mind_binding: "manage_mind_usage_on_site",
+    set_write_mind_binding: "manage_mind_usage_on_site",
+    capture_knowledge: "use_commit_changeset",
   };
   let id = 10;
-  for (const name of MCP_RETIRED_BINDING_TOOLS) {
+  for (const name of [
+    ...MCP_RETIRED_BINDING_TOOLS,
+    ...MCP_RETIRED_CAPTURE_TOOLS,
+  ]) {
     const secretArgument = `raw-${name}-must-not-echo`;
     const args = {
       mind: secretArgument,

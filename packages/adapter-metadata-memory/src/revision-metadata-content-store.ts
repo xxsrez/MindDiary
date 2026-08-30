@@ -28,6 +28,7 @@ import type {
   MarkdownImportStagedFile,
   MindBindingOwnerId,
   PrincipalId,
+  PrincipalMindUsageWritePin,
   RevisionCommitRequest,
   RevisionCommitResult,
   StageContentCommitEffectsRequest,
@@ -173,6 +174,12 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
             principalId: PrincipalId,
             occurredAt: ApplyReadMindBindingRequest["occurredAt"],
           ) => this.readMindBindingSet(bindingOwnerId, principalId, occurredAt),
+          readPrincipalMindUsage: (principalId: PrincipalId) =>
+            this.readPrincipalMindUsage(principalId),
+          validatePrincipalMindUsageWritePin: (
+            pin: Readonly<PrincipalMindUsageWritePin>,
+          ) =>
+            this.validatePrincipalMindUsageWritePin(pin),
           readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
             const current = currentSitesAuthorizationStateFromMaps(
               query,

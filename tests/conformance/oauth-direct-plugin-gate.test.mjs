@@ -16,10 +16,10 @@ import {
   CODEX_PLUGIN_MCP_URL,
   CODEX_PLUGIN_OAUTH_RESOURCE,
   OAUTH_DIRECT_PLUGIN_ASSERTION_IDS,
-  assertAutomaticCaptureSkillPolicy,
+  assertMindUsageSkillPolicy,
   assertCodexCompatibleDefaultWriteCatalog,
   assertCodexCompatibleReadCatalog,
-  assertCodexCompatibleWriteBindingSchema,
+  assertCodexCompatibleVerifiedNativeCatalog,
   assertCodexClientVersion,
   assertDirectPackageServer,
   assertFreshOAuthMcpServerProjection,
@@ -31,6 +31,7 @@ import {
 } from "../../scripts/run-oauth-direct-plugin-probe.mjs";
 
 const SKILL_DESCRIPTION = "Use Mind Diary through its connected content MCP.";
+const SKILL_ROOT = "/private/tmp/fresh/plugins/cache/marketplace";
 const INSTALLED_ROOT = "/private/tmp/fresh/plugins/cache/marketplace/mind-diary/version";
 
 test("Codex plugin uses the isolated compatibility transport with the canonical OAuth resource", () => {
@@ -95,7 +96,7 @@ test("full schema inventory stays closed while the deployed default catalog omit
     inputSchema,
     outputSchema,
   }));
-  assert.equal(current.length, 19);
+  assert.equal(current.length, 18);
   const nativeIngress = current.find(({ name }) => name === "get_file_ingress_capabilities");
   assert.deepEqual(
     nativeIngress?.outputSchema?.properties?.data?.properties?.native_file_parameter?.required,
@@ -112,11 +113,11 @@ test("full schema inventory stays closed while the deployed default catalog omit
   const verifiedNativeCatalog = current.filter(
     ({ name }) => name !== "open_bundle_file_picker",
   );
-  assert.equal(verifiedNativeCatalog.length, 18);
-  assert.equal(assertCodexCompatibleWriteBindingSchema(verifiedNativeCatalog), true);
+  assert.equal(verifiedNativeCatalog.length, 17);
+  assert.equal(assertCodexCompatibleVerifiedNativeCatalog(verifiedNativeCatalog), true);
   const defaultWriteCatalog = current.filter(({ name }) =>
     name !== "open_bundle_file_picker" && name !== "stage_bundle_file");
-  assert.equal(defaultWriteCatalog.length, 17);
+  assert.equal(defaultWriteCatalog.length, 16);
   assert.equal(assertCodexCompatibleDefaultWriteCatalog(defaultWriteCatalog), true);
   assert.equal(assertCodexCompatibleReadCatalog(current.filter(
     ({ name }) => name !== "open_bundle_file_picker" &&
@@ -138,9 +139,9 @@ test("full schema inventory stays closed while the deployed default catalog omit
   ];
   for (const mismatch of mismatches) {
     assert.throws(
-      () => assertCodexCompatibleWriteBindingSchema(mismatch),
+      () => assertCodexCompatibleVerifiedNativeCatalog(mismatch),
       (error) => error instanceof ProbeFailure &&
-        error.code === "codex_write_binding_schema_incompatible",
+        error.code === "codex_verified_native_catalog_incompatible",
     );
   }
   assert.throws(
@@ -157,15 +158,20 @@ test("OAuth direct-plugin probe never fabricates native-route authority", async 
   );
   assert.doesNotMatch(source, /verifiedNativeFileParameterRoute/u);
   assert.doesNotMatch(source, /local-synthetic:oauth-direct-plugin:native-route/u);
+  assert.doesNotMatch(source, /\/connections\/\$\{[^}]+\}\/mind-access/u);
+  assert.doesNotMatch(source, /target_version|writable_mind/u);
+  assert.match(source, /\/api\/v1\/mind-usage/u);
+  assert.match(source, /\/api\/v1\/minds\/me\/usage/u);
+  assert.match(source, /personal-token\.shared-principal-usage/u);
 });
 
-function promptInputFixture(line) {
+function promptInputFixture(line, roots = []) {
   return [{
     type: "message",
     role: "developer",
     content: [{
       type: "input_text",
-      text: `<skills_instructions>\n## Skills\n${line}\n</skills_instructions>`,
+      text: `<skills_instructions>\n## Skills\n${roots.join("\n")}\n${line}\n</skills_instructions>`,
     }],
   }];
 }
@@ -222,9 +228,9 @@ test("OAuth direct-plugin UI canary fields are allowed by the release evidence p
 
 test("Codex prompt-input parser proves the installed skill is model-visible", () => {
   const path = `${INSTALLED_ROOT}/skills/mind-diary/SKILL.md`;
-  const line = `- mind-diary:mind-diary: ${SKILL_DESCRIPTION} (file: ${path})`;
+  const line = `- mind-diary:mind-diary: ${SKILL_DESCRIPTION} (file: r7/mind-diary/version/skills/mind-diary/SKILL.md)`;
   assert.deepEqual(
-    parseCodexSkillDiscovery(promptInputFixture(line), {
+    parseCodexSkillDiscovery(promptInputFixture(line, [`- \`r7\` = \`${SKILL_ROOT}\``]), {
       installedRoot: INSTALLED_ROOT,
       description: SKILL_DESCRIPTION,
     }),
@@ -237,20 +243,29 @@ test("Codex prompt-input parser proves the installed skill is model-visible", ()
   );
 });
 
-test("installed skill automatic capture policy is complete and fail-closed", () => {
+test("installed skill principal-owned Mind usage policy is complete and fail-closed", () => {
   const policy = [
-    "## Automatic capture workflow",
-    "`automatic_capture.mode` is `routine_non_sensitive`",
-    "The Sites control plane is the only place that can enable or disable this",
-    "Never call `capture_knowledge` for credentials or authentication material",
-    "Treat `captured` as one new immutable revision and `no_op` as successful",
-    "never move, replace, merge or retry the payload against a different target",
+    "Start each relevant workflow with fresh `list_minds`",
+    "When the user names a Mind, require that exact Mind in the fresh projection",
+    "Otherwise select only the readable Mind or Minds whose descriptions genuinely fit",
+    "consider every newly discussed piece of durable knowledge for automatic preservation",
+    "Do not ask for a separate write instruction, toggle or confirmation",
+    "pass optional `source_references` with the exact enabled source Mind",
+    "Fetch a targeted existing Memory before deciding whether the result is a create, update, explicit delete or semantic no-op",
+    "Validate the complete proposed OKF 0.2 bundle before commit",
+    "call `reconcile_changeset` with the exact original full request",
+    "Briefly tell the user what was created, updated or removed",
   ].join("\n");
-  assert.equal(assertAutomaticCaptureSkillPolicy(policy), true);
+  assert.equal(assertMindUsageSkillPolicy(policy), true);
   assert.throws(
-    () => assertAutomaticCaptureSkillPolicy("## Automatic capture workflow\nAllow everything."),
+    () => assertMindUsageSkillPolicy("Use every accessible Mind and save everything."),
     (error) => error instanceof ProbeFailure &&
-      error.code === "installed_automatic_capture_skill_policy_missing",
+      error.code === "installed_mind_usage_skill_policy_missing",
+  );
+  assert.throws(
+    () => assertMindUsageSkillPolicy(`${policy}\nwrite_binding_id`),
+    (error) => error instanceof ProbeFailure &&
+      error.code === "installed_mind_usage_skill_policy_missing",
   );
 });
 
@@ -259,12 +274,14 @@ test("Codex prompt-input discovery fails closed for cache-only, wrong-source, an
     installedRoot: INSTALLED_ROOT,
     description: SKILL_DESCRIPTION,
   };
-  const exactLine = `- mind-diary:mind-diary: ${SKILL_DESCRIPTION} (file: ${INSTALLED_ROOT}/skills/mind-diary/SKILL.md)`;
+  const exactLine = `- mind-diary:mind-diary: ${SKILL_DESCRIPTION} (file: r7/mind-diary/version/skills/mind-diary/SKILL.md)`;
   const wrongLine = `- mind-diary:mind-diary: ${SKILL_DESCRIPTION} (file: /tmp/untrusted/SKILL.md)`;
+  const root = `- \`r7\` = \`${SKILL_ROOT}\``;
   for (const fixture of [
-    [{ role: "user", content: [{ type: "input_text", text: exactLine }] }],
+    [{ role: "user", content: [{ type: "input_text", text: `${root}\n${exactLine}` }] }],
     promptInputFixture(wrongLine),
-    promptInputFixture(`${exactLine}\n${exactLine}`),
+    promptInputFixture(exactLine, ["- `r7` = `/tmp/untrusted`"]),
+    promptInputFixture(`${exactLine}\n${exactLine}`, [root]),
     { not: "a prompt input list" },
   ]) {
     assert.throws(
@@ -278,9 +295,9 @@ test("Codex prompt-input discovery fails closed for cache-only, wrong-source, an
 });
 
 test("Codex client version and prompt-input command availability fail closed", async () => {
-  assertCodexClientVersion("codex-cli 0.150.1\n");
+  assertCodexClientVersion("codex-cli 0.151.0\n");
   assert.throws(
-    () => assertCodexClientVersion("codex-cli 0.147.0\n"),
+    () => assertCodexClientVersion("codex-cli 0.150.1\n"),
     (error) => error instanceof ProbeFailure && error.code === "codex_version_mismatch",
   );
   await assert.rejects(

@@ -610,7 +610,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     ["/ui/mind-diary-onboarding-client.js", "text/javascript; charset=utf-8", "/api/v1/account"],
     ["/ui/mind-diary-token-client.js", "text/javascript; charset=utf-8", "/api/mcp/2025-11-25"],
     ["/ui/mind-diary-ordinary-minds-list-client.js", "text/javascript; charset=utf-8", "/api/v1/minds"],
-    ["/ui/mind-diary-connections-client.js", "text/javascript; charset=utf-8", "accessEndpoint"],
+    ["/ui/mind-diary-connections-client.js", "text/javascript; charset=utf-8", "data-revoke-connection"],
     ["/ui/mind-diary-visibility-client.js", "text/javascript; charset=utf-8", "data-public-catalog-retry"],
   ]) {
     const response = await handler(new Request(`${origin}${path}`));
@@ -623,12 +623,14 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     const body = await response.text();
     assert.match(body, new RegExp(marker.replaceAll("/", "\\/")));
     if (path.endsWith(".js")) assert.doesNotThrow(() => new vm.Script(body));
+    if (path === "/ui/mind-diary-ordinary-minds-list-client.js") {
+      assert.match(body, /principal-mind-usage\/v1/u);
+      assert.match(body, /\/api\/v1\/mind-usage/u);
+    }
     if (path === "/ui/mind-diary-connections-client.js") {
-      assert.doesNotMatch(body, /api\/v1\/oauth-connections|api\/v1\/mind-bindings/);
+      assert.doesNotMatch(body, /mind-access|api\/v1\/oauth-connections|api\/v1\/mind-bindings/);
       assert.match(body, /cache:\s*"no-store"/u);
-      assert.match(body, /updated access could not be read back/u);
-      assert.match(body, /readable_mind_count\} available/u);
-      assert.doesNotMatch(body, /readable_mind_count\} selected|read selector|attach_read|detach_read/iu);
+      assert.doesNotMatch(body, /readable_mind_count|writable_mind|mind-access|read selector|attach_read|detach_read|data-access-action/iu);
       assert.doesNotMatch(body, /console\.|localStorage|sessionStorage|sendBeacon/u);
     }
   }
@@ -663,7 +665,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
   assert.equal((await iconHead.arrayBuffer()).byteLength, 0);
   const wrongAssetMethod = await handler(new Request(`${origin}/ui/mind-diary-shell.css`, { method: "POST" }));
   assert.equal(wrongAssetMethod.status, 405);
-  assert.deepEqual(calls, ["list_minds"]);
+  assert.deepEqual(calls, []);
 });
 
 test("account settings wires profile CAS, fresh deletion impact, same-key retry client, and privacy-safe recovery", async () => {
@@ -945,7 +947,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(helpHtml, /Report only the symptom, UTC time, and safe request ID/u);
   assert.match(helpHtml, /data-copy-ready-guide="mind-diary-help-starter-playbook"/u);
   assert.match(helpHtml, /data-copy-code="mind-diary-help-concierge-playbook"/u);
-  assert.match(helpHtml, /exactly one target/u);
+  assert.match(helpHtml, /one Mind whose effective mode is Read and write/u);
   assert.match(helpHtml, /concierge work, not a product import/u);
   assert.match(helpHtml, /href="\/settings\/developer\/mcp"[^>]*>Open Advanced MCP<\/a>/u);
   assert.equal((helpHtml.match(/aria-current="page"/gu) ?? []).length, 0);
@@ -963,11 +965,11 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /data-codex-client-tab="desktop"/);
   assert.match(codexHelpHtml, /data-codex-client-tab="cli"/);
   assert.match(codexHelpHtml, /data-copy-code="codex-help-cli-install"/);
-  assert.match(codexHelpHtml, /Discover readable Minds and start/u);
-  assert.match(codexHelpHtml, /current memberships and visibility automatically/u);
+  assert.match(codexHelpHtml, /Choose readable Minds and start/u);
+  assert.match(codexHelpHtml, /current rights and credential scope checks/u);
   assert.match(codexHelpHtml, /Writing is optional/u);
-  assert.match(codexHelpHtml, /select at most one writable Mind/u);
-  assert.match(codexHelpHtml, /Only the Mind Diary Site can select, switch, or clear this target/u);
+  assert.match(codexHelpHtml, /choose Read and write for exactly one described Mind/u);
+  assert.match(codexHelpHtml, /one account-wide choice is shared by every Connection and personal token/u);
   assert.match(codexHelpHtml, /Create the first useful Memory/);
   assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/);
   assert.match(codexHelpHtml, /href="\/settings\/developer\/mcp">Advanced MCP/);
@@ -975,7 +977,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     codexHelpHtml,
     /MIND_DIARY_TOKEN|api\/mcp|client secret|PKCE|DCR|content:read|binding_version|write_binding_id/i,
   );
-  assert.doesNotMatch(codexHelpHtml, /Choose readable Minds|attach at least one Mind/u);
+  assert.doesNotMatch(codexHelpHtml, /attach at least one Mind|select, switch, or clear this target/u);
 
   for (const path of ["/api", "/mcp", "/settings", "/settings/unknown", "/minds/extra"]) {
     assert.equal(await handler(new Request(`${origin}${path}`)), null, path);
@@ -1021,6 +1023,238 @@ test("authenticated Home and Minds both defer collection work behind their safe 
   assert.equal(listed.status, 200);
   assert.equal((await listed.json()).data.length, 2);
   assert.deepEqual(calls, ["list_minds"]);
+});
+
+test("principal-wide Mind usage Web API is safe, atomic, versioned, and independent of credentials", async () => {
+  const personal = Object.freeze({
+    ...personalRoute,
+    description: "Personal decisions and durable preferences discussed with me.",
+  });
+  const research = Object.freeze({
+    ...ordinaryOwnerRoute,
+    description: "Research decisions, evidence, and reusable conclusions.",
+  });
+  const archive = Object.freeze({
+    ...ordinaryOwnerRoute,
+    mindId: "space_archive_internal",
+    route: "/archive",
+    handle: "archive",
+    name: "Archive",
+    description: null,
+    access: Object.freeze({
+      kind: "membership",
+      role: "reader",
+      capabilities: ["content:read"],
+    }),
+  });
+  const byRef = new Map([
+    ["me", personal],
+    ["research-notes", research],
+    ["archive", archive],
+  ]);
+  let usage = null;
+  const commands = [];
+  const descriptionCommands = [];
+  let descriptionConflict = false;
+  const mindUsage = {
+    async read(actor) {
+      assert.equal(actor, registeredActor);
+      return usage;
+    },
+    async mutate(command) {
+      commands.push(command);
+      const currentVersion = usage?.usageVersion ?? 0;
+      if (command.expectedUsageVersion !== currentVersion) {
+        return { kind: "usage_version_conflict" };
+      }
+      const entries = new Map((usage?.entries ?? []).map((entry) => [
+        entry.spaceId,
+        entry.usageMode,
+      ]));
+      if (command.usageMode === "disabled") entries.delete(command.spaceId);
+      else {
+        if (command.usageMode === "read_write") {
+          for (const [spaceId, mode] of entries) {
+            if (mode === "read_write" && spaceId !== command.spaceId) {
+              entries.set(spaceId, "read");
+            }
+          }
+        }
+        entries.set(command.spaceId, command.usageMode);
+      }
+      usage = Object.freeze({
+        contractVersion: "principal-mind-usage/v1",
+        principalId: registeredActor.principalId,
+        usageVersion: currentVersion + 1,
+        entries: Object.freeze([...entries].map(([spaceId, usageMode]) =>
+          Object.freeze({ spaceId, usageMode }))),
+      });
+      return { kind: "applied", state: usage, changed: true, replayed: false };
+    },
+  };
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-usage", verify: (_actor, token) => token === "csrf-usage" },
+    control: { async execute(request) {
+      if (request.operation === "get_session") return {
+        ...sessionProjection,
+        personalMind: { ...sessionProjection.personalMind, description: personal.description },
+      };
+      if (request.operation === "list_minds") return [personal, research, archive];
+      if (request.operation === "get_mind_info") return byRef.get(request.input.mind_ref) ?? null;
+      if (request.operation === "update_personal_mind_description") {
+        descriptionCommands.push(request.input);
+        if (descriptionConflict) throw Object.assign(new Error("stale"), { code: "metadata_conflict" });
+        return {
+          principal: { principalId: "principal_must_not_escape", displayName: "Product Owner", profileVersion: 3 },
+          personalMind: {
+            mindId: "space_personal_must_not_escape",
+            route: "/me",
+            name: "Product Owner",
+            description: request.input.description,
+            metadataVersion: 3,
+            headRevisionId: "revision_must_not_escape",
+          },
+          replayed: false,
+        };
+      }
+      throw new Error(`unexpected operation: ${request.operation}`);
+    } },
+    mindUsage,
+    writableTargets: {
+      async listResolved() { throw new Error("usage must not depend on credentials"); },
+      async mutateResolved() { throw new Error("usage must not mutate credentials"); },
+    },
+  });
+
+  const initial = await handler(new Request(`${origin}/api/v1/mind-usage`));
+  assert.equal(initial.status, 200);
+  const initialBody = await initial.json();
+  assert.equal(initialBody.data.contract_version, "principal-mind-usage/v1");
+  assert.equal(initialBody.data.usage_version, 0);
+  assert.deepEqual(initialBody.data.items.map((item) => item.usage_mode), [
+    "disabled", "disabled", "disabled",
+  ]);
+  assert.equal(initialBody.data.items[2].description, null);
+  assert.equal(initialBody.data.items[2].eligibility.can_read, true);
+  assert.equal(initialBody.data.items[2].eligibility.can_write, false);
+  assert.equal(initialBody.data.items[2].eligibility.description_required, true);
+  assert.doesNotMatch(JSON.stringify(initialBody), /principal_one|space_|revision_|mind_id|generation/iu);
+
+  const denied = await handler(new Request(`${origin}/api/v1/minds/archive/usage`, {
+    method: "PUT",
+    headers: { origin, "x-csrf-token": "wrong", "content-type": "application/json" },
+    body: JSON.stringify({ usage_mode: "read", expected_usage_version: 0 }),
+  }));
+  assert.equal(denied.status, 403);
+  assert.equal(commands.length, 0);
+
+  const set = async (mindRef, usageMode, expectedUsageVersion, key) => {
+    const response = await handler(new Request(`${origin}/api/v1/minds/${mindRef}/usage`, {
+      method: "PUT",
+      headers: {
+        origin,
+        "x-csrf-token": "csrf-usage",
+        "content-type": "application/json",
+        "idempotency-key": key,
+      },
+      body: JSON.stringify({ usage_mode: usageMode, expected_usage_version: expectedUsageVersion }),
+    }));
+    return { response, body: await response.json() };
+  };
+
+  const archiveRead = await set("archive", "read", 0, "usage:archive-read");
+  assert.equal(archiveRead.response.status, 200);
+  assert.equal(archiveRead.body.data.projection.items.find((item) =>
+    item.mind_ref === "/archive").usage_mode, "read");
+  assert.equal(archiveRead.body.data.projection.items.find((item) =>
+    item.mind_ref === "/archive").effective.can_write, false);
+
+  const researchWrite = await set("research-notes", "read_write", 1, "usage:research-write");
+  assert.equal(researchWrite.response.status, 200);
+  assert.equal(researchWrite.body.data.projection.usage_version, 2);
+  assert.equal(researchWrite.body.data.projection.items.find((item) =>
+    item.mind_ref === "/research-notes").effective.can_write, true);
+
+  const personalWrite = await set("me", "read_write", 2, "usage:personal-write");
+  assert.equal(personalWrite.response.status, 200);
+  assert.deepEqual(personalWrite.body.data.projection.items.map((item) => [
+    item.mind_ref,
+    item.usage_mode,
+  ]), [
+    ["/me", "read_write"],
+    ["/research-notes", "read"],
+    ["/archive", "read"],
+  ]);
+  assert.equal(personalWrite.body.data.projection.items.filter((item) =>
+    item.usage_mode === "read_write").length, 1);
+  assert.doesNotMatch(JSON.stringify(personalWrite.body), /principal_one|space_|revision_|mind_id|generation/iu);
+  assert.deepEqual(commands.map((command) => ({
+    spaceId: command.spaceId,
+    usageMode: command.usageMode,
+    expectedUsageVersion: command.expectedUsageVersion,
+    idempotencyKey: command.idempotencyKey,
+  })), [
+    { spaceId: "space_archive_internal", usageMode: "read", expectedUsageVersion: 0, idempotencyKey: "usage:archive-read" },
+    { spaceId: "space_research", usageMode: "read_write", expectedUsageVersion: 1, idempotencyKey: "usage:research-write" },
+    { spaceId: "space_personal", usageMode: "read_write", expectedUsageVersion: 2, idempotencyKey: "usage:personal-write" },
+  ]);
+
+  const conflict = await set("research-notes", "read_write", 1, "usage:stale");
+  assert.equal(conflict.response.status, 409);
+  assert.equal(conflict.body.error.code, "usage_conflict");
+  const refreshed = await (await handler(new Request(
+    `${origin}/api/v1/minds/research-notes/usage`,
+  ))).json();
+  assert.equal(refreshed.data.usage_version, 3);
+  assert.equal(refreshed.data.items[0].usage_mode, "read");
+
+  const description = await handler(new Request(`${origin}/api/v1/minds/me/description`, {
+    method: "PATCH",
+    headers: {
+      origin,
+      "x-csrf-token": "csrf-usage",
+      "content-type": "application/json",
+      "idempotency-key": "description:personal",
+    },
+    body: JSON.stringify({
+      description: "Private durable preferences discussed with me.",
+      expected_metadata_version: 2,
+    }),
+  }));
+  assert.equal(description.status, 200);
+  const descriptionBody = await description.json();
+  assert.deepEqual(descriptionBody.data, {
+    personal_mind: {
+      route: "/me",
+      name: "Product Owner",
+      description: "Private durable preferences discussed with me.",
+      metadata_version: 3,
+    },
+    replayed: false,
+  });
+  assert.deepEqual(descriptionCommands[0], {
+    description: "Private durable preferences discussed with me.",
+    expectedMetadataVersion: 2,
+    idempotencyKey: "description:personal",
+    mind_ref: "me",
+  });
+  assert.doesNotMatch(JSON.stringify(descriptionBody), /principal|space_|revision_|mind_id/iu);
+
+  descriptionConflict = true;
+  const staleDescription = await handler(new Request(`${origin}/api/v1/minds/me/description`, {
+    method: "PATCH",
+    headers: {
+      origin,
+      "x-csrf-token": "csrf-usage",
+      "content-type": "application/json",
+      "idempotency-key": "description:stale",
+    },
+    body: JSON.stringify({ description: null, expected_metadata_version: 2 }),
+  }));
+  assert.equal(staleDescription.status, 409);
+  assert.equal((await staleDescription.json()).error.code, "metadata_conflict");
 });
 
 test("ordinary Mind list and exact route wire the UAT management and deletion controls", async () => {
@@ -1669,13 +1903,11 @@ test("token controls preserve CSRF and expose a one-time secret only in the issu
   assert.equal(JSON.stringify(revokedBody).includes("token_id"), false);
 });
 
-test("Connections project and mutate one server-owned writable target with target CAS", async () => {
-  const targetCalls = [];
+test("Connections expose credential scopes only and reject retired per-credential Mind mutations", async () => {
+  let targetReads = 0;
+  let targetMutations = 0;
   const connectionRef = `conn_v1_${"3".repeat(32)}`;
   const bindingOwnerId = "md_oauth_grant_internal_must_not_render";
-  let targetVersion = 8;
-  let targetMindId = "space_research";
-  let conflict = false;
   const oauthConnection = Object.freeze({
     connectionRef,
     bindingOwnerId,
@@ -1690,10 +1922,6 @@ test("Connections project and mutate one server-owned writable target with targe
     csrf: { issue: () => "csrf-target", verify: (_actor, token) => token === "csrf-target" },
     control: { execute(request) {
       if (request.operation === "get_session") return sessionProjection;
-      if (request.operation === "list_minds") return [personalRoute, {
-        ...ordinaryOwnerRoute,
-        visibility: "unlisted",
-      }];
       throw Object.assign(new Error("unexpected operation"), { code: "not_found" });
     } },
     oauthConnections: {
@@ -1708,58 +1936,34 @@ test("Connections project and mutate one server-owned writable target with targe
       async revoke() { return true; },
     },
     writableTargets: {
-      async listResolved(actor, credentials) {
-        assert.equal(actor, registeredActor);
-        assert.deepEqual(credentials, [{
-          ownerId: bindingOwnerId,
-          credentialKind: "oauth_grant",
-          scopes: ["content:read", "content:write"],
-          state: "active",
-        }]);
-        return [{
-          ownerId: bindingOwnerId,
-          credentialKind: "oauth_grant",
-          lifecycleState: "active",
-          targetVersion,
-          targetMindId,
-        }];
-      },
-      async mutateResolved(actor, credential, input) {
-        targetCalls.push({ actor, credential, input });
-        if (conflict) throw Object.assign(new Error("stale"), { code: "target_conflict" });
-        targetVersion += 1;
-        targetMindId = input.mindRef === "/me" ? "space_personal" : null;
-        return { changed: true, replayed: false, targetVersion };
-      },
+      async listResolved() { targetReads += 1; return []; },
+      async mutateResolved() { targetMutations += 1; throw new Error("retired"); },
     },
   });
 
   const collection = await handler(new Request(`${origin}/api/v1/connections`));
   assert.equal(collection.status, 200);
   const collectionBody = await collection.json();
-  assert.equal(collectionBody.data.items[0].readable_mind_count, 2);
-  assert.equal(collectionBody.data.items[0].writable_mind_selected, true);
+  assert.deepEqual(collectionBody.data.items[0], {
+    connection_ref: connectionRef,
+    client_name: "Codex Marketplace",
+    created_at: "2026-08-08T00:00:00.000Z",
+    last_used_at: null,
+    can_read: true,
+    can_write: true,
+  });
+  assert.equal(JSON.stringify(collectionBody).includes(bindingOwnerId), false);
+  assert.doesNotMatch(JSON.stringify(collectionBody), /mind_(?:count|selected)|target|binding/iu);
 
   const detail = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));
   assert.equal(detail.status, 200);
   const detailHtml = await detail.text();
-  assert.match(detailHtml, /data-target-version="8"/);
-  assert.match(detailHtml, /2 Minds are readable with your current access/);
-  assert.match(detailHtml, /Access follows current membership and visibility automatically/);
-  assert.doesNotMatch(detailHtml, /<ul class="md-binding-list"|read selector/iu);
-  assert.match(detailHtml, /Research Notes[\s\S]*\/research-notes[\s\S]*unlisted/);
-  assert.match(detailHtml, /data-access-action="select_write"/);
-  assert.match(detailHtml, /data-access-action="clear_write"/);
-  assert.doesNotMatch(detailHtml, /attach_read|detach_read|stale_access_ref|binding-version/);
+  assert.match(detailHtml, /Credential scopes/);
+  assert.match(detailHtml, /Mind modes belong to your account/);
+  assert.match(detailHtml, /shared by all your Connections and personal tokens|Every Connection and personal token sees the same configured/u);
+  assert.match(detailHtml, /href="\/minds#mind-usage-heading"/);
+  assert.doesNotMatch(detailHtml, /data-access-action|mind-access|select_write|clear_write|attach_read|detach_read|writable target|binding-version/iu);
   assert.doesNotMatch(detailHtml, /md_oauth_grant_internal_must_not_render|space_(?:personal|research)/);
-
-  const denied = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
-    method: "PATCH",
-    headers: { origin, "x-csrf-token": "wrong", "content-type": "application/json" },
-    body: JSON.stringify({ action: "select_write", mind_ref: "/me", expected_target_version: 8 }),
-  }));
-  assert.equal(denied.status, 403);
-  assert.equal(targetCalls.length, 0);
 
   const removed = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
     method: "PATCH",
@@ -1771,208 +1975,10 @@ test("Connections project and mutate one server-owned writable target with targe
     },
     body: JSON.stringify({ action: "attach_read", mind_ref: "/me", expected_target_version: 8 }),
   }));
-  assert.equal(removed.status, 400);
-  assert.equal((await removed.json()).error.code, "operation_removed");
-  assert.equal(targetCalls.length, 0);
-
-  const applied = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
-    method: "PATCH",
-    headers: {
-      origin,
-      "x-csrf-token": "csrf-target",
-      "content-type": "application/json",
-      "idempotency-key": "target:product-site",
-    },
-    body: JSON.stringify({
-      action: "select_write",
-      mind_ref: "/me",
-      expected_target_version: 8,
-    }),
-  }));
-  assert.equal(applied.status, 200);
-  const appliedBody = await applied.json();
-  assert.equal(appliedBody.data.connection_ref, connectionRef);
-  assert.equal(appliedBody.data.changed, true);
-  assert.equal(appliedBody.data.replayed, false);
-  assert.equal(appliedBody.data.access.target_version, 9);
-  assert.equal(appliedBody.data.access.writable_mind.route, "/me");
-  assert.equal(JSON.stringify(appliedBody).includes(bindingOwnerId), false);
-  assert.deepEqual(targetCalls[0].credential, {
-    ownerId: bindingOwnerId,
-    credentialKind: "oauth_grant",
-    scopes: ["content:read", "content:write"],
-    state: "active",
-  });
-  assert.deepEqual(targetCalls[0].input, {
-    action: "select_write",
-    mindRef: "/me",
-    expectedTargetVersion: 8,
-    idempotencyKey: "target:product-site",
-    binding_owner_id: bindingOwnerId,
-  });
-
-  conflict = true;
-  const stale = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
-    method: "PATCH",
-    headers: {
-      origin,
-      "x-csrf-token": "csrf-target",
-      "content-type": "application/json",
-      "idempotency-key": "target:stale",
-    },
-    body: JSON.stringify({ action: "clear_write", expected_target_version: 8 }),
-  }));
-  assert.equal(stale.status, 409);
-  const staleBody = await stale.json();
-  assert.equal(staleBody.error.code, "target_conflict");
-  assert.equal(JSON.stringify(staleBody).includes(bindingOwnerId), false);
-});
-
-test("legacy Connections without a normalized target stay recoverable and disclose no Minds", async () => {
-  const connectionRef = `conn_v1_${"5".repeat(32)}`;
-  const bindingOwnerId = "legacy_connection_owner";
-  const handler = createProductWebHttpHandler({
-    applicationOrigin: origin,
-    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
-    csrf: { issue: () => "csrf-legacy-connection", verify: () => true },
-    control: { execute(request) {
-      if (request.operation === "get_session") return sessionProjection;
-      if (request.operation === "list_minds") {
-        throw new Error("legacy recovery must not depend on ACL-derived Minds");
-      }
-      throw new Error("unexpected operation");
-    } },
-    oauthConnections: {
-      async listPage() {
-        return {
-          items: [{
-            connectionRef,
-            bindingOwnerId,
-            clientName: "Legacy Codex",
-            scopes: ["content:read", "content:write"],
-            createdAt: "2026-08-08T00:00:00.000Z",
-            lastUsedAt: null,
-          }],
-          nextCursor: null,
-        };
-      },
-      async read(_principalId, presentedRef) {
-        return presentedRef === connectionRef ? {
-          connectionRef,
-          bindingOwnerId,
-          clientName: "Legacy Codex",
-          scopes: ["content:read", "content:write"],
-          createdAt: "2026-08-08T00:00:00.000Z",
-          lastUsedAt: null,
-        } : null;
-      },
-      async revoke() { return true; },
-    },
-    writableTargets: {
-      async listResolved() { return []; },
-      async mutateResolved() { throw new Error("legacy target must not mutate"); },
-    },
-  });
-
-  const collection = await handler(new Request(`${origin}/api/v1/connections`));
-  assert.equal(collection.status, 200);
-  const collectionBody = await collection.json();
-  assert.equal(collectionBody.data.items[0].readable_mind_count, 0);
-  assert.equal(collectionBody.data.items[0].writable_mind_selected, false);
-  assert.doesNotMatch(JSON.stringify(collectionBody), /My Mind|Research Notes|\/me|\/research-notes/u);
-
-  const detail = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));
-  assert.equal(detail.status, 200);
-  const detailHtml = await detail.text();
-  assert.match(detailHtml, /Reconnect required/);
-  assert.match(detailHtml, /No Minds are readable with your current access/);
-  const accessPanel = detailHtml.match(
-    /<section class="md-binding-panel"[\s\S]*?<section class="md-setup-card"/u,
-  )?.[0] ?? "";
-  assert.notEqual(accessPanel, "");
-  assert.doesNotMatch(accessPanel, /My Mind|Research Notes|\/me|\/research-notes|name="mind_ref"/u);
-});
-
-
-test("read-only Connections reject selection but allow recovery-safe clear", async () => {
-  const connectionRef = `conn_v1_${"6".repeat(32)}`;
-  const targetCalls = [];
-  const handler = createProductWebHttpHandler({
-    applicationOrigin: origin,
-    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
-    csrf: { issue: () => "csrf-read-only", verify: () => true },
-    control: { execute(request) {
-      if (request.operation === "get_session") return sessionProjection;
-      if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
-      throw new Error("unexpected operation");
-    } },
-    oauthConnections: {
-      async listPage() { return { items: [], nextCursor: null }; },
-      async read(principalId, presentedRef) {
-        assert.equal(principalId, registeredActor.principalId);
-        return presentedRef === connectionRef ? {
-          connectionRef,
-          bindingOwnerId: "read_only_internal_owner",
-          clientName: "Read-only Codex",
-          scopes: ["content:read"],
-          createdAt: "2026-08-08T00:00:00.000Z",
-          lastUsedAt: null,
-        } : null;
-      },
-      async revoke() { return true; },
-    },
-    writableTargets: {
-      async listResolved() {
-        return [{
-          ownerId: "read_only_internal_owner",
-          credentialKind: "oauth_grant",
-          lifecycleState: "active",
-          targetVersion: 1,
-          targetMindId: "space_research",
-        }];
-      },
-      async mutateResolved(_actor, _credential, input) {
-        targetCalls.push(input);
-        return { changed: true, replayed: false, targetVersion: 2 };
-      },
-    },
-  });
-
-  const response = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /Previous writable Mind/);
-  assert.match(html, /This connection cannot write now/);
-  assert.match(html, /data-access-action="clear_write"/);
-  assert.doesNotMatch(html, /data-access-action="select_write"|Select one writable Mind/);
-
-  const mutation = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
-    method: "PATCH",
-    headers: {
-      origin,
-      "x-csrf-token": "csrf-read-only",
-      "content-type": "application/json",
-      "idempotency-key": "read-only:write",
-    },
-    body: JSON.stringify({ action: "select_write", mind_ref: "/research-notes", expected_target_version: 1 }),
-  }));
-  assert.equal(mutation.status, 409);
-  assert.equal((await mutation.json()).error.code, "write_step_up_required");
-  assert.equal(targetCalls.length, 0);
-
-  const cleared = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
-    method: "PATCH",
-    headers: {
-      origin,
-      "x-csrf-token": "csrf-read-only",
-      "content-type": "application/json",
-      "idempotency-key": "read-only:clear",
-    },
-    body: JSON.stringify({ action: "clear_write", expected_target_version: 1 }),
-  }));
-  assert.equal(cleared.status, 200);
-  assert.equal(targetCalls.length, 1);
-  assert.equal(targetCalls[0].action, "clear_write");
+  assert.equal(removed.status, 404);
+  assert.equal((await removed.json()).error.code, "not_found");
+  assert.equal(targetReads, 0);
+  assert.equal(targetMutations, 0);
 });
 
 test("connection lookup makes unknown, foreign, and revoked presentation refs indistinguishable", async () => {
@@ -2067,10 +2073,7 @@ test("connection pages stay bounded to the requested page and reject ambiguous l
   assert.deepEqual(pageBody.data.items.map((item) => item.connection_ref), refs);
   assert.equal(pageBody.data.next_cursor, "next_page_cursor");
   assert.equal(JSON.stringify(pageBody).includes("page_owner_"), false);
-  assert.deepEqual(bindingCalls, [[
-    { ownerId: ownerIds[0], credentialKind: "oauth_grant", scopes: ["content:read"], state: "active" },
-    { ownerId: ownerIds[1], credentialKind: "oauth_grant", scopes: ["content:read"], state: "active" },
-  ]]);
+  assert.deepEqual(bindingCalls, []);
   assert.deepEqual(listCalls[0], {
     principalId: registeredActor.principalId,
     query: { limit: 2, cursor: "page_cursor" },

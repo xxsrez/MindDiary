@@ -367,7 +367,7 @@ test("pool, U-ACCESS, MD-354 contract and runbook share one exact actor and invi
   ));
 });
 
-test("MD-354 branch preserves current durable token UI assertions", async () => {
+test("MD-354 branch preserves current principal Mind usage UI assertions", async () => {
   const runtimeTest = await readFile(
     new URL("../integration/product-site-mcp-runtime.test.mjs", import.meta.url),
     "utf8",
@@ -380,6 +380,8 @@ test("MD-354 branch preserves current durable token UI assertions", async () => 
   for (const current of [
     "const marker = `<h3>${tokenName}</h3>`;",
     "assert.doesNotMatch(readOnlyHtml, /data-personal-token-ref/u);",
-    "assert.match(boundHtml, /Writable target[\\s\\S]*Web Binding E2E",
+    "assert.equal(boundBody.data.projection.items[0].usage_mode, \"read_write\");",
+    "assert.match(boundHtml, /Account-wide Mind modes/u);",
+    "assert.doesNotMatch(boundHtml, /Writable target|data-binding-action|data-target-version/u);",
   ]) assert.equal(runtimeTest.includes(current), true, current);
 });

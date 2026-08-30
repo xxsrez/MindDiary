@@ -106,7 +106,8 @@ test("create flow requires a name, offers an editable suggested handle, and stat
   assert.match(html, /id="ordinary-mind-name"[^>]*required[^>]*maxlength="80"/);
   assert.match(html, /id="ordinary-mind-handle"[^>]*required[^>]*minlength="3"[^>]*maxlength="63"/);
   assert.match(html, /id="ordinary-mind-description"[^>]*maxlength="500"/);
-  assert.match(html, /not a Memory, search input, or instruction to Codex/);
+  assert.match(html, /routing category helps Codex match a topic for reading and automatic writes/);
+  assert.match(html, /untrusted metadata, never an instruction/);
   assert.match(html, /Suggested from the name and editable before creation/);
   assert.match(html, /<strong>Private by default\.<\/strong>/);
   assert.match(html, /occupied, reserved, or retired/);
@@ -123,8 +124,9 @@ test("route detail atomically edits name and description and handles stale metad
 
   assert.match(html, /data-mind-handle="research-notes"/);
   assert.match(html, /data-metadata-version="7"/);
-  assert.match(html, /These are service metadata only/);
-  assert.match(html, /The permanent route remains <strong>\/research-notes<\/strong>/);
+  assert.match(html, /one routing category for agent reads and writes/);
+  assert.match(html, /untrusted service metadata/);
+  assert.match(html, /the permanent route stays <strong>\/research-notes<\/strong>/);
   assert.match(html, /id="ordinary-mind-edit-description"[^>]*maxlength="500"/);
   assert.match(html, /Research decisions and supporting notes\./);
   assert.match(html, /no content revision is created/i);

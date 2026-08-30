@@ -65,7 +65,6 @@ export const CONTENT_QUERIES = [
   "list_minds",
   "resolve_mind",
   "get_mind_info",
-  "get_mind_bindings",
   "get_file_ingress_capabilities",
   "browse_entries",
   "search_entries",
@@ -79,12 +78,9 @@ export const CONTENT_QUERIES = [
 ] as const;
 
 export const CONTENT_COMMANDS = [
-  "set_read_mind_binding",
-  "set_write_mind_binding",
   "create_file_upload_intent",
   "stage_bundle_file",
   "get_bundle_file_download",
-  "capture_knowledge",
   "commit_changeset",
 ] as const;
 

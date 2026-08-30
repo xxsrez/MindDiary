@@ -338,24 +338,6 @@ test("product adapter terminates provider metadata and returns only verified sta
         };
       },
     },
-    bindings: {
-      async read() {
-        return {
-          kind: "ready",
-          bindings: {
-            bindingSet: { state: "active" },
-            readBindings: [],
-            writeBinding: {
-              state: "active",
-              spaceId: "space_bundle_stage",
-              writeBindingId: "write_binding_stage",
-            },
-          },
-        };
-      },
-      async mutateRead() { throw new Error("unused"); },
-      async mutateWrite() { throw new Error("unused"); },
-    },
     nativeFileRoute: NativeFileParameterRoute.create({
       assertion: {
         profileId: "test-app-session-attachment-v1",
@@ -532,7 +514,7 @@ test("product adapter terminates provider metadata and returns only verified sta
   assert.equal(portableRequest.sourceKind, "session_attachment");
   assert.equal(portableRequest.maxBytes, 268_435_456);
   assert.equal(portableRequest.spaceId, "space_bundle_stage");
-  assert.equal(portableRequest.writeBindingId, "write_binding_stage");
+  assert.equal("writeBindingId" in portableRequest, false);
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /provider-secret|temporary-secret|download_url|file_id|137,80,78,71/iu);
 

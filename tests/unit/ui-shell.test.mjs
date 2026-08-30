@@ -438,6 +438,8 @@ function authenticatedModel(profileUpdate = { kind: "idle", idempotencyKey: "pro
     personalMind: {
       route: "/me",
       name: "Andrey",
+      description: "Private durable preferences and decisions.",
+      metadataVersion: 5,
       headRevisionId: "revision_personal",
       updatedLabel: "Updated today",
     },
@@ -474,8 +476,13 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(html, /data-import-receipt-revision/u);
   assert.match(html, /only UTF-8 Markdown/u);
   assert.match(html, /Never store a token in a repository/u);
+  assert.match(html, /data-personal-description-form[^>]+data-metadata-version="5"/u);
+  assert.match(html, /<textarea[^>]+id="personal-mind-description"/u);
+  assert.match(html, /Without a description, Codex may read this Mind only when you name it directly/u);
+  assert.match(html, /“Read and write” requires a description/u);
+  assert.match(html, /data-mind-usage-panel[^>]+data-mind-ref="\/me"/u);
   assert.doesNotMatch(html, /space_handle|hidden handle|data-(?:share|visibility|transfer|delete)/i);
-  assert.doesNotMatch(html, /<(?:textarea|iframe)\b|contenteditable/i);
+  assert.doesNotMatch(html, /<iframe\b|contenteditable/i);
   assert.doesNotMatch(html, /<button[^>]*>[^<]*(?:Share|Visibility|Transfer|Delete)/i);
 
   assert.match(shellCss, /\.md-setup-card > \*\s*\{\s*min-width:\s*0;/u);

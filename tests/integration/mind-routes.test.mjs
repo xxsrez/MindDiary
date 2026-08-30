@@ -205,7 +205,7 @@ test("/me and list expose only safe Personal plus accepted membership descriptor
   assert.equal(personal.name, "Accepted Member");
   assert.equal(personal.isPersonal, true);
   assert.equal("handle" in personal, false);
-  assert.equal("description" in personal, false);
+  assert.equal(personal.description, null);
   assert.equal(
     personal.access.capabilities.some(
       (capability) => !capability.startsWith("content:"),

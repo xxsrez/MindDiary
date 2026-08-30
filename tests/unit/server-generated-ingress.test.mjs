@@ -26,29 +26,29 @@ const COMMON = {
   idempotencyKey: "server-generated:stage",
 };
 
-function currentTarget(overrides = {}) {
+function currentUsage(overrides = {}) {
   return {
-    kind: "current",
-    state: {
-      bindingOwnerId: TARGET_OWNER,
+    principalId: COMMON.actor.principalId,
+    activeWriteGeneration: {
+      generationId: TARGET_GENERATION,
       principalId: COMMON.actor.principalId,
-      lifecycleState: "active",
-      targetVersion: 3,
-      activeGeneration: {
-        generationId: TARGET_GENERATION,
-        bindingOwnerId: TARGET_OWNER,
-        spaceId: COMMON.spaceId,
-      },
-      ...overrides,
+      spaceId: COMMON.spaceId,
     },
+    ...overrides,
   };
 }
 
-function targetReader(result = currentTarget(), reads = []) {
+function usageReader(result = currentUsage(), reads = []) {
   return {
-    async readCredentialWriteTarget(ownerId, principalId) {
-      reads.push({ ownerId, principalId });
+    async readPrincipalMindUsage(principalId) {
+      reads.push(principalId);
       return result;
+    },
+    async validatePrincipalMindUsageWritePin(pin) {
+      const generation = result?.activeWriteGeneration;
+      return generation?.generationId === pin.generationId &&
+        generation?.principalId === pin.principalId &&
+        generation?.spaceId === pin.spaceId;
     },
   };
 }
@@ -89,8 +89,8 @@ function fixture(options = {}) {
         return options.reconcileResult ?? { kind: "missing" };
       },
     },
-    targets: targetReader(
-      Object.hasOwn(options, "targetResult") ? options.targetResult : currentTarget(),
+    usage: usageReader(
+      Object.hasOwn(options, "targetResult") ? options.targetResult : currentUsage(),
       targetReads,
     ),
   });
@@ -123,10 +123,7 @@ test("trusted producer forwards only a bounded stream to the shared ingress", as
   assert.equal(producerContext.maxBytes, 268_435_456);
   assert.equal(producerContext.signal instanceof AbortSignal, true);
   assert.equal(env.reconciles.length, 1);
-  assert.deepEqual(env.targetReads, [{
-    ownerId: TARGET_OWNER,
-    principalId: COMMON.actor.principalId,
-  }]);
+  assert.deepEqual(env.targetReads, [COMMON.actor.principalId]);
   assert.equal(env.reconciles[0].sourceKind, "server_generated");
   assert.equal(env.reconciles[0].mediaType, "application/octet-stream");
   assert.equal(env.reconciles[0].sha256, COMMON.expectedSha256);
@@ -163,22 +160,22 @@ test("the accepted producer lease and size ceiling are exact and cannot widen", 
   assert.throws(() => new TrustedServerGeneratedIngressService({
     ingress: { stageServerGenerated() { throw new Error("unreachable"); } },
     reconciliation: { reconcile() { throw new Error("unreachable"); } },
-    targets: targetReader(),
+    usage: usageReader(),
     producerLeaseMilliseconds: 600_001,
   }), /outside the accepted bound/u);
 });
 
-test("credential owner target is required and exact before producer acquisition", async () => {
+test("principal Mind mount is required and exact before producer acquisition", async () => {
   for (const [targetResult, code] of [
-    [currentTarget({ activeGeneration: null }), "writable_target_required"],
-    [currentTarget({
-      activeGeneration: {
+    [currentUsage({ activeWriteGeneration: null }), "writable_target_required"],
+    [currentUsage({
+      activeWriteGeneration: {
         generationId: "target_generation_other",
-        bindingOwnerId: TARGET_OWNER,
+        principalId: COMMON.actor.principalId,
         spaceId: "space_other",
       },
     }), "writable_target_mismatch"],
-    [null, "writable_target_unavailable"],
+    [null, "writable_target_required"],
   ]) {
     const env = fixture({ targetResult });
     let producerInvocations = 0;
@@ -279,7 +276,7 @@ test("shared preflight rejection closes an unopened producer iterator", async ()
     reconciliation: {
       async reconcile() { return { kind: "missing" }; },
     },
-    targets: targetReader(),
+    usage: usageReader(),
   });
   const result = await service.stage({
     ...COMMON,
@@ -317,7 +314,7 @@ test("successful uncertain retry and changed receipt resolve before producer or 
           : { kind: "invalid", code: "idempotency_conflict" };
       },
     },
-    targets: targetReader(),
+    usage: usageReader(),
     ingress: {
       async stageServerGenerated(request) {
         for await (const chunk of request.stream) objectWrites += chunk.byteLength;

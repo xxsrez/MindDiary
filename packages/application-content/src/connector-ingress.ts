@@ -1,7 +1,7 @@
 import type { McpTokenActorContext } from "@mind-diary/application-contracts";
-import type { CredentialWriteTargetStore } from "@mind-diary/application-ports";
+import type { PrincipalMindUsageReader } from "@mind-diary/application-ports";
 import type {
-  CredentialWriteTargetGenerationId,
+  PrincipalMindUsageGenerationId,
   Sha256Digest,
   SpaceId,
 } from "@mind-diary/domain";
@@ -225,7 +225,7 @@ function unavailable(
 
 type ResolvedWritableTarget = Readonly<{
   kind: "ready";
-  generationId: CredentialWriteTargetGenerationId;
+  generationId: PrincipalMindUsageGenerationId;
 }>;
 
 type WritableTargetFailure = Readonly<{
@@ -245,18 +245,13 @@ function mapCurrentTargetFailure<Result extends StageBundleFileStreamResult>(
 ): Result | WritableTargetFailure {
   if (result.kind === "denied") {
     const decision = result.decision as Readonly<{ readonly code?: unknown }>;
-    if (decision.code === "write_binding_required") {
+    if (decision.code === "writable_mind_required") {
       return writableTargetFailure("writable_target_required");
     }
     if (
-      decision.code === "write_binding_stale" ||
-      decision.code === "binding_state_unavailable" ||
-      decision.code === "binding_owner_revoked" ||
+      decision.code === "writable_mind_stale" ||
       decision.code === "authorization_state_changed"
     ) return writableTargetFailure("writable_target_unavailable");
-  }
-  if (result.kind === "invalid" && result.code === "binding_mismatch") {
-    return writableTargetFailure("writable_target_unavailable");
   }
   return result;
 }
@@ -273,7 +268,7 @@ export class AuthorizedConnectorIngressService {
     BundleFileStagingService,
     "authorizeSourceRead" | "stageStream"
   >;
-  readonly #targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
+  readonly #usage: PrincipalMindUsageReader;
   readonly #fetchTimeoutMilliseconds: number;
 
   constructor(dependencies: {
@@ -281,12 +276,16 @@ export class AuthorizedConnectorIngressService {
       BundleFileStagingService,
       "authorizeSourceRead" | "stageStream"
     >;
-    readonly targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
+    readonly usage?: PrincipalMindUsageReader;
+    /** @deprecated Composition compatibility; principal usage is still read here. */
+    readonly targets?: PrincipalMindUsageReader;
     /** A stricter bounded timeout is allowed for a specific adapter/test profile. */
     readonly fetchTimeoutMilliseconds?: number;
   }) {
     this.#staging = dependencies.staging;
-    this.#targets = dependencies.targets;
+    const usage = dependencies.usage ?? dependencies.targets;
+    if (usage === undefined) throw new TypeError("principal Mind usage reader is required");
+    this.#usage = usage;
     const timeout = dependencies.fetchTimeoutMilliseconds ??
       CONNECTOR_OBJECT_LIMITS.fetchTimeoutMilliseconds;
     if (
@@ -312,7 +311,6 @@ export class AuthorizedConnectorIngressService {
     const authorization = await this.#staging.authorizeSourceRead({
       actor: request.actor,
       spaceId: request.spaceId,
-      writeBindingId: target.generationId,
     });
     if (authorization.kind === "denied") {
       return mapCurrentTargetFailure(Object.freeze({
@@ -403,7 +401,6 @@ export class AuthorizedConnectorIngressService {
         result = await this.#staging.stageStream({
           actor: request.actor,
           spaceId: request.spaceId,
-          writeBindingId: target.generationId,
           sourceKind: "connector_object",
           stream: classifiedStream,
           maxBytes: CONNECTOR_OBJECT_LIMITS.maxBytes,
@@ -454,28 +451,25 @@ export class AuthorizedConnectorIngressService {
   ): Promise<ResolvedWritableTarget | WritableTargetFailure> {
     let snapshot;
     try {
-      snapshot = await this.#targets.readCredentialWriteTarget(
-        actor.authentication.bindingOwnerId,
-        actor.principalId,
-      );
+      snapshot = await this.#usage.readPrincipalMindUsage(actor.principalId);
     } catch {
       return writableTargetFailure("writable_target_unavailable");
     }
-    if (snapshot?.kind === "pending_upgrade") {
-      return writableTargetFailure("writable_target_required");
+    if (snapshot !== null && snapshot.principalId !== actor.principalId) {
+      return writableTargetFailure("writable_target_unavailable");
     }
-    if (
-      snapshot?.kind !== "current" ||
-      snapshot.state.bindingOwnerId !== actor.authentication.bindingOwnerId ||
-      snapshot.state.principalId !== actor.principalId ||
-      snapshot.state.lifecycleState !== "active"
-    ) return writableTargetFailure("writable_target_unavailable");
-    const generation = snapshot.state.activeGeneration;
+    const generation = snapshot?.activeWriteGeneration ?? null;
     if (generation === null) return writableTargetFailure("writable_target_required");
     if (
-      generation.bindingOwnerId !== actor.authentication.bindingOwnerId ||
+      generation.principalId !== actor.principalId ||
       generation.spaceId !== spaceId
     ) return writableTargetFailure("writable_target_mismatch");
+    const pinValid = await this.#usage.validatePrincipalMindUsageWritePin({
+      principalId: actor.principalId,
+      spaceId,
+      generationId: generation.generationId,
+    });
+    if (!pinValid) return writableTargetFailure("writable_target_unavailable");
     return Object.freeze({ kind: "ready", generationId: generation.generationId });
   }
 }

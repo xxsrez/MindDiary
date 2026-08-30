@@ -61,7 +61,6 @@ function fakeStaging(results = []) {
 const COMMON = {
   actor: {},
   spaceId: "space_test",
-  writeBindingId: "binding_test",
   displayFilename: "generated.png",
   claimedMediaType: "image/png",
   expectedMediaType: "image/png; charset=binary",

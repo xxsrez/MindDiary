@@ -153,9 +153,67 @@ function changes(path, title) {
   ];
 }
 
+function principalMountedMetadata(metadata) {
+  const mounted = new Map();
+  let generation = 0;
+  const select = (principalId, spaceId) => {
+    const current = Object.freeze({
+      principalId,
+      spaceId,
+      generationId: `usage_generation_idempotency_${++generation}`,
+    });
+    mounted.set(principalId, current);
+    return current;
+  };
+  const ensure = (principalId, spaceId) => {
+    const current = mounted.get(principalId);
+    return current?.spaceId === spaceId ? current : select(principalId, spaceId);
+  };
+  const readUsage = async (principalId) => {
+    const current = mounted.get(principalId);
+    if (current === undefined) return null;
+    return Object.freeze({
+      principalId,
+      entries: Object.freeze([Object.freeze({
+        principalId,
+        spaceId: current.spaceId,
+        usageMode: "read_write",
+        writeGeneration: current,
+      })]),
+      activeWriteGeneration: current,
+    });
+  };
+  const validatePin = async (pin) => {
+    const current = mounted.get(pin.principalId);
+    return current !== undefined &&
+      current.spaceId === pin.spaceId &&
+      current.generationId === pin.generationId;
+  };
+  const wrapTransaction = (transaction) => Object.freeze({
+    ...transaction,
+    readPrincipalMindUsage: readUsage,
+    validatePrincipalMindUsageWritePin: validatePin,
+  });
+  const store = new Proxy(metadata, {
+    get(target, property) {
+      if (property === "readPrincipalMindUsage") return readUsage;
+      if (property === "validatePrincipalMindUsageWritePin") return validatePin;
+      if (property === "runContentCommitTransaction") {
+        return (operation) => target.runContentCommitTransaction((transaction) =>
+          operation(wrapTransaction(transaction)));
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return Object.freeze({ store, select, ensure });
+}
+
 async function fixture() {
   const objects = new InMemoryObjectStore();
-  const metadata = new InMemoryRevisionMetadataStore();
+  const rawMetadata = new InMemoryRevisionMetadataStore();
+  const usage = principalMountedMetadata(rawMetadata);
+  const metadata = usage.store;
   const coordinator = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   const authorizer = new CapabilityAuthorizer(metadata);
   const seed = async (spaceId, revisionId) => {
@@ -170,11 +228,13 @@ async function fixture() {
     });
     assert.equal(seeded.kind, "committed");
   };
-  const grant = (currentActor, spaceId, overrides) =>
+  const grant = (currentActor, spaceId, overrides) => {
+    usage.ensure(currentActor.principalId, spaceId);
     metadata.setCurrentAuthorizationStateForTest(
       authorizationQuery(currentActor, spaceId),
       authorizationState(currentActor, spaceId, overrides),
     );
+  };
   const service = (ids, objectStore = objects) =>
     new ChangesetCommitService({
       authorizer,
@@ -191,7 +251,7 @@ async function fixture() {
     ),
     idempotency: await metadata.listIdempotencyRecordsForTest(),
   });
-  return { objects, metadata, coordinator, seed, grant, service, snapshot };
+  return { objects, metadata, coordinator, seed, grant, service, snapshot, usage };
 }
 
 function request({ currentActor, spaceId, expectedRevisionId, key, path, title }) {
@@ -379,6 +439,7 @@ test("the same key is isolated by principal and Space while operation stays expl
   env.grant(editorA, SPACE_B);
   const sharedKey = "shared_namespace_key";
 
+  env.usage.select(editorA.principalId, SPACE_A);
   const first = await env.service(["revision_namespace_principal_a"]).commit(
     request({
       currentActor: editorA,
@@ -390,6 +451,7 @@ test("the same key is isolated by principal and Space while operation stays expl
     }),
   );
   assert.equal(first.kind, "committed");
+  env.usage.select(editorB.principalId, SPACE_A);
   const second = await env.service(["revision_namespace_principal_b"]).commit(
     request({
       currentActor: editorB,
@@ -401,6 +463,7 @@ test("the same key is isolated by principal and Space while operation stays expl
     }),
   );
   assert.equal(second.kind, "committed");
+  env.usage.select(editorA.principalId, SPACE_B);
   const third = await env.service(["revision_namespace_space_b"]).commit(
     request({
       currentActor: editorA,

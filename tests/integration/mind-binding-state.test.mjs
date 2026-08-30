@@ -400,6 +400,66 @@ test("current-ACL read mode grants no durable binding authority and follows ACL 
   assert.equal(denied.code, "access_denied");
 });
 
+test("current-ACL mode authorizes writes by credential lifecycle and delegate scope without legacy binding", async () => {
+  const { metadata } = applicationHarness("credential_write_target");
+  const registered = await metadata.runCredentialWriteTargetTransaction((transaction) =>
+    transaction.registerCredentialWriteTargetOwner({
+      bindingOwnerId: BINDING_OWNER_ID,
+      principalId: PRINCIPAL_ID,
+      credentialKind: "oauth_grant",
+      occurredAt: NOW,
+    }));
+  assert.equal(registered.kind, "registered");
+  const currentAcl = new MindBindingContentAuthorizer({
+    delegate: new CapabilityAuthorizer(metadata),
+    bindings: metadata,
+    readAuthority: "current_acl",
+  });
+  const request = {
+    actor: actor(),
+    spaceId: SPACE_A,
+    capability: "content:write",
+    revisionMode: "head",
+  };
+  const allowed = await currentAcl.authorize(request);
+  assert.equal(allowed.kind, "allowed");
+  assert.equal("bindingVersion" in allowed.stamp, false);
+  const reauthorized = await metadata.runBundleFileDownloadGrantTransaction(
+    (transaction) => currentAcl.reauthorizeInTransaction(
+      request,
+      transaction,
+      allowed.stamp,
+    ),
+  );
+  assert.equal(reauthorized.kind, "allowed");
+  assert.equal("bindingVersion" in reauthorized.stamp, false);
+
+  const legacy = new MindBindingContentAuthorizer({
+    delegate: new CapabilityAuthorizer(metadata),
+    bindings: metadata,
+    readAuthority: "legacy_mind_binding",
+  });
+  const legacyDenied = await legacy.authorize(request);
+  assert.equal(legacyDenied.kind, "denied");
+  assert.equal(legacyDenied.code, "write_binding_required");
+
+  const current = authorizationState(SPACE_A);
+  metadata.setCurrentAuthorizationStateForTest(
+    { principalId: PRINCIPAL_ID, spaceId: SPACE_A, tokenId: TOKEN_ID },
+    {
+      ...current,
+      token: {
+        ...current.token,
+        scopes: ["content:read"],
+        version: version(2),
+      },
+    },
+  );
+  const scopeDenied = await currentAcl.authorize(request);
+  assert.equal(scopeDenied.kind, "denied");
+  assert.equal(scopeDenied.code, "insufficient_scope");
+});
+
 test("pending legacy credential fails closed before ACL-derived discovery or read", async () => {
   const { metadata, service } = applicationHarness("legacy_mind_binding");
   const attached = await service.mutateRead({
@@ -456,7 +516,7 @@ test("pending legacy credential fails closed before ACL-derived discovery or rea
   assert.equal(aclCalls, 0);
 });
 
-test("transactional content reads recheck credential lifecycle after preflight", async () => {
+test("transactional current-ACL content operations recheck credential lifecycle after preflight", async () => {
   const { metadata } = applicationHarness("credential_write_target");
   const registered = await metadata.runCredentialWriteTargetTransaction((transaction) =>
     transaction.registerCredentialWriteTargetOwner({
@@ -471,11 +531,11 @@ test("transactional content reads recheck credential lifecycle after preflight",
     bindings: metadata,
     readAuthority: "current_acl",
   });
-  const requests = ["content:fetch", "content:browse"].map((capability) => ({
+  const requests = ["content:fetch", "content:browse", "content:write"].map((capability) => ({
     actor: actor(),
     spaceId: SPACE_A,
     capability,
-    revisionMode: "historical",
+    revisionMode: capability === "content:write" ? "head" : "historical",
   }));
   const initial = [];
   for (const request of requests) {

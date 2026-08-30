@@ -111,8 +111,6 @@
     if (typeof value.created_at !== "string" || value.created_at.length > 64) return null;
     if (value.last_used_at !== null && (typeof value.last_used_at !== "string" || value.last_used_at.length > 64)) return null;
     if (typeof value.can_read !== "boolean" || typeof value.can_write !== "boolean") return null;
-    if (!Number.isSafeInteger(value.readable_mind_count) || value.readable_mind_count < 0) return null;
-    if (typeof value.writable_mind_selected !== "boolean") return null;
     return value;
   };
 
@@ -130,13 +128,13 @@
 
     const metadata = node("dl", "md-token-card__metadata");
     metadata.append(
-      definition("Can read", item.can_read ? `${item.readable_mind_count} available` : "No"),
-      definition("Can add and change", item.can_write ? (item.writable_mind_selected ? "One Mind selected" : "Not selected") : "No"),
+      definition("Read scope", item.can_read ? "Granted" : "No"),
+      definition("Write scope", item.can_write ? "Granted" : "No"),
       definition("Connected", dateLabel(item.created_at)),
       definition("Last used", dateLabel(item.last_used_at)),
     );
     const action = node("p");
-    const manage = node("a", "md-button md-button--secondary", "Manage access");
+    const manage = node("a", "md-button md-button--secondary", "View connection");
     manage.href = href;
     action.append(manage);
     article.append(heading, metadata, action);
@@ -223,59 +221,12 @@
     }
   };
 
-  const mutate = async (panel, action, values = {}) => {
-    const endpoint = panel.dataset.accessEndpoint ?? "";
-    const expected = Number(panel.dataset.targetVersion ?? "NaN");
-    const status = panel.querySelector("[data-access-status]");
-    if (!endpoint.startsWith("/api/v1/") || !Number.isSafeInteger(expected) || expected < 0) return;
-    panel.setAttribute("aria-busy", "true");
-    say(status, "Saving current Mind access…");
-    try {
-      const result = await request(endpoint, "PATCH", {
-        action,
-        expected_target_version: expected,
-        ...values,
-      });
-      if (
-        !Number.isSafeInteger(result?.access?.target_version) ||
-        result.access.target_version < expected
-      ) throw new Error("The updated access could not be read back.");
-      location.reload();
-    } catch (error) {
-      say(status, error?.code === "write_step_up_required"
-        ? "Ask Codex to add or change a Memory to start the separate write permission step."
-        : error?.code?.includes("stale") || error?.code?.includes("conflict")
-          ? "Access changed in another session. Reload before trying again."
-          : error?.message ?? "Mind access could not be changed.");
-      panel.removeAttribute("aria-busy");
-    }
-  };
-
-  shell.addEventListener("submit", async (event) => {
-    const accessForm = event.target.closest?.("[data-access-form]");
-    if (accessForm) {
-      event.preventDefault();
-      const panel = accessForm.closest("[data-access-panel]");
-      const action = accessForm.dataset.accessAction ?? "";
-      const mindRef = new FormData(accessForm).get("mind_ref");
-      if (panel && typeof mindRef === "string" && mindRef) await mutate(panel, action, { mind_ref: mindRef });
-      return;
-    }
-  });
-
   shell.addEventListener("click", async (event) => {
     const target = event.target.closest?.("button");
     if (!target) return;
     if (target.hasAttribute("data-connections-retry")) {
       target.disabled = true;
       await loadConnections();
-      return;
-    }
-    const panel = target.closest("[data-access-panel]");
-    const action = target.dataset.accessAction;
-    if (panel && action) {
-      const values = {};
-      await mutate(panel, action, values);
       return;
     }
     const revokeEndpoint = target.dataset.revokeEndpoint;

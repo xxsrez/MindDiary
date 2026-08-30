@@ -35,29 +35,29 @@ const ALLOWED = Object.freeze({
   }),
 });
 
-function currentTarget(overrides = {}) {
+function currentUsage(overrides = {}) {
   return {
-    kind: "current",
-    state: {
-      bindingOwnerId: TARGET_OWNER,
+    principalId: COMMON.actor.principalId,
+    activeWriteGeneration: {
+      generationId: TARGET_GENERATION,
       principalId: COMMON.actor.principalId,
-      lifecycleState: "active",
-      targetVersion: 2,
-      activeGeneration: {
-        generationId: TARGET_GENERATION,
-        bindingOwnerId: TARGET_OWNER,
-        spaceId: COMMON.spaceId,
-      },
-      ...overrides,
+      spaceId: COMMON.spaceId,
     },
+    ...overrides,
   };
 }
 
-function targetReader(result = currentTarget(), reads = []) {
+function usageReader(result = currentUsage(), reads = []) {
   return {
-    async readCredentialWriteTarget(ownerId, principalId) {
-      reads.push({ ownerId, principalId });
+    async readPrincipalMindUsage(principalId) {
+      reads.push(principalId);
       return result;
+    },
+    async validatePrincipalMindUsageWritePin(pin) {
+      const generation = result?.activeWriteGeneration;
+      return generation?.generationId === pin.generationId &&
+        generation?.principalId === pin.principalId &&
+        generation?.spaceId === pin.spaceId;
     },
   };
 }
@@ -83,10 +83,10 @@ function fixture(
   const reads = [];
   const stages = [];
   const targetReads = [];
-  const { targetResult = currentTarget(), ...serviceOptions } = options;
+  const { targetResult = currentUsage(), ...serviceOptions } = options;
   const service = new AuthorizedConnectorIngressService({
     ...serviceOptions,
-    targets: targetReader(targetResult, targetReads),
+    usage: usageReader(targetResult, targetReads),
     staging: {
       async authorizeSourceRead() {
         return ALLOWED;
@@ -106,19 +106,19 @@ function fixture(
   return { service, source, reads, stages, targetReads };
 }
 
-test("current web credential target and Mind write authorization are checked before connector metadata", async () => {
+test("current principal Mind mount and write authorization are checked before connector metadata", async () => {
   let reads = 0;
   const denied = Object.freeze({
     kind: "denied",
-    code: "write_binding_stale",
+    code: "writable_mind_stale",
     retryable: false,
   });
   const service = new AuthorizedConnectorIngressService({
-    targets: targetReader(),
+    usage: usageReader(),
     staging: {
       async authorizeSourceRead(request) {
         assert.equal(request.spaceId, COMMON.spaceId);
-        assert.equal(request.writeBindingId, TARGET_GENERATION);
+        assert.equal("writeBindingId" in request, false);
         return denied;
       },
       async stageStream() {
@@ -139,17 +139,17 @@ test("current web credential target and Mind write authorization are checked bef
   assert.equal(reads, 0);
 });
 
-test("credential target failures are typed and stop before connector metadata", async () => {
+test("principal mount failures are typed and stop before connector metadata", async () => {
   for (const [targetResult, code] of [
-    [currentTarget({ activeGeneration: null }), "writable_target_required"],
-    [currentTarget({
-      activeGeneration: {
+    [currentUsage({ activeWriteGeneration: null }), "writable_target_required"],
+    [currentUsage({
+      activeWriteGeneration: {
         generationId: "target_generation_other",
-        bindingOwnerId: TARGET_OWNER,
+        principalId: COMMON.actor.principalId,
         spaceId: "space_other",
       },
     }), "writable_target_mismatch"],
-    [null, "writable_target_unavailable"],
+    [null, "writable_target_required"],
   ]) {
     const env = fixture(
       { kind: "ready", input: verifiedInput() },
@@ -162,10 +162,7 @@ test("credential target failures are typed and stop before connector metadata", 
     });
     assert.equal(env.reads.length, 0);
     assert.equal(env.stages.length, 0);
-    assert.deepEqual(env.targetReads, [{
-      ownerId: TARGET_OWNER,
-      principalId: COMMON.actor.principalId,
-    }]);
+    assert.deepEqual(env.targetReads, [COMMON.actor.principalId]);
   }
 });
 
@@ -193,7 +190,7 @@ test("binary connector snapshots expose only verified bytes to shared staging", 
   assert.equal(env.stages[0].claimedMediaType, "application/octet-stream");
   assert.equal(env.stages[0].expectedSize, 1);
   assert.equal(env.stages[0].expectedSha256, SHA256);
-  assert.equal(env.stages[0].writeBindingId, TARGET_GENERATION);
+  assert.equal("writeBindingId" in env.stages[0], false);
   for (const forbidden of [
     "source", "representation", "providerObjectId", "providerUrl", "providerRevision",
     "account", "grant", "locator", "url",
@@ -366,7 +363,7 @@ test("late source drift remains terminal after quarantine cleanup", async () => 
   let durableStages = 0;
   let sourceCalls = 0;
   const service = new AuthorizedConnectorIngressService({
-    targets: targetReader(),
+    usage: usageReader(),
     staging: {
       async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {
@@ -408,7 +405,7 @@ test("late source drift remains terminal after quarantine cleanup", async () => 
 
 test("late transient transport failure remains retryable after cleanup", async () => {
   const service = new AuthorizedConnectorIngressService({
-    targets: targetReader(),
+    usage: usageReader(),
     staging: {
       async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {
@@ -448,7 +445,7 @@ test("the connector deadline remains active until the verified stream finishes",
   let observedSignal;
   const service = new AuthorizedConnectorIngressService({
     fetchTimeoutMilliseconds: 1,
-    targets: targetReader(),
+    usage: usageReader(),
     staging: {
       async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {

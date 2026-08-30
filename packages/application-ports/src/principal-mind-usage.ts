@@ -60,27 +60,27 @@ export interface PrincipalMindUsageWritePin {
   readonly generationId: PrincipalMindUsageGenerationId;
 }
 
-export interface PrincipalMindUsageTransaction {
-  readonly kind: "principal-mind-usage-transaction";
+/** Read-only projection shared by ordinary reads and race-sensitive writes. */
+export interface PrincipalMindUsageReader {
   readPrincipalMindUsage(
     principalId: PrincipalId,
   ): Promise<Readonly<PrincipalMindUsageState> | null>;
-  setPrincipalMindUsageMode(
-    request: Readonly<SetPrincipalMindUsageModeRequest>,
-  ): Promise<SetPrincipalMindUsageModeResult>;
   validatePrincipalMindUsageWritePin(
     pin: Readonly<PrincipalMindUsageWritePin>,
   ): Promise<boolean>;
 }
 
-export interface PrincipalMindUsageStore extends MetadataStore {
-  readPrincipalMindUsage(
-    principalId: PrincipalId,
-  ): Promise<Readonly<PrincipalMindUsageState> | null>;
+export interface PrincipalMindUsageTransaction extends PrincipalMindUsageReader {
+  readonly kind: "principal-mind-usage-transaction";
+  setPrincipalMindUsageMode(
+    request: Readonly<SetPrincipalMindUsageModeRequest>,
+  ): Promise<SetPrincipalMindUsageModeResult>;
+}
+
+export interface PrincipalMindUsageStore
+  extends MetadataStore,
+    PrincipalMindUsageReader {
   runPrincipalMindUsageTransaction<Result>(
     operation: (transaction: PrincipalMindUsageTransaction) => Promise<Result>,
   ): Promise<Result>;
-  validatePrincipalMindUsageWritePin(
-    pin: Readonly<PrincipalMindUsageWritePin>,
-  ): Promise<boolean>;
 }

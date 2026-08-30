@@ -12,26 +12,6 @@ import {
   mindDiaryCodexConfig,
 } from "./token-management.js";
 
-export interface SafeConnectionMind {
-  readonly name: string;
-  readonly route: string;
-  readonly visibility: "private" | "unlisted" | "public";
-  readonly canWrite: boolean;
-}
-
-export interface SafeCredentialAccess {
-  readonly targetVersion: number;
-  readonly readableMinds: readonly SafeConnectionMind[];
-  readonly writableMind?: SafeConnectionMind | null;
-  readonly writableTargetState:
-    | "not_selected"
-    | "selected"
-    | "unavailable"
-    | "reconsent_required"
-    | "reissue_required";
-  readonly eligibleMinds: readonly SafeConnectionMind[];
-}
-
 export interface ConnectionListItem {
   readonly connectionRef: string;
   readonly clientName: string;
@@ -39,13 +19,9 @@ export interface ConnectionListItem {
   readonly lastUsedAt: string | null;
   readonly canRead: boolean;
   readonly canWrite: boolean;
-  readonly readableMindCount: number;
-  readonly writableMindSelected: boolean;
 }
 
-export interface ConnectionDetail extends ConnectionListItem {
-  readonly access: SafeCredentialAccess;
-}
+export interface ConnectionDetail extends ConnectionListItem {}
 
 export type ConnectionsCollection =
   | { readonly kind: "loading" }
@@ -73,7 +49,6 @@ export interface PersonalTokenItem {
   readonly expiresAt: string;
   readonly lastUsedAt: string | null;
   readonly revokedAt: string | null;
-  readonly access?: SafeCredentialAccess;
 }
 
 export type PersonalTokenCollection =
@@ -90,10 +65,6 @@ export interface AdvancedMcpPageModel {
 
 const CONNECTION_REF = /^conn_v1_[0-9a-f]{32}$/u;
 const PERSONAL_TOKEN_REF = /^ptok_v1_[0-9a-f]{32}$/u;
-
-function safeMindRoute(value: string): string | null {
-  return /^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(value) ? value : null;
-}
 
 function dateLabel(value: string | null): string {
   if (value === null) return "Never";
@@ -139,12 +110,12 @@ function renderConnectionCard(item: ConnectionListItem): string {
       <span class="md-token-state md-token-state--active">● Connected</span>
     </div>
     <dl class="md-token-card__metadata">
-      <div><dt>Can read</dt><dd>${item.canRead ? `${item.readableMindCount} available` : "No"}</dd></div>
-      <div><dt>Can add and change</dt><dd>${item.canWrite ? (item.writableMindSelected ? "One Mind selected" : "Not selected") : "No"}</dd></div>
+      <div><dt>Read scope</dt><dd>${item.canRead ? "Granted" : "No"}</dd></div>
+      <div><dt>Write scope</dt><dd>${item.canWrite ? "Granted" : "No"}</dd></div>
       <div><dt>Connected</dt><dd>${escapeUntrustedText(dateLabel(item.createdAt))}</dd></div>
       <div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(item.lastUsedAt))}</dd></div>
     </dl>
-    <p><a class="md-button md-button--secondary" href="${href}">Manage access</a></p>
+    <p><a class="md-button md-button--secondary" href="${href}">View connection</a></p>
   </article>`;
 }
 
@@ -163,7 +134,7 @@ export function renderConnectionsPageDocument(model: ConnectionsPageModel): stri
     <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "connections")}
     <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
-      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Codex access</p><h1>Connections</h1><p>See what is connected, which Minds it can read, and whether one writable Mind is selected.</p></div></div>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Codex access</p><h1>Connections</h1><p>See connected clients and their credential scopes. Which Minds Codex uses is one account-wide setting on the Minds page.</p></div></div>
       ${collection}
       <p class="md-caveat"><a href="/settings/developer/mcp">Advanced MCP</a> is for personal tokens, endpoints, and diagnostics.</p>
     </main>
@@ -171,123 +142,34 @@ export function renderConnectionsPageDocument(model: ConnectionsPageModel): stri
   </div>`);
 }
 
-function renderMind(mind: SafeConnectionMind): string {
-  const route = safeMindRoute(mind.route);
-  if (route === null) return "<strong>Access unavailable</strong>";
-  return `<span class="md-binding-target"><strong>${escapeUntrustedText(mind.name)}</strong><code>${escapeUntrustedText(route)}</code><span>${escapeUntrustedText(mind.visibility)}</span></span>`;
-}
-
 function renderOrdinaryConnectionAccess(
-  access: SafeCredentialAccess,
   connectionRef: string,
   canWrite: boolean,
 ): string {
-  if (
-    !CONNECTION_REF.test(connectionRef) ||
-    !Number.isSafeInteger(access.targetVersion) ||
-    access.targetVersion < 0
-  ) {
+  if (!CONNECTION_REF.test(connectionRef)) {
     return `<section class="md-state md-state--error" role="alert"><h2>Mind access is unavailable</h2><p>Reload before changing this connection.</p></section>`;
   }
-  const endpoint = `/api/v1/connections/${connectionRef}/mind-access`;
-  const readableCount = access.readableMinds.length;
-  const readableSummary = readableCount === 0
-    ? "No Minds are readable with your current access."
-    : `${readableCount} ${readableCount === 1 ? "Mind is" : "Minds are"} readable with your current access.`;
-  const writableOptions = access.eligibleMinds
-    .filter((mind) => mind.canWrite)
-    .map((mind) => {
-      const route = safeMindRoute(mind.route);
-      return route === null
-        ? ""
-        : `<option value="${escapeUntrustedText(route)}">${escapeUntrustedText(mind.name)} — ${escapeUntrustedText(route)}</option>`;
-    })
-    .join("");
-  const targetSummary =
-    access.writableTargetState === "selected" &&
-    access.writableMind !== null && access.writableMind !== undefined
-      ? renderMind(access.writableMind)
-      : access.writableTargetState === "unavailable"
-        ? '<p><strong>Unavailable</strong></p><p>The former target is disabled because current access no longer permits it. Its metadata stays hidden.</p>'
-        : access.writableTargetState === "reconsent_required"
-          ? '<p><strong>Reconnect required</strong></p><p>Reconnect this app before choosing a new writable Mind. The former target is not used.</p>'
-          : '<p><strong>Not selected</strong></p><p>No Mind receives changes. My Mind is never selected automatically.</p>';
-  const targetMutable = access.writableTargetState !== "reconsent_required" &&
-    access.writableTargetState !== "reissue_required";
-  const hasSelectedTarget = access.writableTargetState === "selected" ||
-    access.writableTargetState === "unavailable";
-  const selector = canWrite && targetMutable && writableOptions.length > 0
-    ? `<form data-access-form data-access-action="select_write"><label>${hasSelectedTarget ? "Switch" : "Select"} writable Mind<select name="mind_ref" required><option value="">Choose a Mind</option>${writableOptions}</select></label><button class="md-button md-button--secondary" type="submit">${hasSelectedTarget ? "Switch" : "Select"}</button></form>`
-    : canWrite && targetMutable
-      ? '<p>No currently writable Minds are available.</p>'
-      : "";
-  const clear = hasSelectedTarget && targetMutable
-    ? '<button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button>'
-    : "";
-  const writable = canWrite
-    ? `<section aria-labelledby="connection-write-access-heading"><h2 id="connection-write-access-heading">Can add and change</h2>${targetSummary}<div class="md-binding-controls">${selector}${clear}</div></section>`
-    : hasSelectedTarget
-      ? `<section aria-labelledby="connection-write-recovery-heading"><h2 id="connection-write-recovery-heading">Previous writable Mind</h2>${targetSummary}<p>This connection cannot write now. Clearing only removes the disabled selection.</p>${clear}</section>`
-      : '<section aria-labelledby="connection-write-access-heading"><h2 id="connection-write-access-heading">Can add and change</h2><p>No. Ask Codex to add or change a Memory to start the separate write permission step.</p></section>';
-
-  return `<section class="md-binding-panel" data-access-panel data-access-endpoint="${endpoint}" data-target-version="${access.targetVersion}">
-    <section aria-labelledby="connection-read-access-heading"><h2 id="connection-read-access-heading">Can read</h2><p>${escapeUntrustedText(readableSummary)} Access follows current membership and visibility automatically.</p></section>
-    ${writable}
-    <p class="md-form__status" role="status" aria-live="polite" data-access-status></p>
+  return `<section class="md-credential-mode-panel" data-principal-mind-usage-notice>
+    <section aria-labelledby="connection-read-access-heading"><h2 id="connection-read-access-heading">Credential scopes</h2><p>Read scope is available. ${canWrite ? "Write scope is also available." : "Write scope is not available."} Scopes only narrow the account-wide Mind modes and never choose a destination.</p></section>
+    <section aria-labelledby="connection-mind-intent-heading"><h2 id="connection-mind-intent-heading">Mind modes belong to your account</h2><p>Every Connection and personal token sees the same configured “Off”, “Read only”, or “Read and write” intent. Current rights, description and this credential’s scopes are checked again on every call.</p><p><a class="md-button md-button--secondary" href="/minds#mind-usage-heading">Manage Mind modes</a></p></section>
   </section>`;
 }
 
 function renderAdvancedTokenAccess(
-  access: SafeCredentialAccess,
   input: {
     readonly personalTokenRef: string;
     readonly canWrite: boolean;
     readonly headingSuffix: string;
   },
 ): string {
-  if (
-    !PERSONAL_TOKEN_REF.test(input.personalTokenRef) ||
-    !/^[a-z0-9-]{1,40}$/u.test(input.headingSuffix) ||
-    !Number.isSafeInteger(access.targetVersion) || access.targetVersion < 0
-  ) {
+  if (!PERSONAL_TOKEN_REF.test(input.personalTokenRef) || !/^[a-z0-9-]{1,40}$/u.test(input.headingSuffix)) {
     return `<section class="md-state md-state--error" role="alert"><h2>Mind access is unavailable</h2><p>Reload before changing this credential.</p></section>`;
   }
-  const base = `/api/v1/mcp-tokens/${input.personalTokenRef}`;
-  const readableCount = access.readableMinds.length;
-  const readableSummary = readableCount === 0
-    ? "No Minds are currently readable."
-    : `${readableCount} ${readableCount === 1 ? "Mind is" : "Minds are"} currently readable.`;
-  const writableOptions = access.eligibleMinds.filter((mind) => mind.canWrite).map((mind) => {
-    const route = safeMindRoute(mind.route);
-    return route === null ? "" : `<option value="${escapeUntrustedText(route)}">${escapeUntrustedText(mind.name)} — ${escapeUntrustedText(route)}</option>`;
-  }).join("");
-  const targetSummary = access.writableTargetState === "selected" && access.writableMind !== null && access.writableMind !== undefined
-    ? renderMind(access.writableMind)
-    : access.writableTargetState === "unavailable"
-      ? '<p><strong>Access unavailable</strong></p><p>Mind metadata is hidden because current access no longer permits it. You can still clear this selection.</p>'
-      : access.writableTargetState === "reconsent_required"
-        ? '<p><strong>Reconnect required</strong></p><p>Reconnect this app to upgrade its write access. The existing target is not used until that succeeds.</p>'
-        : access.writableTargetState === "reissue_required"
-          ? '<p><strong>Reissue required</strong></p><p>Create a new personal token. Legacy write access is not transferred to the new token.</p>'
-          : '<p><strong>Not selected</strong></p><p>No Mind receives changes. My Mind is never selected automatically.</p>';
-  const targetMutable = access.writableTargetState !== "reconsent_required" && access.writableTargetState !== "reissue_required";
-  const hasSelectedTarget = access.writableTargetState === "selected" || access.writableTargetState === "unavailable";
   const readHeading = `token-read-access-${input.headingSuffix}`;
   const writeHeading = `token-write-access-${input.headingSuffix}`;
-  const selector = targetMutable && writableOptions.length > 0
-    ? `<form data-access-form data-access-action="select_write"><label>${hasSelectedTarget ? "Switch" : "Select"} writable Mind<select name="mind_ref" required><option value="">Choose a Mind</option>${writableOptions}</select></label><button class="md-button md-button--secondary" type="submit">${hasSelectedTarget ? "Switch" : "Select"}</button></form>`
-    : targetMutable
-      ? '<p>No currently writable Minds are available.</p>'
-      : "";
-  const write = input.canWrite
-    ? `<section aria-labelledby="${writeHeading}"><h4 id="${writeHeading}">Writable target</h4>${targetSummary}${targetMutable ? `<div class="md-binding-controls">${selector}${hasSelectedTarget ? `<button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button>` : ""}</div>` : ""}</section>`
-    : hasSelectedTarget
-      ? `<section aria-labelledby="${writeHeading}"><h4 id="${writeHeading}">Previous writable target</h4>${targetSummary}<p>This token can no longer write, but you can clear the old selection.</p><button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button></section>`
-      : "";
-  return `<section class="md-binding-panel" data-access-panel data-access-endpoint="${base}/mind-access" data-target-version="${access.targetVersion}">
-    <section aria-labelledby="${readHeading}"><h4 id="${readHeading}">Readable access</h4><p>${escapeUntrustedText(readableSummary)} This always follows current membership and visibility; there is no read selector.</p></section>
-    ${write}
-    <p class="md-form__status" role="status" aria-live="polite" data-access-status></p>
+  return `<section class="md-credential-mode-panel" data-principal-mind-usage-notice>
+    <section aria-labelledby="${readHeading}"><h4 id="${readHeading}">Credential scope</h4><p>This token can read. ${input.canWrite ? "It can also write when the account-wide Mind mode and current rights allow it." : "It cannot write."}</p></section>
+    <section aria-labelledby="${writeHeading}"><h4 id="${writeHeading}">Account-wide Mind modes</h4><p>This token does not own a separate Mind choice. Manage the one shared intent for all credentials on the Minds page.</p><p><a href="/minds#mind-usage-heading">Manage Mind modes</a></p></section>
   </section>`;
 }
 
@@ -300,7 +182,7 @@ export function renderConnectionDetailDocument(model: ConnectionDetailModel): st
     <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
       <p><a href="/settings/connections">← Connections</a></p>
       <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Connected app</p><h1>${escapeUntrustedText(connection.clientName)}</h1><p>Connected ${escapeUntrustedText(dateLabel(connection.createdAt))}; last used ${escapeUntrustedText(dateLabel(connection.lastUsedAt))}.</p></div><span class="md-token-state md-token-state--active">● Connected</span></div>
-      ${renderOrdinaryConnectionAccess(connection.access, connection.connectionRef, connection.canWrite)}
+      ${renderOrdinaryConnectionAccess(connection.connectionRef, connection.canWrite)}
       <section class="md-setup-card" aria-labelledby="disconnect-heading"><h2 id="disconnect-heading">Disconnect</h2><p>Revoking stops this app immediately and removes it from Connections.</p><button class="md-button md-button--danger" type="button" data-revoke-connection data-revoke-endpoint="/api/v1/connections/${connection.connectionRef}">Revoke connection</button><p class="md-form__status" role="status" aria-live="polite" data-revoke-status></p></section>
     </main>
     ${renderMindDiaryAuthenticatedFooter("connections")}
@@ -313,7 +195,7 @@ function renderPersonalToken(token: PersonalTokenItem, index: number): string {
   return `<article class="md-token-card" data-personal-token>
     <div class="md-token-card__heading"><div><h3>${escapeUntrustedText(token.name)}</h3><p><code>${escapeUntrustedText(token.displayPrefix)}</code></p></div><span class="md-token-state md-token-state--${token.state}">${escapeUntrustedText(token.state)}</span></div>
     <dl class="md-token-card__metadata"><div><dt>Scopes</dt><dd>${canWrite ? "content:read, content:write" : "content:read"}</dd></div><div><dt>Expires</dt><dd>${escapeUntrustedText(dateLabel(token.expiresAt))}</dd></div><div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(token.lastUsedAt))}</dd></div></dl>
-    ${token.state === "active" && token.access !== undefined ? renderAdvancedTokenAccess(token.access, { personalTokenRef: token.personalTokenRef, canWrite, headingSuffix: `item-${index + 1}` }) : ""}
+    ${token.state === "active" ? renderAdvancedTokenAccess({ personalTokenRef: token.personalTokenRef, canWrite, headingSuffix: `item-${index + 1}` }) : ""}
     ${token.state === "active" ? `<button class="md-button md-button--danger" type="button" data-revoke-personal-token data-revoke-endpoint="/api/v1/mcp-tokens/${token.personalTokenRef}">Revoke token</button><p class="md-form__status" role="status" aria-live="polite" data-revoke-status></p>` : ""}
   </article>`;
 }
@@ -367,18 +249,18 @@ export function renderCodexHelpPageDocument(displayName: string): string {
         <ol class="md-setup-steps">
           <li data-copy-region><h2>Install Mind Diary</h2><p>Open <strong>Plugins</strong>, choose <strong>Add marketplace</strong>, paste this repository, and add it. In <strong>Srez Marketplace</strong>, open <strong>Mind Diary UAT</strong> and choose <strong>Install</strong>.</p><pre><code id="codex-help-desktop-marketplace" tabindex="-1" data-code-value>${escapeUntrustedText(marketplaceUrl)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-desktop-marketplace">Copy Marketplace URL</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p><p><strong>Success:</strong> the plugin card says <strong>Installed</strong>. This confirms the plugin package, not an account connection.</p></li>
           <li data-copy-region><h2>Authenticate for reading</h2><p>Start a new Task and send the read-only check below. The first read opens <strong>Authenticate</strong> or <strong>Connect</strong>. Sign in with the same account and workspace you use for this Mind Diary Site, then approve reading.</p><pre><code id="codex-help-desktop-smoke" tabindex="-1" data-code-value>${escapeUntrustedText(readOnlySmoke)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-desktop-smoke">Copy read-only check</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p><p><strong>Success:</strong> Mind Diary appears in <a href="/settings/connections">Connections</a>. That connection is created only after consent.</p></li>
-          <li><h2>Discover readable Minds and start</h2><p>Readable Minds follow your current memberships and visibility automatically; there is no read attachment step. In a fresh Task, run the same read-only check. Success is a bounded list of currently readable Minds; no Memory is created or changed.</p></li>
+          <li><h2>Choose readable Minds and start</h2><p>Open <a href="/minds#mind-usage-heading">Minds</a> and choose Read only or Read and write for the Minds Codex should use. A fresh Task receives only enabled Minds that still pass current rights and credential scope checks.</p></li>
         </ol>
       </section>
       <section class="md-client-panel" id="codex-client-cli-panel" role="tabpanel" aria-labelledby="codex-client-cli-tab" data-codex-client-panel="cli">
         <ol class="md-setup-steps">
           <li data-copy-region><h2>Install Mind Diary</h2><p>Run these commands as written. The first adds <strong>Srez Marketplace</strong>; the second installs the <strong>Mind Diary</strong> plugin.</p><pre><code id="codex-help-cli-install" tabindex="-1" data-code-value>${escapeUntrustedText(cliInstall)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-cli-install">Copy CLI install commands</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p><p><strong>Success:</strong> <code>codex plugin list</code> shows <code>mind-diary@srez-marketplace</code> as installed and enabled. This is still separate from the account connection.</p></li>
           <li><h2>Authenticate for reading</h2><p>Run <code>codex</code> and ask Mind Diary to read. The first read opens <strong>Authenticate</strong>. Sign in with the same account and workspace you use for this Mind Diary Site, then approve reading.</p></li>
-          <li data-copy-region><h2>Discover readable Minds and start</h2><p>Readable Minds follow your current memberships and visibility automatically; there is no read attachment step. Enter <code>/new</code>, then send this safe check. Success is a bounded list of currently readable Minds; no Memory is created or changed.</p><pre><code id="codex-help-cli-smoke" tabindex="-1" data-code-value>${escapeUntrustedText(readOnlySmoke)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-cli-smoke">Copy read-only check</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p></li>
+          <li data-copy-region><h2>Choose readable Minds and start</h2><p>Open <a href="/minds#mind-usage-heading">Minds</a> and choose Read only or Read and write. Enter <code>/new</code>, then send this safe check. Success is a bounded list of enabled Minds that still pass current rights and scope checks; no Memory is changed.</p><pre><code id="codex-help-cli-smoke" tabindex="-1" data-code-value>${escapeUntrustedText(readOnlySmoke)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-cli-smoke">Copy read-only check</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p></li>
         </ol>
       </section>
-      <section class="md-setup-card md-setup-card--single" aria-labelledby="codex-help-troubleshooting"><div><p class="md-eyebrow">Checkpoint help</p><h2 id="codex-help-troubleshooting">If a step does not finish</h2><ul><li><strong>Marketplace:</strong> compare the repository exactly. Add it once, then reload Plugins once.</li><li><strong>Install:</strong> confirm the plugin says Installed and start a fresh Task. Installed does not mean connected.</li><li><strong>Authenticate:</strong> repeat the read-only check in a fresh Task and confirm the same account and workspace. Then check <a href="/settings/connections">Connections</a>.</li><li><strong>Readable Minds:</strong> check your current membership or visibility on the Mind Diary Site. Read access is derived automatically and is never attached in Connections.</li></ul><p>Revoke and reconnect only when the existing connection is no longer usable.</p></div></section>
-      <section class="md-setup-card md-setup-card--single" aria-labelledby="codex-help-first-memory"><p class="md-eyebrow">After the read-only check</p><h2 id="codex-help-first-memory">Create the first useful Memory</h2><p>Writing is optional. Before a content change, open <a href="/settings/connections">Connections</a> and select at most one writable Mind there. Only the Mind Diary Site can select, switch, or clear this target; Codex cannot manage it through content MCP.</p><p>Open My Mind and use its existing starter card. It keeps the first content change separate from installation and connection checks.</p><p><a class="md-button md-button--primary" href="/me#first-result-title">Open the starter card</a></p></section>
+      <section class="md-setup-card md-setup-card--single" aria-labelledby="codex-help-troubleshooting"><div><p class="md-eyebrow">Checkpoint help</p><h2 id="codex-help-troubleshooting">If a step does not finish</h2><ul><li><strong>Marketplace:</strong> compare the repository exactly. Add it once, then reload Plugins once.</li><li><strong>Install:</strong> confirm the plugin says Installed and start a fresh Task. Installed does not mean connected.</li><li><strong>Authenticate:</strong> repeat the read-only check in a fresh Task and confirm the same account and workspace. Then check <a href="/settings/connections">Connections</a>.</li><li><strong>Readable Minds:</strong> check the account-wide mode on <a href="/minds#mind-usage-heading">Minds</a>, plus current membership or visibility and credential read scope.</li></ul><p>Revoke and reconnect only when the existing connection is no longer usable.</p></div></section>
+      <section class="md-setup-card md-setup-card--single" aria-labelledby="codex-help-first-memory"><p class="md-eyebrow">After the read-only check</p><h2 id="codex-help-first-memory">Create the first useful Memory</h2><p>Writing is optional. On <a href="/minds#mind-usage-heading">Minds</a>, choose Read and write for exactly one described Mind. That one account-wide choice is shared by every Connection and personal token; each credential’s scope and current Mind rights can only narrow it.</p><p>Open My Mind and use its existing starter card. It keeps the first content change separate from installation and connection checks.</p><p><a class="md-button md-button--primary" href="/me#first-result-title">Open the starter card</a></p></section>
       <section class="md-setup-card md-setup-card--single"><h2>Advanced setup</h2><p><a href="/settings/developer/mcp">Advanced MCP</a> is the separate place for direct client setup and diagnostics. The ordinary plugin flow above does not require it.</p></section>
     </main>
     ${renderMindDiaryAuthenticatedFooter("help")}

@@ -37,8 +37,9 @@ MCP.
 
 ## Product authority Release 0.3
 
-- Site создаёт и показывает Connections, отзывает их, управляет writable
-  target, токенами и остальными account/Mind controls.
+- Site создаёт и показывает Connections, отзывает их, управляет principal-owned
+  `disabled | read | read_write` mode на странице Mind, токенами и остальными
+  account/Mind controls.
 - Plugin и Content MCP только discover-ят доступные Minds, читают, ищут,
   открывают историю, выполняют standalone validation и ordinary content commit
   в один exact target, уже выбранный пользователем через Site.
@@ -53,7 +54,7 @@ MCP.
 [Operation disposition Release 0.3](release-0.3-operation-disposition.md)
 определяет целевую surface каждого исторического tool/route, а точный access и
 writable-target contract принят в
-[MD-339 specification](credential-write-target.md). Исторические
+[режимах использования Mind](mind-usage-modes.md). Исторические
 `get_mind_bindings`, `set_read_mind_binding`, `set_write_mind_binding`,
 `start_export` и связанные payloads ниже следует читать только как Release
 0.1/0.2 as-built: fresh catalogs и schemas Release 0.3 их не публикуют.
@@ -134,7 +135,7 @@ Diary доступной после обновления каталога. Он�
 | Installation | `AVAILABLE` + `ON_USE` | то же поведение |
 | OAuth | authorization code + PKCE, DCR | тот же protocol profile, но Mind Diary scopes и identity rules |
 | Data authorization | internal Task Manager user | internal immutable Mind Diary `principal_id` |
-| Tool surface | task operations | principal-wide discovery + per-grant/token `0..N` read и singleton write bindings |
+| Tool surface | task operations | fresh principal-owned enabled projection + one exact server-resolved `read_write` destination |
 
 Не следует механически копировать из Task Manager:
 
@@ -250,28 +251,34 @@ Desktop/CLI connection source. Такое разделение не меняет
 authorization и token exchange используют `/api/mcp`, а compatibility adapter
 изолирует только transport lifecycle клиента.
 
-Skill остаётся тонким interaction adapter. Он должен объяснять progressive
-disclosure, явный выбор одного Mind/revision, read-before-write,
-`expected_revision`, idempotency и безопасный preview. Skill не может
-расширять OAuth scopes, обходить ACL или переносить control-plane operations в
-content MCP.
+Skill остаётся тонким interaction adapter и поставляет агенту полную целевую
+инструкцию Release 0.3. Перед релевантным workflow он получает fresh
+`list_minds`: прямое имя пользователя требует exact enabled Mind, а без прямого
+имени агент выбирает один или несколько readable Minds только по semantic fit
+недоверенных descriptions. Disabled/недоступный Mind, `/me`, похожее имя и
+предыдущий результат не дают fallback. Каждый content call остаётся внутри
+одного exact Mind/revision, а corpus раскрывается постепенно через browse,
+search и fetch без общего cross-Mind search или фонового vacuum.
 
-До любого content read/write skill вызывает `list_minds` и просит выбрать один
-exact Mind. Каждый read явно передаёт этот Mind и revision; доступ берётся из
-текущих ACL/visibility, поэтому attach/detach шага, implicit `/me` и cross-Mind
-fallback нет. Skill не выводит target из предыдущего search, chat, model
-memory, похожего name или corpus text.
+После содержательного разговора skill рассматривает всё durable knowledge,
+явно обсуждённое в текущей conversation, включая обсуждённое знание из другого
+enabled readable Mind. Если оно соответствует description единственного fresh
+effective `read_write` Mind, агент автоматически сохраняет его обычным
+`commit_changeset`: отдельная write-инструкция, toggle или confirmation не
+нужны. Перед изменением он целево ищет существующую Memory и выбирает
+create/update/явный delete/semantic no-op; changeset детерминированно обновляет
+index/log, сохраняет неизвестные OKF types/fields и при cross-Mind переносе
+передаёт optional exact `source_references`.
 
-Writable target и export управляются только на authenticated Mind Diary Site.
-Если выбранный Mind не является текущим Site-owned writable target, skill
-направляет пользователя в `Connection / Advanced MCP` и останавливается; он
-никогда не вызывает MCP target/export mutation. Перед capture/commit skill
-privacy-safe сообщает exact target name, route, visibility, revision, paths и
-operations, но не показывает principal/token/grant/email/internal Mind IDs или
-target implementation identifiers. После confirmation он повторно читает
-HEAD; target error либо изменившийся HEAD останавливает operation без
-automatic transfer. `commit_changeset` передаёт exact `expected_revision` и
-fresh idempotency key.
+Client `mind` — только exact assertion. Server сам разрешает principal-owned
+writable mount, pin-ит текущую generation и повторяет проверки credential,
+scope, writer role, description, HEAD, digests, idempotency и полного
+результирующего OKF 0.2 bundle. Неопределённый transport outcome сверяется
+`reconcile_changeset` только с exact original payload. После commit skill
+читает exact revision, повторно валидирует полный bundle и кратко сообщает
+пользователю результат. Skill не показывает principal/token/grant/email,
+internal Mind IDs, generation или приватные source bodies и не переносит
+control-plane operations в Content MCP.
 
 Marketplace catalog получает вторую запись с local source
 `./plugins/mind-diary`, `installation: AVAILABLE` и
@@ -325,18 +332,17 @@ MCP authorization error также содержит `_meta["mcp/www_authenticate
 host мог открыть native linking или step-up flow. `tools/list` публикует
 `securitySchemes`:
 
-- discovery, binding inspection и read attach/detach — `content:read`;
-- singleton write bind/rebind/unbind — `content:write`;
+- enabled discovery, browse, search, fetch, history и validation —
+  `content:read`;
 - `commit_changeset` — `content:write`;
-- `capture_knowledge` — `content:write`;
-- `start_export` — `content:read`, поскольку он создаёт delivery job, но не
-  изменяет canonical Mind content.
+- verified single-file staging/ingress — `content:write`;
+- exact BundleFile read/download — `content:read`.
 
 Tool annotations сохраняют фактическую семантику. В частности,
 `commit_changeset` остаётся immediate commit и destructive-capable operation;
 OAuth consent не превращает его в draft или approval artifact.
-`capture_knowledge` non-destructive по annotation, но всё равно немедленно
-создаёт additive immutable revision только через enabled server policy.
+Fresh catalogs не публикуют отдельный simplified automatic-save tool или
+control-plane mutation.
 
 ### Token lifecycle
 
@@ -480,18 +486,16 @@ Switch copy объясняет, что previous target больше не writabl
 отдельно предупреждает об immediate `unlisted`/`public` live HEAD/history
 exposure. Это source-candidate evidence, не claim о уже развёрнутом UAT UI.
 
-В onboarding следует объяснять только три пользовательских действия: установить
-Mind Diary из Srez Marketplace, пройти read Authenticate и при первом write
-intent пройти отдельный native step-up. Подключение read Minds входит во второй
-шаг, выбор одного writable target — в третий. MCP URL, DCR, PKCE, resource
-audience и token rotation остаются implementation details. Binding не включает
-automatic capture. Полный IA/state/query contract — в
-[Connections, Advanced MCP и Codex Help](connection-experience.md).
-Обновлённый companion skill читает `automatic_capture` из fresh
-bindings и использует `capture_knowledge` только для already-enabled
-routine/non-sensitive policy в exact private writable Mind. Он не включает
-policy через MCP и не переносит sensitive/cross-Mind/external payload; полный
-contract — в [Automatic capture](automatic-capture.md).
+В onboarding следует объяснять четыре пользовательских действия: установить
+Mind Diary из Srez Marketplace, пройти Authenticate, выбрать для каждого Mind
+`disabled | read | read_write` на Site и при необходимости пройти native write
+step-up. Настройка принадлежит principal и одинакова для всех его Connections и
+personal tokens; scope только сужает effective capability. MCP URL, DCR, PKCE,
+resource audience, generation и token rotation остаются implementation details.
+Полный IA/state/query contract — в
+[Connections, Advanced MCP и Codex Help](connection-experience.md), а agent
+routing/automatic-save contract — в
+[режимах использования Mind](mind-usage-modes.md).
 
 ## Проверка и acceptance
 
@@ -512,14 +516,15 @@ Blocking matrix:
    client secret или personal token.
 3. Unknown identity не получает старые права и проходит explicit onboarding
    либо recovery.
-4. Read-only grant разрешает discovery, `get_mind_bindings`, read
-   attach/detach, browse, search, fetch, history, validation и export, но не
-   singleton write binding или commit.
-5. Первый `set_write_mind_binding` либо commit без write scope запускает native
-   step-up; после consent binding mutation и `commit_changeset` сохраняют CAS и
-   idempotency semantics.
-6. Один principal видит все и только доступные ему Minds; каждый call явно
-   выбирает один Mind, cross-Mind leakage отсутствует.
+4. Read-only grant разрешает fresh enabled projection, browse, search, fetch,
+   history и validation, но не commit; одна configured projection остаётся
+   общей для всех credentials principal.
+5. Первый `commit_changeset` без write scope запускает native step-up; после
+   consent commit пишет только в exact current principal-owned `read_write`
+   Mind и сохраняет generation/HEAD CAS, idempotency и full-bundle validation.
+6. Один principal видит все и только enabled доступные ему Minds; direct user
+   selection не обходит disabled/access, description routing не делает общего
+   cross-Mind search, provenance проверяется отдельно.
 7. Revocation делает следующий call unauthorized; reconnect создаёт новый
    grant, а старые refresh tokens не оживают.
 8. Existing personal-token modern и compatibility flows остаются рабочими.

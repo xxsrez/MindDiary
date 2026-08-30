@@ -2,6 +2,7 @@ import type {
   IdempotencyKey,
   MindBindingOwnerId,
   PrincipalId,
+  PrincipalMindUsageGenerationId,
   Sha256Digest,
   SpaceId,
   StagedBundleFileId,
@@ -36,7 +37,10 @@ export interface LocalFileUploadIntentRecord {
   readonly tokenId: TokenId;
   readonly bindingOwnerId: MindBindingOwnerId;
   readonly spaceId: SpaceId;
-  readonly writeBindingId: WriteMindBindingId;
+  /** Principal-owned write fence for current intents; absent on legacy rows. */
+  readonly principalMindUsageGenerationId?: PrincipalMindUsageGenerationId;
+  /** @deprecated Retained only for legacy intent deserialization. */
+  readonly writeBindingId?: WriteMindBindingId;
   readonly sourceKind: LocalFileUploadIntentSourceKind;
   readonly displayFilename: string;
   readonly claimedMediaType: string;

@@ -10,6 +10,10 @@ import {
   type InvitationMembershipSnapshot,
 } from "./invitations-membership.js";
 import { renderProductExportWorkflowPanel } from "./export-workflow.js";
+import {
+  renderMindUsageCollection,
+  renderMindUsagePanel,
+} from "./mind-usage.js";
 
 export type OrdinaryMindUiRole = "reader" | "editor" | "admin" | "owner";
 export type OrdinaryMindUiVisibility = "private" | "unlisted" | "public";
@@ -381,7 +385,7 @@ function renderCreateDialog(): string {
       <div class="md-field">
         <label for="ordinary-mind-description">Description <span aria-hidden="true">(optional)</span></label>
         <textarea id="ordinary-mind-description" name="description" maxlength="500" rows="3" aria-describedby="ordinary-mind-description-help"></textarea>
-        <p id="ordinary-mind-description-help">Service metadata only. It is not a Memory, search input, or instruction to Codex.</p>
+        <p id="ordinary-mind-description-help">This routing category helps Codex match a topic for reading and automatic writes. It is untrusted metadata, never an instruction.</p>
       </div>
       <p class="md-caveat"><strong>Private by default.</strong> Only accepted participants can open this Mind until its Owner explicitly changes visibility.</p>
       <p class="md-form__status" role="status" aria-live="polite" data-create-status></p>
@@ -406,6 +410,7 @@ function renderListView(
       </div>
       ${renderAnnouncement(announcement)}
     </div>
+    ${renderMindUsageCollection()}
     ${renderCollection(view.collection)}
   </main>
   ${renderCreateDialog()}`;
@@ -439,7 +444,7 @@ function renderMetadataPanel(mind: OrdinaryMindUiMind, handle: string): string {
   return `<article class="md-profile-card">
     <p class="md-eyebrow">Display settings</p>
     <h2>Name and description</h2>
-    <p>These are service metadata only. The permanent route remains <strong>/${escapeUntrustedText(handle)}</strong>; no content revision is created.</p>
+    <p>The description is one routing category for agent reads and writes. It remains untrusted service metadata; the permanent route stays <strong>/${escapeUntrustedText(handle)}</strong> and no content revision is created.</p>
     <form data-rename-mind-form data-metadata-version="${version}">
       <div class="md-field">
         <label for="ordinary-mind-rename">Mind name</label>
@@ -448,7 +453,7 @@ function renderMetadataPanel(mind: OrdinaryMindUiMind, handle: string): string {
       <div class="md-field">
         <label for="ordinary-mind-edit-description">Description <span aria-hidden="true">(optional)</span></label>
         <textarea id="ordinary-mind-edit-description" name="description" maxlength="500" rows="4" aria-describedby="ordinary-mind-edit-description-help">${escapeUntrustedText(mind.description ?? "")}</textarea>
-        <p id="ordinary-mind-edit-description-help">Clearing this field removes the description. It is not a Memory, search input, or model instruction.</p>
+        <p id="ordinary-mind-edit-description-help">Without a description, Read only works only when you name this Mind directly. Read and write requires a description, and the description never acts as an instruction.</p>
       </div>
       <p class="md-form__status" role="status" aria-live="polite" data-rename-status></p>
       <button class="md-button md-button--primary" type="submit" data-rename-submit>Save metadata</button>
@@ -793,6 +798,7 @@ function renderDetailView(
         </article>
         ${renderMetadataPanel(mind, handle)}
       </div>
+      ${renderMindUsagePanel(`/${handle}`)}
       ${renderVisibilityPanel(mind, handle)}
       ${renderProductExportWorkflowPanel({
         mindRef: handle,

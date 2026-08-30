@@ -19,7 +19,9 @@ import {
   MCP_WWW_AUTHENTICATE,
   MCP_CONTENT_TOOLS,
   MCP_RETIRED_BINDING_TOOLS,
+  MCP_RETIRED_CAPTURE_TOOLS,
   MCP_MOVED_EXPORT_TOOLS,
+  MCP_AGENT_INSTRUCTIONS,
   MCP_READ_TOOL_DEFINITIONS,
   MCP_ADVERTISED_CAPABILITIES,
   RESOURCE_CONTROL_CHARACTER,
@@ -38,8 +40,10 @@ type McpRequestId = Parameters<McpBearerAuthenticator["authenticate"]>[1];
 type McpApplicationToolName =
   | (typeof MCP_CONTENT_TOOLS)[number]
   | (typeof MCP_MOVED_EXPORT_TOOLS)[number];
-type McpRetiredBindingToolName = (typeof MCP_RETIRED_BINDING_TOOLS)[number];
-type McpToolName = McpApplicationToolName | McpRetiredBindingToolName;
+type McpRetiredToolName =
+  | (typeof MCP_RETIRED_BINDING_TOOLS)[number]
+  | (typeof MCP_RETIRED_CAPTURE_TOOLS)[number];
+type McpToolName = McpApplicationToolName | McpRetiredToolName;
 type McpReadToolName = (typeof MCP_READ_TOOL_DEFINITIONS)[number]["name"];
 
 const MCP_READ_TOOL_NAMES: ReadonlySet<string> = new Set(
@@ -619,17 +623,19 @@ function readFailureMessage(code: string): string {
     case "read_conflict":
       return "The Mind changed while it was being read; retry the call.";
     case "mind_binding_required":
-      return "Attach this Mind for reading or select it as the writable target first.";
+      return "Enable this Mind for reading in the Mind Diary Site, then refresh list_minds.";
     case "credential_access_upgrade_required":
       return "Upgrade, re-consent, or reissue this credential before reading content.";
     case "write_binding_required":
-      return "Select exactly one writable Mind before committing.";
+    case "writable_mind_required":
+      return "Configure exactly one read_write Mind in the Mind Diary Site, then refresh list_minds.";
     case "write_binding_stale":
-      return "The writable Mind changed; inspect current bindings and rebuild the commit.";
+    case "writable_mind_stale":
+      return "The writable Mind changed; refresh list_minds and rebuild the commit from the current HEAD.";
     case "binding_owner_revoked":
-      return "The current credential can no longer use Mind bindings.";
+      return "The current credential can no longer use this principal's enabled Minds.";
     case "binding_state_unavailable":
-      return "Mind binding state is unavailable.";
+      return "Mind usage settings are unavailable.";
     case "invalid_cursor":
       return "The pagination cursor is invalid.";
     case "invalid_limit":
@@ -703,29 +709,35 @@ function isToolName(value: unknown): value is McpToolName {
     typeof value === "string" &&
     ((MCP_CONTENT_TOOLS as readonly string[]).includes(value) ||
       (MCP_RETIRED_BINDING_TOOLS as readonly string[]).includes(value) ||
+      (MCP_RETIRED_CAPTURE_TOOLS as readonly string[]).includes(value) ||
       (MCP_MOVED_EXPORT_TOOLS as readonly string[]).includes(value))
   );
 }
 
-function isRetiredBindingToolName(
+function isRetiredToolName(
   value: McpToolName,
-): value is McpRetiredBindingToolName {
-  return (MCP_RETIRED_BINDING_TOOLS as readonly string[]).includes(value);
+): value is McpRetiredToolName {
+  return (MCP_RETIRED_BINDING_TOOLS as readonly string[]).includes(value) ||
+    (MCP_RETIRED_CAPTURE_TOOLS as readonly string[]).includes(value);
 }
 
-function retiredBindingToolResult(
-  operation: McpRetiredBindingToolName,
+function retiredToolResult(
+  operation: McpRetiredToolName,
 ): Readonly<Record<string, unknown>> {
   const remediation = operation === "get_mind_bindings"
-    ? "inspect_access_on_site"
+    ? "inspect_mind_usage_on_site"
     : operation === "set_read_mind_binding"
-      ? "read_access_follows_current_acl"
-      : "manage_writable_target_on_site";
+      ? "manage_mind_usage_on_site"
+      : operation === "set_write_mind_binding"
+        ? "manage_mind_usage_on_site"
+        : "use_commit_changeset";
   const text = operation === "get_mind_bindings"
-    ? "Mind access is inspected on the authenticated Mind Diary Site; use list_minds for current accessible Minds."
+    ? "Mind usage is configured on each Mind in the authenticated Mind Diary Site; use list_minds for the current enabled projection."
     : operation === "set_read_mind_binding"
-      ? "Readable Minds follow current access; use list_minds and explicitly select one Mind per read."
-      : "Manage the writable target in Connection / Advanced MCP on the authenticated Mind Diary Site.";
+      ? "Configure read or read_write on the Mind Diary Site, then refresh list_minds."
+      : operation === "set_write_mind_binding"
+        ? "Configure the single read_write Mind on the Mind Diary Site, then refresh list_minds."
+        : "capture_knowledge is retired; use the canonical commit_changeset automatic-save workflow.";
   return Object.freeze({
     resultType: "complete",
     content: Object.freeze([
@@ -1201,8 +1213,7 @@ export function createMcpHttpHandlerAtEndpoint(
               version: "0.1.0",
             }),
           }),
-          instructions:
-            "Use list_minds to discover currently accessible Minds. Every read explicitly selects one Mind and revision from current access; there is no attach step, implicit /me, or cross-Mind fallback. Manage the writable target and export only on the authenticated Mind Diary Site.",
+          instructions: MCP_AGENT_INSTRUCTIONS,
           ttlMs: 60_000,
           cacheScope: "private" as const,
         }),
@@ -1450,10 +1461,10 @@ export function createMcpHttpHandlerAtEndpoint(
     }
     const toolArguments = Object.freeze({ ...argumentsValue });
 
-    if (isRetiredBindingToolName(name)) {
+    if (isRetiredToolName(name)) {
       const response = jsonRpcResult(
         rpc.id,
-        retiredBindingToolResult(name),
+        retiredToolResult(name),
         responseFormat,
       );
       await safeLog(
@@ -1472,8 +1483,7 @@ export function createMcpHttpHandlerAtEndpoint(
         name === "create_file_upload_intent" ||
         name === "open_bundle_file_picker" ||
         name === "stage_bundle_file" ||
-        name === "reconcile_file_stage" ||
-        name === "capture_knowledge") &&
+        name === "reconcile_file_stage") &&
       !tokenAllowsWrite(actor)
     ) {
       const challenge = oauthChallenge(dependencies.oauth, "content:write");

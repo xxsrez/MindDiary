@@ -44,6 +44,9 @@ import {
   type AuthorizationStateReader,
   type AuthorizationTransaction,
 } from "./authorization.js";
+import {
+  type PrincipalMindUsageReader,
+} from "./principal-mind-usage.js";
 
 export type RevisionCommitResult =
   | {
@@ -628,6 +631,7 @@ export interface CapacityLedgerStore extends MetadataStore {
  */
 export interface ContentCommitMetadataTransaction
   extends AuthorizationTransaction,
+    PrincipalMindUsageReader,
     IdempotencyTransaction,
     CapacityReservationTransaction {
   readHead(spaceId: SpaceId): Promise<RevisionId | null>;
@@ -658,6 +662,7 @@ export interface ContentCommitMetadataTransaction
 /** Atomic metadata boundary for one application-level content commit. */
 export interface ContentCommitMetadataStore
   extends RevisionMetadataStore,
+    PrincipalMindUsageReader,
     BackgroundWorkStore,
     BundleFileStagingStore,
     CapacityLedgerStore,

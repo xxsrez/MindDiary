@@ -2,7 +2,11 @@
 
 Статус: accepted, 2026-08-22; format-neutral amendment принят 2026-08-25 в
 [ADR-0021](../decisions/0021-format-neutral-bundle-files.md).
-`normative_status: accepted`; `implementation_status: legacy_bounded_local`.
+Release 0.3 principal-owned staging amendment принят 2026-08-30 в
+[ADR-0024](../decisions/0024-principal-mind-usage-modes-and-automatic-save.md)
+и [Mind usage contract](mind-usage-modes.md).
+`normative_status: accepted`; `implementation_status: legacy_bounded_local`;
+`principal_usage_staging_status: implemented_repository`.
 Текущий repository baseline из MD-247/MD-248/MD-249 реализует manifest v1/v2/v3,
 allowlist raster/PDF/ZIP и 64 MiB per-file limit. Это проверенный исторический
 baseline, но не текущая product boundary Release 0.2. MD-303 принимает manifest
@@ -38,7 +42,8 @@ URL или local-path fallback.
 Format-neutral bytes, manifest, containment, exact-revision read/download and
 atomic commit semantics ниже сохраняются. Bulk import/export orchestration
 принадлежит Sites control plane; Content MCP не управляет этими workflows и не
-выбирает writable target. Ordinary per-file source admission, stage и reconcile
+меняет `usage_mode` или active writable mount. Ordinary per-file source
+admission, stage и reconcile
 могут оставаться подготовкой exact-target content commit в Codex content flow:
 input остаётся explicit, adapter-owned и server-approved, а commit — fenced by
 current ACL/scope/HEAD. Такая подготовка не создаёт control-plane authority или
@@ -46,9 +51,35 @@ current ACL/scope/HEAD. Такая подготовка не создаёт cont
 
 Historical `stage_bundle_file`, reconcile, binding and export tool descriptions
 below document 0.1/0.2 compatibility, not the Release 0.3 operation register.
-MD-336 neither retires nor adopts their exact names: MD-337 owns disposition;
-MD-339 owns target/binding compatibility and migration. Runtime, schemas,
-storage and UAT claims do not change in MD-336.
+Historical MD-339 target/binding contract remains evidence of that older
+surface. ADR-0024 supersedes it for fresh Release 0.3 staging: runtime neither
+advertises nor accepts client binding fields, while exact cached legacy calls
+may only return a side-effect-free retired result.
+
+### Release 0.3 principal-owned mount-generation amendment
+
+Fresh BundleFile stage and commit do not derive destination from an OAuth grant,
+personal token or caller-provided binding. Server resolves authenticated
+`principal_id`, reads that principal's single active `read_write` Mind and pins
+its opaque `principal_mind_usage_generation_id`. Credential state/scope and
+current ACL/role remain mandatory authorization checks, but never select or
+replace the Mind.
+
+- An asserted `mind`/`space_id` must exactly equal the server-resolved mount;
+  mismatch fails closed without Personal-Mind or previous-target fallback.
+- Fresh MCP, upload-intent, connector and generated-source requests contain no
+  `write_binding_id`, `binding_owner_id`, target version or client generation.
+- New staged records bind
+  `principal_id + space_id + principal_mind_usage_generation_id`; stage checks
+  this pin before source/provider reads and again in the staging transaction.
+  Commit consumes only records with the same exact pin and repeats mode,
+  generation, role, scope, HEAD CAS, quota and idempotency checks atomically.
+- Disable/switch, generation drift, credential revoke/expiry, role loss or
+  corrupt usage state invalidates in-flight work. A legacy row without the new
+  exact generation is non-consumable and is never remapped.
+- An internal credential/grant partition may remain for temporary object
+  containment, quota and revoke cleanup. It is not client authority, destination
+  identity or an idempotency selector for fresh application requests.
 
 ## Контекст и граница решения
 
@@ -228,7 +259,8 @@ base64, URL or path transport exists, and public capability discovery remains
 storage upload port, subject to the 256 MiB per-BundleFile limit; the local
 Sites object adapter sends that stream directly to quarantine storage rather
 than assembling it in application memory. Both paths perform the same SHA-256,
-size, advisory-media, filename, quota, quarantine and binding-owner idempotency
+size, advisory-media, filename, quota, quarantine and
+principal/mount-generation idempotency
 checks. Generated previews or derived artifacts do not become canonical files
 automatically: staging returns no model-facing `structuredContent`, and an
 authorized caller must reference the verified
@@ -266,7 +298,7 @@ All numbers are binary bytes and fail closed before canonical HEAD mutation:
 | One BundleFile | 268,435,456 bytes (256 MiB), inclusive |
 | BundleFile operations in one changeset | 20 |
 | Sum of staged bytes referenced by one changeset | 268,435,456 bytes (256 MiB) |
-| Outstanding verified staged bytes per binding owner | 268,435,456 bytes (256 MiB) |
+| Outstanding verified staged bytes per internal staging namespace | 268,435,456 bytes (256 MiB); namespace is accounting/revocation metadata, not destination authority |
 | All entries in one resulting revision | 10,000 |
 | Markdown subtotal in one resulting revision | existing 67,108,864 bytes (64 MiB) |
 | Markdown + BundleFile bytes in one resulting revision | 1,073,741,824 bytes (1 GiB) |
@@ -276,8 +308,9 @@ All numbers are binary bytes and fail closed before canonical HEAD mutation:
 | One bounded GC run | at most 100 objects and 268,435,456 bytes |
 
 Existing Markdown limits remain 1 MiB/file, 4 MiB changed Markdown bytes and
-100 total changeset operations. Stage reserves the binding-owner staging quota;
-commit transaction reserves resulting-HEAD and retained-Space quotas before
+100 total changeset operations. Stage reserves the internal staging quota;
+that compatibility partition does not select the writable Mind. Commit
+transaction reserves resulting-HEAD and retained-Space quotas before
 HEAD CAS. Failed/stale commit does not consume the staged ref or quota twice.
 No client field can raise a limit. MD-260 capacity/accounting semantics are now
 accepted in the
@@ -286,6 +319,11 @@ lower applicable BundleFile/Mind/principal/Site limit wins. Implementation and
 capacity UAT remain separate; this slice does not infer larger values.
 
 ## Historical upload surface and stable commit lifecycle
+
+Весь request shape и binding terminology этого раздела сохранены только как
+историческое evidence Release 0.1/0.2. Их нельзя использовать для fresh
+Release 0.3 calls или implementation; действующий request/authority contract
+находится в principal-owned amendment выше.
 
 `stage_bundle_file` is one-Mind content operation and requires `content:write`,
 an active exact `write_binding_id`, current write ACL and:
@@ -346,7 +384,8 @@ commit key/payload; it never restages or changes the key until reconciliation.
 Historical Release 0.1/0.2 `list_bundle_files` requires `content:read`, exact
 read/write binding and one Mind/revision. Target Release 0.3 keeps the exact
 Mind/revision selector and current ACL/scope checks but removes binding as a
-read prerequisite; MD-339 defines the compatibility transition. The operation
+read prerequisite; ADR-0024 defines the current principal-owned transition.
+The operation
 returns bounded path, advisory media type, size, SHA-256, revision ID, derived
 inline eligibility and deterministic reference diagnostics; no bytes, provider
 ID or URL.
@@ -411,6 +450,8 @@ bundle_file_operation_limit_exceeded
 bundle_file_changeset_size_limit_exceeded
 bundle_file_quota_exceeded
 staging_quota_exceeded
+writable_mind_required
+writable_mind_stale
 bundle_file_media_mismatch
 invalid_bundle_file_name
 staged_file_unavailable
@@ -425,6 +466,11 @@ bundle_file_integrity_failure
 bundle_file_download_expired
 export_profile_required
 ```
+
+`staged_file_binding_stale` remains a historical compatibility code. Fresh
+principal-owned staging reports `writable_mind_required` when no effective
+mount exists and `writable_mind_stale` when its exact usage generation changed.
+Neither result permits binding-generation replay or fallback to another Mind.
 
 `stage_bundle_file` is write-scoped, non-destructive and open-world because the
 adapter downloads host-provided bytes. `list_bundle_files` is read-only and

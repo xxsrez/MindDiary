@@ -44,25 +44,22 @@ const ALLOWED = Object.freeze({
   stamp: Object.freeze({ accessVersion: 1, membershipVersion: 1, tokenVersion: 1 }),
 });
 
-function targetReader(spaceId = SPACE) {
+function usageReader(spaceId = SPACE) {
   return {
-    async readCredentialWriteTarget(ownerId, principalId) {
-      assert.equal(ownerId, TARGET_OWNER);
+    async readPrincipalMindUsage(principalId) {
       assert.equal(principalId, ACTOR.principalId);
       return {
-        kind: "current",
-        state: {
-          bindingOwnerId: TARGET_OWNER,
+        principalId: ACTOR.principalId,
+        activeWriteGeneration: {
+          generationId: TARGET_GENERATION,
           principalId: ACTOR.principalId,
-          lifecycleState: "active",
-          targetVersion: 1,
-          activeGeneration: {
-            generationId: TARGET_GENERATION,
-            bindingOwnerId: TARGET_OWNER,
-            spaceId,
-          },
+          spaceId,
         },
       };
+    },
+    async validatePrincipalMindUsageWritePin(pin) {
+      return pin.principalId === ACTOR.principalId &&
+        pin.spaceId === spaceId && pin.generationId === TARGET_GENERATION;
     },
   };
 }
@@ -170,7 +167,7 @@ async function collect(stream) {
 
 function consumingIngress() {
   return new AuthorizedConnectorIngressService({
-    targets: targetReader(),
+    usage: usageReader(),
     staging: {
       async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {
@@ -351,7 +348,7 @@ test("native export race fails when the explicit snapshot bytes change", async (
     selection: selection(fixture.objectId),
     grants: authorizedGrants(),
     fetcher: provider.fetcher,
-    targets: targetReader("space_native_export_race"),
+    targets: usageReader("space_native_export_race"),
     staging: {
       async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {
@@ -550,9 +547,12 @@ test("run-scoped stage resolves target before exact provider binding and preserv
       return provider.fetcher(input, init);
     },
     targets: {
-      async readCredentialWriteTarget(ownerId, principalId) {
+      async readPrincipalMindUsage(principalId) {
         events.push("target-read");
-        return targetReader().readCredentialWriteTarget(ownerId, principalId);
+        return usageReader().readPrincipalMindUsage(principalId);
+      },
+      async validatePrincipalMindUsageWritePin(pin) {
+        return usageReader().validatePrincipalMindUsageWritePin(pin);
       },
     },
     staging: {
@@ -612,7 +612,8 @@ test("run-scoped stage never resolves a grant or provider before writable target
       throw new Error("must not fetch");
     },
     targets: {
-      async readCredentialWriteTarget() { return null; },
+      async readPrincipalMindUsage() { return null; },
+      async validatePrincipalMindUsageWritePin() { return false; },
     },
     staging: {
       async authorizeSourceRead() {
@@ -631,7 +632,7 @@ test("run-scoped stage never resolves a grant or provider before writable target
     idempotencyKey: "run-stage-no-target",
   }), {
     kind: "invalid",
-    code: "writable_target_unavailable",
+    code: "writable_target_required",
   });
   assert.equal(authorizationReads, 0);
   assert.equal(storeReads, 0);
@@ -659,7 +660,7 @@ test("run-scoped grant revoke during stream verification fails closed", async ()
       },
     },
     fetcher: provider.fetcher,
-    targets: targetReader(),
+    targets: usageReader(),
     staging: {
       async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {
@@ -717,7 +718,7 @@ test("run-scoped stage rejects mismatched or expanded provider bindings", async 
         providerReads += 1;
         throw new Error("must not fetch");
       },
-      targets: targetReader(),
+      targets: usageReader(),
       staging: {
         async authorizeSourceRead() { return ALLOWED; },
         async stageStream() { throw new Error("must not stage"); },
@@ -751,7 +752,7 @@ test("run-scoped stage rejects mismatched or expanded provider bindings", async 
         providerReads += 1;
         throw new Error("must not fetch");
       },
-      targets: targetReader(),
+      targets: usageReader(),
       staging: {
         async authorizeSourceRead() { return ALLOWED; },
         async stageStream() { throw new Error("must not stage"); },

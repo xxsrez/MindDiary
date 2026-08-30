@@ -11,12 +11,14 @@ import {
   type CurrentAuthorizationState,
   type OrdinaryMindRouteSnapshot,
   type PersonalMindProfileSnapshot,
+  type PrincipalMindUsageStore,
   type PublicMindCatalogStore,
   type RevisionMetadataStore,
 } from "@mind-diary/application-ports";
 import {
   capabilitiesForRole,
   capabilitiesForVisibilityGrant,
+  freezePrincipalMindUsageState,
   isRevisionIndexTerminalFailureCode,
   isReservedTopLevelHandle,
   parseCanonicalSpaceHandle,
@@ -24,6 +26,8 @@ import {
   type CanonicalRevisionEnvelope,
   type Capability,
   type PrincipalId,
+  type PrincipalMindUsageGenerationId,
+  type PrincipalMindUsageState,
   type RevisionId,
   type RevisionMode,
   type Role,
@@ -114,6 +118,8 @@ export interface MindDiscoveryDescriptor {
   readonly route: string;
   readonly handle: string | null;
   readonly name: string;
+  /** Authorized service metadata used only as an untrusted routing category. */
+  readonly description: string | null;
   readonly isPersonal: boolean;
   readonly visibility: "private" | "unlisted" | "public";
   readonly discovery:
@@ -123,7 +129,28 @@ export interface MindDiscoveryDescriptor {
     | "exact_handle";
   readonly access: Readonly<MindDiscoveryAccess>;
   readonly metadataVersion: number;
+  /** Present on the principal-owned MCP projection; trusted internal readers may omit it. */
+  readonly usageMode?: "read" | "read_write";
+  readonly effective?: Readonly<{
+    readonly canRead: true;
+    readonly canWrite: boolean;
+  }>;
+  readonly settingsVersion?: number;
+  readonly writableMount?: Readonly<{
+    readonly active: boolean;
+    /** Principal-owned mount generation. It is never a credential binding ID. */
+    readonly generation: PrincipalMindUsageGenerationId | null;
+  }>;
   readonly head: Readonly<MindDiscoveryRevisionDescriptor>;
+}
+
+export interface EnabledMindUsageProjection {
+  readonly usageMode: "read" | "read_write";
+  readonly settingsVersion: number;
+  readonly writableMount: Readonly<{
+    readonly active: boolean;
+    readonly generation: PrincipalMindUsageGenerationId | null;
+  }>;
 }
 
 export interface ListMindsQuery {
@@ -169,6 +196,7 @@ export interface RevisionIndexStatusReader {
 export interface MindDiscoveryStore
   extends PublicMindCatalogStore,
     RevisionMetadataStore,
+    Pick<PrincipalMindUsageStore, "readPrincipalMindUsage">,
     Pick<BackgroundWorkStore, "readRevisionIndexState"> {
   /**
    * Optional adapter-level consistent view. Persistent adapters use this to
@@ -198,6 +226,8 @@ export interface MindDiscoveryDependencies {
   ) => RevisionIndexStatusReader;
   /** MCP-only profile gate. Omit for trusted Sites and isolated fixtures. */
   readonly credentialAccess?: CredentialContentAccessAuthorizer;
+  /** Internal propagation for a consistent MCP read-session after the outer credential gate. */
+  readonly principalUsageRequired?: boolean;
 }
 
 interface NormalizedListQuery {
@@ -442,13 +472,73 @@ function normalizeListQuery(value: unknown): Readonly<NormalizedListQuery> {
 function listFingerprint(minds: readonly Readonly<MindDiscoveryDescriptor>[]): string {
   let hash = 0x811c9dc5;
   const input = minds
-    .map((mind) => `${mind.mindId}\u001f${mind.route}\u001f${mind.head.revisionId}\u001f${mind.discovery}`)
+    .map((mind) => [
+      mind.mindId,
+      mind.route,
+      mind.head.revisionId,
+      mind.discovery,
+      mind.usageMode ?? "internal",
+      String(mind.settingsVersion ?? "internal"),
+      mind.writableMount?.generation ?? "none",
+    ].join("\u001f"))
     .join("\u001e");
   for (let index = 0; index < input.length; index += 1) {
     hash ^= input.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return hash.toString(16).padStart(8, "0");
+}
+
+function enabledUsageProjection(
+  state: Readonly<PrincipalMindUsageState>,
+  spaceId: SpaceId,
+): Readonly<EnabledMindUsageProjection> | null {
+  const entry = state.entries.find((candidate) => candidate.spaceId === spaceId);
+  if (entry === undefined) return null;
+  if (entry.principalId !== state.principalId) {
+    throw new MindDiscoveryFailure(
+      "discovery_unavailable",
+      "Mind usage state is unavailable.",
+    );
+  }
+  if (entry.usageMode === "read") {
+    if (entry.writeGeneration !== null) {
+      throw new MindDiscoveryFailure(
+        "discovery_unavailable",
+        "Mind usage state is unavailable.",
+      );
+    }
+    return Object.freeze({
+      usageMode: "read" as const,
+      settingsVersion: state.usageVersion,
+      writableMount: Object.freeze({ active: false, generation: null }),
+    });
+  }
+  const generation = entry.writeGeneration;
+  const active = state.activeWriteGeneration;
+  if (
+    entry.usageMode !== "read_write" ||
+    generation === null ||
+    active === null ||
+    generation.principalId !== state.principalId ||
+    generation.spaceId !== spaceId ||
+    active.principalId !== state.principalId ||
+    active.spaceId !== spaceId ||
+    active.generationId !== generation.generationId
+  ) {
+    throw new MindDiscoveryFailure(
+      "discovery_unavailable",
+      "Mind usage state is unavailable.",
+    );
+  }
+  return Object.freeze({
+    usageMode: "read_write" as const,
+    settingsVersion: state.usageVersion,
+    writableMount: Object.freeze({
+      active: true,
+      generation: generation.generationId,
+    }),
+  });
 }
 
 function encodeCursor(offset: number, fingerprint: string): string {
@@ -524,6 +614,7 @@ export class MindDiscoveryService {
     | undefined;
   readonly #authorizer: CapabilityAuthorizer;
   readonly #credentialAccess: CredentialContentAccessAuthorizer | undefined;
+  readonly #principalUsageRequired: boolean;
   readonly #handles: AuthorizedHandleReader<Readonly<OrdinaryMindRouteSnapshot>>;
 
   constructor(dependencies: MindDiscoveryDependencies) {
@@ -532,6 +623,9 @@ export class MindDiscoveryService {
     this.#indexStatus = dependencies.indexStatus;
     this.#indexStatusForStore = dependencies.indexStatusForStore;
     this.#credentialAccess = dependencies.credentialAccess;
+    this.#principalUsageRequired =
+      dependencies.principalUsageRequired === true ||
+      dependencies.credentialAccess !== undefined;
     this.#authorizer = new CapabilityAuthorizer(dependencies.store);
     this.#handles = new AuthorizedHandleReader({
       handles: dependencies.store,
@@ -544,10 +638,17 @@ export class MindDiscoveryService {
     await this.#requireCredentialAccess(actor);
     if (this.#store.withConsistentRead !== undefined) {
       return this.#store.withConsistentRead((store) =>
-        new MindDiscoveryService({ store, host: this.#host }).listMinds(actor, query));
+        new MindDiscoveryService({
+          store,
+          host: this.#host,
+          principalUsageRequired: this.#principalUsageRequired,
+        }).listMinds(actor, query));
     }
     const actorPrincipalId = this.#requireActor(actor);
     const normalized = normalizeListQuery(query);
+    if (this.#principalUsageRequired) {
+      return this.#listEnabledMinds(actor, actorPrincipalId, normalized);
+    }
     const byId = new Map<SpaceId, Readonly<MindDiscoveryDescriptor>>();
 
     const personal = await this.#personal(actor, actorPrincipalId);
@@ -633,6 +734,133 @@ export class MindDiscoveryService {
       minds: Object.freeze(page),
       nextCursor:
         nextOffset < minds.length ? encodeCursor(nextOffset, fingerprint) : null,
+    });
+  }
+
+  async #listEnabledMinds(
+    actor: ActorContext,
+    actorPrincipalId: PrincipalId,
+    normalized: Readonly<NormalizedListQuery>,
+  ): Promise<Readonly<ListMindsResult>> {
+    const usageState = await this.#readPrincipalUsageState(actorPrincipalId);
+    if (usageState === null) {
+      if (normalized.fingerprint !== null) {
+        throw new MindDiscoveryFailure("invalid_cursor", "Mind list cursor is invalid.");
+      }
+      return Object.freeze({ minds: Object.freeze([]), nextCursor: null });
+    }
+
+    const personal = await this.#store.readPersonalMindProfile(actorPrincipalId);
+    const resolved = await mapDiscoveryBounded(usageState.entries, async (entry) => {
+      const usage = enabledUsageProjection(usageState, entry.spaceId);
+      if (usage === null) return null;
+      let mind: Readonly<ResolvedMind> | null;
+      if (personal?.personalMind.spaceId === entry.spaceId) {
+        try {
+          mind = await this.#personal(actor, actorPrincipalId, personal);
+        } catch (error) {
+          if (error instanceof MindDiscoveryFailure && error.code === "mind_not_found") {
+            return null;
+          }
+          throw error;
+        }
+      } else {
+        mind = await this.#ordinaryById(actor, entry.spaceId, {
+          discovery: "exact_handle",
+          requireMembership: false,
+          requirePublic: false,
+        });
+      }
+      return mind === null ? null : this.#projectEnabledUsage(mind.descriptor, usage);
+    });
+    const minds = resolved
+      .filter((mind): mind is Readonly<MindDiscoveryDescriptor> => mind !== null)
+      .sort((left, right) => {
+        if (left.isPersonal !== right.isPersonal) return left.isPersonal ? -1 : 1;
+        const routeOrder = left.route.localeCompare(right.route, "en");
+        return routeOrder === 0
+          ? left.mindId.localeCompare(right.mindId, "en")
+          : routeOrder;
+      });
+    const fingerprint = listFingerprint(minds);
+    if (
+      normalized.fingerprint !== null &&
+      (normalized.fingerprint !== fingerprint || normalized.offset >= minds.length)
+    ) {
+      throw new MindDiscoveryFailure("invalid_cursor", "Mind list cursor is invalid.");
+    }
+    const page = minds.slice(normalized.offset, normalized.offset + normalized.limit);
+    const nextOffset = normalized.offset + page.length;
+    return Object.freeze({
+      minds: Object.freeze(page),
+      nextCursor:
+        nextOffset < minds.length ? encodeCursor(nextOffset, fingerprint) : null,
+    });
+  }
+
+  /**
+   * Rechecks principal-owned usage before locator/resource paths that do not
+   * carry a model-visible Mind descriptor. Disabled is indistinguishable from
+   * an unavailable content target.
+   */
+  async requireEnabledMindUsage(
+    actor: ActorContext,
+    spaceId: SpaceId,
+  ): Promise<Readonly<EnabledMindUsageProjection> | null> {
+    if (!this.#principalUsageRequired) return null;
+    await this.#requireCredentialAccess(actor);
+    const actorPrincipalId = this.#requireActor(actor);
+    const state = await this.#readPrincipalUsageState(actorPrincipalId);
+    const usage = state === null ? null : enabledUsageProjection(state, spaceId);
+    if (usage === null) {
+      throw new MindDiscoveryFailure("mind_not_found", "Mind was not found.");
+    }
+    return usage;
+  }
+
+  async #readPrincipalUsageState(
+    actorPrincipalId: PrincipalId,
+  ): Promise<Readonly<PrincipalMindUsageState> | null> {
+    let state: Readonly<PrincipalMindUsageState> | null;
+    try {
+      state = await this.#store.readPrincipalMindUsage(actorPrincipalId);
+    } catch {
+      throw new MindDiscoveryFailure(
+        "discovery_unavailable",
+        "Mind usage state is unavailable.",
+      );
+    }
+    if (state === null) return null;
+    if (state.principalId !== actorPrincipalId) {
+      throw new MindDiscoveryFailure(
+        "discovery_unavailable",
+        "Mind usage state is unavailable.",
+      );
+    }
+    let validated: Readonly<PrincipalMindUsageState>;
+    try {
+      validated = freezePrincipalMindUsageState(state);
+    } catch {
+      throw new MindDiscoveryFailure(
+        "discovery_unavailable",
+        "Mind usage state is unavailable.",
+      );
+    }
+    return validated;
+  }
+
+  #projectEnabledUsage(
+    descriptor: Readonly<MindDiscoveryDescriptor>,
+    usage: Readonly<EnabledMindUsageProjection>,
+  ): Readonly<MindDiscoveryDescriptor> {
+    const canWrite = usage.usageMode === "read_write" &&
+      descriptor.access.capabilities.includes("content:write");
+    return Object.freeze({
+      ...descriptor,
+      usageMode: usage.usageMode,
+      effective: Object.freeze({ canRead: true as const, canWrite }),
+      settingsVersion: usage.settingsVersion,
+      writableMount: usage.writableMount,
     });
   }
 
@@ -723,7 +951,11 @@ export class MindDiscoveryService {
   ): Promise<Readonly<MindDiscoveryDescriptor>> {
     await this.#requireCredentialAccess(actor);
     this.#requireActor(actor);
-    return (await this.#exactHandle(actor, handle)).descriptor;
+    const resolved = await this.#exactHandle(actor, handle);
+    const usage = await this.requireEnabledMindUsage(actor, resolved.descriptor.mindId);
+    return usage === null
+      ? resolved.descriptor
+      : this.#projectEnabledUsage(resolved.descriptor, usage);
   }
 
   async getMindInfo(
@@ -740,12 +972,14 @@ export class MindDiscoveryService {
             store,
             host: this.#host,
             indexStatus: indexStatusForStore(store),
+            principalUsageRequired: this.#principalUsageRequired,
           }).getMindInfo(actor, mind, revisionSelector));
       }
       const info = await this.#store.withConsistentRead((store) =>
         new MindDiscoveryService({
           store,
           host: this.#host,
+          principalUsageRequired: this.#principalUsageRequired,
         }).getMindInfo(actor, mind, revisionSelector));
       return Object.freeze({
         ...info,
@@ -792,11 +1026,16 @@ export class MindDiscoveryService {
         envelope.revision.revisionId,
         currentHead,
       );
+      const capabilities = infoCapabilities(access.capabilities);
       return Object.freeze({
         mind: resolved.descriptor,
         resolvedRevision: revisionDescriptor(envelope, currentHead),
         revisionMode,
-        contentCapabilities: infoCapabilities(access.capabilities),
+        contentCapabilities:
+          resolved.descriptor.usageMode !== undefined &&
+          resolved.descriptor.effective?.canWrite !== true
+            ? Object.freeze(capabilities.filter((capability) => capability !== "commit"))
+            : capabilities,
         indexStatus,
       });
     }
@@ -872,18 +1111,24 @@ export class MindDiscoveryService {
     if (typeof mind !== "string" || mind.length === 0 || mind.length > 512) {
       throw new MindDiscoveryFailure("invalid_mind_selector", "Mind selector is invalid.");
     }
-    if (mind === "/me") return this.#personal(actor, actorPrincipalId);
+    let resolved: Readonly<ResolvedMind>;
+    if (mind === "/me") {
+      resolved = await this.#personal(actor, actorPrincipalId);
+      return this.#withRequiredUsage(actor, resolved);
+    }
     if (mind.startsWith("/")) {
       if (mind.slice(1).includes("/")) {
         throw new MindDiscoveryFailure("invalid_mind_selector", "Mind selector is invalid.");
       }
-      return this.#exactHandle(actor, mind.slice(1));
+      resolved = await this.#exactHandle(actor, mind.slice(1));
+      return this.#withRequiredUsage(actor, resolved);
     }
 
     const parsed = parseCanonicalSpaceHandle(mind);
     if (parsed.kind === "valid" && !isReservedTopLevelHandle(parsed.canonicalHandle)) {
       try {
-        return await this.#exactHandle(actor, parsed.canonicalHandle);
+        resolved = await this.#exactHandle(actor, parsed.canonicalHandle);
+        return this.#withRequiredUsage(actor, resolved);
       } catch (error) {
         if (!(error instanceof MindDiscoveryFailure) || error.code !== "mind_not_found") {
           throw error;
@@ -893,7 +1138,8 @@ export class MindDiscoveryService {
 
     const personal = await this.#store.readPersonalMindProfile(actorPrincipalId);
     if (personal?.personalMind.spaceId === mind) {
-      return this.#personal(actor, actorPrincipalId, personal);
+      resolved = await this.#personal(actor, actorPrincipalId, personal);
+      return this.#withRequiredUsage(actor, resolved);
     }
     const ordinary = await this.#ordinaryById(actor, mind as SpaceId, {
       discovery: "exact_handle",
@@ -903,7 +1149,19 @@ export class MindDiscoveryService {
     if (ordinary === null) {
       throw new MindDiscoveryFailure("mind_not_found", "Mind was not found.");
     }
-    return ordinary;
+    return this.#withRequiredUsage(actor, ordinary);
+  }
+
+  async #withRequiredUsage(
+    actor: ActorContext,
+    resolved: Readonly<ResolvedMind>,
+  ): Promise<Readonly<ResolvedMind>> {
+    const usage = await this.requireEnabledMindUsage(actor, resolved.descriptor.mindId);
+    if (usage === null) return resolved;
+    return Object.freeze({
+      ...resolved,
+      descriptor: this.#projectEnabledUsage(resolved.descriptor, usage),
+    });
   }
 
   async #personal(
@@ -934,6 +1192,7 @@ export class MindDiscoveryService {
         route: "/me",
         handle: null,
         name: profile.personalMind.name,
+        description: profile.personalMind.description,
         isPersonal: true,
         visibility: "private",
         discovery: "personal",
@@ -1069,6 +1328,7 @@ export class MindDiscoveryService {
         route: `/${snapshot.canonicalHandle}`,
         handle: snapshot.canonicalHandle,
         name: space.name,
+        description: space.description ?? null,
         isPersonal: false,
         visibility: space.visibility,
         discovery: effectiveDiscovery,

@@ -9,17 +9,18 @@ import type {
   LocalFileUploadIntentRecord,
   LocalFileUploadIntentSourceKind,
   LocalFileUploadIntentStore,
-  MindBindingStore,
   ObjectStore,
+  PrincipalMindUsageReader,
+  PrincipalMindUsageWritePin,
 } from "@mind-diary/application-ports";
 import type {
   Capability,
   IdempotencyKey,
+  PrincipalMindUsageGenerationId,
   Sha256Digest,
   SpaceId,
   StagedBundleFileId,
   UtcInstant,
-  WriteMindBindingId,
 } from "@mind-diary/domain";
 import {
   type BundleFileStagingService,
@@ -44,7 +45,6 @@ const MEDIA_TYPE_ESSENCE =
   /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u;
 const CREATE_KEYS = new Set([
   "source_kind",
-  "write_binding_id",
   "display_filename",
   "claimed_media_type",
   "expected_size",
@@ -134,8 +134,8 @@ export async function createLocalFileUploadIntentSecretCodec(
 export type LocalFileUploadIntentFailureCode =
   | "invalid_request"
   | "insufficient_scope"
-  | "write_binding_required"
-  | "write_binding_stale"
+  | "writable_mind_required"
+  | "writable_mind_stale"
   | "file_ingress_intent_expired"
   | "file_ingress_intent_conflict"
   | "file_ingress_source_unavailable"
@@ -169,7 +169,6 @@ export type ReadLocalFileUploadIntentApplicationResult =
 
 export interface CreateLocalFileUploadIntentInput {
   readonly source_kind?: unknown;
-  readonly write_binding_id?: unknown;
   readonly display_filename?: unknown;
   readonly claimed_media_type?: unknown;
   readonly expected_size?: unknown;
@@ -180,7 +179,6 @@ export interface CreateLocalFileUploadIntentInput {
 
 type ValidatedCreate = Readonly<{
   sourceKind: LocalFileUploadIntentSourceKind;
-  writeBindingId: WriteMindBindingId;
   displayFilename: string;
   claimedMediaType: string;
   expectedSize: number;
@@ -220,7 +218,6 @@ function validateCreate(
 ): ValidatedCreate | null {
   if (Object.keys(input).some((key) => !CREATE_KEYS.has(key))) return null;
   const sourceKind = input.source_kind;
-  const writeBindingId = input.write_binding_id;
   const displayFilename = input.display_filename;
   const expectedSize = input.expected_size;
   const expectedSha256 = input.expected_sha256;
@@ -228,7 +225,6 @@ function validateCreate(
   if (
     (sourceKind !== "local_path" &&
       sourceKind !== "workspace/generated_artifact") ||
-    typeof writeBindingId !== "string" || !BOUNDED_ID.test(writeBindingId) ||
     !validFilename(displayFilename) ||
     !Number.isSafeInteger(expectedSize) || (expectedSize as number) < 0 ||
     (expectedSize as number) > LOCAL_FILE_UPLOAD_INTENT_LIMITS.maxBytes ||
@@ -237,7 +233,6 @@ function validateCreate(
   ) return null;
   return Object.freeze({
     sourceKind,
-    writeBindingId: writeBindingId as WriteMindBindingId,
     displayFilename,
     claimedMediaType: normalizeUploadIntentMediaType(input.claimed_media_type),
     expectedSize: expectedSize as number,
@@ -311,7 +306,7 @@ function actorForIntent(
 
 export class LocalFileUploadIntentService {
   readonly #authorizer: Authorizer;
-  readonly #bindings: Pick<MindBindingStore, "readMindBindingSet">;
+  readonly #usage: PrincipalMindUsageReader;
   readonly #intents: LocalFileUploadIntentStore;
   readonly #staging: Pick<BundleFileStagingService, "stageStream"> &
     Pick<BundleFileStagingStore, "readStagedBundleFile">;
@@ -326,7 +321,9 @@ export class LocalFileUploadIntentService {
 
   constructor(dependencies: {
     readonly authorizer: Authorizer;
-    readonly bindings: Pick<MindBindingStore, "readMindBindingSet">;
+    readonly usage?: PrincipalMindUsageReader;
+    /** @deprecated Composition compatibility; principal usage is still read here. */
+    readonly bindings?: PrincipalMindUsageReader;
     readonly intents: LocalFileUploadIntentStore;
     readonly staging: Pick<BundleFileStagingService, "stageStream"> &
       Pick<BundleFileStagingStore, "readStagedBundleFile">;
@@ -340,7 +337,9 @@ export class LocalFileUploadIntentService {
     readonly leaseHeartbeatMilliseconds?: number;
   }) {
     this.#authorizer = dependencies.authorizer;
-    this.#bindings = dependencies.bindings;
+    const usage = dependencies.usage ?? dependencies.bindings;
+    if (usage === undefined) throw new TypeError("principal Mind usage reader is required");
+    this.#usage = usage;
     this.#intents = dependencies.intents;
     this.#staging = dependencies.staging;
     this.#digest = dependencies.digest;
@@ -378,29 +377,15 @@ export class LocalFileUploadIntentService {
       return Object.freeze({ kind: "invalid", code: "invalid_request" });
     }
     const ownerId = actor.authentication.bindingOwnerId;
-    const bindings = await this.#bindings.readMindBindingSet(
-      ownerId,
-      actor.principalId,
-      actor.occurredAtUtc,
-    );
-    const write = bindings?.writeBinding;
-    if (write === null || write === undefined) {
-      return Object.freeze({ kind: "invalid", code: "write_binding_required" });
+    const writePin = await this.#resolveWritePin(actor.principalId, expectedSpaceId);
+    if (writePin === null) {
+      return Object.freeze({ kind: "invalid", code: "writable_mind_required" });
     }
-    if (
-      write.state !== "active" ||
-      write.writeBindingId !== validated.writeBindingId ||
-      write.spaceId !== expectedSpaceId
-    ) return Object.freeze({ kind: "invalid", code: "write_binding_stale" });
     const authorization = await this.#authorizer.authorize({
       actor,
-      spaceId: write.spaceId,
+      spaceId: expectedSpaceId,
       capability: "content:write",
       revisionMode: "head",
-      bindingRequirement: Object.freeze({
-        kind: "write",
-        writeBindingId: validated.writeBindingId,
-      }),
     });
     if (authorization.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: authorization });
@@ -416,11 +401,12 @@ export class LocalFileUploadIntentService {
     );
     const canonicalRequestHash = await this.#digest.calculateSha256(
       new TextEncoder().encode(`${JSON.stringify({
-        format: "mind-diary-local-upload-intent-request-v1",
+        format: "mind-diary-local-upload-intent-request-v2",
         binding_owner_id: ownerId,
-        space_id: write.spaceId,
+        principal_id: actor.principalId,
+        space_id: expectedSpaceId,
+        principal_mind_usage_generation_id: writePin.generationId,
         source_kind: validated.sourceKind,
-        write_binding_id: validated.writeBindingId,
         display_filename: validated.displayFilename,
         claimed_media_type: validated.claimedMediaType,
         expected_size: validated.expectedSize,
@@ -436,8 +422,8 @@ export class LocalFileUploadIntentService {
       principalId: actor.principalId,
       tokenId: actor.authentication.tokenId,
       bindingOwnerId: ownerId,
-      spaceId: write.spaceId,
-      writeBindingId: validated.writeBindingId,
+      spaceId: expectedSpaceId,
+      principalMindUsageGenerationId: writePin.generationId,
       sourceKind: validated.sourceKind,
       displayFilename: validated.displayFilename,
       claimedMediaType: validated.claimedMediaType,
@@ -505,16 +491,13 @@ export class LocalFileUploadIntentService {
       occurredAt,
       this.#deploymentCapabilities,
     );
-    const currentBinding = await this.#bindings.readMindBindingSet(
-      existing.bindingOwnerId,
-      existing.principalId,
-      occurredAt,
-    );
-    const write = currentBinding?.writeBinding;
     if (
-      write === null || write === undefined || write.state !== "active" ||
-      write.writeBindingId !== existing.writeBindingId ||
-      write.spaceId !== existing.spaceId
+      existing.principalMindUsageGenerationId === undefined ||
+      !(await this.#usage.validatePrincipalMindUsageWritePin({
+        principalId: existing.principalId,
+        spaceId: existing.spaceId,
+        generationId: existing.principalMindUsageGenerationId,
+      }))
     ) {
       return Object.freeze({
         kind: "intent_invalid",
@@ -526,10 +509,6 @@ export class LocalFileUploadIntentService {
       spaceId: existing.spaceId,
       capability: "content:write",
       revisionMode: "head",
-      bindingRequirement: Object.freeze({
-        kind: "write",
-        writeBindingId: existing.writeBindingId,
-      }),
     });
     if (authorization.kind === "denied") {
       return Object.freeze({
@@ -605,7 +584,6 @@ export class LocalFileUploadIntentService {
         result = await this.#staging.stageStream({
           actor,
           spaceId: record.spaceId,
-          writeBindingId: record.writeBindingId,
           displayFilename: record.displayFilename,
           claimedMediaType: record.claimedMediaType,
           expectedSize: record.expectedSize,
@@ -700,16 +678,13 @@ export class LocalFileUploadIntentService {
       occurredAt,
       this.#deploymentCapabilities,
     );
-    const bindingSet = await this.#bindings.readMindBindingSet(
-      record.bindingOwnerId,
-      record.principalId,
-      occurredAt,
-    );
-    const write = bindingSet?.writeBinding;
     if (
-      write === null || write === undefined || write.state !== "active" ||
-      write.writeBindingId !== record.writeBindingId ||
-      write.spaceId !== record.spaceId
+      record.principalMindUsageGenerationId === undefined ||
+      !(await this.#usage.validatePrincipalMindUsageWritePin({
+        principalId: record.principalId,
+        spaceId: record.spaceId,
+        generationId: record.principalMindUsageGenerationId,
+      }))
     ) {
       return Object.freeze({
         kind: "intent_invalid",
@@ -721,10 +696,6 @@ export class LocalFileUploadIntentService {
       spaceId: record.spaceId,
       capability: "content:write",
       revisionMode: "head",
-      bindingRequirement: Object.freeze({
-        kind: "write",
-        writeBindingId: record.writeBindingId,
-      }),
     });
     if (authorization.kind === "denied") {
       return Object.freeze({
@@ -754,6 +725,26 @@ export class LocalFileUploadIntentService {
           record: staged,
           replayed: record.stageReplayed === true,
         });
+  }
+
+  async #resolveWritePin(
+    principalId: McpTokenActorContext["principalId"],
+    assertedSpaceId: SpaceId,
+  ): Promise<Readonly<PrincipalMindUsageWritePin> | null> {
+    const state = await this.#usage.readPrincipalMindUsage(principalId);
+    const generation = state?.activeWriteGeneration ?? null;
+    if (
+      generation === null || generation.principalId !== principalId ||
+      generation.spaceId !== assertedSpaceId
+    ) return null;
+    const pin: Readonly<PrincipalMindUsageWritePin> = Object.freeze({
+      principalId,
+      spaceId: assertedSpaceId,
+      generationId: generation.generationId as PrincipalMindUsageGenerationId,
+    });
+    return await this.#usage.validatePrincipalMindUsageWritePin(pin)
+      ? pin
+      : null;
   }
 }
 

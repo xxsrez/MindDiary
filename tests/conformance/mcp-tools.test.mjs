@@ -210,7 +210,8 @@ test("schemas require one explicit Mind and one revision selector shape", () => 
 
   const search = definitions.get("search");
   assert.deepEqual(search.inputSchema.required, ["mind", "query"]);
-  assert.match(search.description, /never performs implicit cross-Mind search/u);
+  assert.match(search.description, /implicit cross-Mind search/iu);
+  assert.match(search.description, /enabled explicit Mind/iu);
   assert.deepEqual(
     search.inputSchema.properties.revision_selector.oneOf.map(
       (variant) => variant.properties.kind.const,

@@ -2,6 +2,7 @@ import type { ActorContext } from "@mind-diary/application-contracts";
 import {
   REVISION_MANIFEST_MEDIA_TYPE,
   type Authorizer,
+  type AuthorizationStamp,
   type Clock,
   type CapacityLimits,
   type CommitEffectIdGenerator,
@@ -10,6 +11,7 @@ import {
   type FileIngressSourceKind,
   type IdempotencyNamespace,
   type BundleFileObjectStore,
+  type PrincipalMindUsageWritePin,
   type RevisionIdGenerator,
 } from "@mind-diary/application-ports";
 import {
@@ -17,16 +19,17 @@ import {
   REVISION_MANIFEST_FORMAT_V4,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
+  canonicalBundleFilePath,
+  canonicalMarkdownPath,
   opaqueId,
   serializeRevisionManifest,
   version,
-  type BindingVersion,
   type CanonicalRevisionEnvelope,
   type IdempotencyKey,
+  type PrincipalId,
   type RevisionId,
   type Sha256Digest,
   type SpaceId,
-  type WriteMindBindingId,
 } from "@mind-diary/domain";
 import {
   ChangesetPreflightService,
@@ -52,30 +55,15 @@ import { IncrementalSha256 } from "./incremental-sha256.js";
 export interface CommitChangesetRequest {
   readonly actor: ActorContext;
   readonly spaceId: SpaceId;
-  readonly writeBindingId?: unknown;
   readonly expectedRevisionId: RevisionId | null;
   readonly idempotencyKey: unknown;
   readonly summary: string;
-  /** Trusted application-only context; never projected from commit_changeset input. */
-  readonly automaticCapture?: Readonly<AutomaticCaptureCommitContext>;
+  /** Adapter-resolved exact sources; untrusted shape is validated here. */
+  readonly sourceReferences?: unknown;
   /** Trusted application-only policy for agent/service-produced OKF. */
   readonly producerProfile?: boolean;
   /** Untrusted adapter input is validated by changeset preflight. */
   readonly operations: unknown;
-}
-
-export interface AutomaticCaptureCommitContext {
-  readonly expectedBindingVersion: BindingVersion;
-  readonly captureKey: string;
-  readonly path: string;
-  readonly sourceRefs: readonly Readonly<
-    | { readonly kind: "user_statement" }
-    | {
-        readonly kind: "target_entry";
-        readonly revisionId: RevisionId;
-        readonly path: string;
-      }
-  >[];
 }
 
 type NonReadyPreflightResult = Exclude<
@@ -135,11 +123,32 @@ export const DEFAULT_MAX_RETAINED_BUNDLE_FILE_BYTES = 2_147_483_648;
 
 interface ValidatedCommitPayload {
   readonly idempotencyKey: IdempotencyKey;
-  readonly writeBindingId: WriteMindBindingId | null;
   readonly operations: readonly Readonly<ChangesetOperation>[];
-  readonly automaticCapture: Readonly<AutomaticCaptureCommitContext> | null;
+  readonly sourceReferences: readonly Readonly<ValidatedSourceReference>[];
   readonly producerProfile: boolean;
 }
+
+interface ValidatedSourceReference {
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly path: string;
+}
+
+interface AuthorizedSourceReference {
+  readonly source: Readonly<ValidatedSourceReference>;
+  readonly stamp: Readonly<AuthorizationStamp>;
+}
+
+type WritePinResolution =
+  | { readonly kind: "resolved"; readonly pin: Readonly<PrincipalMindUsageWritePin> }
+  | { readonly kind: "required" | "stale" };
+
+type SourceAuthorizationResult =
+  | {
+      readonly kind: "authorized";
+      readonly sources: readonly Readonly<AuthorizedSourceReference>[];
+    }
+  | Extract<CommitChangesetResult, { readonly kind: "denied" | "invalid" }>;
 
 interface StagedSourceAuditReceipt {
   readonly source_kind: FileIngressSourceKind;
@@ -152,6 +161,59 @@ type InvalidResult = Extract<
 >;
 
 const ENCODER = new TextEncoder();
+const MAX_SOURCE_REFERENCES = 8;
+
+function canonicalSourcePath(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    return canonicalMarkdownPath(value);
+  } catch {
+    try {
+      return canonicalBundleFilePath(value);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function compareSourceReferences(
+  left: Readonly<ValidatedSourceReference>,
+  right: Readonly<ValidatedSourceReference>,
+): number {
+  return left.spaceId.localeCompare(right.spaceId) ||
+    left.revisionId.localeCompare(right.revisionId) ||
+    left.path.localeCompare(right.path);
+}
+
+function validateSourceReferences(
+  value: unknown,
+): readonly Readonly<ValidatedSourceReference>[] | null {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > MAX_SOURCE_REFERENCES) return null;
+  const sources: ValidatedSourceReference[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
+    const source = item as Readonly<Record<string, unknown>>;
+    if (
+      Object.keys(source).sort().join(",") !== "path,revisionId,spaceId" ||
+      typeof source.spaceId !== "string" || source.spaceId.length === 0 ||
+      typeof source.revisionId !== "string" || source.revisionId.length === 0
+    ) return null;
+    const path = canonicalSourcePath(source.path);
+    if (path === null) return null;
+    const normalized: ValidatedSourceReference = {
+      spaceId: source.spaceId as SpaceId,
+      revisionId: source.revisionId as RevisionId,
+      path,
+    };
+    const key = `${normalized.spaceId}\u0000${normalized.revisionId}\u0000${path}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    sources.push(Object.freeze(normalized));
+  }
+  return Object.freeze(sources.sort(compareSourceReferences));
+}
 
 function canonicalStagedSourceAuditReceipts(
   records: readonly Readonly<{
@@ -270,36 +332,39 @@ function canonicalRequestSource(
   request: CommitChangesetRequest,
   validated: ValidatedCommitPayload,
 ): string {
-  // producerProfile is server policy, not caller payload: excluding it preserves
-  // exact retries of already-committed requests across the policy rollout.
+  // producerProfile and the principal-owned generation are server policy, not
+  // caller payload. They are deliberately excluded from the idempotency hash.
   return `${JSON.stringify({
-    format: "mind-diary-commit-changeset-request-v1",
-    write_binding_id: validated.writeBindingId,
+    format: "mind-diary-commit-changeset-request-v2",
     expected_revision_id: request.expectedRevisionId,
     summary: request.summary,
     operations: validated.operations.map(canonicalOperation),
-    automatic_capture: validated.automaticCapture,
+    source_references: validated.sourceReferences.map((source) => ({
+      space_id: source.spaceId,
+      revision_id: source.revisionId,
+      path: source.path,
+    })),
   })}\n`;
 }
 
-function writeBindingRequirement(
-  writeBindingId: unknown,
-  automaticCapture: Readonly<AutomaticCaptureCommitContext> | undefined | null,
+function canonicalSourceReferencesSource(
+  sources: readonly Readonly<ValidatedSourceReference>[],
+): string {
+  return `${JSON.stringify(sources.map((source) => ({
+    space_id: source.spaceId,
+    revision_id: source.revisionId,
+    path: source.path,
+  })))}\n`;
+}
+
+function deniedWritableMind(
+  code: "writable_mind_required" | "writable_mind_stale",
+  retryable = false,
 ) {
-  if (typeof writeBindingId !== "string" || writeBindingId.length === 0) {
-    return Object.freeze({});
-  }
   return Object.freeze({
-    bindingRequirement: automaticCapture === undefined || automaticCapture === null
-      ? Object.freeze({
-          kind: "write" as const,
-          writeBindingId: writeBindingId as WriteMindBindingId,
-        })
-      : Object.freeze({
-          kind: "automatic_capture" as const,
-          writeBindingId: writeBindingId as WriteMindBindingId,
-          expectedBindingVersion: automaticCapture.expectedBindingVersion,
-        }),
+    kind: "denied" as const,
+    code,
+    retryable,
   });
 }
 
@@ -362,59 +427,6 @@ export class ChangesetCommitService {
       spaceId: request.spaceId,
       capability: "content:write",
       revisionMode: "head",
-      ...writeBindingRequirement(request.writeBindingId, request.automaticCapture),
-    });
-    if (initialAuthorization.kind === "denied") {
-      return Object.freeze({ kind: "denied", decision: initialAuthorization });
-    }
-    if (request.actor.kind !== "registered_principal") {
-      throw new ChangesetCommitFailure(
-        "invalid_actor",
-        "an authorized content changeset must belong to a registered principal",
-      );
-    }
-    const validated = this.#validatePayload(request);
-    if ("kind" in validated) return validated;
-    const canonicalRequestHash = await this.#objects.calculateSha256(
-      ENCODER.encode(canonicalRequestSource(request, validated)),
-    );
-    const namespace: Readonly<
-      IdempotencyNamespace & { readonly operation: "commit_changeset" }
-    > = Object.freeze({
-      principalId: request.actor.principalId,
-      spaceId: request.spaceId,
-      operation: "commit_changeset",
-      key: validated.idempotencyKey,
-    });
-    return this.#metadata.runContentCommitTransaction(async (transaction) => {
-      const authorization = await this.#authorizer.reauthorizeInTransaction(
-        {
-          actor: request.actor,
-          spaceId: request.spaceId,
-          capability: "content:write",
-          revisionMode: "head",
-          ...writeBindingRequirement(
-            validated.writeBindingId,
-            validated.automaticCapture,
-          ),
-        },
-        transaction,
-        initialAuthorization.stamp,
-      );
-      if (authorization.kind === "denied") {
-        return Object.freeze({ kind: "denied", decision: authorization });
-      }
-      return this.#resolveIdempotency(transaction, namespace, canonicalRequestHash);
-    });
-  }
-
-  async commit(request: CommitChangesetRequest): Promise<CommitChangesetResult> {
-    const initialAuthorization = await this.#authorizer.authorize({
-      actor: request.actor,
-      spaceId: request.spaceId,
-      capability: "content:write",
-      revisionMode: "head",
-      ...writeBindingRequirement(request.writeBindingId, request.automaticCapture),
     });
     if (initialAuthorization.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: initialAuthorization });
@@ -426,12 +438,117 @@ export class ChangesetCommitService {
       );
     }
     const actor = request.actor;
-
+    const resolvedWritePin = await this.#resolveWritePin(
+      actor.principalId,
+      request.spaceId,
+    );
+    if (resolvedWritePin.kind !== "resolved") {
+      return Object.freeze({
+        kind: "denied",
+        decision: deniedWritableMind(
+          resolvedWritePin.kind === "required"
+            ? "writable_mind_required"
+            : "writable_mind_stale",
+        ),
+      });
+    }
+    const writePin = resolvedWritePin.pin;
     const validated = this.#validatePayload(request);
     if ("kind" in validated) return validated;
+    const sourceAuthorization = await this.#authorizeSourceReferences(
+      actor,
+      validated.sourceReferences,
+    );
+    if (sourceAuthorization.kind !== "authorized") return sourceAuthorization;
     const canonicalRequestHash = await this.#objects.calculateSha256(
       ENCODER.encode(canonicalRequestSource(request, validated)),
     );
+    const namespace: Readonly<
+      IdempotencyNamespace & { readonly operation: "commit_changeset" }
+    > = Object.freeze({
+      principalId: actor.principalId,
+      spaceId: request.spaceId,
+      operation: "commit_changeset",
+      key: validated.idempotencyKey,
+    });
+    return this.#metadata.runContentCommitTransaction(async (transaction) => {
+      const authorization = await this.#authorizer.reauthorizeInTransaction(
+        {
+          actor,
+          spaceId: request.spaceId,
+          capability: "content:write",
+          revisionMode: "head",
+        },
+        transaction,
+        initialAuthorization.stamp,
+      );
+      if (authorization.kind === "denied") {
+        return Object.freeze({ kind: "denied", decision: authorization });
+      }
+      if (!(await transaction.validatePrincipalMindUsageWritePin(writePin))) {
+        return Object.freeze({
+          kind: "denied",
+          decision: deniedWritableMind("writable_mind_stale"),
+        });
+      }
+      const sourceDenied = await this.#reauthorizeSourceReferences(
+        actor,
+        transaction,
+        sourceAuthorization.sources,
+      );
+      if (sourceDenied !== null) return sourceDenied;
+      return this.#resolveIdempotency(transaction, namespace, canonicalRequestHash);
+    });
+  }
+
+  async commit(request: CommitChangesetRequest): Promise<CommitChangesetResult> {
+    const initialAuthorization = await this.#authorizer.authorize({
+      actor: request.actor,
+      spaceId: request.spaceId,
+      capability: "content:write",
+      revisionMode: "head",
+    });
+    if (initialAuthorization.kind === "denied") {
+      return Object.freeze({ kind: "denied", decision: initialAuthorization });
+    }
+    if (request.actor.kind !== "registered_principal") {
+      throw new ChangesetCommitFailure(
+        "invalid_actor",
+        "an authorized content changeset must belong to a registered principal",
+      );
+    }
+    const actor = request.actor;
+    const resolvedWritePin = await this.#resolveWritePin(
+      actor.principalId,
+      request.spaceId,
+    );
+    if (resolvedWritePin.kind !== "resolved") {
+      return Object.freeze({
+        kind: "denied",
+        decision: deniedWritableMind(
+          resolvedWritePin.kind === "required"
+            ? "writable_mind_required"
+            : "writable_mind_stale",
+        ),
+      });
+    }
+    const writePin = resolvedWritePin.pin;
+
+    const validated = this.#validatePayload(request);
+    if ("kind" in validated) return validated;
+    const sourceAuthorization = await this.#authorizeSourceReferences(
+      actor,
+      validated.sourceReferences,
+    );
+    if (sourceAuthorization.kind !== "authorized") return sourceAuthorization;
+    const canonicalRequestHash = await this.#objects.calculateSha256(
+      ENCODER.encode(canonicalRequestSource(request, validated)),
+    );
+    const sourceReferencesDigest = validated.sourceReferences.length === 0
+      ? null
+      : await this.#objects.calculateSha256(
+          ENCODER.encode(canonicalSourceReferencesSource(validated.sourceReferences)),
+        );
     const namespace: Readonly<
       IdempotencyNamespace & { readonly operation: "commit_changeset" }
     > = Object.freeze({
@@ -449,10 +566,6 @@ export class ChangesetCommitService {
             spaceId: request.spaceId,
             capability: "content:write",
             revisionMode: "head",
-            ...writeBindingRequirement(
-              validated.writeBindingId,
-              validated.automaticCapture,
-            ),
           },
           transaction,
           initialAuthorization.stamp,
@@ -460,6 +573,18 @@ export class ChangesetCommitService {
         if (authorization.kind === "denied") {
           return Object.freeze({ kind: "denied", decision: authorization });
         }
+        if (!(await transaction.validatePrincipalMindUsageWritePin(writePin))) {
+          return Object.freeze({
+            kind: "denied",
+            decision: deniedWritableMind("writable_mind_stale"),
+          });
+        }
+        const sourceDenied = await this.#reauthorizeSourceReferences(
+          actor,
+          transaction,
+          sourceAuthorization.sources,
+        );
+        if (sourceDenied !== null) return sourceDenied;
         return this.#resolveIdempotency(
           transaction,
           namespace,
@@ -474,17 +599,7 @@ export class ChangesetCommitService {
       spaceId: request.spaceId,
       revisionMode: "head",
       expectedRevisionId: request.expectedRevisionId,
-      ...(validated.writeBindingId === null
-        ? {}
-        : {
-            writeBindingId: validated.writeBindingId,
-            ...(validated.automaticCapture === null
-              ? {}
-              : {
-                  automaticCaptureExpectedBindingVersion:
-                    validated.automaticCapture.expectedBindingVersion,
-                }),
-          }),
+      writeUsagePin: writePin,
       operations: validated.operations,
       producerProfile: validated.producerProfile,
     });
@@ -655,10 +770,6 @@ export class ChangesetCommitService {
           spaceId: request.spaceId,
           capability: "content:write",
           revisionMode: "head",
-          ...writeBindingRequirement(
-            validated.writeBindingId,
-            validated.automaticCapture,
-          ),
         },
         transaction,
         preflight.authorization.stamp,
@@ -666,6 +777,18 @@ export class ChangesetCommitService {
       if (authorization.kind === "denied") {
         return Object.freeze({ kind: "denied", decision: authorization });
       }
+      if (!(await transaction.validatePrincipalMindUsageWritePin(writePin))) {
+        return Object.freeze({
+          kind: "denied",
+          decision: deniedWritableMind("writable_mind_stale"),
+        });
+      }
+      const sourceDenied = await this.#reauthorizeSourceReferences(
+        actor,
+        transaction,
+        sourceAuthorization.sources,
+      );
+      if (sourceDenied !== null) return sourceDenied;
 
       const idempotency = await this.#resolveIdempotency(
         transaction,
@@ -683,33 +806,7 @@ export class ChangesetCommitService {
       }
 
 
-      let stagedBindingOwnerId = null;
-      let stagedBindingGeneration = null;
       if (preflight.stagedBundleFileRecords.length > 0) {
-        if (
-          actor.authentication.kind !== "mcp_token" ||
-          validated.writeBindingId === null ||
-          transaction.readMindBindingSet === undefined
-        ) return invalid(
-          "staged_bundle_file_binding_mismatch",
-          "BundleFile commit requires an active MCP write binding",
-        );
-        stagedBindingOwnerId = actor.authentication.bindingOwnerId;
-        const bindings = await transaction.readMindBindingSet(
-          stagedBindingOwnerId,
-          actor.principalId,
-          committedAt,
-        );
-        const write = bindings?.writeBinding;
-        if (
-          write === null || write === undefined || write.state !== "active" ||
-          write.writeBindingId !== validated.writeBindingId ||
-          write.spaceId !== request.spaceId
-        ) return invalid(
-          "staged_bundle_file_binding_mismatch",
-          "BundleFile write binding changed before commit",
-        );
-        stagedBindingGeneration = write.generation;
         for (const expected of preflight.stagedBundleFileRecords) {
           const current = await transaction.readStagedBundleFile(expected.stagedFileId);
           if (
@@ -717,9 +814,8 @@ export class ChangesetCommitService {
             current.sha256 !== expected.sha256 || current.size !== expected.size ||
             current.mediaType !== expected.mediaType ||
             current.sourceKind !== expected.sourceKind ||
-            current.bindingOwnerId !== stagedBindingOwnerId ||
-            current.writeBindingId !== validated.writeBindingId ||
-            current.writeBindingGeneration !== stagedBindingGeneration ||
+            current.principalId !== writePin.principalId ||
+            current.principalMindUsageGenerationId !== writePin.generationId ||
             current.spaceId !== request.spaceId ||
             Date.parse(current.expiresAt) <= Date.parse(committedAt)
           ) return invalid(
@@ -782,18 +878,14 @@ export class ChangesetCommitService {
           );
         }
         if (
-          preflight.stagedBundleFileRecords.length > 0 &&
-          stagedBindingOwnerId !== null &&
-          stagedBindingGeneration !== null &&
-          validated.writeBindingId !== null
+          preflight.stagedBundleFileRecords.length > 0
         ) {
           const consumed = await transaction.consumeStagedBundleFiles({
             stagedFileIds: preflight.stagedBundleFileRecords.map(
               (record) => record.stagedFileId,
             ),
-            bindingOwnerId: stagedBindingOwnerId,
-            writeBindingId: validated.writeBindingId,
-            writeBindingGeneration: stagedBindingGeneration,
+            principalId: writePin.principalId,
+            principalMindUsageGenerationId: writePin.generationId,
             spaceId: request.spaceId,
             consumedAt: committedAt,
           });
@@ -847,15 +939,11 @@ export class ChangesetCommitService {
               ...(stagedSourceReceipts === null
                 ? {}
                 : { staged_source_receipts: stagedSourceReceipts }),
-              ...(validated.automaticCapture === null
+              ...(sourceReferencesDigest === null
                 ? {}
                 : {
-                    capture_mode: "routine_non_sensitive",
-                    capture_key: validated.automaticCapture.captureKey,
-                    capture_path: validated.automaticCapture.path,
-                    capture_source_refs: JSON.stringify(
-                      validated.automaticCapture.sourceRefs,
-                    ),
+                    source_reference_count: validated.sourceReferences.length,
+                    source_reference_digest: sourceReferencesDigest,
                   }),
             }),
           }),
@@ -991,26 +1079,140 @@ export class ChangesetCommitService {
       this.#preflightLimits,
     );
     if (operations.kind === "invalid") return operations;
-    if (
-      request.writeBindingId !== undefined &&
-      (typeof request.writeBindingId !== "string" ||
-        request.writeBindingId.length === 0)
-    ) {
+    const sourceReferences = validateSourceReferences(request.sourceReferences);
+    if (sourceReferences === null) {
       return invalid(
-        "invalid_write_binding_id",
-        "write binding ID must be a non-empty opaque ID",
+        "invalid_source_references",
+        "source references must be at most eight distinct exact source locators",
       );
     }
     return Object.freeze({
       idempotencyKey: checkedKey.key,
-      writeBindingId:
-        request.writeBindingId === undefined
-          ? null
-          : (request.writeBindingId as WriteMindBindingId),
       operations: operations.operations,
-      automaticCapture: request.automaticCapture ?? null,
+      sourceReferences,
       producerProfile: request.producerProfile === true,
     });
+  }
+
+  async #resolveWritePin(
+    principalId: PrincipalId,
+    spaceId: SpaceId,
+  ): Promise<WritePinResolution> {
+    const state = await this.#metadata.readPrincipalMindUsage(principalId);
+    const generation = state?.activeWriteGeneration ?? null;
+    if (
+      generation === null ||
+      generation.principalId !== principalId ||
+      generation.spaceId !== spaceId
+    ) return Object.freeze({ kind: "required" });
+    const pin: Readonly<PrincipalMindUsageWritePin> = Object.freeze({
+      principalId,
+      spaceId,
+      generationId: generation.generationId,
+    });
+    return await this.#metadata.validatePrincipalMindUsageWritePin(pin)
+      ? Object.freeze({ kind: "resolved", pin })
+      : Object.freeze({ kind: "stale" });
+  }
+
+  async #authorizeSourceReferences(
+    actor: Extract<ActorContext, { readonly kind: "registered_principal" }>,
+    sources: readonly Readonly<ValidatedSourceReference>[],
+  ): Promise<SourceAuthorizationResult> {
+    if (sources.length === 0) {
+      return Object.freeze({ kind: "authorized", sources: Object.freeze([]) });
+    }
+    const usage = await this.#metadata.readPrincipalMindUsage(actor.principalId);
+    const authorized: AuthorizedSourceReference[] = [];
+    for (const source of sources) {
+      if (!usage?.entries.some((entry) => entry.spaceId === source.spaceId)) {
+        return Object.freeze({
+          kind: "denied",
+          decision: Object.freeze({
+            kind: "denied" as const,
+            code: "access_denied" as const,
+            retryable: false,
+          }),
+        });
+      }
+      const decision = await this.#authorizer.authorize({
+        actor,
+        spaceId: source.spaceId,
+        capability: "content:fetch",
+        revisionMode: "historical",
+      });
+      if (decision.kind === "denied") {
+        return Object.freeze({ kind: "denied", decision });
+      }
+      const envelope = await this.#metadata.readRevision(
+        source.spaceId,
+        source.revisionId,
+      );
+      if (
+        envelope === null ||
+        !envelope.manifest.entries.some((entry) => entry.path === source.path)
+      ) {
+        return invalid(
+          "source_reference_unavailable",
+          "an exact source reference is unavailable",
+        );
+      }
+      authorized.push(Object.freeze({ source, stamp: decision.stamp }));
+    }
+    return Object.freeze({
+      kind: "authorized",
+      sources: Object.freeze(authorized),
+    });
+  }
+
+  async #reauthorizeSourceReferences(
+    actor: Extract<ActorContext, { readonly kind: "registered_principal" }>,
+    transaction: ContentCommitMetadataTransaction,
+    sources: readonly Readonly<AuthorizedSourceReference>[],
+  ): Promise<Extract<CommitChangesetResult, { readonly kind: "denied" | "invalid" }> | null> {
+    if (sources.length === 0) return null;
+    const usage = await transaction.readPrincipalMindUsage(actor.principalId);
+    for (const source of sources) {
+      if (!usage?.entries.some((entry) => entry.spaceId === source.source.spaceId)) {
+        return Object.freeze({
+          kind: "denied",
+          decision: Object.freeze({
+            kind: "denied" as const,
+            code: "access_denied" as const,
+            retryable: false,
+          }),
+        });
+      }
+      const decision = await this.#authorizer.reauthorizeInTransaction(
+        {
+          actor,
+          spaceId: source.source.spaceId,
+          capability: "content:fetch",
+          revisionMode: "historical",
+        },
+        transaction,
+        source.stamp,
+      );
+      if (decision.kind === "denied") {
+        return Object.freeze({ kind: "denied", decision });
+      }
+      const envelope = await transaction.readRevision(
+        source.source.spaceId,
+        source.source.revisionId,
+      );
+      if (
+        envelope === null ||
+        !envelope.manifest.entries.some(
+          (entry) => entry.path === source.source.path,
+        )
+      ) {
+        return invalid(
+          "source_reference_unavailable",
+          "an exact source reference is unavailable",
+        );
+      }
+    }
+    return null;
   }
 
   async #resolveIdempotency(

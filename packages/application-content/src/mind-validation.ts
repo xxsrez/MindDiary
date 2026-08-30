@@ -532,6 +532,14 @@ export class MindValidationService {
     revisionMode: RevisionMode,
     concealCapabilityDenial: boolean,
   ): Promise<AllowedAuthorization> {
+    try {
+      await this.#discovery.requireEnabledMindUsage(actor, spaceId);
+    } catch (error) {
+      if (error instanceof MindDiscoveryFailure) {
+        throw new MindValidationFailure("mind_not_found", "Mind was not found.");
+      }
+      throw error;
+    }
     const decision = await this.#authorizer.authorize({
       actor,
       spaceId,

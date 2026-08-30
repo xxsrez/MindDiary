@@ -26,7 +26,7 @@ export const RELEASE_03_LOCAL_ASSERTION_IDS = Object.freeze([
   "local.personal-membership-public-unlisted-private",
   "local.membership-visibility-revoke-immediate",
   "local.owner-isolation-oauth-and-personal-token",
-  "local.modern-compat-catalog-exact-17",
+  "local.modern-compat-catalog-exact-16",
   "local.target-exact-generation-stale-head-wrong-mind",
   "local.fresh-reconnect-reissue-empty-target",
   "local.legacy-and-same-owner-upgrade",
@@ -472,8 +472,8 @@ export function verifyRelease03AuthorityTargetUatJoin(value) {
     !SHA256.test(value.read_back.local_evidence_sha256) ||
     !SHA256.test(value.read_back.pool_readiness_sha256) ||
     !SHA256.test(value.read_back.hosted_observation_sha256) ||
-    value.read_back.modern_tool_count !== 17 ||
-    value.read_back.compatibility_tool_count !== 17 ||
+    value.read_back.modern_tool_count !== EXPECTED_DEFAULT_MCP_TOOL_NAMES.length ||
+    value.read_back.compatibility_tool_count !== EXPECTED_DEFAULT_MCP_TOOL_NAMES.length ||
     !RUN_FINGERPRINT.test(value.read_back.run_fingerprint)
   ) fail("invalid_uat_join_evidence");
   verifySurfaceReadBack(value.read_back.web_surfaces);

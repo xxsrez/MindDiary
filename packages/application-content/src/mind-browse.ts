@@ -1477,6 +1477,17 @@ export class MindBrowseService {
     revisionMode: RevisionMode,
     denialCode: "mind_not_found" | "locator_not_found" | "resource_not_found",
   ): Promise<AllowedAuthorization> {
+    try {
+      await this.#discovery.requireEnabledMindUsage(actor, spaceId);
+    } catch (error) {
+      if (error instanceof MindDiscoveryFailure) {
+        throw new MindBrowseFailure(
+          denialCode,
+          denialCode === "mind_not_found" ? "Mind was not found." : "Entry was not found.",
+        );
+      }
+      throw error;
+    }
     const decision = await this.#authorizer.authorize({
       actor,
       spaceId,
@@ -1511,6 +1522,17 @@ export class MindBrowseService {
     expected: AllowedAuthorization,
     denialCode: "mind_not_found" | "locator_not_found" | "resource_not_found",
   ): Promise<void> {
+    try {
+      await this.#discovery.requireEnabledMindUsage(actor, spaceId);
+    } catch (error) {
+      if (error instanceof MindDiscoveryFailure) {
+        throw new MindBrowseFailure(
+          denialCode,
+          denialCode === "mind_not_found" ? "Mind was not found." : "Entry was not found.",
+        );
+      }
+      throw error;
+    }
     const decision = await this.#authorizer.authorize({
       actor,
       spaceId,

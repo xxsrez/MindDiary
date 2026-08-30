@@ -1,6 +1,7 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
 import type {
   GeneratedArtifactSourceKind,
+  PrincipalMindUsageWritePin,
 } from "@mind-diary/application-ports";
 import type { Sha256Digest, SpaceId, StagedBundleFileId } from "@mind-diary/domain";
 import {
@@ -28,7 +29,6 @@ export type GeneratedArtifactInput =
 type GeneratedArtifactRequestFields = Readonly<{
   readonly actor: ActorContext;
   readonly spaceId: SpaceId;
-  readonly writeBindingId: unknown;
   readonly sourceKind: unknown;
   readonly displayFilename: unknown;
   readonly claimedMediaType: unknown;
@@ -136,7 +136,10 @@ export class GeneratedArtifactIngressService {
     this.#staging = dependencies.staging;
   }
 
-  async stage(request: StageGeneratedArtifactRequest): Promise<GeneratedArtifactIngressResult> {
+  async stage(
+    request: StageGeneratedArtifactRequest,
+    expectedWritePin?: Readonly<PrincipalMindUsageWritePin>,
+  ): Promise<GeneratedArtifactIngressResult> {
     const sourceKind = generatedSourceKind(request.sourceKind);
     if (sourceKind === null) {
       return Object.freeze({ kind: "invalid", code: "invalid_source_kind" });
@@ -164,7 +167,6 @@ export class GeneratedArtifactIngressService {
       return mapStreamResult(await this.#staging.stageStream({
         actor: request.actor,
         spaceId: request.spaceId,
-        writeBindingId: request.writeBindingId,
         displayFilename: request.displayFilename,
         claimedMediaType: request.claimedMediaType,
         idempotencyKey: request.idempotencyKey,
@@ -177,7 +179,7 @@ export class GeneratedArtifactIngressService {
           ? {}
           : { expectedMediaType: request.expectedMediaType }),
         ...(request.signal === undefined ? {} : { signal: request.signal }),
-      }));
+      }, expectedWritePin));
     }
 
     if (!(request.bytes instanceof Uint8Array)) {
@@ -193,7 +195,6 @@ export class GeneratedArtifactIngressService {
     const stageRequest: StageBundleFileRequest = {
       actor: request.actor,
       spaceId: request.spaceId,
-      writeBindingId: request.writeBindingId,
       displayFilename: request.displayFilename,
       claimedMediaType: request.claimedMediaType,
       bytes: request.bytes,
@@ -205,7 +206,7 @@ export class GeneratedArtifactIngressService {
         ? {}
         : { expectedMediaType: request.expectedMediaType }),
     };
-    return this.#staging.stage(stageRequest);
+    return this.#staging.stage(stageRequest, expectedWritePin);
   }
 
   stageBoundedInMemory(
@@ -216,8 +217,12 @@ export class GeneratedArtifactIngressService {
 
   stageServerGenerated(
     request: StageGeneratedArtifactWithoutSource,
+    expectedWritePin?: Readonly<PrincipalMindUsageWritePin>,
   ): Promise<GeneratedArtifactIngressResult> {
-    return this.stage({ ...request, sourceKind: "server_generated" });
+    return this.stage(
+      { ...request, sourceKind: "server_generated" },
+      expectedWritePin,
+    );
   }
 
   /**

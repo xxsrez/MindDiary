@@ -1,15 +1,17 @@
 # Проверка generated-source ingress в UAT
 
-Статус: accepted procedure MD-290, 2026-08-28. Эта проверка относится только к
-Release 0.3 и UAT. Она не включает production, не меняет access policy и не
-принимает пользовательские данные.
+Статус: accepted procedure MD-290, 2026-08-28; principal-owned mount-generation
+amendment, 2026-08-30. Эта проверка относится только к Release 0.3 и UAT. Она
+не включает production, не меняет access policy и не принимает пользовательские
+данные.
 
 ## Результат
 
 Один exact candidate должен доказать два внутренних source route:
 `bounded_in_memory` и `server_generated`. Оба используют обычный
 application-owned staging, возвращают только `staged_file_ref` и становятся
-видимы лишь после отдельного atomic commit в выбранный на Site writable target.
+видимы лишь после отдельного atomic commit в единственный выбранный на Site
+principal-owned Mind с режимом `read_write`.
 
 Локальная проверка и hosted evidence разделены. Локальный receipt всегда имеет
 `hosted_evidence=false`; offline join также не может объявить hosted PASS.
@@ -51,15 +53,19 @@ rows одновременно остаются `not_available`, `none`, `0`.
 
 В уже подготовленной restricted-UAT test session normal server commands должны:
 
-1. создать fresh private ordinary Mind с synthetic content only;
+1. создать fresh private ordinary Mind с synthetic content only и непустым
+   synthetic description;
 2. выпустить personal token с exact name `UAT Generated Sources`, active
    `content:write` и expiry не более восьми суток от `created_at`;
-3. выбрать этот Mind единственным writable target через authenticated Site;
+3. через authenticated Site задать этому Mind режим `read_write` и перечитать
+   единственную active writable projection principal; exact usage generation
+   остаётся server-only, а credential/token page не выбирает destination;
 4. вызвать same-origin, CSRF-protected
    `POST /api/internal/uat/generated-sources` с JSON ровно
    `{ "action": "run_matrix", "personal_token_ref": "<actor-owned-ref>",
    "run_id": "<8..64 bounded id>" }`;
-5. проверить +1 byte, overflow, cancel, timeout, producer error, stale target,
+5. проверить +1 byte, overflow, cancel, timeout, producer error, stale/changed
+   principal usage mount,
    digest mismatch и reconcile/replay как no-HEAD/no-partial-effect outcomes;
 6. reconcile exact stage/commit payload после искусственно неизвестного
    transport outcome без повторного object/revision effect;
@@ -68,14 +74,19 @@ rows одновременно остаются `not_available`, `none`, `0`.
 8. выполнить controlled redeploy того же version/candidate и повторить exact
    path/size/SHA/bytes read-back;
 9. revoke-нуть dedicated credential, удалить только run-owned Mind и перечитать
-   отсутствие target/Mind.
+   отсутствие active writable mount и Mind.
 
 POST принимает только три указанных поля: никакие bytes/base64, path, URL,
-Mind, owner, generation, filename/media/digest, provider locator, prompt/job
-или способ generation не являются input. Owner/generation/version никогда не
-являются runner input. Trusted runtime
-сам выводит credential owner и active target generation; Content MCP request не
-может передать `write_binding_id` или replacement generation field.
+Mind, `principal_id`, `space_id`, binding owner, generation,
+filename/media/digest, provider locator, prompt/job или способ generation не
+являются input. Principal/mount/generation/version никогда не являются runner
+input. Trusted runtime разрешает principal из dedicated credential, читает его
+единственный active `read_write` Mind и pin-ит exact
+`principal_mind_usage_generation_id`. Credential scope и current role/ACL
+авторизуют вызов, но не выбирают destination. Ни route, ни Content MCP request
+не могут передать или заменить `write_binding_id`, `binding_owner_id`,
+principal usage generation либо target version; любое asserted Mind mismatch
+fail closed без fallback.
 
 Matrix response заканчивается одним commit и возвращает только candidate/test
 rows, 15 safe assertion statuses, size/SHA receipts и
@@ -125,7 +136,9 @@ provenance отдельно и только затем решает terminal acc
 - После unknown mutation сначала выполняется read-only reconcile exact payload;
   новый key до разрешения outcome запрещён.
 - Cleanup удаляет только fresh run-owned private Mind после повторной проверки
-  sole Owner, private visibility и exact target. Drift останавливает deletion.
+  sole Owner, private visibility и exact active principal-owned mount. Usage
+  generation drift останавливает mutation; legacy binding field не используется
+  для восстановления или выбора target.
 - Credential revoke выполняется до Mind deletion и перечитывается.
 - Evidence parent остаётся `0700`, files — `0600`; output reservation использует
   no-follow/exclusive open и повторно проверяет parent device/inode.

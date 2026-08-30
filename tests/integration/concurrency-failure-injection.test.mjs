@@ -36,6 +36,7 @@ import {
   OrdinaryMindDeletionService,
   OwnershipTransferFailure,
   OwnershipTransferService,
+  PrincipalMindUsageApplicationService,
   VisibilityControlService,
 } from "@mind-diary/application-control";
 import {
@@ -146,6 +147,9 @@ function createHarness() {
   let indexJob = 0;
   let exportJob = 0;
   let deletionImpact = 0;
+  let usageGeneration = 0;
+  let usageAudit = 0;
+  let usageOutbox = 0;
 
   const nextAuditEventId = () => `audit_stress_${++auditEvent}`;
   const nextOutboxMessageId = () => `outbox_stress_${++auditOutbox}`;
@@ -194,6 +198,18 @@ function createHarness() {
     auditIds: { nextAuditEventId, nextOutboxMessageId },
     capacityLimits: DEFAULT_CAPACITY_LIMITS,
   });
+  const usage = new PrincipalMindUsageApplicationService({
+    usage: metadata,
+    digest: objects,
+    ids: {
+      nextPrincipalMindUsageGenerationId: () =>
+        `usage_generation_stress_${++usageGeneration}`,
+      nextPrincipalMindUsageAuditEventId: () =>
+        `usage_audit_stress_${++usageAudit}`,
+      nextPrincipalMindUsageOutboxMessageId: () =>
+        `usage_outbox_stress_${++usageOutbox}`,
+    },
+  });
   const effectIds = {
     nextAuditEventId,
     nextOutboxMessageId,
@@ -231,6 +247,7 @@ function createHarness() {
     invitations,
     visibility,
     ownership,
+    usage,
     effectIds,
     revisionIds,
     jobIds,
@@ -245,14 +262,24 @@ async function bootstrap(env, index) {
 }
 
 async function createMind(env, owner, handle) {
-  return env.ordinary.createSpaceWithOwner(
+  const mind = await env.ordinary.createSpaceWithOwner(
     sitesActor(owner.principalId, `create_${handle}`, T0),
     {
       name: `Mind ${handle}`,
       handle,
+      description: `Durable knowledge for ${handle}`,
       idempotencyKey: `create-${handle}`,
     },
   );
+  const selected = await env.usage.mutate({
+    actor: sitesActor(owner.principalId, `select_${handle}`, T0),
+    spaceId: mind.mindId,
+    usageMode: "read_write",
+    expectedUsageVersion: 0,
+    idempotencyKey: `select-${handle}`,
+  });
+  assert.equal(selected.kind, "applied");
+  return mind;
 }
 
 async function inspectMind(env, mindId) {
@@ -696,7 +723,12 @@ test(
     );
     assert.equal(await env.metadata.readHead(mind.mindId), mind.headRevisionId);
     assert.equal((await env.metadata.listIdempotencyRecordsForTest()).length, 0);
-    assert.equal((await env.metadata.listAuditEventsForTest()).length, 0);
+    assert.equal(
+      (await env.metadata.listAuditEventsForTest()).filter(
+        (event) => event.eventType === "content.changeset_committed",
+      ).length,
+      0,
+    );
 
     const exactResults = await Promise.all(
       Array.from({ length: 24 }, (_, index) =>

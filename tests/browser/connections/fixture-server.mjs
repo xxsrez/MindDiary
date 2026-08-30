@@ -37,27 +37,6 @@ function presentationRef(prefix, index) {
   return `${prefix}${index.toString(16).padStart(32, "0")}`;
 }
 
-const minds = Object.freeze([
-  Object.freeze({
-    name: "Personal notes with a deliberately long mobile label",
-    route: "/me",
-    visibility: "private",
-    canWrite: true,
-  }),
-  Object.freeze({
-    name: "Shared research",
-    route: "/shared-research",
-    visibility: "unlisted",
-    canWrite: true,
-  }),
-  Object.freeze({
-    name: "Public reader",
-    route: "/public-reader",
-    visibility: "public",
-    canWrite: false,
-  }),
-]);
-
 const connections = Array.from({ length: requestedCount }, (_, offset) => {
   const index = offset + 1;
   return Object.freeze({
@@ -69,8 +48,6 @@ const connections = Array.from({ length: requestedCount }, (_, offset) => {
     lastUsedAt: index % 2 === 0 ? null : "2026-08-24T12:00:00.000Z",
     canRead: true,
     canWrite: index === 1,
-    readableMindCount: 1,
-    writableMindSelected: index === 1,
   });
 });
 
@@ -95,10 +72,7 @@ const personalTokens = Array.from({ length: requestedCount }, (_, offset) => {
 
 const revokedConnections = new Set();
 const revokedTokens = new Set();
-let targetVersion = 4;
 let createdToken = null;
-const clearedConnectionTargets = new Set();
-const clearedTokenTargets = new Set();
 
 function cookie(request, name) {
   const header = request.headers.cookie ?? "";
@@ -148,43 +122,6 @@ function page(items, cursor) {
   return Object.freeze({
     items: Object.freeze(visible),
     nextCursor: start === 0 && items.length > pageSize ? "fixture-next" : null,
-  });
-}
-
-function access(canWrite = true, hasSelectedTarget = canWrite) {
-  return Object.freeze({
-    targetVersion,
-    readableMinds: minds,
-    writableMind: hasSelectedTarget ? minds[1] : null,
-    writableTargetState: hasSelectedTarget ? "selected" : "not_selected",
-    eligibleMinds: minds,
-  });
-}
-
-function connectionDetail(item) {
-  return Object.freeze({
-    ...item,
-    access: access(
-      item.canWrite,
-      item.canWrite && !clearedConnectionTargets.has(item.connectionRef),
-    ),
-  });
-}
-
-function tokenDetail(item) {
-  const selected = item.scopes.includes("content:write") &&
-    item !== createdToken &&
-    !clearedTokenTargets.has(item.personalTokenRef);
-  return Object.freeze({ ...item, access: access(item.scopes.includes("content:write"), selected) });
-}
-
-function accessJson(value) {
-  return Object.freeze({
-    target_version: value.targetVersion,
-    readable_minds: value.readableMinds,
-    writable_mind: value.writableMind,
-    writable_target_state: value.writableTargetState,
-    eligible_minds: value.eligibleMinds,
   });
 }
 
@@ -309,7 +246,7 @@ const server = createServer(async (request, response) => {
           ? { kind: "empty" }
           : {
               kind: "ready",
-              items: result.items.map((item) => state === "active" ? tokenDetail(item) : item),
+              items: result.items,
               nextCursor: result.nextCursor,
             };
       send(response, 200, "text/html; charset=utf-8", withFixtureMeta(
@@ -345,8 +282,6 @@ const server = createServer(async (request, response) => {
             last_used_at: item.lastUsedAt,
             can_read: item.canRead,
             can_write: item.canWrite,
-            readable_mind_count: item.readableMindCount,
-            writable_mind_selected: item.writableMindSelected,
           })),
           next_cursor: result.nextCursor,
         },
@@ -365,43 +300,17 @@ const server = createServer(async (request, response) => {
       send(response, 200, "text/html; charset=utf-8", withFixtureMeta(
         renderConnectionDetailDocument({
           displayName: "Browser Fixture",
-          connection: connectionDetail(item),
+          connection: item,
         }),
       ));
       return;
     }
 
-    const connectionApi = /^\/api\/v1\/connections\/(conn_v1_[0-9a-f]{32})(?:\/mind-access)?$/u.exec(url.pathname);
+    const connectionApi = /^\/api\/v1\/connections\/(conn_v1_[0-9a-f]{32})$/u.exec(url.pathname);
     if (connectionApi && method === "DELETE") {
       await new Promise((resolve) => setTimeout(resolve, 80));
       revokedConnections.add(connectionApi[1]);
       json(response, 200, { ok: true, data: { revoked: true } });
-      return;
-    }
-    if (connectionApi && method === "PATCH" && url.pathname.endsWith("/mind-access")) {
-      const command = await body(request);
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      if (command?.expected_target_version !== targetVersion) {
-        json(response, 409, { error: { code: "target_conflict" } });
-        return;
-      }
-      if (command?.action === "clear_write") {
-        clearedConnectionTargets.add(connectionApi[1]);
-      } else if (command?.action === "select_write") {
-        clearedConnectionTargets.delete(connectionApi[1]);
-      } else {
-        json(response, 400, { error: { code: "invalid_request" } });
-        return;
-      }
-      targetVersion += 1;
-      json(response, 200, {
-        ok: true,
-        data: {
-          changed: true,
-          replayed: false,
-          access: accessJson(access(true, !clearedConnectionTargets.has(connectionApi[1]))),
-        },
-      });
       return;
     }
     if (url.pathname === "/api/v1/mcp-tokens" && method === "POST") {
@@ -425,35 +334,10 @@ const server = createServer(async (request, response) => {
       });
       return;
     }
-    const tokenApi = /^\/api\/v1\/mcp-tokens\/(ptok_v1_[0-9a-f]{32})(?:\/mind-access)?$/u.exec(url.pathname);
-    if (tokenApi && method === "DELETE" && !url.pathname.endsWith("/mind-access")) {
+    const tokenApi = /^\/api\/v1\/mcp-tokens\/(ptok_v1_[0-9a-f]{32})$/u.exec(url.pathname);
+    if (tokenApi && method === "DELETE") {
       revokedTokens.add(tokenApi[1]);
       json(response, 200, { ok: true, data: { token: { state: "revoked" } } });
-      return;
-    }
-    if (tokenApi && method === "PATCH" && url.pathname.endsWith("/mind-access")) {
-      const command = await body(request);
-      if (command?.expected_target_version !== targetVersion) {
-        json(response, 409, { error: { code: "target_conflict" } });
-        return;
-      }
-      if (command?.action === "clear_write") {
-        clearedTokenTargets.add(tokenApi[1]);
-      } else if (command?.action === "select_write") {
-        clearedTokenTargets.delete(tokenApi[1]);
-      } else {
-        json(response, 400, { error: { code: "invalid_request" } });
-        return;
-      }
-      targetVersion += 1;
-      json(response, 200, {
-        ok: true,
-        data: {
-          changed: true,
-          replayed: false,
-          access: accessJson(access(true, !clearedTokenTargets.has(tokenApi[1]))),
-        },
-      });
       return;
     }
     if (

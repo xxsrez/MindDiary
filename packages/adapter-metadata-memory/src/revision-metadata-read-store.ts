@@ -1193,6 +1193,12 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
             principalId: PrincipalId,
             occurredAt: ApplyReadMindBindingRequest["occurredAt"],
           ) => this.readMindBindingSet(bindingOwnerId, principalId, occurredAt),
+          readPrincipalMindUsage: (principalId: PrincipalId) =>
+            this.readPrincipalMindUsage(principalId),
+          validatePrincipalMindUsageWritePin: (
+            pin: Readonly<PrincipalMindUsageWritePin>,
+          ) =>
+            this.validatePrincipalMindUsageWritePin(pin),
           readCurrentAuthorizationState: (query: AuthorizationStateQuery) =>
             this.readCurrentAuthorizationState(query),
           readStagedBundleFile: async (stagedFileId: StagedBundleFileId) => {

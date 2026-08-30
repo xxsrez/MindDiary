@@ -1,8 +1,11 @@
 import type { McpTokenActorContext } from "@mind-diary/application-contracts";
-import type { CredentialWriteTargetStore } from "@mind-diary/application-ports";
+import type {
+  PrincipalMindUsageReader,
+  PrincipalMindUsageWritePin,
+} from "@mind-diary/application-ports";
 import {
   bundleFileMediaType,
-  type CredentialWriteTargetGenerationId,
+  type PrincipalMindUsageGenerationId,
   type SpaceId,
 } from "@mind-diary/domain";
 import type { BundleFileStagingService } from "./bundle-files.js";
@@ -189,8 +192,7 @@ function cancelled(): GeneratedArtifactIngressResult {
 
 type ResolvedWritableTarget = Readonly<{
   kind: "ready";
-  generationId: CredentialWriteTargetGenerationId;
-  targetVersion: number;
+  generationId: PrincipalMindUsageGenerationId;
 }>;
 
 type WritableTargetFailure = Extract<
@@ -212,18 +214,13 @@ function mapCurrentTargetFailure<Result extends GeneratedArtifactIngressResult |
 }>(result: Result): Result | WritableTargetFailure {
   if (result.kind === "denied") {
     const decision = result.decision as Readonly<{ readonly code?: unknown }>;
-    if (decision.code === "write_binding_required") {
+    if (decision.code === "writable_mind_required") {
       return writableTargetFailure("writable_target_required");
     }
     if (
-      decision.code === "write_binding_stale" ||
-      decision.code === "binding_state_unavailable" ||
-      decision.code === "binding_owner_revoked" ||
+      decision.code === "writable_mind_stale" ||
       decision.code === "authorization_state_changed"
     ) return writableTargetFailure("writable_target_unavailable");
-  }
-  if (result.kind === "invalid" && result.code === "binding_mismatch") {
-    return writableTargetFailure("writable_target_unavailable");
   }
   return result;
 }
@@ -238,19 +235,23 @@ function mapCurrentTargetFailure<Result extends GeneratedArtifactIngressResult |
 export class TrustedServerGeneratedIngressService {
   readonly #ingress: Pick<GeneratedArtifactIngressService, "stageServerGenerated">;
   readonly #reconciliation: Pick<BundleFileStagingService, "reconcile">;
-  readonly #targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
+  readonly #usage: PrincipalMindUsageReader;
   readonly #producerLeaseMilliseconds: number;
 
   constructor(dependencies: {
     readonly ingress: Pick<GeneratedArtifactIngressService, "stageServerGenerated">;
     readonly reconciliation: Pick<BundleFileStagingService, "reconcile">;
-    readonly targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
+    readonly usage?: PrincipalMindUsageReader;
+    /** @deprecated Composition compatibility; principal usage is still read here. */
+    readonly targets?: PrincipalMindUsageReader;
     /** Tests/adapters may choose a stricter lease, never a wider one. */
     readonly producerLeaseMilliseconds?: number;
   }) {
     this.#ingress = dependencies.ingress;
     this.#reconciliation = dependencies.reconciliation;
-    this.#targets = dependencies.targets;
+    const usage = dependencies.usage ?? dependencies.targets;
+    if (usage === undefined) throw new TypeError("principal Mind usage reader is required");
+    this.#usage = usage;
     const lease = dependencies.producerLeaseMilliseconds ??
       SERVER_GENERATED_INGRESS_LIMITS.producerLeaseMilliseconds;
     if (
@@ -280,7 +281,6 @@ export class TrustedServerGeneratedIngressService {
       const prior = mapCurrentTargetFailure(await this.#reconciliation.reconcile({
         actor: request.actor,
         spaceId: request.spaceId,
-        writeBindingId: target.generationId,
         displayFilename: request.displayFilename,
         claimedMediaType: expectedMediaType,
         idempotencyKey: request.idempotencyKey,
@@ -341,7 +341,6 @@ export class TrustedServerGeneratedIngressService {
       const result = await this.#ingress.stageServerGenerated({
         actor: request.actor,
         spaceId: request.spaceId,
-        writeBindingId: target.generationId,
         displayFilename: request.displayFilename,
         claimedMediaType: expectedMediaType,
         expectedMediaType,
@@ -350,7 +349,11 @@ export class TrustedServerGeneratedIngressService {
         expectedSize: request.expectedSize,
         expectedSha256: request.expectedSha256,
         signal,
-      });
+      }, Object.freeze({
+        principalId: request.actor.principalId,
+        spaceId: request.spaceId,
+        generationId: target.generationId,
+      } satisfies PrincipalMindUsageWritePin));
       if (
         result.kind === "invalid" &&
         result.code === "generated_artifact_cancelled" &&
@@ -372,32 +375,28 @@ export class TrustedServerGeneratedIngressService {
   ): Promise<ResolvedWritableTarget | WritableTargetFailure> {
     let snapshot;
     try {
-      snapshot = await this.#targets.readCredentialWriteTarget(
-        actor.authentication.bindingOwnerId,
-        actor.principalId,
-      );
+      snapshot = await this.#usage.readPrincipalMindUsage(actor.principalId);
     } catch {
       return writableTargetFailure("writable_target_unavailable");
     }
-    if (snapshot?.kind === "pending_upgrade") {
-      return writableTargetFailure("writable_target_required");
+    if (snapshot !== null && snapshot.principalId !== actor.principalId) {
+      return writableTargetFailure("writable_target_unavailable");
     }
-    if (
-      snapshot?.kind !== "current" ||
-      snapshot.state.bindingOwnerId !== actor.authentication.bindingOwnerId ||
-      snapshot.state.principalId !== actor.principalId ||
-      snapshot.state.lifecycleState !== "active"
-    ) return writableTargetFailure("writable_target_unavailable");
-    const generation = snapshot.state.activeGeneration;
+    const generation = snapshot?.activeWriteGeneration ?? null;
     if (generation === null) return writableTargetFailure("writable_target_required");
     if (
-      generation.bindingOwnerId !== actor.authentication.bindingOwnerId ||
+      generation.principalId !== actor.principalId ||
       generation.spaceId !== spaceId
     ) return writableTargetFailure("writable_target_mismatch");
+    const pinValid = await this.#usage.validatePrincipalMindUsageWritePin({
+      principalId: actor.principalId,
+      spaceId,
+      generationId: generation.generationId,
+    });
+    if (!pinValid) return writableTargetFailure("writable_target_unavailable");
     return Object.freeze({
       kind: "ready",
       generationId: generation.generationId,
-      targetVersion: snapshot.state.targetVersion,
     });
   }
 }

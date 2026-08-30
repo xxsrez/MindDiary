@@ -192,20 +192,34 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
   const secret = issuedData.secret;
   const personalTokenRef = issuedData.token.personal_token_ref;
 
-  const selected = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
-    {
+  const described = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/description`, {
       method: "PATCH",
       headers: {
         origin: ORIGIN,
         "content-type": "application/json",
         "x-csrf-token": csrf,
-        "idempotency-key": "target:server-generated-composition",
+        "idempotency-key": "description:server-generated-composition",
       },
       body: JSON.stringify({
-        action: "select_write",
-        mind_ref: "/me",
-        expected_target_version: 0,
+        description: "Durable generated documents explicitly discussed with the user",
+        expected_metadata_version: sessionData.personal_mind.metadata_version,
+      }),
+    },
+  ));
+  assert.equal(described.status, 200, await described.clone().text());
+  const selected = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/usage`, {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": "usage:server-generated-composition",
+      },
+      body: JSON.stringify({
+        usage_mode: "read_write",
+        expected_usage_version: 0,
       }),
     },
   ));
@@ -307,36 +321,33 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
     producer: async () => {
       targetRaceProducerInvocations += 1;
       const cleared = await responseFrom(runtime, new Request(
-        `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
-        {
-          method: "PATCH",
+        `${ORIGIN}/api/v1/minds/me/usage`, {
+          method: "PUT",
           headers: {
             origin: ORIGIN,
             "content-type": "application/json",
             "x-csrf-token": csrf,
-            "idempotency-key": "target:server-generated-race-clear",
+            "idempotency-key": "usage:server-generated-race-clear",
           },
           body: JSON.stringify({
-            action: "clear_write",
-            expected_target_version: 1,
+            usage_mode: "disabled",
+            expected_usage_version: 1,
           }),
         },
       ));
       assert.equal(cleared.status, 200, await cleared.clone().text());
       const reselected = await responseFrom(runtime, new Request(
-        `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
-        {
-          method: "PATCH",
+        `${ORIGIN}/api/v1/minds/me/usage`, {
+          method: "PUT",
           headers: {
             origin: ORIGIN,
             "content-type": "application/json",
             "x-csrf-token": csrf,
-            "idempotency-key": "target:server-generated-race-reselect",
+            "idempotency-key": "usage:server-generated-race-reselect",
           },
           body: JSON.stringify({
-            action: "select_write",
-            mind_ref: "/me",
-            expected_target_version: 2,
+            usage_mode: "read_write",
+            expected_usage_version: 2,
           }),
         },
       ));

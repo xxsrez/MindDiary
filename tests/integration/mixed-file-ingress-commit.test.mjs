@@ -18,14 +18,12 @@ import {
   FileIngressCoordinator,
   GeneratedArtifactIngressService,
   LocalFileUploadIntentService,
-  MindBindingContentAuthorizer,
   createLocalFileUploadIntentSecretCodec,
 } from "@mind-diary/application-content";
 import { createGoogleDriveConnectorIngress } from "@mind-diary/composition-root";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import {
   CAPABILITIES,
-  bindingVersion,
   verifiedSpaceHost,
   version,
 } from "@mind-diary/domain";
@@ -41,11 +39,8 @@ import {
 const START = "2026-08-25T13:00:00.000Z";
 const AUTHORIZATION_RECORD_ID = "md_oauth_access_mixed_ingress";
 const OWNER = "md_oauth_grant_mixed_ingress";
-const WRITE = "write_binding_mixed_ingress";
 const FOREIGN_AUTHORIZATION_RECORD_ID = "md_oauth_access_mixed_foreign";
 const FOREIGN_OWNER = "md_oauth_grant_mixed_foreign";
-const FOREIGN_WRITE = "write_binding_mixed_foreign";
-const HASH = `sha256:${"a".repeat(64)}`;
 
 const FIXTURES = Object.freeze({
   sessionDocx: Uint8Array.from([
@@ -134,58 +129,59 @@ function authorizationState({
   });
 }
 
-async function bindWrite(metadata, currentActor, spaceId, writeBindingId, suffix) {
-  const result = await metadata.runMindBindingTransaction((transaction) =>
-    transaction.applyWriteMindBinding({
-      bindingOwnerId: currentActor.authentication.bindingOwnerId,
-      principalId: currentActor.principalId,
-      action: "bind",
+function principalMountedMetadata(metadata) {
+  const mounted = new Map();
+  let generation = 0;
+  const select = (principalId, spaceId) => {
+    const current = Object.freeze({
+      principalId,
       spaceId,
-      writeBindingId,
-      expectedBindingVersion: bindingVersion(0),
-      idempotencyKey: `bind-${suffix}`,
-      canonicalRequestHash: HASH,
-      requestId: `request_bind_${suffix}`,
-      auditEventId: `audit_bind_${suffix}`,
-      auditOutboxMessageId: `outbox_bind_${suffix}`,
-      occurredAt: currentActor.occurredAtUtc,
-    }),
-  );
-  assert.equal(result.kind, "applied");
-}
-
-async function selectCredentialWriteTarget(
-  metadata,
-  currentActor,
-  spaceId,
-  generationId,
-  suffix,
-) {
-  const registered = await metadata.runCredentialWriteTargetTransaction((transaction) =>
-    transaction.registerCredentialWriteTargetOwner({
-      bindingOwnerId: currentActor.authentication.bindingOwnerId,
-      principalId: currentActor.principalId,
-      credentialKind: "oauth_grant",
-      occurredAt: currentActor.occurredAtUtc,
-    }));
-  assert.equal(registered.kind, "registered");
-  const selected = await metadata.runCredentialWriteTargetTransaction((transaction) =>
-    transaction.applyCredentialWriteTarget({
-      bindingOwnerId: currentActor.authentication.bindingOwnerId,
-      principalId: currentActor.principalId,
-      operation: "select",
-      spaceId,
-      expectedTargetVersion: 0,
-      generationId,
-      credentialHasWriteScope: true,
-      idempotencyKey: `target-${suffix}`,
-      canonicalRequestHash: HASH,
-      requestId: `request_target_${suffix}`,
-      auditEventId: `audit_target_${suffix}`,
-      auditOutboxMessageId: `outbox_target_${suffix}`,
-      occurredAt: currentActor.occurredAtUtc,
-    }));
-  assert.equal(selected.kind, "applied");
+      generationId: `usage_generation_mixed_${++generation}`,
+    });
+    mounted.set(principalId, current);
+    return current;
+  };
+  const readUsage = async (principalId) => {
+    const current = mounted.get(principalId);
+    if (current === undefined) return null;
+    return Object.freeze({
+      principalId,
+      entries: Object.freeze([Object.freeze({
+        principalId,
+        spaceId: current.spaceId,
+        usageMode: "read_write",
+        writeGeneration: current,
+      })]),
+      activeWriteGeneration: current,
+    });
+  };
+  const validatePin = async (pin) => {
+    const current = mounted.get(pin.principalId);
+    return current !== undefined &&
+      current.spaceId === pin.spaceId &&
+      current.generationId === pin.generationId;
+  };
+  const wrapTransaction = (transaction) => Object.freeze({
+    ...transaction,
+    readPrincipalMindUsage: readUsage,
+    validatePrincipalMindUsageWritePin: validatePin,
+  });
+  const store = new Proxy(metadata, {
+    get(target, property) {
+      if (property === "readPrincipalMindUsage") return readUsage;
+      if (property === "validatePrincipalMindUsageWritePin") return validatePin;
+      if (
+        property === "runBundleFileStagingTransaction" ||
+        property === "runContentCommitTransaction"
+      ) {
+        return (operation) => target[property]((transaction) =>
+          operation(wrapTransaction(transaction)));
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return Object.freeze({ store, select });
 }
 
 function chunks(bytes) {
@@ -223,7 +219,9 @@ async function harness() {
     now: () => now,
     set: (value) => { now = value; },
   });
-  const metadata = new InMemoryRevisionMetadataStore();
+  const rawMetadata = new InMemoryRevisionMetadataStore();
+  const usage = principalMountedMetadata(rawMetadata);
+  const metadata = usage.store;
   const objects = new InMemoryObjectStore();
   const env = { clock, metadata, objects };
   const currentActor = actor(env);
@@ -243,14 +241,7 @@ async function harness() {
     },
     Object.freeze({ ...authorizationState(), token: null }),
   );
-  await bindWrite(metadata, currentActor, MINDS.ordinary.spaceId, WRITE, "mixed");
-  await selectCredentialWriteTarget(
-    metadata,
-    currentActor,
-    MINDS.ordinary.spaceId,
-    WRITE,
-    "mixed",
-  );
+  usage.select(currentActor.principalId, MINDS.ordinary.spaceId);
 
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   await revisions.commit({
@@ -262,11 +253,7 @@ async function harness() {
     summary: "Mixed ingress fixture",
     files: CANONICAL_REVISION_FILES,
   });
-  const authorizer = new MindBindingContentAuthorizer({
-    delegate: new CapabilityAuthorizer(metadata),
-    bindings: metadata,
-    readAuthority: "legacy_mind_binding",
-  });
+  const authorizer = new CapabilityAuthorizer(metadata);
   const staging = new BundleFileStagingService({
     authorizer,
     metadata,
@@ -297,7 +284,7 @@ async function harness() {
   );
   const uploadIntents = new LocalFileUploadIntentService({
     authorizer,
-    bindings: metadata,
+    usage: metadata,
     intents: intentStore,
     staging,
     digest: objects,
@@ -311,6 +298,7 @@ async function harness() {
   });
   return {
     ...env,
+    usage,
     authorizer,
     revisions,
     staging,
@@ -329,7 +317,6 @@ async function stageLocalIntent(env, sourceKind, filename, mediaType, bytes, key
     MINDS.ordinary.spaceId,
     {
       source_kind: sourceKind,
-      write_binding_id: WRITE,
       display_filename: filename,
       claimed_media_type: mediaType,
       expected_size: bytes.byteLength,
@@ -355,7 +342,6 @@ async function stageSmall(env, sourceKind, key) {
   const result = await env.staging.stage({
     actor: env.currentActor(),
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE,
     displayFilename: `${key}.bin`,
     claimedMediaType: "application/octet-stream",
     bytes,
@@ -370,7 +356,6 @@ function commitRequest(env, key, operations, overrides = {}) {
   return Object.freeze({
     actor: env.currentActor(),
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE,
     expectedRevisionId: overrides.expectedRevisionId ?? REVISIONS.initial.revisionId,
     idempotencyKey: key,
     summary: overrides.summary ?? `Synthetic ${key}`,
@@ -403,7 +388,6 @@ test("mixed ingress commits real source services atomically and reconciles every
     payload: {
       actor: env.currentActor(),
       spaceId: MINDS.ordinary.spaceId,
-      writeBindingId: WRITE,
       displayFilename: "synthetic-session.docx",
       claimedMediaType:
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -566,7 +550,6 @@ test("mixed ingress commits real source services atomically and reconciles every
   const bounded = await generatedService.stageBoundedInMemory({
     actor: env.currentActor(),
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE,
     displayFilename: "synthetic-bounded.bin",
     claimedMediaType: "application/octet-stream",
     idempotencyKey: "stage-bounded",
@@ -576,7 +559,6 @@ test("mixed ingress commits real source services atomically and reconciles every
   const boundedCopy = await generatedService.stageBoundedInMemory({
     actor: env.currentActor(),
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE,
     displayFilename: "synthetic-bounded-copy.bin",
     claimedMediaType: "application/octet-stream",
     idempotencyKey: "stage-bounded-copy",
@@ -586,7 +568,6 @@ test("mixed ingress commits real source services atomically and reconciles every
   const generated = await generatedService.stageServerGenerated({
     actor: env.currentActor(),
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE,
     displayFilename: "synthetic-generated.bin",
     claimedMediaType: "application/octet-stream",
     idempotencyKey: "stage-generated",
@@ -932,17 +913,10 @@ test("mixed ingress commits real source services atomically and reconciles every
       role: "owner",
     }),
   );
-  await bindWrite(
-    env.metadata,
-    foreignActor,
-    MINDS.personal.spaceId,
-    FOREIGN_WRITE,
-    "foreign",
-  );
+  env.usage.select(foreignActor.principalId, MINDS.personal.spaceId);
   const foreignStage = await env.staging.stage({
     actor: foreignActor,
     spaceId: MINDS.personal.spaceId,
-    writeBindingId: FOREIGN_WRITE,
     displayFilename: "synthetic-foreign.bin",
     claimedMediaType: "application/octet-stream",
     bytes: Uint8Array.from([0xf0, 0x12, 0x34]),
@@ -961,7 +935,7 @@ test("mixed ingress commits real source services atomically and reconciles every
     { expectedRevisionId: committed.envelope.revision.revisionId },
   ));
   assert.equal(foreign.kind, "invalid");
-  assert.equal(foreign.error.code, "staged_bundle_file_binding_mismatch");
+  assert.equal(foreign.error.code, "staged_bundle_file_usage_mismatch");
 
   assert.equal(await env.metadata.readHead(MINDS.ordinary.spaceId), "revision_mixed_1");
   assert.equal((await env.metadata.listRevisions(MINDS.ordinary.spaceId)).length, 2);

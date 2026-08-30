@@ -883,26 +883,50 @@ async function modernTool(runtime, secret, id, name, args, benchmarkCorrelationI
   return body.result.structuredContent.data;
 }
 
-async function mutatePersonalTokenTarget(
+async function mutateMindUsage(
   runtime,
   csrf,
-  personalTokenRef,
-  body,
+  mindRef,
+  usageMode,
+  expectedUsageVersion,
   idempotencyKey,
 ) {
+  const routeRef = mindRef === "/me" ? "me" : mindRef.replace(/^\//u, "");
   return responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
+    `${ORIGIN}/api/v1/minds/${encodeURIComponent(routeRef)}/usage`,
     {
-      method: "PATCH",
+      method: "PUT",
       headers: {
         origin: ORIGIN,
         "content-type": "application/json",
         "x-csrf-token": csrf,
         "idempotency-key": idempotencyKey,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        usage_mode: usageMode,
+        expected_usage_version: expectedUsageVersion,
+      }),
     },
   ));
+}
+
+async function describePersonalMind(runtime, csrf, description, idempotencyKey) {
+  const session = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/session`));
+  assert.equal(session.status, 200);
+  const sessionBody = await session.json();
+  return responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/me/description`, {
+    method: "PATCH",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": csrf,
+      "idempotency-key": idempotencyKey,
+    },
+    body: JSON.stringify({
+      description,
+      expected_metadata_version: sessionBody.data.personal_mind.metadata_version,
+    }),
+  }));
 }
 
 test("Product Site activates native staging only for an exact verified route composition", async () => {
@@ -1002,17 +1026,20 @@ test("Product Site activates native staging only for an exact verified route com
   assert.equal(issued.status, 200);
   const issuedBody = await issued.json();
   const secret = issuedBody.data.secret;
-  const tokenRef = issuedBody.data.token.personal_token_ref;
-  const selected = await mutatePersonalTokenTarget(
+  const described = await describePersonalMind(
     directRuntime,
     settingsCsrf,
-    tokenRef,
-    {
-      action: "select_write",
-      mind_ref: "/me",
-      expected_target_version: 0,
-    },
-    "target:native-route-e2e",
+    "Binary files explicitly discussed for this private Mind.",
+    "description:native-route-e2e",
+  );
+  assert.equal(described.status, 200, await described.clone().text());
+  const selected = await mutateMindUsage(
+    directRuntime,
+    settingsCsrf,
+    "/me",
+    "read_write",
+    0,
+    "usage:native-route-e2e",
   );
   assert.equal(selected.status, 200, await selected.clone().text());
 
@@ -1453,7 +1480,9 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(issued.status, 200);
   const issuedBody = await issued.json();
   const secret = issuedBody.data.secret;
-  const personalTokenRef = issuedBody.data.token.personal_token_ref;
+  const starterSession = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/session`));
+  assert.equal(starterSession.status, 200);
+  const disabledPersonalRevisionId = (await starterSession.json()).data.personal_mind.head_revision_id;
 
   const minds = await modernTool(
     runtime,
@@ -1463,11 +1492,10 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     {},
     "benchmark_starter_list",
   );
-  const personal = minds.minds.find(({ route }) => route === "/me");
-  assert.ok(personal);
-  const unboundRead = await modernMcp(runtime, secret, {
+  assert.deepEqual(minds.minds, []);
+  const disabledRead = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
-    id: "starter-unbound-read",
+    id: "starter-disabled-read",
     method: "tools/call",
     params: {
       name: "browse_entries",
@@ -1482,25 +1510,21 @@ test("empty account reaches a strict starter commit and first useful search/fetc
       },
     },
   });
-  assert.equal(unboundRead.status, 200);
-  const unboundReadBody = await unboundRead.json();
-  assert.equal(unboundReadBody.result.isError, false);
-  assert.ok(
-    unboundReadBody.result.structuredContent.data.entries.some(
-      ({ path }) => path === "index.md",
-    ),
-  );
-  const unboundCommit = await modernMcp(runtime, secret, {
+  assert.equal(disabledRead.status, 200);
+  const disabledReadBody = await disabledRead.json();
+  assert.equal(disabledReadBody.result.isError, true);
+  assert.equal(disabledReadBody.result.structuredContent.error.code, "mind_not_found");
+  const disabledCommit = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
-    id: "starter-unbound-commit",
+    id: "starter-disabled-commit",
     method: "tools/call",
     params: {
       name: "commit_changeset",
       arguments: {
         mind: "/me",
-        expected_revision: personal.head.revision_id,
-        idempotency_key: "commit:starter-unbound",
-        summary: "Must not commit without a binding",
+        expected_revision: disabledPersonalRevisionId,
+        idempotency_key: "commit:starter-disabled",
+        summary: "Must not commit while the principal mode is disabled",
         operations: [{
           type: "create_file",
           path: "concepts/must-not-exist.md",
@@ -1517,13 +1541,40 @@ test("empty account reaches a strict starter commit and first useful search/fetc
       },
     },
   });
-  assert.equal(unboundCommit.status, 200);
-  const unboundCommitBody = await unboundCommit.json();
-  assert.equal(unboundCommitBody.result.isError, true);
+  assert.equal(disabledCommit.status, 200);
+  const disabledCommitBody = await disabledCommit.json();
+  assert.equal(disabledCommitBody.result.isError, true);
   assert.equal(
-    unboundCommitBody.result.structuredContent.error.code,
-    "writable_target_required",
+    disabledCommitBody.result.structuredContent.error.code,
+    "writable_mind_required",
   );
+  const described = await describePersonalMind(
+    runtime,
+    settingsCsrf,
+    "Durable facts and decisions explicitly discussed in this starter session.",
+    "description:starter-e2e",
+  );
+  assert.equal(described.status, 200, await described.clone().text());
+  const selectedUsage = await mutateMindUsage(
+    runtime,
+    settingsCsrf,
+    "/me",
+    "read_write",
+    0,
+    "usage:starter-e2e",
+  );
+  assert.equal(selectedUsage.status, 200, await selectedUsage.clone().text());
+  const enabledMinds = await modernTool(
+    runtime,
+    secret,
+    "starter-list-enabled",
+    "list_minds",
+    {},
+  );
+  const personal = enabledMinds.minds.find(({ route }) => route === "/me");
+  assert.ok(personal);
+  assert.equal(personal.usage_mode, "read_write");
+
   const unboundExport = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/minds/me/exports`,
     {
@@ -1532,7 +1583,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
         origin: ORIGIN,
         "content-type": "application/json",
         "x-csrf-token": settingsCsrf,
-        "idempotency-key": "export:starter-unbound",
+        "idempotency-key": "export:starter-disabled-mode",
       },
       body: JSON.stringify({
         revision_selector: {
@@ -1546,18 +1597,6 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   const unboundExportBody = await unboundExport.json();
   assert.equal(unboundExportBody.ok, true);
   assert.equal(unboundExportBody.data.job.revision_id, personal.head.revision_id);
-  const selectedTarget = await mutatePersonalTokenTarget(
-    runtime,
-    settingsCsrf,
-    personalTokenRef,
-    {
-      action: "select_write",
-      mind_ref: "/me",
-      expected_target_version: 0,
-    },
-    "target:starter-e2e",
-  );
-  assert.equal(selectedTarget.status, 200, await selectedTarget.clone().text());
   const initialRevisionId = personal.head.revision_id;
   const initialBrowse = await modernTool(
     runtime,
@@ -1896,7 +1935,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
         origin: ORIGIN,
         "content-type": "application/json",
         "x-csrf-token": settingsCsrf,
-        "idempotency-key": "export:starter-before-unbind",
+        "idempotency-key": "export:starter-before-disable",
       },
       body: JSON.stringify({
         revision_selector: {
@@ -1909,20 +1948,18 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(exportStartedResponse.status, 202);
   const exportStarted = (await exportStartedResponse.json()).data;
 
-  const clearedTarget = await mutatePersonalTokenTarget(
+  const clearedTarget = await mutateMindUsage(
     runtime,
     settingsCsrf,
-    personalTokenRef,
-    {
-      action: "clear_write",
-      expected_target_version: 1,
-    },
-    "target:starter-clear",
+    "/me",
+    "disabled",
+    1,
+    "usage:starter-disabled",
   );
   assert.equal(clearedTarget.status, 200, await clearedTarget.clone().text());
-  const detachedFetch = await modernMcp(runtime, secret, {
+  const disabledFetch = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
-    id: "starter-fetch-after-unbind",
+    id: "starter-fetch-after-disable",
     method: "tools/call",
     params: {
       name: "fetch",
@@ -1937,16 +1974,13 @@ test("empty account reaches a strict starter commit and first useful search/fetc
       },
     },
   });
-  assert.equal(detachedFetch.status, 200);
-  const detachedFetchBody = await detachedFetch.json();
-  assert.equal(detachedFetchBody.result.isError, false);
-  assert.equal(
-    detachedFetchBody.result.structuredContent.data.entry.path,
-    "concepts/first-memory.md",
-  );
-  const unboundResources = await modernMcp(runtime, secret, {
+  assert.equal(disabledFetch.status, 200);
+  const disabledFetchBody = await disabledFetch.json();
+  assert.equal(disabledFetchBody.result.isError, true);
+  assert.equal(disabledFetchBody.result.structuredContent.error.code, "locator_not_found");
+  const disabledResources = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
-    id: "starter-resources-after-unbind",
+    id: "starter-resources-after-disable",
     method: "resources/list",
     params: {
       _meta: {
@@ -1959,12 +1993,9 @@ test("empty account reaches a strict starter commit and first useful search/fetc
       },
     },
   });
-  assert.equal(unboundResources.status, 200);
-  const unboundResourcesBody = await unboundResources.json();
-  assert.deepEqual(
-    unboundResourcesBody.result.resources.map(({ uri }) => uri),
-    [`okf://spaces/${personal.mind_id}/revisions/${starterRevisionId}/index`],
-  );
+  assert.equal(disabledResources.status, 200);
+  const disabledResourcesBody = await disabledResources.json();
+  assert.deepEqual(disabledResourcesBody.result.resources, []);
   const detachedExportStatus = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/export-jobs/${encodeURIComponent(exportStarted.job.job_id)}`,
   ));
@@ -1974,7 +2005,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(detachedExportStatusBody.data.job.revision_id, starterRevisionId);
 });
 
-test("durable Product Site controls one token binding with ownership, CAS, read-back, and revoke fencing", async () => {
+test("durable Product Site controls account-wide Mind usage with CAS, shared credentials, and revoke fencing", async () => {
   let currentTime = new Date("2026-08-22T11:00:00.000Z");
   const runtime = await createProductSiteRuntime({
     database: new FakeD1Database(),
@@ -1984,8 +2015,8 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
       readVerifiedIdentity() {
         return {
           kind: "authenticated",
-          verifiedEmail: "web.binding.e2e@example.com",
-          verifiedFullName: "Web Binding E2E",
+          verifiedEmail: "web.usage.e2e@example.com",
+          verifiedFullName: "Web Usage E2E",
         };
       },
     },
@@ -2006,7 +2037,7 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
       origin: ORIGIN,
       "content-type": "application/json",
       "x-csrf-token": registrationCsrf,
-      "idempotency-key": "bootstrap:web-binding-e2e",
+      "idempotency-key": "bootstrap:web-usage-e2e",
     },
     body: JSON.stringify({ action: "create_isolated_account" }),
   }));
@@ -2020,9 +2051,9 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
       origin: ORIGIN,
       "content-type": "application/json",
       "x-csrf-token": csrf,
-      "idempotency-key": "token:web-binding-e2e",
+      "idempotency-key": "token:web-usage-e2e",
     },
-    body: JSON.stringify({ name: "Web binding token", scopes: ["content:write"] }),
+    body: JSON.stringify({ name: "Web usage token", scopes: ["content:write"] }),
   }));
   assert.equal(issued.status, 200);
   const issuedBody = await issued.json();
@@ -2033,16 +2064,16 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
 
   const emptyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const emptyHtml = await emptyPage.text();
-  assert.match(emptyHtml, /Web binding token/u);
-  assert.match(emptyHtml, /data-target-version="0"/u);
-  assert.match(emptyHtml, /\d+ Minds? (?:is|are) currently readable\. This always follows current membership and visibility/u);
-  assert.match(emptyHtml, /Writable target[\s\S]*Not selected[\s\S]*Select writable Mind/u);
-  assert.doesNotMatch(emptyHtml, /Automatic knowledge capture/u);
+  assert.match(emptyHtml, /Web usage token/u);
+  assert.match(emptyHtml, /Account-wide Mind modes/u);
+  assert.match(emptyHtml, /does not own a separate Mind choice/u);
+  assert.match(emptyHtml, /Manage Mind modes/u);
+  assert.doesNotMatch(emptyHtml, /data-target-version|Writable target|Automatic knowledge capture/u);
 
   const mutate = (body, idempotencyKey) => responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
+    `${ORIGIN}/api/v1/minds/me/usage`,
     {
-      method: "PATCH",
+      method: "PUT",
       headers: {
         origin: ORIGIN,
         "content-type": "application/json",
@@ -2053,45 +2084,45 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
     },
   ));
 
+  const described = await describePersonalMind(
+    runtime,
+    csrf,
+    "Private durable knowledge explicitly discussed with this account.",
+    "description:web-usage-e2e",
+  );
+  assert.equal(described.status, 200, await described.clone().text());
   const bound = await mutate({
-    action: "select_write",
-    mind_ref: "/me",
-    expected_target_version: 0,
-  }, "binding:web-bind-write");
+    usage_mode: "read_write",
+    expected_usage_version: 0,
+  }, "usage:web-enable-write");
   assert.equal(bound.status, 200, await bound.clone().text());
   const boundBody = await bound.json();
   assert.equal(boundBody.data.changed, true);
   assert.equal(boundBody.data.replayed, false);
-  assert.equal(boundBody.data.access.target_version, 1);
+  assert.equal(boundBody.data.projection.usage_version, 1);
+  assert.equal(boundBody.data.projection.items[0].usage_mode, "read_write");
 
   const boundPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const boundHtml = await boundPage.text();
-  assert.match(boundHtml, /data-target-version="1"/u);
-  assert.match(boundHtml, /Writable target[\s\S]*Web Binding E2E[\s\S]*\/me[\s\S]*private/u);
-  assert.doesNotMatch(boundHtml, /Automatic knowledge capture|data-binding-action/u);
+  assert.match(boundHtml, /Account-wide Mind modes/u);
+  assert.doesNotMatch(boundHtml, /Writable target|data-binding-action|data-target-version/u);
   assert.doesNotMatch(boundHtml, /principal_|space_personal/u);
 
-  assert.equal(boundBody.data.access.writable_mind.route, "/me");
-  assert.equal(JSON.stringify(boundBody).includes("write_binding"), false);
+  assert.equal(boundBody.data.projection.items[0].mind_ref, "/me");
   assert.equal(JSON.stringify(boundBody).includes("space_id"), false);
 
   const stale = await mutate({
-    action: "clear_write",
-    expected_target_version: 0,
-  }, "binding:web-stale");
+    usage_mode: "disabled",
+    expected_usage_version: 0,
+  }, "usage:web-stale");
   assert.equal(stale.status, 409);
-  assert.equal((await stale.json()).error.code, "target_conflict");
-  const afterStalePage = await responseFrom(
-    runtime,
-    new Request(`${ORIGIN}/settings/developer/mcp`),
-  );
-  assert.match(await afterStalePage.text(), /data-target-version="1"/u);
+  assert.equal((await stale.json()).error.code, "usage_conflict");
 
   const unknownField = await mutate({
-    action: "clear_write",
-    expected_target_version: 1,
+    usage_mode: "disabled",
+    expected_usage_version: 1,
     principal_id: "must-not-be-accepted",
-  }, "binding:web-unknown-field");
+  }, "usage:web-unknown-field");
   assert.equal(unknownField.status, 400);
   assert.equal((await unknownField.json()).error.code, "invalid_request");
 
@@ -2101,31 +2132,51 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
       origin: ORIGIN,
       "content-type": "application/json",
       "x-csrf-token": csrf,
-      "idempotency-key": "token:web-binding-read-only",
+      "idempotency-key": "token:web-usage-read-only",
     },
-    body: JSON.stringify({ name: "Read-only binding token", scopes: ["content:read"] }),
+    body: JSON.stringify({ name: "Read-only usage token", scopes: ["content:read"] }),
   }));
   assert.equal(readOnlyIssued.status, 200);
-  const readOnlyTokenRef = (await readOnlyIssued.json()).data.token.personal_token_ref;
-  const readOnlyWrite = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(readOnlyTokenRef)}/mind-access`,
-    {
-      method: "PATCH",
-      headers: {
-        origin: ORIGIN,
-        "content-type": "application/json",
-        "x-csrf-token": csrf,
-        "idempotency-key": "binding:web-read-only-write",
+  const readOnlyIssuedBody = await readOnlyIssued.json();
+  const readOnlySecret = readOnlyIssuedBody.data.secret;
+  const readOnlyMinds = await modernTool(
+    runtime,
+    readOnlySecret,
+    "shared-usage-read-only-list",
+    "list_minds",
+    {},
+  );
+  const sharedPersonal = readOnlyMinds.minds.find(({ route }) => route === "/me");
+  assert.ok(sharedPersonal);
+  assert.equal(sharedPersonal.usage_mode, "read_write");
+  assert.equal(sharedPersonal.effective.can_write, false);
+  const readOnlyWrite = await modernMcp(runtime, readOnlySecret, {
+    jsonrpc: "2.0",
+    id: "shared-usage-read-only-write",
+    method: "tools/call",
+    params: {
+      name: "commit_changeset",
+      arguments: {
+        mind: "/me",
+        expected_revision: sharedPersonal.head.revision_id,
+        idempotency_key: "commit:shared-usage-read-only-denied",
+        summary: "Credential scope must still deny this write",
+        operations: [],
       },
-      body: JSON.stringify({
-        action: "select_write",
-        mind_ref: "/me",
-        expected_target_version: 0,
-      }),
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-shared-usage-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
     },
-  ));
-  assert.equal(readOnlyWrite.status, 409);
-  assert.equal((await readOnlyWrite.json()).error.code, "write_step_up_required");
+  });
+  assert.equal(readOnlyWrite.status, 200);
+  const readOnlyWriteBody = await readOnlyWrite.json();
+  assert.equal(readOnlyWriteBody.result.isError, true);
+  assert.equal(readOnlyWriteBody.result.structuredContent.error.code, "insufficient_scope");
   const readOnlyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const readOnlyHtml = await readOnlyPage.text();
   const panelFor = (html, tokenName) => {
@@ -2139,10 +2190,10 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
     return html.slice(articleStart, articleEnd + "</article>".length);
   };
   assert.doesNotMatch(readOnlyHtml, /data-personal-token-ref/u);
-  const readOnlyPanel = panelFor(readOnlyHtml, "Read-only binding token");
-  assert.match(readOnlyPanel, /\d+ Minds? (?:is|are) currently readable\. This always follows current membership and visibility/u);
-  assert.doesNotMatch(readOnlyPanel, /data-access-action="attach_read"/u);
-  assert.doesNotMatch(readOnlyPanel, /data-access-action="select_write"|Select one writable Mind/u);
+  const readOnlyPanel = panelFor(readOnlyHtml, "Read-only usage token");
+  assert.match(readOnlyPanel, /This token can read\. It cannot write/u);
+  assert.match(readOnlyPanel, /Account-wide Mind modes/u);
+  assert.doesNotMatch(readOnlyPanel, /data-access-action|Select one writable Mind/u);
 
   const revoked = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}`,
@@ -2151,49 +2202,48 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
       headers: {
         origin: ORIGIN,
         "x-csrf-token": csrf,
-        "idempotency-key": "revoke:web-binding-e2e",
+        "idempotency-key": "revoke:web-usage-e2e",
       },
     },
   ));
   assert.equal(revoked.status, 200);
   const revokedPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp?state=revoked`));
   const revokedHtml = await revokedPage.text();
-  assert.match(revokedHtml, /Web binding token/u);
-  const revokedPanel = panelFor(revokedHtml, "Web binding token");
+  assert.match(revokedHtml, /Web usage token/u);
+  const revokedPanel = panelFor(revokedHtml, "Web usage token");
   assert.doesNotMatch(revokedPanel, /data-access-form|data-access-action/u);
 
-  const afterRevoke = await mutate({
-    action: "select_write",
-    mind_ref: "/me",
-    expected_target_version: 1,
-  }, "binding:web-after-revoke");
-  assert.equal(afterRevoke.status, 404);
-  assert.equal((await afterRevoke.json()).error.code, "personal_token_not_found");
+  const revokedCredential = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "shared-usage-revoked-write-token",
+    method: "tools/list",
+    params: { _meta: {} },
+  });
+  assert.equal(revokedCredential.status, 401);
+  assert.equal((await revokedCredential.json()).code, "authentication_required");
+  const stillShared = await modernTool(
+    runtime,
+    readOnlySecret,
+    "shared-usage-after-other-revoke",
+    "list_minds",
+    {},
+  );
+  assert.equal(stillShared.minds.some(({ route }) => route === "/me"), true);
 
   currentTime = new Date("2027-01-22T11:00:00.000Z");
   const expiredPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp?state=expired`));
   const expiredHtml = await expiredPage.text();
-  const expiredReadOnlyPanel = panelFor(expiredHtml, "Read-only binding token");
+  const expiredReadOnlyPanel = panelFor(expiredHtml, "Read-only usage token");
   assert.match(expiredReadOnlyPanel, /expired/u);
   assert.doesNotMatch(expiredReadOnlyPanel, /data-access-form|data-access-action/u);
-  const expiredMutation = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(readOnlyTokenRef)}/mind-access`,
-    {
-      method: "PATCH",
-      headers: {
-        origin: ORIGIN,
-        "content-type": "application/json",
-        "x-csrf-token": csrf,
-        "idempotency-key": "binding:web-expired-read",
-      },
-      body: JSON.stringify({
-        action: "clear_write",
-        expected_target_version: 0,
-      }),
-    },
-  ));
-  assert.equal(expiredMutation.status, 404);
-  assert.equal((await expiredMutation.json()).error.code, "personal_token_not_found");
+  const expiredCredential = await modernMcp(runtime, readOnlySecret, {
+    jsonrpc: "2.0",
+    id: "shared-usage-expired-read-token",
+    method: "tools/list",
+    params: { _meta: {} },
+  });
+  assert.equal(expiredCredential.status, 401);
+  assert.equal((await expiredCredential.json()).code, "authentication_required");
 });
 
 test("durable product runtime carries a Sites account token through Codex MCP and revokes it", async () => {
@@ -2305,12 +2355,12 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     codexHelpHtml,
     /Use Mind Diary to list the Minds I can read\. Do not create or change any Memory\./u,
   );
-  assert.match(codexHelpHtml, /Discover readable Minds and start/u);
-  assert.match(codexHelpHtml, /current memberships and visibility automatically/u);
+  assert.match(codexHelpHtml, /Choose readable Minds and start/u);
+  assert.match(codexHelpHtml, /only enabled Minds that still pass current rights and credential scope checks/u);
   assert.match(codexHelpHtml, /Writing is optional/u);
-  assert.match(codexHelpHtml, /select at most one writable Mind/u);
-  assert.match(codexHelpHtml, /Only the Mind Diary Site can select, switch, or clear this target/u);
-  assert.doesNotMatch(codexHelpHtml, /Choose readable Minds|attach at least one Mind/u);
+  assert.match(codexHelpHtml, /choose Read and write for exactly one described Mind/u);
+  assert.match(codexHelpHtml, /one account-wide choice is shared by every Connection and personal token/u);
+  assert.doesNotMatch(codexHelpHtml, /\b(?:bind|unbind)\b|writable target|attach at least one Mind/iu);
   assert.match(codexHelpHtml, /Create the first useful Memory/u);
   assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/u);
 
@@ -2365,7 +2415,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     reconstructedMindsBody.data.map(({ route }) => route),
     ["/me", "/runtime-shared"],
   );
-  assert.equal("description" in reconstructedMindsBody.data[0], false);
+  assert.equal(reconstructedMindsBody.data[0].description, null);
   assert.equal(
     reconstructedMindsBody.data[1].description,
     "Runtime Mind\ndescription",
@@ -2508,18 +2558,31 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(secret, /^mdp_v1_/u);
   assert.match(personalTokenRef, /^ptok_v1_[0-9a-f]{32}$/u);
   assert.equal(JSON.stringify(issuedBody).includes("token_id"), false);
-  const selectedTarget = await mutatePersonalTokenTarget(
+  const describedPersonal = await describePersonalMind(
     runtime,
     registeredCsrf,
-    personalTokenRef,
-    {
-      action: "select_write",
-      mind_ref: "/me",
-      expected_target_version: 0,
-    },
-    "target:product-runtime-e2e",
+    "Personal durable knowledge explicitly discussed with Runtime Owner.",
+    "description:product-runtime-e2e",
   );
-  assert.equal(selectedTarget.status, 200, await selectedTarget.clone().text());
+  assert.equal(describedPersonal.status, 200, await describedPersonal.clone().text());
+  const enabledOrdinary = await mutateMindUsage(
+    runtime,
+    registeredCsrf,
+    "/runtime-shared",
+    "read",
+    0,
+    "usage:product-runtime-shared-read",
+  );
+  assert.equal(enabledOrdinary.status, 200, await enabledOrdinary.clone().text());
+  const enabledPersonal = await mutateMindUsage(
+    runtime,
+    registeredCsrf,
+    "/me",
+    "read_write",
+    1,
+    "usage:product-runtime-personal-write",
+  );
+  assert.equal(enabledPersonal.status, 200, await enabledPersonal.clone().text());
 
   const discovery = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
@@ -2606,14 +2669,15 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   );
   assert.ok(ordinaryMind);
   assert.equal(ordinaryMind.name, "Runtime Library");
-  assert.equal("description" in ordinaryMind, false);
-  assert.equal(JSON.stringify(listedBody).includes("Updated runtime description"), false);
+  assert.equal(ordinaryMind.description, "Updated runtime description");
+  assert.equal(ordinaryMind.usage_mode, "read");
   const personalMind = listedBody.result.structuredContent.data.minds.find(
     ({ route }) => route === "/me",
   );
   assert.ok(personalMind);
   assert.equal(personalMind.route, "/me");
   assert.equal(personalMind.discovery, "personal");
+  assert.equal(personalMind.usage_mode, "read_write");
   assert.equal(
     typeof personalMind.head.revision_id,
     "string",
@@ -3469,6 +3533,15 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   }));
   assert.equal(tokenIssued.status, 200);
   const outsiderSecret = (await tokenIssued.json()).data.secret;
+  const enabledPublicMind = await mutateMindUsage(
+    runtime,
+    outsiderCsrf,
+    "/visibility-runtime",
+    "read",
+    0,
+    "usage:visibility-outsider-read",
+  );
+  assert.equal(enabledPublicMind.status, 200, await enabledPublicMind.clone().text());
   const mcpBeforePrivate = await modernMcp(runtime, outsiderSecret, {
     jsonrpc: "2.0",
     id: 71,
@@ -3870,6 +3943,19 @@ test("durable collaboration accepts exactly once, rejects stale role state, and 
   assert.equal(acceptedExact.status, 200);
   assert.equal((await acceptedExact.json()).data.access.role, "editor");
   const memberSettingsCsrf = await csrf("/settings/developer/mcp");
+  const enabledCollaborationMind = await mutateMindUsage(
+    runtime,
+    memberSettingsCsrf,
+    "/collaboration-runtime",
+    "read",
+    0,
+    "usage:collaboration-member-read",
+  );
+  assert.equal(
+    enabledCollaborationMind.status,
+    200,
+    await enabledCollaborationMind.clone().text(),
+  );
   const issued = await mutation(
     "/api/v1/mcp-tokens",
     "POST",
@@ -4051,7 +4137,22 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   assert.equal(issued.status, 200);
   const issuedBody = await issued.json();
   const secret = issuedBody.data.secret;
-  const personalTokenRef = issuedBody.data.token.personal_token_ref;
+  const described = await describePersonalMind(
+    runtime,
+    settingsCsrf,
+    "Durable recovery facts explicitly discussed in this private Mind.",
+    "description:request-recovery",
+  );
+  assert.equal(described.status, 200, await described.clone().text());
+  const enabled = await mutateMindUsage(
+    runtime,
+    settingsCsrf,
+    "/me",
+    "read_write",
+    0,
+    "usage:request-recovery",
+  );
+  assert.equal(enabled.status, 200, await enabled.clone().text());
 
   const personal = (await modernTool(
     runtime,
@@ -4061,18 +4162,6 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     {},
   )).minds.find(({ route }) => route === "/me");
   assert.ok(personal);
-  const selectedTarget = await mutatePersonalTokenTarget(
-    runtime,
-    settingsCsrf,
-    personalTokenRef,
-    {
-      action: "select_write",
-      mind_ref: "/me",
-      expected_target_version: 0,
-    },
-    "target:request-recovery",
-  );
-  assert.equal(selectedTarget.status, 200, await selectedTarget.clone().text());
   const initialRevisionId = personal.head.revision_id;
   const initialBrowse = await modernTool(
     runtime,

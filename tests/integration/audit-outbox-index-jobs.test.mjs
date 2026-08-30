@@ -95,9 +95,50 @@ function operations(path, title, privateBody = "") {
   ];
 }
 
+function principalMountedMetadata(metadata) {
+  const generation = Object.freeze({
+    principalId: PRINCIPALS.editor.principalId,
+    spaceId: MINDS.ordinary.spaceId,
+    generationId: "usage_generation_audit_index",
+  });
+  const readUsage = async (principalId) => principalId === generation.principalId
+    ? Object.freeze({
+        principalId,
+        entries: Object.freeze([Object.freeze({
+          principalId,
+          spaceId: generation.spaceId,
+          usageMode: "read_write",
+          writeGeneration: generation,
+        })]),
+        activeWriteGeneration: generation,
+      })
+    : null;
+  const validatePin = async (pin) =>
+    pin.principalId === generation.principalId &&
+    pin.spaceId === generation.spaceId &&
+    pin.generationId === generation.generationId;
+  const wrapTransaction = (transaction) => Object.freeze({
+    ...transaction,
+    readPrincipalMindUsage: readUsage,
+    validatePrincipalMindUsageWritePin: validatePin,
+  });
+  return new Proxy(metadata, {
+    get(target, property) {
+      if (property === "readPrincipalMindUsage") return readUsage;
+      if (property === "validatePrincipalMindUsageWritePin") return validatePin;
+      if (property === "runContentCommitTransaction") {
+        return (operation) => target.runContentCommitTransaction((transaction) =>
+          operation(wrapTransaction(transaction)));
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 async function fixture() {
   const objects = new InMemoryObjectStore();
-  const metadata = new InMemoryRevisionMetadataStore();
+  const metadata = principalMountedMetadata(new InMemoryRevisionMetadataStore());
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   const seeded = await revisions.commit({
     spaceId: MINDS.ordinary.spaceId,

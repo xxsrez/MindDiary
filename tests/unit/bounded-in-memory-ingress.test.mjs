@@ -46,8 +46,8 @@ test("trusted bounded adapter fixes provenance and forwards only safe fields", a
     "expectedSize",
     "idempotencyKey",
     "spaceId",
-    "writeBindingId",
   ]);
+  assert.equal(calls[0].writeBindingId, undefined);
   assert.equal(calls[0].sourceKind, undefined);
   assert.equal(calls[0].localPath, undefined);
   assert.equal(calls[0].providerUrl, undefined);

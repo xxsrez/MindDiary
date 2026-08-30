@@ -50,7 +50,7 @@ const REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect";
 const EVIDENCE_SCHEMA = "mind-diary/oauth-direct-plugin-evidence/v1";
 const BINDING_NAMESPACE = "synthetic-test";
 const CLIENT = "codex-cli";
-const CLIENT_VERSION = "0.150.1";
+const CLIENT_VERSION = "0.151.0";
 const CODEX_SKILL_DISCOVERY_PROMPT =
   "Check whether the installed Mind Diary skill is available. Do not call tools.";
 const MAX_CODEX_PROMPT_INPUT_BYTES = 2 * 1024 * 1024;
@@ -70,12 +70,12 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "package.fresh-context-discovery-before-install",
   "package.install-before-oauth",
   "package.skill-discovery",
-  "package.automatic-capture-skill-policy",
+  "package.mind-usage-skill-policy",
   "package.mcp-resolution",
   "package.task-manager-separate",
   "oauth.codex-compatible-default-write-schema",
-  "oauth.catalog-modern-default-exact-17",
-  "oauth.catalog-compat-default-exact-17",
+  "oauth.catalog-modern-default-exact-16",
+  "oauth.catalog-compat-default-exact-16",
   "oauth.protected-resource-discovery",
   "oauth.authorization-server-discovery",
   "oauth.public-dcr-no-secret",
@@ -96,19 +96,22 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "oauth.write-step-up",
   "oauth.authorization-mirror-active",
   "oauth.current-acl-readback",
-  "oauth.explicit-write-binding-readback",
-  "oauth.refresh-preserves-write-binding",
-  "oauth.connection-safe-projection",
-  "oauth.connection-stale-cas",
+  "oauth.principal-usage-initial-disabled",
+  "oauth.principal-usage-read-mode",
+  "oauth.principal-usage-write-readback",
+  "oauth.refresh-preserves-principal-usage",
+  "oauth.connection-safe-account-wide-projection",
+  "oauth.principal-usage-stale-cas",
   "oauth.product-runtime-commit",
   "oauth.product-runtime-idempotent-replay",
   "oauth.product-runtime-stale-cas",
   "oauth.connected-app-mirror-revoke",
-  "oauth.connected-app-binding-revoke",
+  "oauth.connected-app-revoke-preserves-principal-usage",
   "oauth.reconnect-new-grant",
-  "oauth.reconnect-empty-binding-generation",
+  "oauth.reconnect-shares-principal-usage",
   "personal-token.modern-regression",
   "personal-token.compat-regression",
+  "personal-token.shared-principal-usage",
   "production-negative.no-synthetic-authority",
   "evidence.external-ui-canary-separated",
 ]);
@@ -131,9 +134,9 @@ export function assertFreshOAuthMcpServerProjection(server, expectedUrl = CODEX_
   return true;
 }
 
-export function assertCodexCompatibleWriteBindingSchema(tools) {
+export function assertCodexCompatibleVerifiedNativeCatalog(tools) {
   if (!matchesExactVerifiedNativeMcpToolInventory(tools)) {
-    fail("codex_write_binding_schema_incompatible", {
+    fail("codex_verified_native_catalog_incompatible", {
       toolCount: Array.isArray(tools) ? tools.length : null,
       toolNames: Array.isArray(tools)
         ? tools.map((tool) => typeof tool?.name === "string" ? tool.name : "invalid")
@@ -263,21 +266,39 @@ export function createEvidence({
   }));
 }
 
-export function assertAutomaticCaptureSkillPolicy(skill) {
+export function assertMindUsageSkillPolicy(skill) {
   if (typeof skill !== "string") {
-    fail("installed_automatic_capture_skill_policy_missing");
+    fail("installed_mind_usage_skill_policy_missing");
   }
   const normalized = skill.replace(/\s+/gu, " ");
   const required = [
-    "## Automatic capture workflow",
-    "automatic_capture.mode` is `routine_non_sensitive",
-    "The Sites control plane is the only place that can enable or disable this",
-    "Never call `capture_knowledge` for credentials or authentication material",
-    "Treat `captured` as one new immutable revision and `no_op` as successful",
-    "never move, replace, merge or retry the payload against a different target",
+    "Start each relevant workflow with fresh `list_minds`",
+    "When the user names a Mind, require that exact Mind in the fresh projection",
+    "Otherwise select only the readable Mind or Minds whose descriptions genuinely fit",
+    "consider every newly discussed piece of durable knowledge for automatic preservation",
+    "Do not ask for a separate write instruction, toggle or confirmation",
+    "pass optional `source_references` with the exact enabled source Mind",
+    "Fetch a targeted existing Memory before deciding whether the result is a create, update, explicit delete or semantic no-op",
+    "Validate the complete proposed OKF 0.2 bundle before commit",
+    "call `reconcile_changeset` with the exact original full request",
+    "Briefly tell the user what was created, updated or removed",
   ];
-  if (required.some((fragment) => !normalized.includes(fragment))) {
-    fail("installed_automatic_capture_skill_policy_missing");
+  const retired = [
+    "get_mind_bindings",
+    "set_read_mind_binding",
+    "set_write_mind_binding",
+    "write_binding_id",
+    "capture_knowledge",
+    "routine_non_sensitive",
+    "automatic_capture",
+    "rebind",
+    "unbind",
+  ];
+  if (
+    required.some((fragment) => !normalized.includes(fragment)) ||
+    retired.some((fragment) => normalized.includes(fragment))
+  ) {
+    fail("installed_mind_usage_skill_policy_missing");
   }
   return true;
 }
@@ -434,9 +455,9 @@ export function parseCodexSkillDiscovery(promptInput, { installedRoot, descripti
   if (!Array.isArray(promptInput)) fail("invalid_codex_prompt_input");
   const root = requiredString(installedRoot, "missing_installed_plugin_root");
   const expectedDescription = requiredString(description, "missing_installed_skill_description");
-  const expectedPath = join(root, "skills", "mind-diary", "SKILL.md");
+  const expectedPath = resolve(root, "skills", "mind-diary", "SKILL.md");
   const prefix = "- mind-diary:mind-diary: ";
-  const expected = `${prefix}${expectedDescription} (file: ${expectedPath})`;
+  const expectedLinePrefix = `${prefix}${expectedDescription} (file: `;
   const entries = [];
   for (const message of promptInput) {
     if (!isRecord(message) || message.role !== "developer" || !Array.isArray(message.content)) {
@@ -450,10 +471,34 @@ export function parseCodexSkillDiscovery(promptInput, { installedRoot, descripti
         !block.text.startsWith("<skills_instructions>\n") ||
         !block.text.endsWith("\n</skills_instructions>")
       ) continue;
-      entries.push(...block.text.split("\n").filter((line) => line.startsWith(prefix)));
+      const lines = block.text.split("\n");
+      const skillRoots = new Map();
+      for (const line of lines) {
+        const match = /^- `(r\d+)` = `([^`]+)`$/u.exec(line);
+        if (!match) continue;
+        const previous = skillRoots.get(match[1]);
+        if (previous !== undefined && previous !== match[2]) {
+          fail("installed_skill_not_model_visible");
+        }
+        skillRoots.set(match[1], match[2]);
+      }
+      for (const line of lines.filter((candidate) => candidate.startsWith(prefix))) {
+        if (!line.startsWith(expectedLinePrefix) || !line.endsWith(")")) {
+          entries.push(null);
+          continue;
+        }
+        const source = line.slice(expectedLinePrefix.length, -1);
+        const aliased = /^(r\d+)\/(.+)$/u.exec(source);
+        const sourcePath = aliased
+          ? skillRoots.has(aliased[1])
+            ? resolve(skillRoots.get(aliased[1]), aliased[2])
+            : null
+          : resolve(source);
+        entries.push(sourcePath);
+      }
     }
   }
-  if (entries.length !== 1 || entries[0] !== expected) {
+  if (entries.length !== 1 || entries[0] !== expectedPath) {
     fail("installed_skill_not_model_visible");
   }
   return Object.freeze({
@@ -529,8 +574,8 @@ async function verifyFreshPluginContext(snapshot, assertions) {
       { installedRoot, description },
     );
     assertions.add("package.skill-discovery");
-    assertAutomaticCaptureSkillPolicy(skill);
-    assertions.add("package.automatic-capture-skill-policy");
+    assertMindUsageSkillPolicy(skill);
+    assertions.add("package.mind-usage-skill-policy");
 
     const installedList = await codexJson(
       codexHome,
@@ -862,7 +907,7 @@ function latestAccessRecord(database) {
   return row;
 }
 
-async function runOAuthScenario({ assertions, nowState }) {
+export async function runOAuthScenario({ assertions, nowState }) {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
   const identities = new WeakMap();
@@ -892,6 +937,66 @@ async function runOAuthScenario({ assertions, nowState }) {
   });
   const ownerSession = await owner.session(`oauth:${nonce}:bootstrap:owner`);
   await other.session(`oauth:${nonce}:bootstrap:other`);
+
+  const personalMetadataVersion = ownerSession.personal_mind?.metadata_version;
+  if (!Number.isSafeInteger(personalMetadataVersion) || personalMetadataVersion < 1) {
+    fail("oauth_personal_mind_metadata_unavailable");
+  }
+  const described = await owner.api("/api/v1/minds/me/description", {
+    method: "PATCH",
+    body: {
+      description: "Durable OAuth gate knowledge explicitly discussed with the user.",
+      expected_metadata_version: personalMetadataVersion,
+    },
+    idempotencyKey: `oauth:${nonce}:personal-description`,
+    csrfPath: "/me",
+  });
+  if (
+    described.body?.data?.personal_mind?.description !==
+      "Durable OAuth gate knowledge explicitly discussed with the user."
+  ) fail("oauth_personal_mind_description_readback_failed");
+
+  const setPersonalUsage = async (
+    usageMode,
+    expectedUsageVersion,
+    key,
+    expectedStatus = 200,
+  ) => owner.api("/api/v1/minds/me/usage", {
+    method: "PUT",
+    body: {
+      usage_mode: usageMode,
+      expected_usage_version: expectedUsageVersion,
+    },
+    idempotencyKey: `oauth:${nonce}:${key}`,
+    csrfPath: "/minds",
+    expectedStatus,
+  });
+  const initialUsage = await owner.api("/api/v1/mind-usage");
+  const initialPersonalUsage = initialUsage.body?.data?.items?.find(
+    (item) => item?.mind_ref === "/me",
+  );
+  if (
+    initialUsage.body?.data?.contract_version !== "principal-mind-usage/v1" ||
+    initialUsage.body?.data?.usage_version !== 0 ||
+    initialPersonalUsage?.usage_mode !== "disabled" ||
+    /principal_id|space_id|mind_id|generation/iu.test(
+      JSON.stringify(initialUsage.body),
+    )
+  ) fail("oauth_principal_usage_initial_state_mismatch");
+  assertions.add("oauth.principal-usage-initial-disabled");
+
+  const enabledRead = await setPersonalUsage("read", 0, "usage-read");
+  const enabledReadProjection = enabledRead.body?.data?.projection;
+  const enabledReadPersonal = enabledReadProjection?.items?.find(
+    (item) => item?.mind_ref === "/me",
+  );
+  if (
+    enabledReadProjection?.usage_version !== 1 ||
+    enabledReadPersonal?.usage_mode !== "read" ||
+    enabledReadPersonal?.effective?.can_read !== true ||
+    enabledReadPersonal?.effective?.can_write !== false
+  ) fail("oauth_principal_usage_read_mode_mismatch");
+  assertions.add("oauth.principal-usage-read-mode");
 
   const protectedResource = expectStatus(
     await raw(owner, "/.well-known/oauth-protected-resource/api/mcp"),
@@ -1031,16 +1136,25 @@ async function runOAuthScenario({ assertions, nowState }) {
     await modernTool(owner, readGrant.tokens.access_token, "oauth-read-list", "list_minds"),
     "oauth_modern_read_failed",
   );
-  if (!modernList.minds?.some((mind) => mind.route === "/me")) fail("oauth_personal_mind_missing");
+  const modernReadPersonal = modernList.minds?.find((mind) => mind.route === "/me");
+  if (
+    modernReadPersonal?.usage_mode !== "read" ||
+    modernReadPersonal?.effective?.can_read !== true ||
+    modernReadPersonal?.effective?.can_write !== false ||
+    modernReadPersonal?.writable_mount?.active !== false
+  ) fail("oauth_personal_mind_read_projection_mismatch");
   assertions.add("oauth.read-grant-modern-runtime");
   const compatList = await assertCompatibilityRead(owner, readGrant.tokens.access_token);
-  if (!compatList.minds?.some((mind) => mind.route === "/me")) fail("oauth_compat_personal_mind_missing");
+  const compatReadPersonal = compatList.minds?.find((mind) => mind.route === "/me");
+  if (
+    compatReadPersonal?.usage_mode !== "read" ||
+    compatReadPersonal?.effective?.can_write !== false
+  ) fail("oauth_compat_personal_mind_read_projection_mismatch");
   assertions.add("oauth.read-grant-compat-runtime");
-  const personal = modernList.minds.find((mind) => mind.route === "/me");
   const writeChallenge = expectMcpError(
     await modernTool(owner, readGrant.tokens.access_token, "oauth-read-write", "commit_changeset", {
       mind: "/me",
-      expected_revision: personal.head.revision_id,
+      expected_revision: modernReadPersonal.head.revision_id,
       idempotency_key: `oauth:${nonce}:read-denied`,
       summary: "OAuth read grant denial",
       operations: [{
@@ -1123,11 +1237,11 @@ async function runOAuthScenario({ assertions, nowState }) {
   });
   if (advertisedWriteTools.status !== 200) fail("oauth_write_tools_list_failed");
   assertCodexCompatibleDefaultWriteCatalog(advertisedWriteTools.body?.result?.tools);
-  assertions.add("oauth.catalog-modern-default-exact-17");
+  assertions.add("oauth.catalog-modern-default-exact-16");
   await assertCompatibilityRead(owner, writeGrant.tokens.access_token, {
     defaultWriteCatalog: true,
   });
-  assertions.add("oauth.catalog-compat-default-exact-17");
+  assertions.add("oauth.catalog-compat-default-exact-16");
   assertions.add("oauth.codex-compatible-default-write-schema");
   const writeAccessRecord = latestAccessRecord(database);
   const metadata = await createSitesMetadataStore(database);
@@ -1135,88 +1249,79 @@ async function runOAuthScenario({ assertions, nowState }) {
   if (activeMirror?.state !== "active") fail("oauth_authorization_mirror_not_active");
   assertions.add("oauth.authorization-mirror-active");
 
-  const info = mcpData(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-info", "get_mind_info", { mind: "/me" }),
-    "oauth_current_acl_read_failed",
-  );
-  if (!info.content_capabilities?.includes("commit")) fail("oauth_current_acl_missing_commit");
-  assertions.add("oauth.current-acl-readback");
   const connections = await owner.api("/api/v1/connections");
   const connection = connections.body?.data?.items?.find((item) => item?.can_write === true);
   const connectionRef = requiredString(
     connection?.connection_ref,
     "oauth_connected_app_not_visible",
   );
-  const initialConnection = await owner.api(
-    `/api/v1/connections/${encodeURIComponent(connectionRef)}`,
-  );
-  if (
-    initialConnection.body?.data?.access?.target_version !== 0 ||
-    initialConnection.body?.data?.access?.writable_mind !== null
-  ) fail("oauth_initial_bindings_not_empty");
-  const selected = await owner.api(
-    `/api/v1/connections/${encodeURIComponent(connectionRef)}/mind-access`,
-    {
-      method: "PATCH",
-      body: {
-        action: "select_write",
-        mind_ref: "/me",
-        expected_target_version: 0,
-      },
-      idempotencyKey: `oauth:${nonce}:select-target`,
-      csrfPath: `/settings/connections/${encodeURIComponent(connectionRef)}`,
-    },
-  );
-  const targetReadback = selected.body?.data?.access;
-  if (
-    targetReadback?.target_version !== 1 ||
-    targetReadback?.writable_mind?.route !== "/me" ||
-    /write_binding|binding_owner|space_id|generation/u.test(JSON.stringify(selected.body))
-  ) fail("oauth_write_binding_readback_mismatch");
-  assertions.add("oauth.explicit-write-binding-readback");
-  const refreshedWriteGrant = expectStatus(
-    await refresh(owner, clientId, writeGrant.tokens.refresh_token),
-    200,
-    "oauth_bound_grant_refresh_failed",
-  );
-  mcpData(
-    await modernTool(owner, refreshedWriteGrant.body.access_token, "oauth-refreshed-target-read", "list_minds"),
-    "oauth_refreshed_write_binding_readback_failed",
-  );
-  const refreshedConnection = await owner.api(
-    `/api/v1/connections/${encodeURIComponent(connectionRef)}`,
-  );
-  if (
-    refreshedConnection.body?.data?.access?.target_version !== 1 ||
-    refreshedConnection.body?.data?.access?.writable_mind?.route !== "/me"
-  ) fail("oauth_refresh_changed_write_binding");
-  assertions.add("oauth.refresh-preserves-write-binding");
   const connectionDetail = await owner.api(
     `/api/v1/connections/${encodeURIComponent(connectionRef)}`,
   );
   if (
-    connectionDetail.body?.data?.access?.target_version !== 1 ||
-    connectionDetail.body?.data?.access?.writable_mind?.route !== "/me" ||
-    JSON.stringify(connectionDetail.body).includes(String(writeAccessRecord.grant_id))
+    connectionDetail.body?.data?.connection_ref !== connectionRef ||
+    JSON.stringify(connectionDetail.body).includes(String(writeAccessRecord.grant_id)) ||
+    /principal_id|space_id|mind_id|generation/iu.test(JSON.stringify(connectionDetail.body))
   ) fail("oauth_connection_safe_projection_mismatch");
-  assertions.add("oauth.connection-safe-projection");
-  const staleAccess = await owner.api(
-    `/api/v1/connections/${encodeURIComponent(connectionRef)}/mind-access`,
-    {
-      method: "PATCH",
-      body: {
-        action: "clear_write",
-        expected_target_version: 0,
-      },
-      idempotencyKey: `oauth:${nonce}:stale-access`,
-      csrfPath: `/settings/connections/${encodeURIComponent(connectionRef)}`,
-      expectedStatus: 409,
-    },
+  assertions.add("oauth.connection-safe-account-wide-projection");
+
+  const selected = await setPersonalUsage("read_write", 1, "usage-write");
+  const selectedProjection = selected.body?.data?.projection;
+  const selectedPersonal = selectedProjection?.items?.find(
+    (item) => item?.mind_ref === "/me",
   );
-  if (staleAccess.body?.error?.code !== "target_conflict") {
-    fail("oauth_connection_stale_cas_not_denied");
+  if (
+    selectedProjection?.usage_version !== 2 ||
+    selectedPersonal?.usage_mode !== "read_write" ||
+    selectedPersonal?.effective?.can_write !== true ||
+    /principal_id|space_id|mind_id|generation/iu.test(JSON.stringify(selected.body))
+  ) fail("oauth_principal_usage_write_readback_mismatch");
+  assertions.add("oauth.principal-usage-write-readback");
+
+  const staleUsage = await setPersonalUsage("read", 1, "usage-stale", 409);
+  if (staleUsage.body?.error?.code !== "usage_conflict") {
+    fail("oauth_principal_usage_stale_cas_not_denied");
   }
-  assertions.add("oauth.connection-stale-cas");
+  const usageAfterStale = await owner.api("/api/v1/mind-usage");
+  const usageAfterStalePersonal = usageAfterStale.body?.data?.items?.find(
+    (item) => item?.mind_ref === "/me",
+  );
+  if (
+    usageAfterStale.body?.data?.usage_version !== 2 ||
+    usageAfterStalePersonal?.usage_mode !== "read_write"
+  ) fail("oauth_principal_usage_stale_cas_changed_state");
+  assertions.add("oauth.principal-usage-stale-cas");
+
+  const refreshedWriteGrant = expectStatus(
+    await refresh(owner, clientId, writeGrant.tokens.refresh_token),
+    200,
+    "oauth_write_grant_refresh_failed",
+  );
+  const refreshedUsage = mcpData(
+    await modernTool(owner, refreshedWriteGrant.body.access_token, "oauth-refreshed-usage-read", "list_minds"),
+    "oauth_refreshed_principal_usage_readback_failed",
+  );
+  const refreshedPersonal = refreshedUsage.minds?.find((mind) => mind.route === "/me");
+  if (
+    refreshedPersonal?.usage_mode !== "read_write" ||
+    refreshedPersonal?.effective?.can_write !== true ||
+    refreshedPersonal?.writable_mount?.active !== true
+  ) fail("oauth_refresh_changed_principal_usage");
+  assertions.add("oauth.refresh-preserves-principal-usage");
+
+  const info = mcpData(
+    await modernTool(
+      owner,
+      refreshedWriteGrant.body.access_token,
+      "oauth-write-info",
+      "get_mind_info",
+      { mind: "/me" },
+    ),
+    "oauth_current_acl_read_failed",
+  );
+  if (!info.content_capabilities?.includes("commit")) fail("oauth_current_acl_missing_commit");
+  assertions.add("oauth.current-acl-readback");
+
   const expectedRevision = info.resolved_revision.revision_id;
   const commitArguments = {
     mind: "/me",
@@ -1224,19 +1329,20 @@ async function runOAuthScenario({ assertions, nowState }) {
     idempotency_key: `oauth:${nonce}:commit`,
     summary: "OAuth exact-candidate fixture",
     operations: [{
-      type: "create_file",
-      path: "concepts/oauth-gate.md",
-      text: "---\ntype: Note\ntitle: OAuth gate\n---\nExact candidate fixture.\n",
+      type: "add_log_entry",
+      path: "log.md",
+      category: "Update",
+      message: "Verified the OAuth exact-candidate fixture.",
     }],
   };
   const committed = mcpData(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-commit", "commit_changeset", commitArguments),
+    await modernTool(owner, refreshedWriteGrant.body.access_token, "oauth-write-commit", "commit_changeset", commitArguments),
     "oauth_product_commit_failed",
   );
   if (committed.revision?.revision_id === expectedRevision) fail("oauth_commit_did_not_advance_head");
   assertions.add("oauth.product-runtime-commit");
   const replayed = mcpData(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-replay", "commit_changeset", commitArguments),
+    await modernTool(owner, refreshedWriteGrant.body.access_token, "oauth-write-replay", "commit_changeset", commitArguments),
     "oauth_product_commit_replay_failed",
   );
   if (replayed.revision?.revision_id !== committed.revision?.revision_id) {
@@ -1244,14 +1350,15 @@ async function runOAuthScenario({ assertions, nowState }) {
   }
   assertions.add("oauth.product-runtime-idempotent-replay");
   expectMcpError(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-stale", "commit_changeset", {
+    await modernTool(owner, refreshedWriteGrant.body.access_token, "oauth-write-stale", "commit_changeset", {
       ...commitArguments,
       idempotency_key: `oauth:${nonce}:stale`,
       summary: "OAuth stale fixture",
       operations: [{
-        type: "create_file",
-        path: "concepts/oauth-stale.md",
-        text: "---\ntype: Note\ntitle: OAuth stale\n---\nStale.\n",
+        type: "add_log_entry",
+        path: "log.md",
+        category: "Update",
+        message: "This stale OAuth fixture must not commit.",
       }],
     }),
     "revision_conflict",
@@ -1264,28 +1371,28 @@ async function runOAuthScenario({ assertions, nowState }) {
     idempotencyKey: `oauth:${nonce}:connected-app-revoke`,
     csrfPath: `/settings/connections/${encodeURIComponent(connectionRef)}`,
   });
-  if ((await modernTool(owner, writeGrant.tokens.access_token, "oauth-connected-revoked", "list_minds")).status !== 401) {
+  if ((await modernTool(owner, refreshedWriteGrant.body.access_token, "oauth-connected-revoked", "list_minds")).status !== 401) {
     fail("oauth_connected_app_revoke_not_enforced");
   }
   const revokedMirror = await metadata.readMcpTokenForAuthorization(writeAccessRecord.id);
   if (revokedMirror?.state !== "revoked") fail("oauth_authorization_mirror_not_revoked");
   assertions.add("oauth.connected-app-mirror-revoke");
-  const revokedTarget = await metadata.readCredentialWriteTarget(
-    String(writeAccessRecord.grant_id),
-    String(writeAccessRecord.principal_id),
+  const usageAfterRevoke = await owner.api("/api/v1/mind-usage");
+  const usageAfterRevokePersonal = usageAfterRevoke.body?.data?.items?.find(
+    (item) => item?.mind_ref === "/me",
   );
   if (
-    revokedTarget?.kind !== "current" ||
-    revokedTarget.state.lifecycleState !== "revoked" ||
-    revokedTarget.state.activeGeneration !== null
-  ) fail("oauth_connected_app_binding_owner_not_revoked");
-  assertions.add("oauth.connected-app-binding-revoke");
+    usageAfterRevoke.body?.data?.usage_version !== 2 ||
+    usageAfterRevokePersonal?.usage_mode !== "read_write"
+  ) fail("oauth_connected_app_revoke_changed_principal_usage");
+  assertions.add("oauth.connected-app-revoke-preserves-principal-usage");
 
   const reconnect = await authorize(owner, clientId, { state: "state-reconnect" });
-  mcpData(
+  const reconnectUsage = mcpData(
     await modernTool(owner, reconnect.tokens.access_token, "oauth-reconnect-read", "list_minds"),
     "oauth_reconnect_failed",
   );
+  const reconnectPersonal = reconnectUsage.minds?.find((mind) => mind.route === "/me");
   const reconnectAccess = latestAccessRecord(database);
   const reconnectConnections = await owner.api("/api/v1/connections");
   const reconnectConnection = reconnectConnections.body?.data?.items?.find(
@@ -1293,7 +1400,7 @@ async function runOAuthScenario({ assertions, nowState }) {
   );
   const reconnectRef = requiredString(
     reconnectConnection?.connection_ref,
-    "oauth_reconnect_bindings_failed",
+    "oauth_reconnect_connection_missing",
   );
   const reconnectDetail = await owner.api(
     `/api/v1/connections/${encodeURIComponent(reconnectRef)}`,
@@ -1301,25 +1408,42 @@ async function runOAuthScenario({ assertions, nowState }) {
   if (
     reconnectAccess.grant_id === writeAccessRecord.grant_id ||
     reconnectRef === connectionRef ||
-    reconnectDetail.body?.data?.access?.target_version !== 0 ||
-    reconnectDetail.body?.data?.access?.writable_mind !== null
-  ) fail("oauth_reconnect_binding_generation_not_empty");
+    reconnectPersonal?.usage_mode !== "read_write" ||
+    reconnectPersonal?.effective?.can_write !== false ||
+    reconnectPersonal?.writable_mount?.active !== true ||
+    JSON.stringify(reconnectDetail.body).includes(String(reconnectAccess.grant_id)) ||
+    /principal_id|space_id|mind_id|generation/iu.test(JSON.stringify(reconnectDetail.body))
+  ) fail("oauth_reconnect_principal_usage_mismatch");
   assertions.add("oauth.reconnect-new-grant");
-  assertions.add("oauth.reconnect-empty-binding-generation");
+  assertions.add("oauth.reconnect-shares-principal-usage");
 
   await owner.issueMcpToken({
     name: "Personal token regression",
     idempotencyKey: `oauth:${nonce}:personal-token`,
   });
-  mcpData(
+  const personalTokenUsage = mcpData(
     await modernTool(owner, owner.mcpToken, "personal-modern-list", "list_minds"),
     "personal_token_modern_failed",
   );
+  const personalTokenMind = personalTokenUsage.minds?.find((mind) => mind.route === "/me");
+  if (
+    personalTokenMind?.usage_mode !== "read_write" ||
+    personalTokenMind?.effective?.can_write !== true ||
+    personalTokenMind?.writable_mount?.active !== true
+  ) fail("personal_token_principal_usage_mismatch");
   assertions.add("personal-token.modern-regression");
-  await assertCompatibilityRead(owner, owner.mcpToken, {
+  const personalTokenCompat = await assertCompatibilityRead(owner, owner.mcpToken, {
     defaultWriteCatalog: true,
   });
+  const personalTokenCompatMind = personalTokenCompat.minds?.find(
+    (mind) => mind.route === "/me",
+  );
+  if (
+    personalTokenCompatMind?.usage_mode !== "read_write" ||
+    personalTokenCompatMind?.effective?.can_write !== true
+  ) fail("personal_token_compat_principal_usage_mismatch");
   assertions.add("personal-token.compat-regression");
+  assertions.add("personal-token.shared-principal-usage");
 
   if (ownerSession.personal_mind?.route !== "/me") fail("oauth_owner_session_invalid");
   await assertNoSyntheticProductAuthority(ROOT);

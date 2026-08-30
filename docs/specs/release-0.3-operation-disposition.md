@@ -5,9 +5,8 @@
 > на уровне Mind; `list_minds` публикует enabled projection; bind/unbind,
 > credential target controls, capture toggle и `capture_knowledge` удаляются,
 > а automatic save использует `commit_changeset`. Нормативный delta и migration
-> зафиксированы в [режимах использования Mind](mind-usage-modes.md) и его
-> machine contract. Таблицы/fixture v1 ниже остаются historical MD-337/MD-343
-> evidence до их runtime replacement в MD-374–MD-379.
+> зафиксированы в [режимах использования Mind](mind-usage-modes.md) и этом
+> обновлённом machine contract.
 
 Статус: accepted operation-disposition contract, 2026-08-27. Документ
 фиксирует целевое распределение уже существующих входных операций после
@@ -25,13 +24,13 @@ owner, чтобы не создавать конфликт с параллель
 Release 0.3 оставляет ровно две пользовательские поверхности полномочий:
 
 - **Sites control plane** владеет account/profile, metadata и lifecycle Minds,
-  visibility, участниками и ownership, Connections, выбором единственного
-  writable target, credentials, bulk import/export и административным
-  удалением;
+  visibility, участниками и ownership, principal-wide режимами использования
+  каждого Mind, Connections, credentials, bulk import/export и
+  административным удалением;
 - **Content MCP** владеет discovery, чтением/search/history/standalone
   validation одного явно выбранного Mind/revision, подготовкой отдельных
-  файлов и одним ordinary atomic content commit в заранее выбранный на Site
-  writable target.
+  файлов и одним ordinary atomic content commit в единственный текущий
+  `read_write` Mind principal.
 
 Каждый content read по-прежнему передаёт ровно один explicit `mind`; где
 применимо, selector разрешается в один exact `revision_id`. `fetch` продолжает
@@ -59,33 +58,24 @@ actor, authorization checks, базовую схему ошибок и прав�
 | `web-read` | Sites control; current registered Sites actor; identity и current ACL/visibility до metadata read | `401 authentication_required`, indistinguishable `404` where required; exact Mind only where route contains `mind_ref` |
 | `web-write` | Sites control; current registered Sites actor; same-origin `Origin`, session CSRF, idempotency/CAS where state changes, current named capability | typed `400/403/409`; no content revision unless operation is the internal final step of Site-owned import |
 | `web-import` | Sites control; current actor with exact Mind write authority; quota/reservation/session/CAS checks | bounded typed import errors; exact Mind and base revision, one final HEAD or no change |
-| `credential-control` | Sites control; credential-owner authority, target-version CAS and idempotency are common; action-specific checks are defined below | unknown/foreign ref is indistinguishable `404`; target selection is `0..1`, never content-selected |
+| `mind-usage-control` | Sites control; current registered principal, principal-owned settings, current Mind access, `expected_usage_version`, idempotency and singleton `read_write` invariant | `disabled | read | read_write`; unknown/foreign Mind is indistinguishable `404`; `read_write` additionally requires current writer role and authorized description |
 | `operator-read` | hidden support surface; current registered Sites actor in constructor-only service-operator allowlist | every other actor receives indistinguishable `404`; no content body or new authority |
-| `content-read` | Content MCP; fresh/upgraded OAuth/personal-token actor with `content:read`, current ACL/visibility and explicit Mind/revision whenever the operation targets content | pending legacy credential получает non-disclosing `credential_access_upgrade_required` (`mind-diary/credential-access-upgrade-required/v1`) до любого ACL-derived discovery/read; no `mind_binding_required`; denied/missing stay indistinguishable where required; no cross-Mind fallback |
-| `content-write` | Content MCP; current actor with `content:write`, current ACL, Site-selected writable target, idempotency and HEAD CAS | `writable_target_required`, `writable_target_mismatch`, `writable_target_unavailable`, revision/idempotency conflicts; one exact target |
-| `content-ingress` | Content MCP or capability-only HTTP; same checks as `content-write` plus source ownership, byte/digest/quota/expiry checks | no provider/local locator below adapter; staged result is pinned to current credential target defined by MD-339 |
+| `content-read` | Content MCP; OAuth/personal-token actor with `content:read`, principal usage `read | read_write`, current ACL/visibility and explicit Mind/revision whenever the operation targets content | disabled/inaccessible/missing stay indistinguishable where required; direct user request bypasses only description relevance, never usage/scope/access; no cross-Mind fallback |
+| `content-write` | Content MCP; current actor with `content:write`, exact current principal `read_write` Mind, principal-owned mount generation, current ACL/description, idempotency and HEAD CAS; optional source refs are reauthorized | `writable_mind_required`, `writable_mind_stale`, source/revision/idempotency conflicts; client `mind` is only exact-target assertion |
+| `content-ingress` | Content MCP or capability-only HTTP; same principal mount checks as `content-write` plus source ownership, byte/digest/quota/expiry checks | no provider/local locator below adapter; staged result is pinned to current principal-owned mount generation |
 | `mcp-transport` | Content MCP; current OAuth/personal-token actor authenticated on every POST; per-method/per-tool scope and current access checks follow after protocol validation | OAuth challenge or protocol error before application call; no session actor cache |
 | `oauth` | OAuth adapter; public-client DCR/PKCE, exact redirect/resource, trusted Sites identity at consent, grant/token lifecycle | standard OAuth errors; resource remains canonical `/api/mcp` |
 | `delivery-grant` | exact content/export delivery; one-use opaque URL grant captures principal/Mind/revision and rechecks current access at download | invalid/expired/revoked/deleted/unauthorized are one indistinguishable `404` |
-| `compat-removed` | no target product capability | omitted from advertised catalog and schemas; only an exact cached binding tool name receives versioned `mind-diary/mcp-operation-retired/v1` with no application call or side effect. Unknown and near-miss names still receive protocol `Invalid params`/`Method not found` |
+| `compat-removed` | no target product capability | omitted from advertised catalog and schemas; exact cached binding names and `capture_knowledge` receive versioned `mind-diary/mcp-operation-retired/v1` with no application call or side effect. Unknown and near-miss names still receive protocol `Invalid params`/`Method not found` |
 
-`select_write` additionally requires active credential lifecycle,
-`content:write`, current writer role and target eligibility. `clear_write`
-requires credential-owner authority, active credential lifecycle,
-`expected_target_version` and idempotency: target ACL, current writer role and
-target eligibility are not preconditions. A revoked or expired credential
-cannot clear state, but an active credential may clear after target ACL/role
-loss or target deletion without revealing target metadata. This action-specific
-split is normative; the shared `credential-control` profile must not be
-interpreted as adding the remaining select-only checks to recovery-safe clear.
-
-MD-343 реализует этот target disposition в Sites runtime. Обе actor-owned
-mutation routes принимают только `select_write | clear_write`, используют
-`expected_target_version` и возвращают `409 target_conflict` при stale CAS без
-изменения state или раскрытия target metadata. Read projection теперь выводится
-из current ACL/visibility, а recovery-safe `clear_write` не требует write scope,
-target ACL или writer role. Executable fixture проверяет эту реализацию через
-реальный helper и HTTP handler.
+`PUT /api/v1/minds/{mind_ref}/usage` принимает ровно один mode и
+`expected_usage_version`. `disabled` удаляет Mind из MCP projection, `read`
+разрешает чтение, `read_write` также выбирает единственный writable Mind и
+атомарно переводит прежний writable Mind в `read`. Настройка принадлежит
+principal и одинакова для всех его OAuth grants и personal tokens; scope
+конкретного credential может только сузить effective capability. MD-374
+реализует Site surface и singleton, MD-376 — MCP projection и инструкции,
+MD-379 — server-resolved write pin и transactional rechecks.
 
 ## REST control routes
 
@@ -101,8 +91,12 @@ target ACL или writer role. Executable fixture проверяет эту ре
 | `GET /api/v1/account/deletion-impact` | keep → Sites control | Fresh destructive preview; no migration |
 | `DELETE /api/v1/account` | keep → Sites control | Exact impact + confirmation; no migration |
 | `GET /api/v1/minds` | keep → Sites control | Current accessible metadata projection; no read-binding filter |
+| `GET /api/v1/mind-usage` | change → Sites control | Principal-wide enabled usage singleton with settings version and at most one writable generation. MD-374 |
 | `POST /api/v1/minds` | keep → Sites control | Ordinary Mind create; no migration |
 | `GET /api/v1/minds/{mind_ref}` | keep → Sites control | Current metadata after authorization; no content body |
+| `GET /api/v1/minds/{mind_ref}/usage` | change → Sites control | Authorized per-Mind `disabled | read | read_write` projection; no credential selector. MD-374 |
+| `PUT /api/v1/minds/{mind_ref}/usage` | change → Sites control | `mind-usage-control`; exact mode, `expected_usage_version`, idempotency and singleton writable transition. MD-374 |
+| `PATCH /api/v1/minds/me/description` | change → Sites control | Updates the authorized Personal Mind category used for read relevance and `read_write` eligibility. MD-374 |
 | `GET /api/v1/minds/{mind_ref}/capacity` | keep → Sites control | Current authorized capacity projection |
 | `POST /api/v1/minds/{mind_ref}/exports` | keep → Sites control | Actor-owned exact-revision export start; explicit profile for mixed revisions; atomic idempotency, quota reservation and job creation. MD-361 |
 | `GET /api/v1/export-jobs/{job_id}` | keep → Sites control | Creator-private bounded status; current read access is rechecked before issuing a short-lived download grant. MD-361 |
@@ -132,12 +126,15 @@ target ACL или writer role. Executable fixture проверяет эту ре
 | `DELETE /api/v1/invitations/{invitation_id}` | keep → Sites control | Current administrative authority |
 | `GET /api/v1/mcp-tokens` | keep → Sites control | Advanced MCP metadata; no secret/verifier |
 | `POST /api/v1/mcp-tokens` | keep → Sites control | One-time secret issuance |
-| `PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access` | change → Sites control | `credential-control`: remove `attach_read`/`detach_read`; retain only select/switch/clear writable target with target-version CAS. Legacy actions fail `400 operation_removed`; target stale `expected_target_version` fails `409 target_conflict`, changes no target state, discloses no target metadata and never falls back to last-write-wins. MD-339 owns record/version migration; MD-343 owns helper/handler implementation |
 | `DELETE /api/v1/mcp-tokens/{personal_token_ref}` | keep → Sites control | Actor-owned revoke |
-| `GET /api/v1/connections` | change → Sites control | Current active Connections and current-readable projection; remove mutable read-attachment state from response. MD-339 owns projection migration |
-| `GET /api/v1/connections/{connection_ref}` | change → Sites control | `credential-control`: readable Minds are current derived access; writable target remains explicit Site state. MD-339 owns projection migration |
-| `PATCH /api/v1/connections/{connection_ref}/mind-access` | change → Sites control | Same target-only action schema and exact `target_conflict` semantics as personal token. MD-343 implementation; MD-339 durable state migration |
+| `GET /api/v1/connections` | change → Sites control | Current active connection lifecycle only; Mind usage is principal-wide and read from Mind settings. MD-374 |
+| `GET /api/v1/connections/{connection_ref}` | change → Sites control | Connection details no longer expose or mutate credential-specific Mind targets. MD-374 |
 | `DELETE /api/v1/connections/{connection_ref}` | keep → Sites control | Actor-owned connection revoke |
+
+Старые `PATCH .../mind-access` routes удалены из published
+`WEB_CONTROL_ROUTES`. Migration narrative может вернуть `operation_removed`
+для уже полученного legacy request на старом artifact, но свежий Site не
+регистрирует эти routes и не считает их compatibility operations.
 
 The hidden operator alias `GET /api/v1/internal/operators/users` and UI route
 `GET /internal/operators/users` remain unchanged read-only support projections;
@@ -150,8 +147,8 @@ indistinguishable `404` for every other actor.
 |---|---|---|
 | `GET /api/v1/exports/{grant}` | move → Sites export delivery | Grant download remains one-use and reauthorizes current read access, but only a Site-owned export workflow may issue it. Existing MCP job issuers are retired. MD-359 owns Site workflow routes |
 | `GET /api/bundle-download/{grant}` | keep → content delivery | Exact Mind/revision BundleFile grant, current access recheck; not bulk export |
-| `GET /api/file-ingress/v1/upload-intents/{capability}` | change → content ingress | Status is capability-only; target pin uses MD-339 target record, not historical `write_binding_id` |
-| `PUT /api/file-ingress/v1/upload-intents/{capability}` | change → content ingress | Same target rule plus byte/digest/quota/expiry checks; MD-339 |
+| `GET /api/file-ingress/v1/upload-intents/{capability}` | change → content ingress | Status is capability-only; write pin uses the current principal-owned mount generation, not historical `write_binding_id`. MD-379 |
+| `PUT /api/file-ingress/v1/upload-intents/{capability}` | change → content ingress | Same principal mount rule plus byte/digest/quota/expiry checks; MD-379 |
 | `GET /.well-known/oauth-protected-resource` | keep → OAuth | Canonical resource metadata for `/api/mcp` |
 | `GET /.well-known/oauth-protected-resource/api/mcp` | keep → OAuth | Same metadata alias |
 | `GET /.well-known/oauth-authorization-server` | keep → OAuth | No authority change |
@@ -161,41 +158,41 @@ indistinguishable `404` for every other actor.
 | `POST /oauth/authorize` | keep → OAuth | Explicit consent; account control is not granted |
 | `POST /oauth/token` | keep → OAuth | PKCE/refresh/resource/grant checks |
 | `POST /oauth/revoke` | keep → OAuth | Credential revoke; Site Connection UI remains product control |
-| `POST /api/mcp` | change → Content MCP modern | Catalog/instructions/schema changes below; canonical OAuth resource unchanged |
+| `POST /api/mcp` | change → Content MCP modern | Enabled projection, centralized agent instructions and schema changes below; canonical OAuth resource unchanged. MD-376/MD-379 |
 | `POST /api/mcp/apps` | change → Content MCP Apps | Isolated modern route profile for the static file picker and app-only native staging; same canonical OAuth audience `/api/mcp`; MD-315/MD-316 |
-| `POST /api/mcp/2025-11-25` | change → Content MCP compatibility | Isolated legacy lifecycle, same target tool catalog |
+| `POST /api/mcp/2025-11-25` | change → Content MCP compatibility | Isolated legacy lifecycle, same enabled tool catalog and centralized instructions. MD-376 |
 | any `/mcp` | remove → none | Preserve explicit product `404 route_not_found`; never redirect a bearer request |
 
 ## MCP tool register
 
 | Current tool | Disposition → target | Schema/error delta, compatibility и migration owner |
 |---|---|---|
-| `list_minds` | keep → Content MCP | Existing discovery already lists current allowed Minds and creates no binding |
-| `resolve_mind` | keep → Content MCP | Existing exact-handle discovery already authorizes from current ACL/visibility and creates no binding |
-| `get_mind_info` | change → Content MCP | Keep explicit `mind`/revision selector; remove binding-derived requirements/projection |
-| `get_mind_bindings` | remove → none | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1` and points inspection to the actor-owned Site projection without reading binding state. MD-339 migrates state |
-| `browse_entries` | change → Content MCP | Wire selector unchanged; remove `mind_binding_required` |
-| `search` | change → Content MCP | Wire selector unchanged; one Mind/revision only; remove binding requirement |
-| `fetch` | change → Content MCP | Opaque exact-revision locator unchanged; current access only, no binding |
-| `list_revisions` | change → Content MCP | Explicit one Mind; current access only, no binding |
+| `list_minds` | change → Content MCP | Lists only principal-enabled `read | read_write` Minds with authorized untrusted description, effective capability, settings version and singleton writable mount generation. MD-376 |
+| `resolve_mind` | change → Content MCP | Exact enabled handle only; explicit user request never bypasses disabled/scope/current access. MD-376 |
+| `get_mind_info` | change → Content MCP | Explicit enabled Mind/revision and effective capability; historical mode remains read-only. MD-376 |
+| `get_mind_bindings` | remove → none | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1` and points to principal Mind usage on Site. MD-376 |
+| `browse_entries` | change → Content MCP | One enabled explicit Mind/revision per call; no corpus vacuum or fallback. MD-376 |
+| `search` | change → Content MCP | One enabled explicit Mind/revision only; multiple relevant Minds require sequential calls. MD-376 |
+| `fetch` | change → Content MCP | Opaque exact-revision locator unchanged; current usage and access are rechecked. MD-376 |
+| `list_revisions` | change → Content MCP | Enabled explicit Mind; current access only; history stays read-only. MD-376 |
 | `get_revision` | change → Content MCP | Explicit Mind + exact revision; historical view stays read-only |
 | `validate_mind` | change → Content MCP | Standalone exact revision validation; not import-session validation |
 | `list_bundle_files` | change → Content MCP | Explicit Mind/revision, no binding; metadata only |
-| `set_read_mind_binding` | remove → none | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1`. There is no mutation replacement because read access is derived from current ACL/visibility. MD-339 removes/migrates records |
-| `set_write_mind_binding` | move → Sites control | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1` and directs the user to the actor-owned Site Connection/Advanced MCP control. It never forwards arguments to Site or mutates a target. MD-339 |
+| `set_read_mind_binding` | remove → none | Omit from both catalogs/schemas; exact cached call directs the user to per-Mind usage on Site and has no side effect. MD-376 |
+| `set_write_mind_binding` | remove → none | Omit from both catalogs/schemas; exact cached call directs the user to the single principal `read_write` mode on Site and has no side effect. MD-376 |
 | `get_file_ingress_capabilities` | change → Content MCP | Read-only deployed-adapter report; rename output `requires_write_binding` to `requires_writable_target`; no client/path promise |
 | `open_bundle_file_picker` | change → Content MCP Apps | Model-visible preflight for one explicit writable Mind; links the static MCP Apps UI resource and exposes no provider file ID, URL or bytes. Direct and compatibility profiles omit it. MD-316 |
-| `create_file_upload_intent` | change → Content MCP | Remove required `write_binding_id`; explicit `mind` must equal Site-selected target; target errors use `content-write` profile. MD-339 |
-| `stage_bundle_file` | change → Content MCP | Remove required `write_binding_id`; native provider object terminates at adapter; staged ref pins current credential target. MD-339 |
-| `reconcile_file_stage` | change → Content MCP | Remove required `write_binding_id`; reconcile exact original target/source/digest/idempotency payload |
-| `get_bundle_file_download` | change → Content MCP | Exact Mind/revision current read; remove binding requirement |
-| `commit_changeset` | change → Content MCP | Remove required `write_binding_id`; keep required explicit `mind`, `expected_revision`, `idempotency_key`, non-empty operations; server verifies `mind` equals Site-selected target. MD-339 |
-| `reconcile_changeset` | change → Content MCP | Same target schema as original commit; missing outcome performs no writes |
-| `capture_knowledge` | change → Content MCP | Remove `write_binding_id` and `expected_binding_version`; keep explicit Mind/HEAD/idempotency/policy payload, require Site-owned enabled policy and same selected private target. MD-339 |
+| `create_file_upload_intent` | change → Content MCP | No client binding/generation; explicit `mind` is an assertion against the current principal `read_write` Mind. MD-379 |
+| `stage_bundle_file` | change → Content MCP | Native provider object terminates at adapter; service resolves and pins the current principal mount generation. MD-379 |
+| `reconcile_file_stage` | change → Content MCP | Reconcile exact original target/source/digest/idempotency payload under the current principal mount. MD-379 |
+| `get_bundle_file_download` | change → Content MCP | Exact enabled Mind/revision current read; usage is rechecked. MD-376 |
+| `commit_changeset` | change → Content MCP | Canonical automatic save: explicit target assertion, expected HEAD, idempotency, bounded operations and optional max-8 strict `source_references[{mind,revision,path}]`; service resolves current principal `read_write` generation and reauthorizes target/source transactionally. MD-376/MD-379 |
+| `reconcile_changeset` | change → Content MCP | Exact original commit payload including unchanged `source_references`; missing outcome performs no writes. MD-376/MD-379 |
+| `capture_knowledge` | remove → none | Omit from both catalogs/schemas; exact cached call is side-effect-free and directs the agent to canonical `commit_changeset`. MD-376 |
 | `start_export` | move → Sites control | Omit from catalog; exact old call returns side-effect-free `operation_moved_to_sites` with the Sites REST route and never starts a job. MD-359/MD-361 |
 | `get_export_status` | move → Sites control | Omit from catalog; exact old call returns the same side-effect-free migration result; Site status/download only. MD-359/MD-361 |
 
-The complete target schema catalog therefore contains 19 tools, in stable order.
+The complete target schema catalog therefore contains 18 tools, in stable order.
 Endpoint profiles publish only their exact safe projection: direct modern and
 compatibility omit both `open_bundle_file_picker` and `stage_bundle_file`, a
 constructor-verified native route may publish `stage_bundle_file` without the
@@ -220,7 +217,6 @@ reconcile_file_stage
 get_bundle_file_download
 commit_changeset
 reconcile_changeset
-capture_knowledge
 ```
 
 ## MCP Resources и protocol profiles
@@ -229,7 +225,7 @@ Modern `2026-07-28`:
 
 | Method | Disposition | Target behavior |
 |---|---|---|
-| `server/discover` | change | Keep version/capabilities; instructions describe explicit Mind reads and Site-selected writable target, not attach/bind |
+| `server/discover` | change | Keep version/capabilities; centralized instructions describe description-relevant or user-requested enabled reads, sequential multi-Mind calls, automatic discussed-knowledge save, OKF validation/read-back/conflict reconciliation and user notification. MD-376 |
 | `resources/templates/list` | keep | Authenticated empty list; no implicit templates |
 | `resources/list` | change | Enumerate only authorized root `index` resources from current access, without binding |
 | `resources/read` | change | Reauthorize exact `okf://spaces/{space_id}/revisions/{revision_id}/...`; no HEAD or cross-Mind fallback |
@@ -251,7 +247,7 @@ Compatibility `2025-11-25`:
 | `server/discover` | remove | Preserve compatibility `Method not found` |
 
 MCP Apps `/api/mcp/apps` uses the same modern `2026-07-28` lifecycle, publishes
-the complete 19-tool catalog, and additionally serves the exact static
+the complete 18-tool catalog, and additionally serves the exact static
 `ui://mind-diary/file-ingress/v1.html` resource. `stage_bundle_file` remains
 app-only through `_meta.ui.visibility`; its provider file object and full stage
 result are not projected into model-visible `structuredContent`. После stage
@@ -273,14 +269,14 @@ company-knowledge claim.
 | Surface | Disposition | Target behavior / owner |
 |---|---|---|
 | `/`, `/me`, `/minds`, `/{space_handle}`, `/public`, `/invitations`, `/settings/account`, `/internal/operators/users` | keep | Existing Sites control purpose and authorization boundary |
-| `/settings/connections` | change | Remove attach/detach-read controls; show current-readable projection and link to target selection |
-| `/settings/connections/{connection_ref}` | change | Only Site can select/switch/clear one writable target; MD-339 state migration |
-| `/settings/developer/mcp` | change | Personal-token lifecycle/endpoints remain; access controls become target-only; no binding tool instructions |
+| `/settings/connections` | change | Connection lifecycle only; Mind access modes are principal-wide and configured on each Mind. MD-374 |
+| `/settings/connections/{connection_ref}` | change | Connection details expose no credential-specific readable/writable target controls. MD-374 |
+| `/settings/developer/mcp` | change | Personal-token lifecycle remains; tokens inherit principal usage and only scopes narrow effective capability. MD-374 |
 | `/settings/mcp` | keep | Registered `GET`/`HEAD` stays `308` to Advanced MCP; signed-out safe shell unchanged |
-| `/help/codex` | change | `MD-339`: three steps become install → authenticate/read explicit Minds → choose writable target on Site only when writing; remove “attach readable Minds” guidance |
+| `/help/codex` | change | `MD-376`: install → authenticate → read enabled explicit Minds by user request/description → configure per-Mind usage on Site; automatic save uses `commit_changeset` |
 | `/help` | change | `integration-owner`: starter/concierge copy must not call removed binding/export tools |
 | Marketplace package `mind-diary@srez-marketplace` | change | Keep `AVAILABLE + ON_USE`, compatibility transport `/api/mcp/2025-11-25` and canonical OAuth resource `/api/mcp`; `integration-owner` publishes a new immutable package version for catalog/schema change |
-| Bundled Mind Diary skill | change | `integration-owner`: remove `get/set_*_mind_binding` and MCP export instructions; always name one explicit Mind/revision and direct target/export control to Site |
+| Bundled Mind Diary skill | change | `integration-owner`: remove binding/capture/export-tool instructions; use enabled descriptions for reads, one exact Mind/revision per call, automatic save of explicitly discussed matching knowledge through `commit_changeset`, OKF validation/read-back/conflict reconciliation and user notification |
 | Plugin card/help label `Mind Diary UAT` | keep | `integration-owner`: UAT remains explicit; no production/public-directory claim |
 
 Static asset routes do not carry product authority and remain unchanged.
@@ -294,22 +290,19 @@ published.
 
 The fixture records every changed or removed wire field. Normative highlights:
 
-Имена `expected_target_version`, `requires_writable_target`,
-`writable_target_required`, `writable_target_mismatch`,
-`writable_target_unavailable` и `target_conflict` являются каноническими machine
-names этого operation contract. `target_conflict` относится только к Sites
-mutation: stale `expected_target_version` получает HTTP `409`, не меняет target
-state, не раскрывает target metadata и не допускает last-write-wins. Он не
-добавляется в Content MCP writable-target error set. MD-339 обязан сослаться на
-эти имена и определить durable state, migration/reconnect semantics, не
-переименовывая и не дублируя этот register; MD-343 реализует Sites
-helper/handler delta. Текущие legacy names в source evidence не являются
-каноническими target aliases.
+Имена `expected_usage_version`, `disabled`, `read`, `read_write`,
+`settings_version`, `writable_mount.generation`, `writable_mind_required` и
+`writable_mind_stale` являются каноническими machine names этого operation
+contract. Generation принадлежит principal mount, а не credential binding, и
+никогда не принимается от клиента как authority. Stale usage CAS не меняет
+state и не допускает last-write-wins. MD-374 владеет Site mode transition,
+MD-376 — MCP projection/guidance, MD-379 — write pin и transactional rechecks.
 
 - remove `write_binding_id` from `create_file_upload_intent`,
   `stage_bundle_file`, `reconcile_file_stage`, `commit_changeset` and
   `reconcile_changeset`;
-- additionally remove `expected_binding_version` from `capture_knowledge`;
+- remove `capture_knowledge` from the fresh catalog and accept only its exact
+  cached name through the side-effect-free retired dispatcher;
 - rename `requires_write_binding` to `requires_writable_target` in every
   `get_file_ingress_capabilities.sources[]` row;
 - keep required explicit `mind` on every target-sensitive content operation;
@@ -319,25 +312,27 @@ helper/handler delta. Текущие legacy names в source evidence не явл
   cached binding names to return versioned `mind-diary/mcp-operation-retired/v1`
   without application calls or side effects; this compatibility response is
   not a hidden alias and cannot perform the retired operation;
-- remove `attach_read`/`detach_read` from both credential `mind-access` REST
-  mutations; retain select/switch/clear with an exact target-version CAS;
-- retire binding errors from read paths and use the `content-write` target
-  error set only where a content write or its staging preparation requires the
-  selected target.
+- add optional max-8 strict `source_references[{mind,revision,path}]` to
+  `commit_changeset` and `reconcile_changeset` and keep it identical during
+  uncertain-outcome reconciliation;
+- remove both credential `mind-access` REST routes from the fresh Site catalog;
+  per-Mind usage uses `expected_usage_version` and one of the three exact modes;
+- retire binding errors from fresh read paths and use the `content-write`
+  `writable_mind_*` error set only where a content write or ingress operation
+  requires the current principal mount.
 
 During migration, old MCP names are never forwarded to Site endpoints and old
 REST read-binding actions never become no-op success. Exact cached binding calls
 fail explicitly through the versioned retired result; unknown/near-miss names
 remain protocol errors. The result contains no raw owner, binding, generation,
 Mind or credential identifier and does not inspect application state;
-reconnect/reissue/state migration and preservation rules belong to MD-339.
+reconnect/reissue/state migration and preservation rules belong to MD-374/MD-379.
 Pending legacy credential также не получает список или metadata новых Minds:
 до explicit upgrade/re-consent/reissue все ACL-derived discovery/read operations
 fail closed одним versioned compatibility result. После перехода fresh/upgraded
 profile читает только по current ACL/visibility; historical read bindings не
 становятся authority и `mind_binding_required` не возвращается.
-Sites helper/handler action predicates and legacy error translation belong to
-MD-343.
+Sites usage handler predicates and mode CAS belong to MD-374.
 Export route creation and exact Site projection belong to MD-359.
 
 ## Verification boundary

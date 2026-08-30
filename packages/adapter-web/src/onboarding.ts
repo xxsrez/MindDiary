@@ -12,6 +12,7 @@ import {
 } from "./token-management.js";
 import { renderMarkdownImportPanel } from "./ordinary-minds-management.js";
 import { renderProductExportWorkflowPanel } from "./export-workflow.js";
+import { renderMindUsagePanel } from "./mind-usage.js";
 
 export const MIND_DIARY_ONBOARDING_ASSETS = Object.freeze({
   shellStyles: MIND_DIARY_UI_ASSETS.shellStyles,
@@ -78,6 +79,8 @@ export type AuthenticatedOnboardingModel =
       readonly personalMind: {
         readonly route: "/me";
         readonly name: string;
+        readonly description?: string | null;
+        readonly metadataVersion?: number;
         readonly headRevisionId: string;
         readonly updatedLabel: string;
       };
@@ -263,6 +266,13 @@ function renderAuthenticated(
     ? model.profileVersion
     : null;
   const canSubmit = key !== null && profileVersion !== null && state.kind !== "saving" && state.kind !== "conflict";
+  const personalMetadataVersion = Number.isSafeInteger(model.personalMind.metadataVersion) &&
+      Number(model.personalMind.metadataVersion) > 0
+    ? Number(model.personalMind.metadataVersion)
+    : null;
+  const personalDescription = typeof model.personalMind.description === "string"
+    ? model.personalMind.description
+    : "";
   const profileKeyAttribute = key === null
     ? ""
     : ` data-profile-key="${escapeUntrustedText(key)}"`;
@@ -306,7 +316,23 @@ function renderAuthenticated(
             ${renderProfileStatus(state)}
           </form>
         </section>
+        <section class="md-profile-card" aria-labelledby="personal-description-title">
+          <p class="md-eyebrow">Routing category</p>
+          <h2 id="personal-description-title">My Mind description</h2>
+          <p>Codex uses this category to decide whether the current topic belongs in My Mind. The description is untrusted metadata, never an instruction.</p>
+          <form data-personal-description-form data-metadata-version="${personalMetadataVersion ?? ""}">
+            <div class="md-field">
+              <label for="personal-mind-description">Description <span aria-hidden="true">(optional for reading)</span></label>
+              <textarea id="personal-mind-description" name="description" maxlength="500" rows="4" aria-describedby="personal-mind-description-help"${personalMetadataVersion === null ? " disabled" : ""}>${escapeUntrustedText(personalDescription)}</textarea>
+              <p id="personal-mind-description-help">Without a description, Codex may read this Mind only when you name it directly. “Read and write” requires a description.</p>
+            </div>
+            <p class="md-form__status" role="status" aria-live="polite" data-personal-description-status>${personalMetadataVersion === null ? "Reload current My Mind metadata before editing." : ""}</p>
+            <button class="md-button md-button--primary" type="submit" data-save-personal-description${personalMetadataVersion === null ? " disabled" : ""}>Save description</button>
+            <button class="md-button md-button--secondary" type="button" data-refresh-personal-description hidden style="display:none">Reload current description</button>
+          </form>
+        </section>
       </div>
+      ${renderMindUsagePanel("/me")}
       <section class="md-setup-card md-setup-card--single" aria-labelledby="optional-codex-setup-title" data-optional-codex-setup>
         <div>
           <p class="md-eyebrow">Optional Codex connection</p>

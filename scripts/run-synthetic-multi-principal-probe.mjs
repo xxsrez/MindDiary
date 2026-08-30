@@ -80,33 +80,44 @@ function expectMcpError(response, code) {
   }
 }
 
-async function mutatePersonalTarget(actor, body, idempotencyKey, expectedStatus) {
+async function setMindUsage(actor, mindRef, usageMode, expectedUsageVersion, idempotencyKey, expectedStatus = 200) {
+  const pathRef = mindRef === "/me" ? "me" : mindRef.replace(/^\//u, "");
   if (expectedStatus === null) {
     return actor.request(
-      `/api/v1/mcp-tokens/${encodeURIComponent(actor.mcpTokenRef)}/mind-access`,
+      `/api/v1/minds/${encodeURIComponent(pathRef)}/usage`,
       {
-        method: "PATCH",
+        method: "PUT",
         headers: {
           accept: "application/json",
           "content-type": "application/json",
           "idempotency-key": idempotencyKey,
           origin: actor.origin,
-          "x-csrf-token": await actor.csrf("/settings/developer/mcp"),
+          "x-csrf-token": await actor.csrf("/minds"),
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          usage_mode: usageMode,
+          expected_usage_version: expectedUsageVersion,
+        }),
       },
     );
   }
   return actor.api(
-    `/api/v1/mcp-tokens/${encodeURIComponent(actor.mcpTokenRef)}/mind-access`,
+    `/api/v1/minds/${encodeURIComponent(pathRef)}/usage`,
     {
-      method: "PATCH",
-      body,
+      method: "PUT",
+      body: {
+        usage_mode: usageMode,
+        expected_usage_version: expectedUsageVersion,
+      },
       idempotencyKey,
-      csrfPath: "/settings/developer/mcp",
+      csrfPath: "/minds",
       expectedStatus,
     },
   );
+}
+
+async function readMindUsage(actor) {
+  return data(await actor.api("/api/v1/mind-usage"));
 }
 
 async function assertExactMcpCatalogs(actor) {
@@ -442,24 +453,48 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   ) fail("shared_mcp_credential_forbidden");
   await assertExactMcpCatalogs(actors.participant);
   assertions.add("catalogs.modern-compat-exact-17");
-  const initialCredentialInspection = await createSitesMetadataStore(database);
-  const initialParticipantToken = await initialCredentialInspection
-    .readMcpTokenMetadataByPresentationRef(
-      participantIds.principal,
-      actors.participant.mcpTokenRef,
-    );
-  const initialTarget = initialParticipantToken === null
-    ? null
-    : await initialCredentialInspection.readCredentialWriteTarget(
-      initialParticipantToken.tokenId,
-      participantIds.principal,
-    );
-  if (
-    initialTarget?.kind !== "current" ||
-    initialTarget.state.targetVersion !== 0 ||
-    initialTarget.state.activeGeneration !== null
-  ) fail("initial_binding_state_not_empty");
+  const initialUsageInspection = await createSitesMetadataStore(database);
+  const initialUsage = await initialUsageInspection.readPrincipalMindUsage(
+    participantIds.principal,
+  );
+  if (initialUsage !== null && (
+    initialUsage.usageVersion !== 0 ||
+    initialUsage.entries.length !== 0 ||
+    initialUsage.activeWriteGeneration !== null
+  )) fail("initial_binding_state_not_empty");
   assertions.add("bindings.initial-empty");
+
+  const participantPersonalDescription = await actors.participant.api(
+    "/api/v1/minds/me/description",
+    {
+      method: "PATCH",
+      body: {
+        description: "Durable personal knowledge explicitly discussed in the synthetic scenario.",
+        expected_metadata_version: participantSession.personal_mind.metadata_version,
+      },
+      idempotencyKey: `synthetic:${nonce}:description:participant-personal`,
+      csrfPath: "/me",
+    },
+  );
+  if (data(participantPersonalDescription).personal_mind?.description === null) {
+    fail("personal_description_not_saved");
+  }
+  for (const [actor, suffix] of [
+    [actors.owner, "owner-personal"],
+    [actors.participant, "participant-personal"],
+  ]) {
+    const usage = await readMindUsage(actor);
+    const enabled = data(await setMindUsage(
+      actor,
+      "/me",
+      "read",
+      usage.usage_version,
+      `synthetic:${nonce}:usage:${suffix}`,
+    ));
+    if (enabled.projection?.items?.find((item) => item.mind_ref === "/me")?.usage_mode !== "read") {
+      fail("personal_usage_not_enabled");
+    }
+  }
   const ownerMinds = mcpMinds(await actors.owner.mcp("list_minds"), actors.owner.actorClass);
   const participantMinds = mcpMinds(
     await actors.participant.mcp("list_minds"),
@@ -478,7 +513,11 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
 
   let current = data(await actors.owner.api("/api/v1/minds", {
     method: "POST",
-    body: { name: "Synthetic Boundary", handle },
+    body: {
+      name: "Synthetic Boundary",
+      handle,
+      description: "Durable shared knowledge explicitly discussed in this synthetic scenario.",
+    },
     idempotencyKey: `synthetic:${nonce}:mind:create`,
   }));
   const privateExact = await actors.participant.api(`/api/v1/minds/${handle}`, {
@@ -508,6 +547,19 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (publicView.access?.kind !== "visibility" || publicView.visibility !== "public") {
     fail("public_baseline_failed");
   }
+  if (mcpMinds(await actors.participant.mcp("list_minds"), actors.participant.actorClass)
+    .some((mind) => mind.route === `/${handle}`)) fail("disabled_public_mcp_leak");
+  const publicUsage = await readMindUsage(actors.participant);
+  const publicEnabled = data(await setMindUsage(
+    actors.participant,
+    `/${handle}`,
+    "read",
+    publicUsage.usage_version,
+    `synthetic:${nonce}:usage:public-read`,
+  ));
+  if (publicEnabled.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read") {
+    fail("public_usage_not_enabled");
+  }
   const publicMcp = mcpMinds(await actors.participant.mcp("list_minds"), actors.participant.actorClass)
     .find((mind) => mind.route === `/${handle}`);
   if (!publicMcp) fail("public_mcp_discovery_failed");
@@ -522,7 +574,12 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       text: "---\ntype: Note\ntitle: Baseline denied\n---\nDenied.\n",
     }],
   });
-  expectMcpError(baselineWrite, "forbidden");
+  expectMcpError(baselineWrite, ["forbidden", "writable_mind_required"]);
+  const publicAfterDeniedWrite = data(await actors.participant.api(`/api/v1/minds/${handle}`));
+  if (
+    publicAfterDeniedWrite.access?.kind !== "visibility" ||
+    publicAfterDeniedWrite.head_revision_id !== publicMcp.head.revision_id
+  ) fail("public_write_denial_changed_authority_or_head");
   assertions.add("visibility.public-baseline-read-only");
   if (!data(await actors.participant.api("/api/v1/public-minds")).minds
     .some((candidate) => candidate.route === `/${handle}`)) {
@@ -538,8 +595,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (data(await actors.participant.api(`/api/v1/minds/${handle}`)).visibility !== "unlisted") {
     fail("unlisted_exact_failed");
   }
-  if (mcpMinds(await actors.participant.mcp("list_minds"), actors.participant.actorClass)
-    .some((mind) => mind.route === `/${handle}`)) fail("unlisted_mcp_catalog_leak");
+  if (!mcpMinds(await actors.participant.mcp("list_minds"), actors.participant.actorClass)
+    .some((mind) => mind.route === `/${handle}`)) fail("enabled_unlisted_mcp_missing");
   const resolvedUnlisted = mcpResultData(await actors.participant.mcp("resolve_mind", { handle }));
   if (resolvedUnlisted.route !== `/${handle}`) fail("unlisted_mcp_exact_failed");
   assertions.add("visibility.unlisted-exact-only");
@@ -602,17 +659,16 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   mcpResultData(await actors.participant.mcp("browse_entries", { mind: `/${handle}` }));
   mcpResultData(await actors.participant.mcp("browse_entries", { mind: "/me" }));
   assertions.add("reads.multi-mind-current-acl");
-  const readerTargetDenied = await mutatePersonalTarget(
+  const readerUsage = await readMindUsage(actors.participant);
+  const readerTargetDenied = await setMindUsage(
     actors.participant,
-    {
-      action: "select_write",
-      mind_ref: `/${handle}`,
-      expected_target_version: 0,
-    },
+    `/${handle}`,
+    "read_write",
+    readerUsage.usage_version,
     `synthetic:${nonce}:target:reader-write-denied`,
-    403,
+    422,
   );
-  if (readerTargetDenied.body?.error?.code !== "target_ineligible") {
+  if (readerTargetDenied.body?.error?.code !== "usage_not_allowed") {
     fail("reader_target_selection_not_denied");
   }
   const readerWrite = await actors.participant.mcp("commit_changeset", {
@@ -626,7 +682,12 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       text: "---\ntype: Note\ntitle: Reader denied\n---\nDenied.\n",
     }],
   });
-  expectMcpError(readerWrite, "forbidden");
+  expectMcpError(readerWrite, ["forbidden", "writable_mind_required"]);
+  const readerAfterDeniedWrite = data(await actors.participant.api(`/api/v1/minds/${handle}`));
+  if (
+    readerAfterDeniedWrite.access?.role !== "reader" ||
+    readerAfterDeniedWrite.head_revision_id !== readerMind.head.revision_id
+  ) fail("reader_write_denial_changed_authority_or_head");
   assertions.add("bindings.read-only-cannot-write");
   assertions.add("role-transition.reader-read-only");
 
@@ -644,18 +705,17 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   const editorInfo = mcpResultData(await actors.participant.mcp("get_mind_info", {
     mind: `/${handle}`,
   }));
-  const boundOrdinary = data(await mutatePersonalTarget(
+  const usageBeforeOrdinaryWrite = await readMindUsage(actors.participant);
+  const boundOrdinary = data(await setMindUsage(
     actors.participant,
-    {
-      action: "select_write",
-      mind_ref: `/${handle}`,
-      expected_target_version: 0,
-    },
+    `/${handle}`,
+    "read_write",
+    usageBeforeOrdinaryWrite.usage_version,
     `synthetic:${nonce}:target:write:ordinary`,
   ));
   if (
-    boundOrdinary.access?.target_version !== 1 ||
-    boundOrdinary.access?.writable_mind?.route !== `/${handle}`
+    boundOrdinary.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read_write" ||
+    boundOrdinary.projection?.items?.filter((item) => item.usage_mode === "read_write").length !== 1
   ) fail("ordinary_write_binding_mismatch");
   assertions.add("bindings.single-write-current-target");
   const expectedRevision = editorInfo.resolved_revision.revision_id;
@@ -722,22 +782,21 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       text: "---\ntype: Note\ntitle: Prepared before rebind\n---\nMust not commit.\n",
     }],
   };
-  const reboundPersonal = data(await mutatePersonalTarget(
+  const usageBeforePersonalWrite = await readMindUsage(actors.participant);
+  const reboundPersonal = data(await setMindUsage(
     actors.participant,
-    {
-      action: "select_write",
-      mind_ref: "/me",
-      expected_target_version: 1,
-    },
+    "/me",
+    "read_write",
+    usageBeforePersonalWrite.usage_version,
     `synthetic:${nonce}:target:write:personal`,
   ));
   if (
-    reboundPersonal.access?.target_version !== 2 ||
-    reboundPersonal.access?.writable_mind?.route !== "/me"
+    reboundPersonal.projection?.items?.find((item) => item.mind_ref === "/me")?.usage_mode !== "read_write" ||
+    reboundPersonal.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read"
   ) fail("personal_rebind_mismatch");
   expectMcpError(
     await actors.participant.mcp("commit_changeset", preparedOrdinaryCommit),
-    "writable_target_mismatch",
+    "writable_mind_required",
   );
   const ordinaryAfterRebindDenial = mcpResultData(await actors.participant.mcp(
     "get_mind_info",
@@ -786,17 +845,24 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   ) fail("personal_bound_commit_not_exactly_once");
   assertions.add("bindings.current-target-exactly-one-revision");
 
+  const usageBeforeConcurrentSwitch = await readMindUsage(actors.participant);
   const concurrentRebinds = await Promise.all([
-    mutatePersonalTarget(actors.participant, {
-      action: "select_write",
-      mind_ref: `/${handle}`,
-      expected_target_version: 2,
-    }, `synthetic:${nonce}:target:concurrent:ordinary`, null),
-    mutatePersonalTarget(actors.participant, {
-      action: "select_write",
-      mind_ref: `/${handle}`,
-      expected_target_version: 2,
-    }, `synthetic:${nonce}:target:concurrent:ordinary-second`, null),
+    setMindUsage(
+      actors.participant,
+      `/${handle}`,
+      "read_write",
+      usageBeforeConcurrentSwitch.usage_version,
+      `synthetic:${nonce}:target:concurrent:ordinary`,
+      null,
+    ),
+    setMindUsage(
+      actors.participant,
+      `/${handle}`,
+      "read_write",
+      usageBeforeConcurrentSwitch.usage_version,
+      `synthetic:${nonce}:target:concurrent:ordinary-second`,
+      null,
+    ),
   ]);
   const successfulRebinds = concurrentRebinds.filter(
     (response) => response.status === 200,
@@ -807,19 +873,21 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (
     successfulRebinds.length !== 1 ||
     rejectedRebinds.length !== 1 ||
-    rejectedRebinds[0].body?.error?.code !== "target_conflict"
+    rejectedRebinds[0].body?.error?.code !== "usage_conflict"
   ) fail("concurrent_rebind_cas_mismatch", {
     outcomes: concurrentRebinds.map((response) => ({
       status: response.status,
       code: safeCode(response.body?.error?.code),
-      targetVersion: response.body?.data?.access?.target_version,
-      route: response.body?.data?.access?.writable_mind?.route,
+      usageVersion: response.body?.data?.projection?.usage_version,
+      writableCount: response.body?.data?.projection?.items?.filter(
+        (item) => item.usage_mode === "read_write",
+      ).length,
     })),
   });
   const winningRebind = data(successfulRebinds[0]);
   if (
-    winningRebind.access?.target_version !== 3 ||
-    winningRebind.access?.writable_mind?.route !== `/${handle}`
+    winningRebind.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read_write" ||
+    winningRebind.projection?.items?.filter((item) => item.usage_mode === "read_write").length !== 1
   ) fail("concurrent_rebind_result_not_singleton");
   assertions.add("bindings.concurrent-rebind-cas");
 
@@ -904,21 +972,14 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     ) === true,
   });
   assertions.add("restart-persistence.owner-head-history-tokens");
-  const restartedTargetInspection = await createSitesMetadataStore(database);
-  const restartedToken = await restartedTargetInspection.readMcpTokenMetadataByPresentationRef(
+  const restartedUsageInspection = await createSitesMetadataStore(database);
+  const restartedUsage = await restartedUsageInspection.readPrincipalMindUsage(
     participantIds.principal,
-    actors.participant.mcpTokenRef,
   );
-  const restartedTarget = restartedToken === null
-    ? null
-    : await restartedTargetInspection.readCredentialWriteTarget(
-      restartedToken.tokenId,
-      participantIds.principal,
-    );
   if (
-    restartedTarget?.kind !== "current" ||
-    restartedTarget.state.targetVersion !== 3 ||
-    restartedTarget.state.activeGeneration?.spaceId !== restartedParticipant.mind_id
+    restartedUsage === null ||
+    restartedUsage.activeWriteGeneration?.spaceId !== restartedParticipant.mind_id ||
+    restartedUsage.entries.filter((entry) => entry.usageMode === "read_write").length !== 1
   ) fail("restart_binding_state_changed");
   assertions.add("bindings.restart-persistence");
 
@@ -927,18 +988,21 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     "get_mind_info",
     { mind: staleWriteTargetRoute },
   )).resolved_revision.revision_id;
-  const unbound = data(await mutatePersonalTarget(
-    actors.participant,
-    { action: "clear_write", expected_target_version: 3 },
-    `synthetic:${nonce}:target:clear`,
-  ));
-  if (
-    unbound.access?.target_version !== 4 ||
-    unbound.access?.writable_mind !== null
-  ) fail("detach_unbind_transition_mismatch");
   mcpResultData(await actors.participant.mcp("fetch", { id: ordinaryEntryId }));
   mcpResultData(await actors.participant.mcp("list_revisions", { mind: `/${handle}` }));
   mcpResultData(await actors.participant.mcp("browse_entries", { mind: "/me" }));
+  const usageBeforeDisable = await readMindUsage(actors.participant);
+  const unbound = data(await setMindUsage(
+    actors.participant,
+    `/${handle}`,
+    "disabled",
+    usageBeforeDisable.usage_version,
+    `synthetic:${nonce}:target:clear`,
+  ));
+  if (
+    unbound.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "disabled" ||
+    unbound.projection?.items?.some((item) => item.usage_mode === "read_write")
+  ) fail("detach_unbind_transition_mismatch");
   expectMcpError(
     await actors.participant.mcp("commit_changeset", {
       mind: staleWriteTargetRoute,
@@ -951,13 +1015,11 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
         text: "---\ntype: Note\ntitle: Stale after unbind\n---\nMust not commit.\n",
       }],
     }),
-    "writable_target_required",
+    ["mind_not_found", "forbidden", "writable_mind_required"],
   );
-  if (
-    mcpResultData(await actors.participant.mcp("get_mind_info", {
-      mind: staleWriteTargetRoute,
-    })).resolved_revision.revision_id !== staleWriteTargetHead
-  ) fail("stale_after_unbind_changed_head");
+  if (data(await actors.participant.api(`/api/v1/minds/${handle}`)).head_revision_id !== staleWriteTargetHead) {
+    fail("stale_after_unbind_changed_head");
+  }
   assertions.add("bindings.unbind-write-fail-closed");
 
   const sourceMember = data(await actors.participant.api(`/api/v1/minds/${handle}/members`))
@@ -988,16 +1050,15 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   );
   assertions.add("history-revoke.next-request-denied");
 
-  const boundBeforeDelete = data(await mutatePersonalTarget(
+  const usageBeforeDelete = await readMindUsage(actors.participant);
+  const boundBeforeDelete = data(await setMindUsage(
     actors.participant,
-    {
-      action: "select_write",
-      mind_ref: `/${handle}`,
-      expected_target_version: 4,
-    },
+    `/${handle}`,
+    "read_write",
+    usageBeforeDelete.usage_version,
     `synthetic:${nonce}:target:select-before-delete`,
   ));
-  if (boundBeforeDelete.access?.writable_mind?.route !== `/${handle}`) {
+  if (boundBeforeDelete.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read_write") {
     fail("delete_target_binding_missing");
   }
   await deleteMind(actors.participant, handle, nonce);
@@ -1007,13 +1068,13 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (deleted.body?.error?.code !== "mind_not_found") fail("mind_cleanup_failed");
   assertions.add("cleanup.ordinary-mind-deleted");
   const deletionInspection = await createSitesMetadataStore(database);
-  const targetAfterMindDelete = await deletionInspection.readCredentialWriteTarget(
-    restartedToken.tokenId,
+  const usageAfterMindDelete = await deletionInspection.readPrincipalMindUsage(
     participantIds.principal,
   );
   if (
-    targetAfterMindDelete?.kind !== "current" ||
-    targetAfterMindDelete.state.activeGeneration !== null
+    usageAfterMindDelete === null ||
+    usageAfterMindDelete.entries.some((entry) => entry.spaceId === restartedParticipant.mind_id) ||
+    usageAfterMindDelete.activeWriteGeneration !== null
   ) fail("mind_delete_did_not_invalidate_bindings");
   assertions.add("bindings.mind-delete-invalidates-target");
   const credentialInspection = await createSitesMetadataStore(database);
@@ -1042,23 +1103,19 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     fail("token_cleanup_failed");
   }
   assertions.add("cleanup.tokens-revoked");
-  const revokedTargetInspection = await createSitesMetadataStore(database);
-  const revokedParticipantTarget = await revokedTargetInspection.readCredentialWriteTarget(
-    participantTokenId,
+  const revokedUsageInspection = await createSitesMetadataStore(database);
+  const revokedParticipantUsage = await revokedUsageInspection.readPrincipalMindUsage(
     participantIds.principal,
   );
   if (
-    revokedParticipantTarget?.kind !== "current" ||
-    revokedParticipantTarget.state.lifecycleState !== "revoked" ||
-    revokedParticipantTarget.state.activeGeneration !== null
+    revokedParticipantUsage === null ||
+    revokedParticipantUsage.usageVersion !== usageAfterMindDelete.usageVersion ||
+    revokedParticipantUsage.entries.length !== usageAfterMindDelete.entries.length ||
+    revokedParticipantUsage.activeWriteGeneration !== null
   ) fail("target_owner_revoke_state_mismatch", {
-    kind: revokedParticipantTarget?.kind ?? null,
-    lifecycle: revokedParticipantTarget?.kind === "current"
-      ? revokedParticipantTarget.state.lifecycleState
-      : null,
-    hasActiveGeneration: revokedParticipantTarget?.kind === "current"
-      ? revokedParticipantTarget.state.activeGeneration !== null
-      : null,
+    hasUsage: revokedParticipantUsage !== null,
+    usageVersion: revokedParticipantUsage?.usageVersion ?? null,
+    entryCount: revokedParticipantUsage?.entries.length ?? null,
   });
   assertions.add("bindings.owner-revoke-invalidates-state");
   await deleteAccount(actors.owner, nonce, "owner");
@@ -1083,11 +1140,10 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     provider: BINDING_NAMESPACE,
     normalizedBinding: participantAlias,
   });
-  const deletedParticipantTargetState = await inspection.readCredentialWriteTarget(
-    participantTokenId,
+  const deletedParticipantUsage = await inspection.readPrincipalMindUsage(
     participantIds.principal,
   );
-  const deletedParticipantTargetIsRemoved = deletedParticipantTargetState === null;
+  const deletedParticipantUsageIsRemoved = deletedParticipantUsage === null;
   const retainedAuditTombstonesAreSafe = [...database.audit.values()].every((row) => {
     let event;
     try {
@@ -1101,11 +1157,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       row.principal_id === null &&
       event?.actor?.kind === "deleted-principal" &&
       event?.spaceId === null &&
-      [
-        "mind_binding.owner_revoked",
-        "credential_write_target.owner_revoked",
-        "credential_write_target.clear",
-      ].includes(event?.eventType) &&
+      typeof event?.eventType === "string" &&
+      /^[a-z][a-z0-9_.]{0,95}$/u.test(event.eventType) &&
       !serialized.includes(ownerAlias) &&
       !serialized.includes(participantAlias) &&
       !serialized.includes(ownerIds.principal) &&
@@ -1124,7 +1177,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     participantToken?.state !== "revoked" ||
     ownerBinding !== null ||
     participantBinding !== null ||
-    !deletedParticipantTargetIsRemoved ||
+    !deletedParticipantUsageIsRemoved ||
     bucket.records.size !== 0 ||
     searchProjectionCount(database) !== 0 ||
     !retainedAuditTombstonesAreSafe
@@ -1135,7 +1188,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     ownerTokenState: ownerToken?.state ?? null,
     participantTokenState: participantToken?.state ?? null,
     bindingsRemoved: ownerBinding === null && participantBinding === null,
-    deletedParticipantTargetIsRemoved,
+    deletedParticipantUsageIsRemoved,
     objectCount: bucket.records.size,
     searchCount: searchProjectionCount(database),
     auditCount: database.audit.size,

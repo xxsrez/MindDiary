@@ -167,7 +167,10 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
     body: JSON.stringify({ action: "create_isolated_account" }),
   }));
   assert.equal(bootstrapped.status, 200);
-  const principalId = (await bootstrapped.json()).data.principal_id;
+  const bootstrapData = (await bootstrapped.json()).data;
+  const principalId = bootstrapData.principal_id;
+  const session = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/session`));
+  const sessionData = (await session.json()).data;
 
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const csrf = csrfFromHtml(await settings.text());
@@ -186,20 +189,34 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
   const secret = issuedBody.data.secret;
   const personalTokenRef = issuedBody.data.token.personal_token_ref;
 
-  const selected = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
-    {
+  const described = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/description`, {
       method: "PATCH",
       headers: {
         origin: ORIGIN,
         "content-type": "application/json",
         "x-csrf-token": csrf,
-        "idempotency-key": "target:md321-bounded",
+        "idempotency-key": "description:md321-bounded",
       },
       body: JSON.stringify({
-        action: "select_write",
-        mind_ref: "/me",
-        expected_target_version: 0,
+        description: "Durable generated charts explicitly discussed with the user",
+        expected_metadata_version: sessionData.personal_mind.metadata_version,
+      }),
+    },
+  ));
+  assert.equal(described.status, 200, await described.clone().text());
+  const selected = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/usage`, {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": "usage:md321-bounded",
+      },
+      body: JSON.stringify({
+        usage_mode: "read_write",
+        expected_usage_version: 0,
       }),
     },
   ));
@@ -223,10 +240,6 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
     personalTokenRef,
   );
   assert.ok(token);
-  const target = await metadata.readCredentialWriteTarget(token.tokenId, principalId);
-  assert.equal(target?.kind, "current");
-  assert.ok(target.state.activeGeneration);
-  const writeBindingId = target.state.activeGeneration.generationId;
   const actor = Object.freeze({
     kind: "registered_principal",
     principalId,
@@ -243,7 +256,6 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
   const common = Object.freeze({
     actor,
     spaceId: personal.mind_id,
-    writeBindingId,
     displayFilename: "private-chart.png",
     claimedMediaType: "image/png",
   });
@@ -287,14 +299,45 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
     bytes: PNG_PREFIX,
   });
   assert.deepEqual(invalidFilename, { kind: "invalid", code: "invalid_filename" });
-  const staleTarget = await runtime.boundedInMemoryIngress.stage({
+  const disabled = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/usage`, {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": "usage:md321-disabled",
+      },
+      body: JSON.stringify({
+        usage_mode: "disabled",
+        expected_usage_version: 1,
+      }),
+    },
+  ));
+  assert.equal(disabled.status, 200, await disabled.clone().text());
+  const unavailable = await runtime.boundedInMemoryIngress.stage({
     ...common,
-    writeBindingId: "target_generation_stale",
-    idempotencyKey: "stage:md321-stale-target",
+    idempotencyKey: "stage:md321-disabled",
     bytes: PNG_PREFIX,
   });
-  assert.equal(staleTarget.kind, "denied");
+  assert.equal(unavailable.kind, "denied");
   assert.equal(stagedObjectCount(bucket), beforeRejectedObjects);
+  const reenabled = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/usage`, {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": "usage:md321-reenabled",
+      },
+      body: JSON.stringify({
+        usage_mode: "read_write",
+        expected_usage_version: 2,
+      }),
+    },
+  ));
+  assert.equal(reenabled.status, 200, await reenabled.clone().text());
   const headAfterRejected = (await modernTool(
     runtime,
     secret,

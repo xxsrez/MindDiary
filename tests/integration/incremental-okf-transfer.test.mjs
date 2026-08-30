@@ -19,7 +19,6 @@ import {
   ChangesetCommitService,
   FileIngressCoordinator,
   LocalFileUploadIntentService,
-  MindBindingContentAuthorizer,
   MindBrowseService,
   MindSearchService,
   MindValidationService,
@@ -29,7 +28,6 @@ import {
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import {
   CAPABILITIES,
-  bindingVersion,
   version,
   verifiedSpaceHost,
 } from "@mind-diary/domain";
@@ -47,11 +45,9 @@ const SOURCE_ROOT = resolve(FIXTURE_ROOT, "source");
 const HOST = verifiedSpaceHost("mind-diary.test");
 const TOKEN_ID = "token_incremental_okf_transfer";
 const BINDING_OWNER_ID = "binding_owner_incremental_okf_transfer";
-const WRITE_BINDING_ID = "write_binding_incremental_okf_transfer";
 const FIRST_AT = "2026-08-26T01:00:00.000Z";
 const SECOND_AT = "2026-08-26T01:05:00.000Z";
 const EXPIRES_AT = "2027-08-26T01:00:00.000Z";
-const CANONICAL_REQUEST_HASH = `sha256:${"a".repeat(64)}`;
 const encoder = new TextEncoder();
 
 function actor(clock, requestId) {
@@ -100,24 +96,48 @@ function authorizationState() {
   });
 }
 
-async function bindWritableMind(metadata, currentActor) {
-  const result = await metadata.runMindBindingTransaction((transaction) =>
-    transaction.applyWriteMindBinding({
-      bindingOwnerId: BINDING_OWNER_ID,
-      principalId: currentActor.principalId,
-      action: "bind",
-      spaceId: MINDS.ordinary.spaceId,
-      writeBindingId: WRITE_BINDING_ID,
-      expectedBindingVersion: bindingVersion(0),
-      idempotencyKey: "bind-incremental-okf-transfer",
-      canonicalRequestHash: CANONICAL_REQUEST_HASH,
-      requestId: "request_bind_incremental_okf_transfer",
-      auditEventId: "audit_bind_incremental_okf_transfer",
-      auditOutboxMessageId: "outbox_bind_incremental_okf_transfer",
-      occurredAt: currentActor.occurredAtUtc,
-    }),
-  );
-  assert.equal(result.kind, "applied");
+function principalMountedMetadata(metadata) {
+  const current = Object.freeze({
+    principalId: PRINCIPALS.editor.principalId,
+    spaceId: MINDS.ordinary.spaceId,
+    generationId: "usage_generation_incremental_okf_transfer",
+  });
+  const readUsage = async (principalId) => principalId === current.principalId
+    ? Object.freeze({
+        principalId,
+        entries: Object.freeze([Object.freeze({
+          principalId,
+          spaceId: current.spaceId,
+          usageMode: "read_write",
+          writeGeneration: current,
+        })]),
+        activeWriteGeneration: current,
+      })
+    : null;
+  const validatePin = async (pin) =>
+    pin.principalId === current.principalId &&
+    pin.spaceId === current.spaceId &&
+    pin.generationId === current.generationId;
+  const wrapTransaction = (transaction) => Object.freeze({
+    ...transaction,
+    readPrincipalMindUsage: readUsage,
+    validatePrincipalMindUsageWritePin: validatePin,
+  });
+  return new Proxy(metadata, {
+    get(target, property) {
+      if (property === "readPrincipalMindUsage") return readUsage;
+      if (property === "validatePrincipalMindUsageWritePin") return validatePin;
+      if (
+        property === "runBundleFileStagingTransaction" ||
+        property === "runContentCommitTransaction"
+      ) {
+        return (operation) => target[property]((transaction) =>
+          operation(wrapTransaction(transaction)));
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 function discoveryStore(metadata, clock) {
@@ -187,7 +207,7 @@ async function createHarness() {
     now: () => now,
     set: (value) => { now = value; },
   });
-  const metadata = new InMemoryRevisionMetadataStore();
+  const metadata = principalMountedMetadata(new InMemoryRevisionMetadataStore());
   const objects = new InMemoryObjectStore();
   const firstActor = actor(clock, "request_incremental_transfer_first");
   metadata.setCurrentAuthorizationStateForTest(
@@ -198,8 +218,6 @@ async function createHarness() {
     },
     authorizationState(),
   );
-  await bindWritableMind(metadata, firstActor);
-
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   const seeded = await revisions.commit({
     spaceId: MINDS.ordinary.spaceId,
@@ -212,11 +230,7 @@ async function createHarness() {
   });
   assert.equal(seeded.kind, "committed");
 
-  const authorizer = new MindBindingContentAuthorizer({
-    delegate: new CapabilityAuthorizer(metadata),
-    bindings: metadata,
-    readAuthority: "legacy_mind_binding",
-  });
+  const authorizer = new CapabilityAuthorizer(metadata);
   const staging = new BundleFileStagingService({
     authorizer,
     metadata,
@@ -235,7 +249,7 @@ async function createHarness() {
   const ingress = new FileIngressCoordinator({ staging, commits });
   const uploadIntents = new LocalFileUploadIntentService({
     authorizer,
-    bindings: metadata,
+    usage: metadata,
     intents: new InMemoryLocalFileUploadIntentStore(),
     staging,
     digest: objects,
@@ -366,7 +380,6 @@ async function stageSelectedLocalFile(env, currentActor, {
     MINDS.ordinary.spaceId,
     {
       source_kind: "local_path",
-      write_binding_id: WRITE_BINDING_ID,
       display_filename: displayFilename,
       claimed_media_type: "application/octet-stream",
       expected_size: bytes.byteLength,
@@ -384,7 +397,6 @@ async function stageSelectedLocalFile(env, currentActor, {
   const reconciled = await env.ingress.reconcileStage({
     actor: currentActor,
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE_BINDING_ID,
     displayFilename,
     claimedMediaType: "application/octet-stream",
     mediaType: uploaded.record.mediaType,
@@ -462,7 +474,6 @@ test("two agent-selected typed OKF previews execute through ordinary changesets"
   const firstRequest = Object.freeze({
     actor: firstActor,
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE_BINDING_ID,
     expectedRevisionId: REVISIONS.initial.revisionId,
     idempotencyKey: "commit-incremental-transfer-first",
     summary: "Transfer one explicitly selected typed OKF entry",
@@ -551,7 +562,6 @@ test("two agent-selected typed OKF previews execute through ordinary changesets"
   const secondRequest = Object.freeze({
     actor: secondActor,
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE_BINDING_ID,
     expectedRevisionId: freshHead,
     idempotencyKey: "commit-incremental-transfer-second",
     summary: "Transfer the next explicitly selected typed OKF entry",

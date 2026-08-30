@@ -12,6 +12,8 @@ import type {
   Clock,
   FileIngressSourceKind,
   IdempotencyNamespace,
+  PrincipalMindUsageReader,
+  PrincipalMindUsageWritePin,
   StagedBundleFileRecord,
   StagedBundleFileUpload,
 } from "@mind-diary/application-ports";
@@ -21,10 +23,11 @@ import {
   utcInstant,
   type BundleFileMediaType,
   type IdempotencyKey,
+  type PrincipalId,
+  type PrincipalMindUsageGenerationId,
   type Sha256Digest,
   type SpaceId,
   type StagedBundleFileId,
-  type WriteMindBindingId,
 } from "@mind-diary/domain";
 import {
   CapacityAdmissionService,
@@ -48,7 +51,6 @@ export interface StagedBundleFileIdGenerator {
 export interface StageBundleFileRequest {
   readonly actor: ActorContext;
   readonly spaceId: SpaceId;
-  readonly writeBindingId: unknown;
   readonly displayFilename: unknown;
   readonly claimedMediaType: unknown;
   readonly bytes: unknown;
@@ -102,13 +104,11 @@ export type StageBundleFileResult =
       readonly code:
         | "mcp_token_required"
         | "invalid_source_kind"
-        | "invalid_write_binding_id"
         | "invalid_filename"
         | "file_size_limit_exceeded"
         | "media_type_not_allowed"
         | "file_signature_mismatch"
         | "file_extension_mismatch"
-        | "binding_mismatch"
         | "outstanding_staged_byte_limit_exceeded"
         | "invalid_idempotency_key"
         | "expected_size_mismatch"
@@ -257,7 +257,6 @@ type StageInvalid = Extract<StageBundleFileResult, { readonly kind: "invalid" }>
 type ValidatedStageRequest = Readonly<{
   kind: "validated";
   actor: McpTokenActorContext;
-  writeBindingId: WriteMindBindingId;
   displayFilename: string;
   claimedMediaType: string | undefined;
   idempotencyKey: IdempotencyKey;
@@ -271,9 +270,15 @@ function invalid(code: StageInvalid["code"]): StageInvalid {
   return Object.freeze({ kind: "invalid", code });
 }
 
+function deniedWritableMind(
+  code: "writable_mind_required" | "writable_mind_stale",
+): AuthorizationDecision {
+  return Object.freeze({ kind: "denied", code, retryable: false });
+}
+
 function validateStageRequest(
   request: Readonly<Pick<StageBundleFileRequest,
-    "actor" | "writeBindingId" | "displayFilename" | "claimedMediaType" |
+    "actor" | "displayFilename" | "claimedMediaType" |
     "idempotencyKey" | "sourceKind" | "expectedSize" | "expectedSha256" |
     "expectedMediaType">>,
 ): ValidatedStageRequest | StageInvalid {
@@ -283,9 +288,6 @@ function validateStageRequest(
     actor.authentication.kind !== "mcp_token"
   ) return invalid("mcp_token_required");
   const mcpActor = actor as McpTokenActorContext;
-  if (typeof request.writeBindingId !== "string" || request.writeBindingId.length === 0) {
-    return invalid("invalid_write_binding_id");
-  }
   if (
     typeof request.idempotencyKey !== "string" ||
     request.idempotencyKey.length === 0 ||
@@ -321,7 +323,6 @@ function validateStageRequest(
   return Object.freeze({
     kind: "validated" as const,
     actor: mcpActor,
-    writeBindingId: request.writeBindingId as WriteMindBindingId,
     displayFilename,
     claimedMediaType,
     idempotencyKey: request.idempotencyKey as IdempotencyKey,
@@ -373,14 +374,15 @@ function validateStageReceipt(
 }
 
 function canonicalStageRequestSource(
-  bindingOwnerId: string,
+  principalId: PrincipalId,
+  generationId: PrincipalMindUsageGenerationId,
   validated: ValidatedStageRequest,
   receipt: StageReceipt,
 ): string {
   return `${JSON.stringify({
-    format: "mind-diary-stage-bundle-file-request-v1",
-    binding_owner_id: bindingOwnerId,
-    write_binding_id: validated.writeBindingId,
+    format: "mind-diary-stage-bundle-file-request-v2",
+    principal_id: principalId,
+    principal_mind_usage_generation_id: generationId,
     display_filename: validated.displayFilename,
     claimed_media_type: validated.claimedMediaType ?? null,
     expected_size: validated.expectedSize ?? null,
@@ -403,7 +405,7 @@ function expiresAt(createdAt: string): StagedBundleFileRecord["expiresAt"] {
 
 export class BundleFileStagingService {
   readonly #authorizer: Authorizer;
-  readonly #metadata: BundleFileStagingStore;
+  readonly #metadata: BundleFileStagingStore & PrincipalMindUsageReader;
   readonly #objects: BundleFileObjectStore;
   readonly #clock: Clock;
   readonly #ids: StagedBundleFileIdGenerator;
@@ -411,7 +413,7 @@ export class BundleFileStagingService {
 
   constructor(dependencies: {
     readonly authorizer: Authorizer;
-    readonly metadata: BundleFileStagingStore;
+    readonly metadata: BundleFileStagingStore & PrincipalMindUsageReader;
     readonly objects: BundleFileObjectStore;
     readonly clock: Clock;
     readonly ids?: StagedBundleFileIdGenerator;
@@ -444,13 +446,10 @@ export class BundleFileStagingService {
   async authorizeSourceRead(request: Readonly<{
     actor: ActorContext;
     spaceId: SpaceId;
-    writeBindingId: unknown;
   }>): Promise<AuthorizationDecision> {
     if (
       request.actor.kind !== "registered_principal" ||
-      request.actor.authentication.kind !== "mcp_token" ||
-      typeof request.writeBindingId !== "string" ||
-      request.writeBindingId.length === 0
+      request.actor.authentication.kind !== "mcp_token"
     ) {
       return Object.freeze({
         kind: "denied",
@@ -458,15 +457,16 @@ export class BundleFileStagingService {
         retryable: false,
       });
     }
+    const writePin = await this.#resolveWritePin(
+      request.actor.principalId,
+      request.spaceId,
+    );
+    if (writePin === null) return deniedWritableMind("writable_mind_required");
     return this.#authorizer.authorize({
       actor: request.actor,
       spaceId: request.spaceId,
       capability: "content:write",
       revisionMode: "head",
-      bindingRequirement: Object.freeze({
-        kind: "write",
-        writeBindingId: request.writeBindingId as WriteMindBindingId,
-      }),
     });
   }
 
@@ -481,26 +481,35 @@ export class BundleFileStagingService {
     if (validation.kind === "invalid") return validation;
     const receipt = validateStageReceipt(request, validation);
     if ("kind" in receipt) return receipt;
-    const { actor, writeBindingId, idempotencyKey } = validation;
-    const bindingOwnerId = actor.authentication.bindingOwnerId;
+    const { actor, idempotencyKey } = validation;
     const initial = await this.#authorizer.authorize({
       actor,
       spaceId: request.spaceId,
       capability: "content:write",
       revisionMode: "head",
-      bindingRequirement: Object.freeze({ kind: "write", writeBindingId }),
     });
     if (initial.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: initial });
     }
+    const writePin = await this.#resolveWritePin(actor.principalId, request.spaceId);
+    if (writePin === null) {
+      return Object.freeze({
+        kind: "denied",
+        decision: deniedWritableMind("writable_mind_required"),
+      });
+    }
     const canonicalRequestHash = await this.#objects.calculateSha256(
-      ENCODER.encode(canonicalStageRequestSource(bindingOwnerId, validation, receipt)),
+      ENCODER.encode(canonicalStageRequestSource(
+        actor.principalId,
+        writePin.generationId,
+        validation,
+        receipt,
+      )),
     );
     const namespace: Readonly<
       IdempotencyNamespace & { readonly operation: "stage_bundle_file" }
     > = Object.freeze({
       principalId: actor.principalId,
-      bindingOwnerId,
       spaceId: request.spaceId,
       operation: "stage_bundle_file",
       key: idempotencyKey,
@@ -513,13 +522,18 @@ export class BundleFileStagingService {
           spaceId: request.spaceId,
           capability: "content:write",
           revisionMode: "head",
-          bindingRequirement: Object.freeze({ kind: "write", writeBindingId }),
         },
         transaction,
         initial.stamp,
       );
       if (authorization.kind === "denied") {
         return Object.freeze({ kind: "denied", decision: authorization } as const);
+      }
+      if (!(await transaction.validatePrincipalMindUsageWritePin(writePin))) {
+        return Object.freeze({
+          kind: "denied",
+          decision: deniedWritableMind("writable_mind_stale"),
+        } as const);
       }
       const idempotency = await transaction.checkIdempotency({
         namespace,
@@ -536,6 +550,9 @@ export class BundleFileStagingService {
       );
       if (
         record === null || record.sourceKind !== validation.sourceKind ||
+        record.principalId !== actor.principalId ||
+        record.principalMindUsageGenerationId !== writePin.generationId ||
+        record.spaceId !== request.spaceId ||
         record.displayFilename !== validation.displayFilename ||
         record.mediaType !== receipt.mediaType || record.sha256 !== receipt.sha256 ||
         record.size !== receipt.size
@@ -551,12 +568,14 @@ export class BundleFileStagingService {
     });
   }
 
-  async stage(request: StageBundleFileRequest): Promise<StageBundleFileResult> {
+  async stage(
+    request: StageBundleFileRequest,
+    expectedWritePin?: Readonly<PrincipalMindUsageWritePin>,
+  ): Promise<StageBundleFileResult> {
     const validation = validateStageRequest(request);
     if (validation.kind === "invalid") return validation;
     const {
       actor,
-      writeBindingId,
       displayFilename,
       claimedMediaType,
       idempotencyKey,
@@ -591,11 +610,32 @@ export class BundleFileStagingService {
       spaceId: request.spaceId,
       capability: "content:write",
       revisionMode: "head",
-      bindingRequirement: Object.freeze({ kind: "write", writeBindingId }),
     });
     if (initial.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: initial });
     }
+    const currentWritePin = await this.#resolveWritePin(
+      actor.principalId,
+      request.spaceId,
+    );
+    if (currentWritePin === null) {
+      return Object.freeze({
+        kind: "denied",
+        decision: deniedWritableMind("writable_mind_required"),
+      });
+    }
+    if (
+      expectedWritePin !== undefined &&
+      (expectedWritePin.principalId !== actor.principalId ||
+        expectedWritePin.spaceId !== request.spaceId ||
+        expectedWritePin.generationId !== currentWritePin.generationId)
+    ) {
+      return Object.freeze({
+        kind: "denied",
+        decision: deniedWritableMind("writable_mind_stale"),
+      });
+    }
+    const writePin = expectedWritePin ?? currentWritePin;
 
     const createdAt = this.#clock.now();
     const stagedFileId = this.#ids.nextStagedBundleFileId();
@@ -605,17 +645,21 @@ export class BundleFileStagingService {
       expectedSha256 !== sha256
     ) return Object.freeze({ kind: "invalid", code: "expected_sha256_mismatch" });
     const canonicalRequestHash = await this.#objects.calculateSha256(
-      ENCODER.encode(canonicalStageRequestSource(bindingOwnerId, validation, {
-        mediaType: detected,
-        sha256,
-        size: bytes.byteLength,
-      })),
+      ENCODER.encode(canonicalStageRequestSource(
+        actor.principalId,
+        writePin.generationId,
+        validation,
+        {
+          mediaType: detected,
+          sha256,
+          size: bytes.byteLength,
+        },
+      )),
     );
     const namespace: Readonly<
       IdempotencyNamespace & { readonly operation: "stage_bundle_file" }
     > = Object.freeze({
       principalId: actor.principalId,
-      bindingOwnerId,
       spaceId: request.spaceId,
       operation: "stage_bundle_file",
       key: idempotencyKey,
@@ -669,13 +713,18 @@ export class BundleFileStagingService {
               spaceId: request.spaceId,
               capability: "content:write",
               revisionMode: "head",
-              bindingRequirement: Object.freeze({ kind: "write", writeBindingId }),
             },
             transaction,
             initial.stamp,
           );
           if (authorization.kind === "denied") {
             return Object.freeze({ kind: "denied", decision: authorization } as const);
+          }
+          if (!(await transaction.validatePrincipalMindUsageWritePin(writePin))) {
+            return Object.freeze({
+              kind: "denied",
+              decision: deniedWritableMind("writable_mind_stale"),
+            } as const);
           }
           const idempotency = await transaction.checkIdempotency({
             namespace,
@@ -694,7 +743,11 @@ export class BundleFileStagingService {
             const replay = await transaction.readStagedBundleFile(
               idempotency.record.result.stagedFileId,
             );
-            if (replay === null) {
+            if (
+              replay === null || replay.principalId !== actor.principalId ||
+              replay.principalMindUsageGenerationId !== writePin.generationId ||
+              replay.spaceId !== request.spaceId
+            ) {
               return Object.freeze({ kind: "invalid", code: "invalid_idempotency_state" } as const);
             }
             if (Date.parse(replay.expiresAt) <= Date.parse(createdAt)) {
@@ -710,26 +763,12 @@ export class BundleFileStagingService {
               ? Object.freeze({ kind: "staged", record: replay, replayed: true } as const)
               : Object.freeze({ kind: "invalid", code: "invalid_idempotency_state" } as const);
           }
-          const bindings = await transaction.readMindBindingSet?.(
-            bindingOwnerId,
-            actor.principalId,
-            createdAt,
-          );
-          const write = bindings?.writeBinding;
-          if (
-            write === null || write === undefined ||
-            write.state !== "active" ||
-            write.writeBindingId !== writeBindingId ||
-            write.spaceId !== request.spaceId
-          ) {
-            return Object.freeze({ kind: "invalid", code: "binding_mismatch" } as const);
-          }
           const record: Readonly<StagedBundleFileRecord> = Object.freeze({
             stagedFileId,
             bindingOwnerId,
             sourceKind: ingressSourceKind,
-            writeBindingId,
-            writeBindingGeneration: write.generation,
+            principalId: actor.principalId,
+            principalMindUsageGenerationId: writePin.generationId,
             spaceId: request.spaceId,
             displayFilename,
             mediaType: detected,
@@ -752,7 +791,7 @@ export class BundleFileStagingService {
               kind: "invalid",
               code: created.kind === "outstanding_byte_limit_exceeded"
                 ? "outstanding_staged_byte_limit_exceeded"
-                : "binding_mismatch",
+                : "invalid_idempotency_state",
             } as const);
           }
           const completion = await transaction.completeIdempotency({
@@ -805,6 +844,7 @@ export class BundleFileStagingService {
    */
   async stageStream(
     request: StageBundleFileStreamRequest,
+    expectedWritePin?: Readonly<PrincipalMindUsageWritePin>,
   ): Promise<StageBundleFileStreamResult> {
     const validation = validateStageRequest(request);
     if (validation.kind === "invalid") return validation;
@@ -829,7 +869,6 @@ export class BundleFileStagingService {
 
     const {
       actor,
-      writeBindingId,
       displayFilename,
       claimedMediaType,
       idempotencyKey,
@@ -844,11 +883,32 @@ export class BundleFileStagingService {
       spaceId: request.spaceId,
       capability: "content:write",
       revisionMode: "head",
-      bindingRequirement: Object.freeze({ kind: "write", writeBindingId }),
     });
     if (initial.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: initial });
     }
+    const currentWritePin = await this.#resolveWritePin(
+      actor.principalId,
+      request.spaceId,
+    );
+    if (currentWritePin === null) {
+      return Object.freeze({
+        kind: "denied",
+        decision: deniedWritableMind("writable_mind_required"),
+      });
+    }
+    if (
+      expectedWritePin !== undefined &&
+      (expectedWritePin.principalId !== actor.principalId ||
+        expectedWritePin.spaceId !== request.spaceId ||
+        expectedWritePin.generationId !== currentWritePin.generationId)
+    ) {
+      return Object.freeze({
+        kind: "denied",
+        decision: deniedWritableMind("writable_mind_stale"),
+      });
+    }
+    const writePin = expectedWritePin ?? currentWritePin;
 
     const createdAt = this.#clock.now();
     const stagedFileId = this.#ids.nextStagedBundleFileId();
@@ -995,17 +1055,21 @@ export class BundleFileStagingService {
       await upload.complete({ sha256, size });
       temporaryObjectOwned = true;
       const canonicalRequestHash = await this.#objects.calculateSha256(
-        ENCODER.encode(canonicalStageRequestSource(bindingOwnerId, validation, {
-          mediaType: detected,
-          sha256,
-          size,
-        })),
+        ENCODER.encode(canonicalStageRequestSource(
+          actor.principalId,
+          writePin.generationId,
+          validation,
+          {
+            mediaType: detected,
+            sha256,
+            size,
+          },
+        )),
       );
       const namespace: Readonly<
         IdempotencyNamespace & { readonly operation: "stage_bundle_file" }
       > = Object.freeze({
         principalId: actor.principalId,
-        bindingOwnerId,
         spaceId: request.spaceId,
         operation: "stage_bundle_file",
         key: idempotencyKey,
@@ -1018,13 +1082,18 @@ export class BundleFileStagingService {
               spaceId: request.spaceId,
               capability: "content:write",
               revisionMode: "head",
-              bindingRequirement: Object.freeze({ kind: "write", writeBindingId }),
             },
             transaction,
             initial.stamp,
           );
           if (authorization.kind === "denied") {
             return Object.freeze({ kind: "denied", decision: authorization } as const);
+          }
+          if (!(await transaction.validatePrincipalMindUsageWritePin(writePin))) {
+            return Object.freeze({
+              kind: "denied",
+              decision: deniedWritableMind("writable_mind_stale"),
+            } as const);
           }
           const idempotency = await transaction.checkIdempotency({
             namespace,
@@ -1041,7 +1110,11 @@ export class BundleFileStagingService {
             const replay = await transaction.readStagedBundleFile(
               idempotency.record.result.stagedFileId,
             );
-            if (replay === null) {
+            if (
+              replay === null || replay.principalId !== actor.principalId ||
+              replay.principalMindUsageGenerationId !== writePin.generationId ||
+              replay.spaceId !== request.spaceId
+            ) {
               return Object.freeze({ kind: "invalid", code: "invalid_idempotency_state" } as const);
             }
             if (Date.parse(replay.expiresAt) <= Date.parse(createdAt)) {
@@ -1057,24 +1130,12 @@ export class BundleFileStagingService {
               ? Object.freeze({ kind: "staged", record: replay, replayed: true } as const)
               : Object.freeze({ kind: "invalid", code: "invalid_idempotency_state" } as const);
           }
-          const bindings = await transaction.readMindBindingSet?.(
-            bindingOwnerId,
-            actor.principalId,
-            createdAt,
-          );
-          const write = bindings?.writeBinding;
-          if (
-            write === null || write === undefined ||
-            write.state !== "active" ||
-            write.writeBindingId !== writeBindingId ||
-            write.spaceId !== request.spaceId
-          ) return Object.freeze({ kind: "invalid", code: "binding_mismatch" } as const);
           const record: Readonly<StagedBundleFileRecord> = Object.freeze({
             stagedFileId,
             bindingOwnerId,
             sourceKind: ingressSourceKind,
-            writeBindingId,
-            writeBindingGeneration: write.generation,
+            principalId: actor.principalId,
+            principalMindUsageGenerationId: writePin.generationId,
             spaceId: request.spaceId,
             displayFilename,
             mediaType: detected,
@@ -1097,7 +1158,7 @@ export class BundleFileStagingService {
               kind: "invalid",
               code: created.kind === "outstanding_byte_limit_exceeded"
                 ? "outstanding_staged_byte_limit_exceeded"
-                : "binding_mismatch",
+                : "invalid_idempotency_state",
             } as const);
           }
           const completion = await transaction.completeIdempotency({
@@ -1144,6 +1205,26 @@ export class BundleFileStagingService {
         code: "stream_transport_unavailable",
       }));
     }
+  }
+
+  async #resolveWritePin(
+    principalId: PrincipalId,
+    assertedSpaceId: SpaceId,
+  ): Promise<Readonly<PrincipalMindUsageWritePin> | null> {
+    const state = await this.#metadata.readPrincipalMindUsage(principalId);
+    const generation = state?.activeWriteGeneration ?? null;
+    if (
+      generation === null || generation.principalId !== principalId ||
+      generation.spaceId !== assertedSpaceId
+    ) return null;
+    const pin: Readonly<PrincipalMindUsageWritePin> = Object.freeze({
+      principalId,
+      spaceId: assertedSpaceId,
+      generationId: generation.generationId,
+    });
+    return await this.#metadata.validatePrincipalMindUsageWritePin(pin)
+      ? pin
+      : null;
   }
 
   async #cleanupFailedStage(

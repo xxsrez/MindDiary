@@ -116,10 +116,11 @@ function mcpData(result) {
 }
 
 function expectMcpError(result, code) {
+  const expected = Array.isArray(code) ? code : [code];
   const payload = mcpEnvelope(result);
-  if (payload.isError !== true || payload.structuredContent?.error?.code !== code) {
+  if (payload.isError !== true || !expected.includes(payload.structuredContent?.error?.code)) {
     fail("expected_mcp_error_missing", {
-      expected: code,
+      expected: expected.join("|"),
       actual: safeCode(payload.structuredContent?.error?.code),
     });
   }
@@ -249,17 +250,22 @@ async function issueToken(context, nonce, name) {
   return Object.freeze({ secret: value.secret, ref: value.token.personal_token_ref });
 }
 
-async function mutateTokenTarget(context, tokenRef, nonce, body, suffix, expectedStatus = 200) {
-  return context.api(
-    `/api/v1/mcp-tokens/${encodeURIComponent(tokenRef)}/mind-access`,
-    {
-      method: "PATCH",
-      body,
-      idempotencyKey: `browser:${nonce}:target:${suffix}`,
-      csrfPath: "/settings/developer/mcp",
-      expectedStatus,
+async function readMindUsage(context) {
+  return data(await context.json("/api/v1/mind-usage"), "mind_usage_read_failed");
+}
+
+async function setMindUsage(context, mindRef, usageMode, expectedUsageVersion, nonce, suffix, expectedStatus = 200) {
+  const pathRef = mindRef === "/me" ? "me" : mindRef.replace(/^\//u, "");
+  return context.api(`/api/v1/minds/${encodeURIComponent(pathRef)}/usage`, {
+    method: "PUT",
+    body: {
+      usage_mode: usageMode,
+      expected_usage_version: expectedUsageVersion,
     },
-  );
+    idempotencyKey: `browser:${nonce}:usage:${suffix}`,
+    csrfPath: "/minds",
+    expectedStatus,
+  });
 }
 
 async function setVisibility(context, handle, value, metadataVersion, nonce) {
@@ -378,10 +384,29 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
         ownerBootstrap.personal_mind.mind_id) fail("personal_api_isolation_failed");
     assertions.add("personal-isolation.session-ui-and-api");
 
+    for (const [context, suffix] of [[owner, "owner-personal"], [participant, "participant-personal"]]) {
+      const usage = await readMindUsage(context);
+      const enabled = data(await setMindUsage(
+        context,
+        "/me",
+        "read",
+        usage.usage_version,
+        nonce,
+        suffix,
+      ));
+      if (enabled.projection?.items?.find((item) => item.mind_ref === "/me")?.usage_mode !== "read") {
+        fail("personal_mind_usage_not_enabled");
+      }
+    }
+
     await composition.restart({ serviceOperatorPrincipalIds: [operatorBootstrap.principal_id] });
     let mind = data(await owner.json("/api/v1/minds", {
       method: "POST",
-      body: { name: "Synthetic Browser Mind", handle },
+      body: {
+        name: "Synthetic Browser Mind",
+        handle,
+        description: "Durable synthetic browser-gate knowledge discussed in this scenario.",
+      },
       idempotencyKey: `browser:${nonce}:mind-create`,
     }));
     expectError(await participant.api(`/api/v1/minds/${handle}`), 404, "mind_not_found");
@@ -429,21 +454,35 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     if (!participantMember) fail("reader_membership_missing");
     assertions.add("invitation.accept-reader");
 
+    const readerUsage = await readMindUsage(participant);
+    const readerEnabled = data(await setMindUsage(
+      participant,
+      `/${handle}`,
+      "read",
+      readerUsage.usage_version,
+      nonce,
+      "reader-enable",
+    ));
+    if (readerEnabled.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read") {
+      fail("reader_mind_usage_not_enabled");
+    }
+
     const ownerToken = await issueToken(owner, nonce, "owner");
     const participantToken = await issueToken(participant, nonce, "participant");
     await assertExactMcpCatalogs(participant, participantToken.secret);
     const readerMind = mcpData(await mcp(participant, participantToken.secret, "list_minds"))
       .minds.find((value) => value.route === `/${handle}`);
     if (!readerMind) fail("reader_mcp_discovery_failed");
-    const readerTarget = await mutateTokenTarget(
+    const readerTarget = await setMindUsage(
       participant,
-      participantToken.ref,
+      `/${handle}`,
+      "read_write",
+      readerEnabled.projection.usage_version,
       nonce,
-      { action: "select_write", mind_ref: `/${handle}`, expected_target_version: 0 },
       "reader-denied",
-      403,
+      422,
     );
-    expectError(readerTarget, 403, "target_ineligible");
+    expectError(readerTarget, 422, "usage_not_allowed");
     expectMcpError(await mcp(participant, participantToken.secret, "commit_changeset", {
       mind: `/${handle}`, expected_revision: readerMind.head.revision_id,
       idempotency_key: `browser:${nonce}:reader-write`, summary: "Reader denial", operations: [{
@@ -451,41 +490,36 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
         path: "concepts/reader-must-not-write.md",
         text: "---\ntype: Note\ntitle: Reader must not write\n---\nDenied.\n",
       }],
-    }), "forbidden");
+    }), ["forbidden", "writable_mind_required"]);
+    const readerAfterDenial = data(await participant.json(`/api/v1/minds/${handle}`));
+    if (
+      readerAfterDenial.access?.role !== "reader" ||
+      readerAfterDenial.head_revision_id !== readerMind.head.revision_id
+    ) fail("reader_write_denial_changed_authority_or_head");
     assertions.add("role.reader-no-write");
     await owner.json(`/api/v1/minds/${handle}/members/${encodeURIComponent(participantMember.member_id)}`, {
       method: "PATCH", body: { role: "editor", expected_membership_version: participantMember.membership_version },
       idempotencyKey: `browser:${nonce}:role-editor`, csrfPath: `/${handle}`,
     });
-    const selected = data(await mutateTokenTarget(
+    const usageBeforeWrite = await readMindUsage(participant);
+    const selected = data(await setMindUsage(
       participant,
-      participantToken.ref,
+      `/${handle}`,
+      "read_write",
+      usageBeforeWrite.usage_version,
       nonce,
-      { action: "select_write", mind_ref: `/${handle}`, expected_target_version: 0 },
-      "editor-select",
+      "editor-write",
     ));
-    if (selected.access?.target_version !== 1) fail("editor_target_select_failed");
-    data(await mutateTokenTarget(
-      participant,
-      participantToken.ref,
-      nonce,
-      { action: "select_write", mind_ref: "/me", expected_target_version: 1 },
-      "switch-personal",
-    ));
-    const staleInfo = mcpData(await mcp(participant, participantToken.secret, "get_mind_info", { mind: `/${handle}` }));
+    if (
+      selected.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read_write" ||
+      selected.projection?.items?.filter((item) => item.usage_mode === "read_write").length !== 1
+    ) fail("editor_usage_select_failed");
     expectMcpError(await mcp(participant, participantToken.secret, "commit_changeset", {
-      mind: `/${handle}`,
-      expected_revision: staleInfo.resolved_revision.revision_id,
-      idempotency_key: `browser:${nonce}:editor-write-stale`, summary: "Stale generation denial",
+      mind: "/me",
+      expected_revision: participantBootstrap.personal_mind.head_revision_id,
+      idempotency_key: `browser:${nonce}:editor-wrong-mind`, summary: "Wrong writable Mind denial",
       operations: [{ type: "create_file", path: "concepts/must-not-commit.md", text: "---\ntype: Note\ntitle: Must not commit\n---\nDenied.\n" }],
-    }), "writable_target_mismatch");
-    data(await mutateTokenTarget(
-      participant,
-      participantToken.ref,
-      nonce,
-      { action: "select_write", mind_ref: `/${handle}`, expected_target_version: 2 },
-      "switch-back",
-    ));
+    }), ["forbidden", "writable_mind_required"]);
     await composition.restart({ serviceOperatorPrincipalIds: [operatorBootstrap.principal_id] });
     const currentInfo = mcpData(await mcp(participant, participantToken.secret, "get_mind_info", { mind: `/${handle}` }));
     const commit = mcpData(await mcp(participant, participantToken.secret, "commit_changeset", {

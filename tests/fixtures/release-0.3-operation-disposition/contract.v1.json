@@ -3,12 +3,12 @@
   "version": 1,
   "source": "docs/specs/release-0.3-operation-disposition.md",
   "authority": {
-    "sitesControl": ["account", "mind_metadata", "visibility", "membership", "ownership", "connections", "writable_target", "credentials", "bulk_import", "bulk_export", "administrative_deletion"],
+    "sitesControl": ["account", "mind_metadata", "mind_usage", "visibility", "membership", "ownership", "connections", "credentials", "bulk_import", "bulk_export", "administrative_deletion"],
     "contentMcp": ["discovery", "browse", "search", "fetch", "history", "standalone_validation", "per_file_ingress", "exact_target_content_commit"],
     "implicitPersonalMindFallback": false,
     "implicitCrossMind": false,
     "readBindingRequired": false,
-    "writableTargetSelectedOn": "sites"
+    "writableMindSelectedOn": "principal_mind_usage_on_sites"
   },
   "profiles": {
     "web-session": {
@@ -53,12 +53,12 @@
       "errors": ["export_profile_required", "export_job_not_found", "capacity_limit", "conflict"],
       "compatibility": "keep-route"
     },
-    "credential-control": {
+    "mind-usage-control": {
       "target": "sites-control",
-      "actor": "credential-owner-sites-principal",
-      "checks": ["credential_owner_authority", "target_version_cas", "idempotency"],
-      "errors": ["credential_not_found", "operation_removed", "write_step_up_required", "target_conflict"],
-      "compatibility": "reject-old-read-actions"
+      "actor": "registered-sites-principal",
+      "checks": ["sites_identity", "principal_owned_settings", "current_acl", "usage_version_cas", "singleton_read_write", "idempotency"],
+      "errors": ["mind_not_found", "read_access_required", "writer_access_required", "description_required", "usage_version_conflict"],
+      "compatibility": "principal-wide-not-credential-scoped"
     },
     "operator-read": {
       "target": "sites-control",
@@ -70,23 +70,23 @@
     "content-read": {
       "target": "content-mcp",
       "actor": "oauth-or-personal-token-principal",
-      "checks": ["content_read_scope", "explicit_mind_when_targeted", "current_acl_or_visibility", "exact_revision_when_selected"],
+      "checks": ["content_read_scope", "principal_usage_read_or_read_write", "explicit_mind_when_targeted", "current_acl_or_visibility", "exact_revision_when_selected"],
       "errors": ["authentication_required", "credential_access_upgrade_required", "forbidden_or_not_found", "invalid_mind_selector", "invalid_revision_selector"],
-      "compatibility": "same-name-current-profile-no-read-binding"
+      "compatibility": "same-name-principal-usage-profile"
     },
     "content-write": {
       "target": "content-mcp",
       "actor": "oauth-or-personal-token-principal",
-      "checks": ["content_write_scope", "explicit_mind", "site_selected_target_match", "current_acl", "idempotency", "head_cas"],
-      "errors": ["writable_target_required", "writable_target_mismatch", "writable_target_unavailable", "revision_conflict", "idempotency_conflict"],
-      "compatibility": "same-name-new-target-schema"
+      "checks": ["content_write_scope", "exact_principal_read_write_mind", "principal_mount_generation", "current_acl", "authorized_description", "source_reference_access", "idempotency", "head_cas"],
+      "errors": ["writable_mind_required", "writable_mind_stale", "revision_conflict", "idempotency_conflict", "source_reference_invalid"],
+      "compatibility": "same-name-principal-mount-schema"
     },
     "content-ingress": {
       "target": "content-mcp",
       "actor": "oauth-or-personal-token-principal",
-      "checks": ["content_write_scope", "site_selected_target_match", "source_owner", "size", "sha256", "quota", "expiry"],
-      "errors": ["writable_target_required", "writable_target_mismatch", "file_ingress_source_unavailable", "file_ingress_intent_conflict", "capacity_limit"],
-      "compatibility": "same-name-new-target-schema"
+      "checks": ["content_write_scope", "exact_principal_read_write_mind", "principal_mount_generation", "source_owner", "size", "sha256", "quota", "expiry"],
+      "errors": ["writable_mind_required", "writable_mind_stale", "file_ingress_source_unavailable", "file_ingress_intent_conflict", "capacity_limit"],
+      "compatibility": "same-name-principal-mount-schema"
     },
     "mcp-transport": {
       "target": "content-mcp",
@@ -121,7 +121,7 @@
       "actor": "none",
       "checks": [],
       "errors": ["operation_retired_from_content_mcp"],
-      "compatibility": "omit-schema-and-return-versioned-retired-result-for-exact-cached-binding-name"
+      "compatibility": "omit-schema-and-return-versioned-retired-result-for-exact-cached-binding-or-capture-name"
     }
   },
   "credentialAccessCompatibility": {
@@ -135,29 +135,27 @@
     "mindMetadataDisclosed": false,
     "readBindingAuthority": false
   },
-  "credentialTargetActions": {
+  "principalMindUsage": {
     "disposition": "change",
-    "implementationOwner": "MD-343",
-    "runtimeStatus": "target-implemented",
-    "appliesTo": ["PATCH /api/v1/connections/{connection_ref}/mind-access", "PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access"],
+    "implementationOwner": "MD-374",
+    "runtimeStatus": "principal-usage-implemented",
+    "appliesTo": ["GET /api/v1/mind-usage", "GET /api/v1/minds/{mind_ref}/usage", "PUT /api/v1/minds/{mind_ref}/usage"],
     "implementedRuntime": {
-      "inputVersionField": "expected_target_version",
-      "actionEnum": ["select_write", "clear_write"],
-      "readProjection": "current_acl",
-      "clearWriteRequires": ["active_credential", "expected_target_version", "idempotency"],
-      "staleExpectedVersion": {"httpStatus":409,"code":"target_conflict","targetStateChange":"none","metadataDisclosure":"none"}
+      "inputVersionField": "expected_usage_version",
+      "modeEnum": ["disabled", "read", "read_write"],
+      "scope": "principal",
+      "singleWritable": true,
+      "staleExpectedVersion": {"httpStatus":409,"code":"usage_version_conflict","stateChange":"none","metadataDisclosure":"none"}
     },
-    "select_write": {
-      "checks": ["credential_owner_authority", "active_lifecycle", "content_write_scope", "current_writer_role", "target_eligibility", "expected_target_version", "idempotency"],
-      "errors": ["credential_not_found", "write_step_up_required", "target_conflict", "target_ineligible"],
-      "metadataDisclosure": "authorized-target-only"
+    "read": {
+      "checks": ["current_read_access", "expected_usage_version", "idempotency"],
+      "errors": ["mind_not_found", "read_access_required", "usage_version_conflict"],
+      "metadataDisclosure": "authorized-mind-only"
     },
-    "clear_write": {
-      "checks": ["credential_owner_authority", "active_lifecycle", "expected_target_version", "idempotency"],
-      "mustNotRequire": ["target_acl", "current_writer_role", "target_eligibility"],
-      "allowedAfter": ["target_acl_loss", "target_role_loss", "target_deletion"],
-      "errors": ["credential_not_found", "target_conflict"],
-      "metadataDisclosure": "none"
+    "read_write": {
+      "checks": ["current_read_access", "current_writer_role", "authorized_description", "expected_usage_version", "idempotency"],
+      "errors": ["mind_not_found", "writer_access_required", "description_required", "usage_version_conflict"],
+      "metadataDisclosure": "authorized-mind-only"
     }
   },
   "restRoutes": [
@@ -167,8 +165,12 @@
     {"key":"GET /api/v1/account/deletion-impact","disposition":"keep","profile":"web-read","mindScope":"account-cascade","owner":"none"},
     {"key":"DELETE /api/v1/account","disposition":"keep","profile":"web-write","mindScope":"account-cascade","owner":"none"},
     {"key":"GET /api/v1/minds","disposition":"keep","profile":"web-read","mindScope":"current-access-metadata","owner":"none"},
+    {"key":"GET /api/v1/mind-usage","disposition":"change","profile":"mind-usage-control","mindScope":"principal-enabled-singleton","owner":"MD-374"},
     {"key":"POST /api/v1/minds","disposition":"keep","profile":"web-write","mindScope":"new-ordinary","owner":"none"},
     {"key":"GET /api/v1/minds/{mind_ref}","disposition":"keep","profile":"web-read","mindScope":"explicit-current-metadata","owner":"none"},
+    {"key":"GET /api/v1/minds/{mind_ref}/usage","disposition":"change","profile":"mind-usage-control","mindScope":"explicit-current-usage","owner":"MD-374"},
+    {"key":"PUT /api/v1/minds/{mind_ref}/usage","disposition":"change","profile":"mind-usage-control","mindScope":"explicit-current-usage","owner":"MD-374"},
+    {"key":"PATCH /api/v1/minds/me/description","disposition":"change","profile":"web-write","mindScope":"personal-current-description","owner":"MD-374"},
     {"key":"GET /api/v1/minds/{mind_ref}/capacity","disposition":"keep","profile":"web-read","mindScope":"explicit-current-capacity","owner":"none"},
     {"key":"POST /api/v1/minds/{mind_ref}/exports","disposition":"keep","profile":"web-export","mindScope":"explicit-exact-revision","owner":"MD-361"},
     {"key":"GET /api/v1/export-jobs/{job_id}","disposition":"keep","profile":"web-export","mindScope":"creator-private-job-pinned-revision","owner":"MD-361"},
@@ -198,20 +200,18 @@
     {"key":"DELETE /api/v1/invitations/{invitation_id}","disposition":"keep","profile":"web-write","mindScope":"invitation-pinned","owner":"none"},
     {"key":"GET /api/v1/mcp-tokens","disposition":"keep","profile":"web-read","mindScope":"credential-projection","owner":"none"},
     {"key":"POST /api/v1/mcp-tokens","disposition":"keep","profile":"web-write","mindScope":"credential-lifecycle","owner":"none"},
-    {"key":"PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access","disposition":"change","profile":"credential-control","mindScope":"single-writable-target","owner":"MD-343"},
-    {"key":"DELETE /api/v1/mcp-tokens/{personal_token_ref}","disposition":"keep","profile":"credential-control","mindScope":"credential-lifecycle","owner":"none"},
-    {"key":"GET /api/v1/connections","disposition":"change","profile":"credential-control","mindScope":"current-readable-and-single-writable","owner":"MD-339"},
-    {"key":"GET /api/v1/connections/{connection_ref}","disposition":"change","profile":"credential-control","mindScope":"current-readable-and-single-writable","owner":"MD-339"},
-    {"key":"PATCH /api/v1/connections/{connection_ref}/mind-access","disposition":"change","profile":"credential-control","mindScope":"single-writable-target","owner":"MD-343"},
-    {"key":"DELETE /api/v1/connections/{connection_ref}","disposition":"keep","profile":"credential-control","mindScope":"credential-lifecycle","owner":"none"}
+    {"key":"DELETE /api/v1/mcp-tokens/{personal_token_ref}","disposition":"keep","profile":"web-write","mindScope":"credential-lifecycle","owner":"none"},
+    {"key":"GET /api/v1/connections","disposition":"change","profile":"web-read","mindScope":"credential-lifecycle-only","owner":"MD-374"},
+    {"key":"GET /api/v1/connections/{connection_ref}","disposition":"change","profile":"web-read","mindScope":"credential-lifecycle-only","owner":"MD-374"},
+    {"key":"DELETE /api/v1/connections/{connection_ref}","disposition":"keep","profile":"web-write","mindScope":"credential-lifecycle","owner":"none"}
   ],
   "auxiliaryHttpRoutes": [
     {"key":"GET /api/v1/internal/operators/users","disposition":"keep","profile":"operator-read","owner":"none"},
     {"key":"GET /internal/operators/users","disposition":"keep","profile":"operator-read","owner":"none"},
     {"key":"GET /api/v1/exports/{grant}","disposition":"move","profile":"delivery-grant","owner":"MD-359"},
     {"key":"GET /api/bundle-download/{grant}","disposition":"keep","profile":"delivery-grant","owner":"none"},
-    {"key":"GET /api/file-ingress/v1/upload-intents/{capability}","disposition":"change","profile":"capability-ingress","owner":"MD-339"},
-    {"key":"PUT /api/file-ingress/v1/upload-intents/{capability}","disposition":"change","profile":"capability-ingress","owner":"MD-339"},
+    {"key":"GET /api/file-ingress/v1/upload-intents/{capability}","disposition":"change","profile":"capability-ingress","owner":"MD-379"},
+    {"key":"PUT /api/file-ingress/v1/upload-intents/{capability}","disposition":"change","profile":"capability-ingress","owner":"MD-379"},
     {"key":"GET /.well-known/oauth-protected-resource","disposition":"keep","profile":"oauth","owner":"none"},
     {"key":"GET /.well-known/oauth-protected-resource/api/mcp","disposition":"keep","profile":"oauth","owner":"none"},
     {"key":"GET /.well-known/oauth-authorization-server","disposition":"keep","profile":"oauth","owner":"none"},
@@ -221,9 +221,9 @@
     {"key":"POST /oauth/authorize","disposition":"keep","profile":"oauth","owner":"none"},
     {"key":"POST /oauth/token","disposition":"keep","profile":"oauth","owner":"none"},
     {"key":"POST /oauth/revoke","disposition":"keep","profile":"oauth","owner":"none"},
-    {"key":"POST /api/mcp","disposition":"change","profile":"mcp-transport","owner":"MD-339"},
+    {"key":"POST /api/mcp","disposition":"change","profile":"mcp-transport","owner":"MD-376"},
     {"key":"POST /api/mcp/apps","disposition":"change","profile":"mcp-transport","owner":"MD-316"},
-    {"key":"POST /api/mcp/2025-11-25","disposition":"change","profile":"mcp-transport","owner":"MD-339"},
+    {"key":"POST /api/mcp/2025-11-25","disposition":"change","profile":"mcp-transport","owner":"MD-376"},
     {"key":"ANY /mcp","disposition":"remove","profile":"compat-removed","owner":"none"}
   ],
   "uiRoutes": [
@@ -235,64 +235,63 @@
     {"pattern":"/invitations","disposition":"keep","owner":"none"},
     {"pattern":"/settings/account","disposition":"keep","owner":"none"},
     {"pattern":"/settings/mcp","disposition":"keep","owner":"none"},
-    {"pattern":"/settings/connections","disposition":"change","owner":"MD-339"},
-    {"pattern":"/settings/connections/{connection_ref}","disposition":"change","owner":"MD-339"},
-    {"pattern":"/settings/developer/mcp","disposition":"change","owner":"MD-339"},
-    {"pattern":"/help/codex","disposition":"change","owner":"MD-339"},
-    {"pattern":"/help","disposition":"change","owner":"MD-339"},
+    {"pattern":"/settings/connections","disposition":"change","owner":"MD-374"},
+    {"pattern":"/settings/connections/{connection_ref}","disposition":"change","owner":"MD-374"},
+    {"pattern":"/settings/developer/mcp","disposition":"change","owner":"MD-374"},
+    {"pattern":"/help/codex","disposition":"change","owner":"MD-376"},
+    {"pattern":"/help","disposition":"change","owner":"MD-376"},
     {"pattern":"/internal/operators/users","disposition":"keep","owner":"none"}
   ],
   "mcpTools": [
-    {"name":"list_minds","disposition":"keep","profile":"content-read","mindScope":"discovery-current-access","owner":"none"},
-    {"name":"resolve_mind","disposition":"keep","profile":"content-read","mindScope":"explicit-handle","owner":"none"},
-    {"name":"get_mind_info","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
-    {"name":"get_mind_bindings","disposition":"remove","profile":"compat-removed","mindScope":"none","owner":"MD-339"},
-    {"name":"browse_entries","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
-    {"name":"search","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
-    {"name":"fetch","disposition":"change","profile":"content-read","mindScope":"opaque-exact-revision-locator","owner":"MD-339"},
-    {"name":"list_revisions","disposition":"change","profile":"content-read","mindScope":"explicit-mind","owner":"MD-339"},
-    {"name":"get_revision","disposition":"change","profile":"content-read","mindScope":"explicit-mind-exact-revision","owner":"MD-339"},
-    {"name":"validate_mind","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
-    {"name":"list_bundle_files","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
-    {"name":"set_read_mind_binding","disposition":"remove","profile":"compat-removed","mindScope":"none","owner":"MD-339"},
-    {"name":"set_write_mind_binding","disposition":"move","profile":"compat-removed","mindScope":"single-writable-target","owner":"MD-339"},
-    {"name":"get_file_ingress_capabilities","disposition":"change","profile":"content-read","mindScope":"none","owner":"MD-339"},
-    {"name":"open_bundle_file_picker","disposition":"change","profile":"content-ingress","mindScope":"explicit-selected-target","owner":"MD-316"},
-    {"name":"create_file_upload_intent","disposition":"change","profile":"content-ingress","mindScope":"explicit-selected-target","owner":"MD-339"},
-    {"name":"stage_bundle_file","disposition":"change","profile":"content-ingress","mindScope":"explicit-selected-target","owner":"MD-339"},
-    {"name":"reconcile_file_stage","disposition":"change","profile":"content-ingress","mindScope":"explicit-selected-target","owner":"MD-339"},
-    {"name":"get_bundle_file_download","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
-    {"name":"commit_changeset","disposition":"change","profile":"content-write","mindScope":"explicit-selected-target-head","owner":"MD-339"},
-    {"name":"reconcile_changeset","disposition":"change","profile":"content-write","mindScope":"explicit-selected-target-head","owner":"MD-339"},
-    {"name":"capture_knowledge","disposition":"change","profile":"content-write","mindScope":"explicit-selected-private-target-head","owner":"MD-339"}
+    {"name":"list_minds","disposition":"change","profile":"content-read","mindScope":"principal-enabled-projection","owner":"MD-376"},
+    {"name":"resolve_mind","disposition":"change","profile":"content-read","mindScope":"enabled-explicit-handle","owner":"MD-376"},
+    {"name":"get_mind_info","disposition":"change","profile":"content-read","mindScope":"enabled-explicit-mind-revision","owner":"MD-376"},
+    {"name":"get_mind_bindings","disposition":"remove","profile":"compat-removed","mindScope":"none","owner":"MD-376"},
+    {"name":"browse_entries","disposition":"change","profile":"content-read","mindScope":"enabled-explicit-mind-revision","owner":"MD-376"},
+    {"name":"search","disposition":"change","profile":"content-read","mindScope":"enabled-explicit-mind-revision","owner":"MD-376"},
+    {"name":"fetch","disposition":"change","profile":"content-read","mindScope":"enabled-opaque-exact-revision-locator","owner":"MD-376"},
+    {"name":"list_revisions","disposition":"change","profile":"content-read","mindScope":"enabled-explicit-mind","owner":"MD-376"},
+    {"name":"get_revision","disposition":"change","profile":"content-read","mindScope":"enabled-explicit-mind-exact-revision","owner":"MD-376"},
+    {"name":"validate_mind","disposition":"change","profile":"content-read","mindScope":"enabled-explicit-mind-revision","owner":"MD-376"},
+    {"name":"list_bundle_files","disposition":"change","profile":"content-read","mindScope":"enabled-explicit-mind-revision","owner":"MD-376"},
+    {"name":"set_read_mind_binding","disposition":"remove","profile":"compat-removed","mindScope":"none","owner":"MD-376"},
+    {"name":"set_write_mind_binding","disposition":"remove","profile":"compat-removed","mindScope":"none","owner":"MD-376"},
+    {"name":"get_file_ingress_capabilities","disposition":"change","profile":"content-read","mindScope":"none","owner":"MD-376"},
+    {"name":"open_bundle_file_picker","disposition":"change","profile":"content-ingress","mindScope":"explicit-principal-read-write","owner":"MD-379"},
+    {"name":"create_file_upload_intent","disposition":"change","profile":"content-ingress","mindScope":"explicit-principal-read-write-head","owner":"MD-379"},
+    {"name":"stage_bundle_file","disposition":"change","profile":"content-ingress","mindScope":"explicit-principal-read-write-head","owner":"MD-379"},
+    {"name":"reconcile_file_stage","disposition":"change","profile":"content-ingress","mindScope":"explicit-principal-read-write-head","owner":"MD-379"},
+    {"name":"get_bundle_file_download","disposition":"change","profile":"content-read","mindScope":"enabled-explicit-mind-revision","owner":"MD-376"},
+    {"name":"commit_changeset","disposition":"change","profile":"content-write","mindScope":"explicit-principal-read-write-head","owner":"MD-379"},
+    {"name":"reconcile_changeset","disposition":"change","profile":"content-write","mindScope":"explicit-principal-read-write-head","owner":"MD-379"},
+    {"name":"capture_knowledge","disposition":"remove","profile":"compat-removed","mindScope":"none","owner":"MD-376"}
   ],
-  "targetMcpCatalog": ["list_minds", "resolve_mind", "get_mind_info", "browse_entries", "search", "fetch", "list_revisions", "get_revision", "validate_mind", "list_bundle_files", "get_file_ingress_capabilities", "open_bundle_file_picker", "create_file_upload_intent", "stage_bundle_file", "reconcile_file_stage", "get_bundle_file_download", "commit_changeset", "reconcile_changeset", "capture_knowledge"],
+  "targetMcpCatalog": ["list_minds", "resolve_mind", "get_mind_info", "browse_entries", "search", "fetch", "list_revisions", "get_revision", "validate_mind", "list_bundle_files", "get_file_ingress_capabilities", "open_bundle_file_picker", "create_file_upload_intent", "stage_bundle_file", "reconcile_file_stage", "get_bundle_file_download", "commit_changeset", "reconcile_changeset"],
   "schemaDiffs": [
     {"operation":"create_file_upload_intent","removeRequired":["write_binding_id"],"keepRequired":["mind","source_kind","display_filename","expected_size","expected_sha256","idempotency_key"],"addRequired":[]},
     {"operation":"stage_bundle_file","removeRequired":["write_binding_id"],"keepRequired":["mind","file","idempotency_key"],"addRequired":[]},
     {"operation":"reconcile_file_stage","removeRequired":["write_binding_id"],"keepRequired":["mind","source_kind","display_filename","media_type","sha256","size","idempotency_key"],"addRequired":[]},
-    {"operation":"commit_changeset","removeRequired":["write_binding_id"],"keepRequired":["mind","expected_revision","idempotency_key","operations"],"addRequired":[]},
-    {"operation":"reconcile_changeset","removeRequired":["write_binding_id"],"keepRequired":["mind","expected_revision","idempotency_key","operations"],"addRequired":[]},
-    {"operation":"capture_knowledge","removeRequired":["write_binding_id","expected_binding_version"],"keepRequired":["mind","expected_revision","idempotency_key"],"addRequired":[]},
+    {"operation":"commit_changeset","removeRequired":["write_binding_id"],"keepRequired":["mind","expected_revision","idempotency_key","operations"],"addRequired":[],"addOptional":["source_references"]},
+    {"operation":"reconcile_changeset","removeRequired":["write_binding_id"],"keepRequired":["mind","expected_revision","idempotency_key","operations"],"addRequired":[],"addOptional":["source_references"]},
     {"operation":"get_file_ingress_capabilities","outputRenames":{"sources[].requires_write_binding":"sources[].requires_writable_target"}},
-    {"operation":"PATCH /api/v1/connections/{connection_ref}/mind-access","implementationOwner":"MD-343","removeEnum":["attach_read","detach_read"],"keepEnum":["select_write","clear_write"],"renameFields":{"expected_binding_version":"expected_target_version"},"staleExpectedTargetVersion":{"code":"target_conflict","httpStatus":409,"targetStateChange":"none","metadataDisclosure":"none","lastWriteWins":false,"surface":"sites-control","contentMcpError":false}},
-    {"operation":"PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access","implementationOwner":"MD-343","removeEnum":["attach_read","detach_read"],"keepEnum":["select_write","clear_write"],"renameFields":{"expected_binding_version":"expected_target_version"},"staleExpectedTargetVersion":{"code":"target_conflict","httpStatus":409,"targetStateChange":"none","metadataDisclosure":"none","lastWriteWins":false,"surface":"sites-control","contentMcpError":false}}
+    {"operation":"PUT /api/v1/minds/{mind_ref}/usage","implementationOwner":"MD-374","modeEnum":["disabled","read","read_write"],"versionField":"expected_usage_version","singletonWritable":true}
   ],
-  "retiredMcpTools": ["get_mind_bindings", "set_read_mind_binding", "set_write_mind_binding", "start_export", "get_export_status"],
+  "retiredMcpTools": ["get_mind_bindings", "set_read_mind_binding", "set_write_mind_binding", "capture_knowledge", "start_export", "get_export_status"],
   "retiredMcpCompatibility": {
     "$schema": "mind-diary/mcp-operation-retired/v1",
     "advertised": false,
     "applicationCalls": 0,
     "sideEffects": "none",
     "operations": {
-      "get_mind_bindings": {"code":"operation_retired_from_content_mcp","remediation":"inspect_access_on_site","retryable":false},
-      "set_read_mind_binding": {"code":"operation_retired_from_content_mcp","remediation":"read_access_follows_current_acl","retryable":false},
-      "set_write_mind_binding": {"code":"operation_retired_from_content_mcp","remediation":"manage_writable_target_on_site","retryable":false}
+      "get_mind_bindings": {"code":"operation_retired_from_content_mcp","remediation":"inspect_mind_usage_on_site","retryable":false},
+      "set_read_mind_binding": {"code":"operation_retired_from_content_mcp","remediation":"manage_mind_usage_on_site","retryable":false},
+      "set_write_mind_binding": {"code":"operation_retired_from_content_mcp","remediation":"manage_mind_usage_on_site","retryable":false},
+      "capture_knowledge": {"code":"operation_retired_from_content_mcp","remediation":"use_commit_changeset","retryable":false}
     }
   },
   "retiredReadErrors": ["mind_binding_required"],
   "retiredWriteErrors": ["write_binding_required", "write_binding_stale", "binding_owner_revoked", "binding_state_unavailable"],
-  "targetWriteErrors": ["writable_target_required", "writable_target_mismatch", "writable_target_unavailable"],
+  "targetWriteErrors": ["writable_mind_required", "writable_mind_stale"],
   "protocolProfiles": {
     "2026-07-28": {
       "endpoint": "/api/mcp",
@@ -315,15 +314,16 @@
     "bearerUri": false
   },
   "pluginHelp": [
-    {"surface":"marketplace-package","disposition":"change","owner":"integration-owner","requirements":["AVAILABLE", "ON_USE", "transport:/api/mcp/2025-11-25", "oauth_resource:/api/mcp", "new_immutable_version"],"sourceEvidence":[{"role":"package-probe-source","path":"scripts/run-oauth-direct-plugin-probe.mjs","gitBlob":"763c8e4b9cca5e12211a1fabb7ec0e6aa7baae40"}]},
-    {"surface":"bundled-skill","disposition":"change","owner":"integration-owner","requirements":["explicit_mind", "explicit_revision_when_historical", "no_binding_tools", "no_mcp_export", "site_target_control"],"sourceEvidence":[{"role":"accepted-skill-source-contract","path":"docs/specs/plugin-connector.md","gitBlob":"84e2698b019d1ece303725f9616b182450d7ce77"},{"role":"installed-skill-probe-source","path":"scripts/run-oauth-direct-plugin-probe.mjs","gitBlob":"763c8e4b9cca5e12211a1fabb7ec0e6aa7baae40"}]},
-    {"surface":"/help/codex","disposition":"change","owner":"MD-339","requirements":["install", "authenticate_read", "read_explicit_mind", "select_write_target_on_site_only_when_writing"],"sourceEvidence":[{"role":"help-renderer-source","path":"packages/adapter-web/src/connections.ts","gitBlob":"f46ccfaf8b5b5586eada79876c5a822af614bfb3"}]},
-    {"surface":"/help","disposition":"change","owner":"integration-owner","requirements":["no_removed_binding_tools", "no_removed_export_tools"],"sourceEvidence":[{"role":"help-playbook-source","path":"packages/adapter-web/src/token-management.ts","gitBlob":"25b5e1c7c1a50e7705812b3e3565b6157d867009"},{"role":"help-route-source","path":"packages/adapter-web/src/product-http-request-helpers.ts","gitBlob":"cc06f9dae5008737f039c2a5d2516d1ed4e3f2cb"}]},
+    {"surface":"marketplace-package","disposition":"change","owner":"integration-owner","requirements":["AVAILABLE", "ON_USE", "transport:/api/mcp/2025-11-25", "oauth_resource:/api/mcp", "new_immutable_version"],"sourceEvidence":[{"role":"package-probe-source","path":"scripts/run-oauth-direct-plugin-probe.mjs","gitBlob":"b86de99f6e882715d9d66696012058cf7ccfd865"}]},
+    {"surface":"bundled-skill","disposition":"change","owner":"integration-owner","requirements":["explicit_mind", "explicit_revision_when_historical", "description_relevance", "no_binding_tools", "no_mcp_export", "site_mind_usage", "automatic_commit_changeset"],"sourceEvidence":[{"role":"accepted-skill-source-contract","path":"docs/specs/plugin-connector.md","gitBlob":"9383d91917489f2f527cdc8311dbb70c0f973237"},{"role":"installed-skill-probe-source","path":"scripts/run-oauth-direct-plugin-probe.mjs","gitBlob":"b86de99f6e882715d9d66696012058cf7ccfd865"}]},
+    {"surface":"/help/codex","disposition":"change","owner":"MD-376","requirements":["install", "authenticate_read", "read_enabled_explicit_mind", "configure_principal_mind_usage_on_site", "automatic_commit_changeset"],"sourceEvidence":[{"role":"help-renderer-source","path":"packages/adapter-web/src/connections.ts","gitBlob":"330dd1279f8fb84fa0e5dc99886db64d38caae39"}]},
+    {"surface":"/help","disposition":"change","owner":"integration-owner","requirements":["no_removed_binding_tools", "no_removed_export_tools"],"sourceEvidence":[{"role":"help-playbook-source","path":"packages/adapter-web/src/token-management.ts","gitBlob":"8f6c6174c9b77975b338001d8a5db4d4ca475be7"},{"role":"help-route-source","path":"packages/adapter-web/src/product-http-request-helpers.ts","gitBlob":"4cff03c81598673cb36308f8d46996c61fbb1c1a"}]},
     {"surface":"plugin-label","disposition":"keep","owner":"integration-owner","requirements":["Mind Diary UAT", "no_production_claim"],"sourceEvidence":[{"role":"shared-label-source","path":"packages/adapter-web/src/ui-shell.ts","gitBlob":"e5475a47698fd16e76d8ca4f01e5bbfa8e2e19e5"}]}
   ],
   "migrationOwners": {
-    "MD-339": "writable-target representation, legacy binding migration, reconnect/reissue and fail-closed compatibility",
-    "MD-343": "Sites target-only mutation helper/handler implementation and legacy-to-target error translation",
+    "MD-374": "principal-owned disabled/read/read_write settings, singleton writable mode and Sites control routes",
+    "MD-376": "enabled MCP discovery, fail-closed reads, centralized agent guidance and retired binding/capture tools",
+    "MD-379": "server-resolved writable mount generation, transactional write/source reauthorization and ingress migration",
     "MD-359": "Sites-owned import/export delta routes and projections",
     "integration-owner": "runtime implementation, plugin publication and exact UAT evidence after owning contracts"
   }

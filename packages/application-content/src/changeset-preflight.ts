@@ -4,6 +4,7 @@ import type {
   Authorizer,
   Clock,
   BundleFileStagingStore,
+  PrincipalMindUsageWritePin,
   StagedBundleFileRecord,
 } from "@mind-diary/application-ports";
 import {
@@ -14,11 +15,9 @@ import {
   sha256Digest,
   type RevisionId,
   type RevisionMode,
-  type BindingVersion,
   type Sha256Digest,
   type SpaceId,
   type UtcInstant,
-  type WriteMindBindingId,
   type BundleFileMediaType,
   type StagedBundleFileId,
 } from "@mind-diary/domain";
@@ -131,8 +130,8 @@ export interface ChangesetPreflightRequest {
   readonly spaceId: SpaceId;
   readonly revisionMode: RevisionMode;
   readonly expectedRevisionId: RevisionId | null;
-  readonly writeBindingId?: WriteMindBindingId;
-  readonly automaticCaptureExpectedBindingVersion?: BindingVersion;
+  /** Trusted server-resolved destination fence; never accepted from MCP input. */
+  readonly writeUsagePin?: Readonly<PrincipalMindUsageWritePin>;
   /** Trusted producer policy; never derived from an untrusted operations payload. */
   readonly producerProfile?: boolean;
   /** Untrusted adapter input is deliberately validated inside the service. */
@@ -141,9 +140,10 @@ export interface ChangesetPreflightRequest {
 
 export type ChangesetValidationCode =
   | "invalid_expected_revision"
-  | "invalid_write_binding_id"
   | "invalid_idempotency_key"
   | "invalid_summary"
+  | "invalid_source_references"
+  | "source_reference_unavailable"
   | "operations_required"
   | "operation_limit_exceeded"
   | "invalid_operation"
@@ -169,7 +169,7 @@ export type ChangesetValidationCode =
   | "staged_bundle_file_not_found"
   | "staged_bundle_file_not_verified"
   | "staged_bundle_file_expired"
-  | "staged_bundle_file_binding_mismatch"
+  | "staged_bundle_file_usage_mismatch"
   | "retained_bundle_file_quota_exceeded"
   | "capacity_accounting_untrusted"
   | "capacity_soft_limit"
@@ -840,23 +840,6 @@ export class ChangesetPreflightService {
       spaceId: request.spaceId,
       capability: "content:write",
       revisionMode: request.revisionMode,
-      ...(request.writeBindingId === undefined
-        ? {}
-        : {
-            bindingRequirement: Object.freeze({
-              ...(request.automaticCaptureExpectedBindingVersion === undefined
-                ? {
-                    kind: "write" as const,
-                    writeBindingId: request.writeBindingId,
-                  }
-                : {
-                    kind: "automatic_capture" as const,
-                    writeBindingId: request.writeBindingId,
-                    expectedBindingVersion:
-                      request.automaticCaptureExpectedBindingVersion,
-                  }),
-            }),
-          }),
     });
     if (authorization.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: authorization });
@@ -1114,20 +1097,15 @@ export class ChangesetPreflightService {
             { operationIndex: index, path: operation.path },
           );
         }
-        const bindingOwnerId =
-          request.actor.kind === "registered_principal" &&
-          request.actor.authentication.kind === "mcp_token"
-            ? request.actor.authentication.bindingOwnerId
-            : null;
+        const pin = request.writeUsagePin;
         if (
-          bindingOwnerId === null ||
-          request.writeBindingId === undefined ||
-          staged.bindingOwnerId !== bindingOwnerId ||
-          staged.writeBindingId !== request.writeBindingId ||
+          pin === undefined ||
+          staged.principalId !== pin.principalId ||
+          staged.principalMindUsageGenerationId !== pin.generationId ||
           staged.spaceId !== request.spaceId
         ) return invalid(
-          "staged_bundle_file_binding_mismatch",
-          "staged BundleFile is pinned to another binding or Mind",
+          "staged_bundle_file_usage_mismatch",
+          "staged BundleFile is pinned to another principal write generation or Mind",
           { operationIndex: index, path: operation.path },
         );
         if (!stagedRecords.has(staged.stagedFileId)) {

@@ -223,7 +223,7 @@ test("metadata conflict reload removes every stale control after role downgrade"
   await page.getByLabel("Mind name").fill("Conflicting name");
   await page.getByRole("button", { name: "Save metadata" }).click();
   await expect(page.locator("[data-rename-status]")).toContainText("changed in another session");
-  await page.getByRole("button", { name: "Reload current settings" }).click();
+  await page.locator("[data-rename-mind-form] [data-refresh-mind]").click();
 
   await expectFreshAuthority(page, "Reader");
   await expect(page.getByRole("heading", { name: "Settings are read-only" })).toBeVisible();
@@ -234,8 +234,9 @@ test("metadata conflict reload fails closed after access revocation", async ({ p
   await setConflict("revoke");
   await page.getByLabel("Mind name").fill("Conflicting name");
   await page.getByRole("button", { name: "Save metadata" }).click();
-  await expect(page.getByRole("button", { name: "Reload current settings" })).toBeVisible();
-  await page.getByRole("button", { name: "Reload current settings" }).click();
+  const metadataReload = page.locator("[data-rename-mind-form] [data-refresh-mind]");
+  await expect(metadataReload).toBeVisible();
+  await metadataReload.click();
 
   await expect(page.getByRole("heading", { name: "Mind settings unavailable" })).toBeVisible();
   await expect(page.locator("[data-mind-route]")).toHaveCount(0);

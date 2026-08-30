@@ -7,7 +7,6 @@ import type {
   IdempotencyKey,
   Sha256Digest,
   SpaceId,
-  WriteMindBindingId,
 } from "@mind-diary/domain";
 
 type GeneratedArtifactActorContext = Parameters<
@@ -24,8 +23,6 @@ type TrustedBoundedInMemoryActorContext = Extract<
 export interface BoundedInMemoryIngressRequest {
   readonly actor: TrustedBoundedInMemoryActorContext;
   readonly spaceId: SpaceId;
-  /** Exact current credential write-target generation resolved by the caller. */
-  readonly writeBindingId: WriteMindBindingId;
   readonly displayFilename: string;
   readonly claimedMediaType?: string;
   readonly bytes: Uint8Array;
@@ -72,7 +69,6 @@ export function createBoundedInMemoryIngressAdapter(dependencies: {
       return dependencies.application.stageBoundedInMemory({
         actor: request.actor,
         spaceId: request.spaceId,
-        writeBindingId: request.writeBindingId,
         displayFilename: request.displayFilename,
         claimedMediaType: request.claimedMediaType,
         bytes: request.bytes,
