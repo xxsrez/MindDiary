@@ -570,12 +570,20 @@ test("ordinary description create and partial metadata update normalize atomical
 
   const cleared = await env.ordinary.renameSpace(actor, {
     mindId: created.mindId,
-    description: " \n ",
+    description: null,
     expectedMetadataVersion: updated.metadataVersion,
     idempotencyKey: "description-clear",
   });
   assert.equal(cleared.description, null);
   assert.equal(cleared.metadataVersion, updated.metadataVersion + 1);
+  const normalizedEmptyNoOp = await env.ordinary.renameSpace(actor, {
+    mindId: created.mindId,
+    description: " \n ",
+    expectedMetadataVersion: cleared.metadataVersion,
+    idempotencyKey: "description-normalized-empty-no-op",
+  });
+  assert.equal(normalizedEmptyNoOp.description, null);
+  assert.equal(normalizedEmptyNoOp.metadataVersion, cleared.metadataVersion);
   const explicitNullNoOp = await env.ordinary.renameSpace(actor, {
     mindId: created.mindId,
     description: null,

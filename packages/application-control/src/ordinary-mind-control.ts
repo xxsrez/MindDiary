@@ -522,9 +522,9 @@ export class OrdinaryMindControlService {
             : "mind-diary-ordinary-mind-rename-v1",
           mind_id: command.mindId,
           ...(updatesName ? { display_name: displayName } : {}),
-          ...(normalizedDescription === null
-            ? {}
-            : { description: normalizedDescription.value }),
+          ...(updatesDescription
+            ? { description: normalizedDescription?.value ?? null }
+            : {}),
           expected_metadata_version: expectedMetadataVersion,
         })}\n`),
       );
@@ -534,9 +534,9 @@ export class OrdinaryMindControlService {
             principalId: trustedActor.principalId,
             spaceId: command.mindId,
             ...(displayName === undefined ? {} : { displayName }),
-            ...(normalizedDescription === null
-              ? {}
-              : { description: normalizedDescription.value }),
+            ...(updatesDescription
+              ? { description: normalizedDescription?.value ?? null }
+              : {}),
             expectedMetadataVersion,
             idempotencyKey: checkedIdempotencyKey,
             canonicalRequestHash,
