@@ -1384,7 +1384,7 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
 
 test("ordinary Mind detail uses one consistent read session when the control plane provides it", async () => {
   let sessions = 0;
-  let escapedCalls = 0;
+  const preSessionCalls = [];
   const readControl = {
     execute(request) {
       if (request.operation === "get_mind_info") return ordinaryOwnerRoute;
@@ -1426,8 +1426,11 @@ test("ordinary Mind detail uses one consistent read session when the control pla
     }),
     csrf: { issue: () => "csrf-consistent", verify: () => true },
     control: {
-      execute() {
-        escapedCalls += 1;
+      execute(request) {
+        preSessionCalls.push(request.operation);
+        if (request.operation === "reconcile_invitation_expiries") {
+          return { expiredCount: 0 };
+        }
         throw new Error("detail read escaped the consistent session");
       },
       withConsistentRead(operation) {
@@ -1441,7 +1444,7 @@ test("ordinary Mind detail uses one consistent read session when the control pla
   assert.equal(response.status, 200);
   assert.match(await response.text(), /data-mind-route data-mind-handle="research-notes"/u);
   assert.equal(sessions, 1);
-  assert.equal(escapedCalls, 0);
+  assert.deepEqual(preSessionCalls, ["reconcile_invitation_expiries"]);
 });
 
 test("Markdown import REST maps exact plan, resumable multipart checkpoints and terminal commands", async () => {

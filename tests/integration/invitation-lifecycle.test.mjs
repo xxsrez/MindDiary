@@ -151,6 +151,64 @@ test("accept is target-bound, versioned, atomic and retry-safe under concurrency
   assert.deepEqual(await state(env, mind.mindId), final);
 });
 
+test("request-time expiry is strict at the boundary, durable and retry-safe", async () => {
+  const beforeBoundary = await fixture("reader");
+  const accepted = await beforeBoundary.env.invitations.acceptInvitation(
+    actor(
+      beforeBoundary.target.principalId,
+      "accept-before-boundary",
+      "2026-08-14T06:14:59.999Z",
+    ),
+    command(
+      beforeBoundary.invite.invitationId,
+      1,
+      "accept-before-boundary",
+    ),
+  );
+  assert.equal(accepted.state, "accepted");
+  assert.equal(
+    (await state(beforeBoundary.env, beforeBoundary.mind.mindId)).memberships
+      .filter((item) => item.principalId === beforeBoundary.target.principalId)
+      .length,
+    1,
+  );
+
+  for (const [suffix, occurredAt] of [
+    ["at-boundary", EXPIRES],
+    ["after-boundary", "2026-08-14T06:15:00.001Z"],
+  ]) {
+    const current = await fixture("editor");
+    const exact = command(
+      current.invite.invitationId,
+      1,
+      `late-accept-${suffix}`,
+    );
+    await assert.rejects(
+      current.env.invitations.acceptInvitation(
+        actor(current.target.principalId, `late-${suffix}`, occurredAt),
+        exact,
+      ),
+      failure("invitation_expired"),
+    );
+    const expired = await state(current.env, current.mind.mindId);
+    assert.equal(expired.invitations[0].state, "expired");
+    assert.equal(expired.invitations[0].version, 2);
+    assert.equal(expired.memberships.length, 1);
+
+    await assert.rejects(
+      current.env.invitations.acceptInvitation(
+        actor(current.target.principalId, `late-retry-${suffix}`, occurredAt),
+        exact,
+      ),
+      failure("invitation_expired"),
+    );
+    assert.deepEqual(
+      await state(current.env, current.mind.mindId),
+      expired,
+    );
+  }
+});
+
 test("reject and cancel never grant access; only target rejects and the current authorized sender cancels", async () => {
   const rejected = await fixture("reader");
   await assert.rejects(
@@ -221,6 +279,39 @@ test("reissue replaces terminal or current pending atomically and never leaves t
   assert.equal(terminalState.invitations.find((item) => item.invitationId === terminal.invite.invitationId).state, "rejected");
   assert.equal(terminalState.invitations.find((item) => item.invitationId === terminalReplacement.invitation.invitationId).state, "pending");
   assert.equal(terminalState.invitations.filter((item) => item.state === "pending").length, 1);
+});
+
+test("reissue expires an overdue replacement and creates one new pending invitation", async () => {
+  const current = await fixture("reader");
+  const firstReplacement = await current.env.invitations.reissueInvitation(
+    actor(current.owner.principalId, "initial-reissue"),
+    command(current.invite.invitationId, 1, "initial-reissue"),
+  );
+
+  const secondReplacement = await current.env.invitations.reissueInvitation(
+    actor(current.owner.principalId, "reissue-after-expiry", EXPIRES),
+    command(current.invite.invitationId, 2, "reissue-after-expiry"),
+  );
+  const final = await state(current.env, current.mind.mindId);
+  assert.equal(
+    final.invitations.find(
+      (item) =>
+        item.invitationId === firstReplacement.invitation.invitationId,
+    ).state,
+    "expired",
+  );
+  assert.equal(
+    final.invitations.find(
+      (item) =>
+        item.invitationId === secondReplacement.invitation.invitationId,
+    ).state,
+    "pending",
+  );
+  assert.equal(
+    final.invitations.filter((item) => item.state === "pending").length,
+    1,
+  );
+  assert.equal(final.memberships.length, 1);
 });
 
 test("exact lifecycle replays recheck current principal and sender authorization", async () => {

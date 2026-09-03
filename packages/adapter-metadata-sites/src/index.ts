@@ -451,6 +451,16 @@ function isEmptyRecoveryTransaction(
   callResults: readonly unknown[],
 ): boolean {
   if (
+    method === "runOrdinaryMindTransaction" &&
+    calls.length === 1 &&
+    callResults.length === 1 &&
+    calls[0]?.method === "reconcileInvitationExpiries" &&
+    typeof callResults[0] === "object" &&
+    callResults[0] !== null &&
+    "expiredCount" in callResults[0] &&
+    callResults[0].expiredCount === 0
+  ) return true;
+  if (
     method !== "runMarkdownImportTransaction" ||
     calls.length !== 1 ||
     callResults.length !== 1

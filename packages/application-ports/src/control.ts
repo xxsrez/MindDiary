@@ -418,6 +418,19 @@ export interface ReissueInvitationRequest {
   readonly occurredAt: UtcInstant;
 }
 
+/**
+ * Request-time reconciliation for invitations visible to one principal.
+ * The server timestamp is authoritative; clients never choose the expiry clock.
+ */
+export interface ReconcileInvitationExpiriesRequest {
+  readonly principalId: PrincipalId;
+  readonly occurredAt: UtcInstant;
+}
+
+export interface ReconcileInvitationExpiriesResult {
+  readonly expiredCount: number;
+}
+
 export type ReissueInvitationResult =
   | {
       readonly kind: "reissued";
@@ -1093,6 +1106,9 @@ export interface OrdinaryMindMetadataTransaction
   reissueInvitation(
     request: Readonly<ReissueInvitationRequest>,
   ): Promise<ReissueInvitationResult>;
+  reconcileInvitationExpiries(
+    request: Readonly<ReconcileInvitationExpiriesRequest>,
+  ): Promise<Readonly<ReconcileInvitationExpiriesResult>>;
   createOrdinaryMind(
     records: Readonly<OrdinaryMindRecordSet>,
   ): Promise<CreateOrdinaryMindResult>;

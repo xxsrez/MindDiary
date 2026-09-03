@@ -273,11 +273,7 @@ test("durable Sites membership CAS and safe read projections survive reconstruct
   const incoming = await reads.listInvitations(
     actor(target.principalId, "request_invitations"),
   );
-  assert.deepEqual(
-    incoming.invitations.map(({ direction, counterpartyDisplayName, state }) => [direction, counterpartyDisplayName, state]),
-    [["incoming", "Member 1", "accepted"]],
-  );
-  assert.equal(incoming.invitations[0].mindRoute, "/shared");
+  assert.deepEqual(incoming.invitations, []);
 
   const memberships = new MembershipControlService({
     memberships: metadata,
@@ -303,4 +299,83 @@ test("durable Sites membership CAS and safe read projections survive reconstruct
     mind.mindId,
   );
   assert.equal(after.members.find(({ memberId }) => memberId === accepted.membershipId).role, "editor");
+});
+
+test("request-time invitation reconciliation survives Sites restart and skips empty events", async () => {
+  const database = new EventLogD1();
+  const objects = new InMemoryObjectStore();
+  const generated = ids();
+  let metadata = await createSitesMetadataStore(database);
+  const bootstrap = new AccountBootstrapService({
+    accounts: metadata,
+    objects,
+    ids: generated,
+  });
+  const owner = await bootstrap.bootstrapAccount(
+    preRegistration(1),
+    { action: "create_isolated_account" },
+  );
+  const target = await bootstrap.bootstrapAccount(
+    preRegistration(2),
+    { action: "create_isolated_account" },
+  );
+  const ordinary = new OrdinaryMindControlService({
+    ordinaryMinds: metadata,
+    objects,
+    ids: generated,
+    host: HOST,
+  });
+  const mind = await ordinary.createSpaceWithOwner(
+    actor(owner.principalId, "request_create_expiry_mind", T0),
+    {
+      name: "Expiry recovery",
+      handle: "expiry-recovery",
+      idempotencyKey: "create-expiry-recovery",
+    },
+  );
+  const invitations = new InvitationControlService({
+    invitations: metadata,
+    objects,
+    ids: generated,
+  });
+  await invitations.createInvitation(
+    actor(owner.principalId, "request_expiring_invite"),
+    {
+      mindId: mind.mindId,
+      targetVerifiedEmail: "member.2@example.com",
+      role: "reader",
+      expectedMetadataVersion: mind.metadataVersion,
+      idempotencyKey: "expiring-invite",
+    },
+  );
+
+  metadata = await createSitesMetadataStore(database);
+  const reads = new ControlReadService(metadata, metadata);
+  const atExpiry = actor(
+    target.principalId,
+    "request_reconcile_at_expiry",
+    "2026-08-15T09:05:00.000Z",
+  );
+  const eventsBefore = database.events.length;
+  assert.deepEqual(
+    await reads.reconcileInvitationExpiries(atExpiry),
+    { expiredCount: 1 },
+  );
+  assert.equal(database.events.length, eventsBefore + 1);
+  assert.deepEqual(
+    (await reads.listInvitations(atExpiry)).invitations,
+    [],
+  );
+  assert.deepEqual(
+    await reads.reconcileInvitationExpiries(atExpiry),
+    { expiredCount: 0 },
+  );
+  assert.equal(database.events.length, eventsBefore + 1);
+
+  metadata = await createSitesMetadataStore(database);
+  const recovered = await metadata.inspectOrdinaryMindStateForTest(mind.mindId);
+  assert.ok(recovered);
+  assert.equal(recovered.invitations[0].state, "expired");
+  assert.equal(recovered.invitations[0].version, 2);
+  assert.equal(recovered.memberships.length, 1);
 });

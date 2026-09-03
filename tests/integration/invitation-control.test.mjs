@@ -462,6 +462,59 @@ test("invalid or unknown exact emails, Personal Mind, active membership and dupl
   );
 });
 
+test("normal create expires an overdue pending record and immediately reinvites", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1);
+  await createAccount(env, 2);
+  const mind = await createMind(env, owner, "effective-expiry-reinvite");
+  const original = await env.invitations.createInvitation(
+    actor(owner.principalId, "request_original_invitation"),
+    command(mind.mindId, 2),
+  );
+  const exactCommand = command(mind.mindId, 2, {
+    role: "editor",
+    expectedMetadataVersion: 2,
+    idempotencyKey: "reinvite-after-effective-expiry",
+  });
+  const replacement = await env.invitations.createInvitation(
+    actor(
+      owner.principalId,
+      "request_reinvite_at_expiry",
+      "2026-08-14T05:15:00.000Z",
+    ),
+    exactCommand,
+  );
+  const replay = await env.invitations.createInvitation(
+    actor(
+      owner.principalId,
+      "request_reinvite_replay",
+      "2026-08-14T05:15:01.000Z",
+    ),
+    exactCommand,
+  );
+  assert.deepEqual(replay, { ...replacement, replayed: true });
+
+  const final = await state(env, mind.mindId);
+  assert.equal(
+    final.invitations.find(
+      (item) => item.invitationId === original.invitationId,
+    ).state,
+    "expired",
+  );
+  assert.equal(
+    final.invitations.find(
+      (item) => item.invitationId === replacement.invitationId,
+    ).state,
+    "pending",
+  );
+  assert.equal(
+    final.invitations.filter((item) => item.state === "pending").length,
+    1,
+  );
+  assert.equal(final.memberships.length, 1);
+  assert.equal(final.space.metadataVersion, 4);
+});
+
 test("stale metadata, idempotent retry and conflicting retry preserve one exact invitation", async () => {
   const env = harness();
   const owner = await createAccount(env, 1);

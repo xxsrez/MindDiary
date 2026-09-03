@@ -375,6 +375,16 @@ export async function productUiDocument(input: {
         view,
       }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
     };
+    try {
+      await input.control.execute({
+        operation: "reconcile_invitation_expiries",
+        actor: input.identity.actor,
+        input: Object.freeze({}),
+      });
+    } catch {
+      // Effective-time filtering below remains authoritative even if durable
+      // catch-up is temporarily unavailable.
+    }
     return input.control.withConsistentRead === undefined
       ? renderDetail(input.control)
       : input.control.withConsistentRead(renderDetail);

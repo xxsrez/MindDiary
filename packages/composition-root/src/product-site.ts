@@ -743,6 +743,8 @@ class ProductControlApplication {
       }
       case "list_invitations":
         return this.services.reads.listInvitations(actor as never);
+      case "reconcile_invitation_expiries":
+        return this.services.reads.reconcileInvitationExpiries(actor as never);
       case "list_service_operator_principals":
         return this.services.operatorDirectory.list(actor as never, input);
       default:
@@ -1564,7 +1566,7 @@ export async function createProductSiteRuntime(
     visibility: new VisibilityControlService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, logger: controlObservability }),
     ownership: new OwnershipTransferService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, capacityLimits: DEFAULT_CAPACITY_LIMITS, logger: controlObservability }),
     membership: new MembershipControlService({ memberships: metadata, digest: objects, auditIds: commonAuditIds, logger: controlObservability }),
-    reads: new ControlReadService(metadata),
+    reads: new ControlReadService(metadata, metadata),
     invitation: new InvitationControlService({
       invitations: metadata,
       objects,
@@ -1676,9 +1678,16 @@ export async function createProductSiteRuntime(
       async execute(request) {
         const result = await runWithCapturedWork(() =>
           request.operation === "get_invitations_overview"
-            ? metadata.withConsistentRead((store) =>
-                new ControlReadService(store).listInvitations(request.actor as never),
-              )
+            ? (async () => {
+                await controlServices.reads.reconcileInvitationExpiries(
+                  request.actor as never,
+                );
+                return metadata.withConsistentRead((store) =>
+                  new ControlReadService(store).listInvitations(
+                    request.actor as never,
+                  ),
+                );
+              })()
             : control.execute(request));
         if (
           request.operation === "delete_account" &&

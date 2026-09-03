@@ -13,10 +13,13 @@ import {
   type OrdinaryMindMetadataTransaction,
   type PersonalMindTargetClassification,
   type PersonalMindTargetRequest,
+  type ReconcileInvitationExpiriesRequest,
+  type ReconcileInvitationExpiriesResult,
   type RegisteredPrincipalSnapshot,
   type ReissueInvitationRequest,
   type ReissueInvitationResult,
   type SpaceMembership,
+  type SpaceInvitation,
   type TransitionInvitationRequest,
   type TransitionInvitationResult,
 } from "@mind-diary/application-ports";
@@ -53,6 +56,32 @@ import {
   type OrdinaryMindTransactionState,
 } from "./ordinary-mind-transaction-state.js";
 
+type OrdinarySpaceAggregate = ReturnType<typeof SpaceAggregate.restoreOrdinary>;
+
+function expireDueInvitations(
+  aggregate: OrdinarySpaceAggregate,
+  occurredAt: string,
+  include: (invitation: Readonly<SpaceInvitation>) => boolean,
+): Readonly<{ aggregate: OrdinarySpaceAggregate; expiredCount: number }> {
+  let current = aggregate;
+  let expiredCount = 0;
+  const now = Date.parse(occurredAt);
+  for (const invitation of aggregate.snapshot().invitations) {
+    if (
+      invitation.state !== "pending" ||
+      Date.parse(invitation.expiresAt) > now ||
+      !include(invitation)
+    ) continue;
+    current = current.expireInvitation({
+      invitationId: invitation.invitationId,
+      expectedInvitationVersion: invitation.version,
+      occurredAt: occurredAt as SpaceInvitation["updatedAt"],
+    });
+    expiredCount += 1;
+  }
+  return Object.freeze({ aggregate: current, expiredCount });
+}
+
 export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMetadataReadStore {
   protected _membershipTransactionMethods(
     tx: OrdinaryMindTransactionState,
@@ -65,6 +94,7 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
     | "createInvitation"
     | "transitionInvitation"
     | "reissueInvitation"
+    | "reconcileInvitationExpiries"
   > {
     return Object.freeze({
           readMembershipControlTarget: async (
@@ -418,8 +448,16 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
                 currentMetadataVersion: space.metadataVersion,
               });
             }
+            const reconciled = expireDueInvitations(
+              currentAggregate,
+              request.occurredAt,
+              (candidate) =>
+                candidate.targetPrincipalId === request.target.principalId,
+            );
+            currentAggregate = reconciled.aggregate;
+            const currentSnapshot = currentAggregate.snapshot();
             if (
-              aggregateMemberships.some(
+              currentSnapshot.memberships.some(
                 (membership) =>
                   membership.principalId === request.target.principalId &&
                   membership.state === "active",
@@ -428,7 +466,7 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
               return Object.freeze({ kind: "active_membership_exists" });
             }
             if (
-              aggregateInvitations.some(
+              currentSnapshot.invitations.some(
                 (invitation) =>
                   invitation.targetPrincipalId === request.target.principalId &&
                   invitation.state === "pending",
@@ -488,7 +526,7 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
               updatedAggregate = currentAggregate.addInvitation({
                 actorPrincipalId: request.principalId,
                 invitation: { ...invitation },
-                expectedMetadataVersion: request.expectedMetadataVersion,
+                expectedMetadataVersion: currentSnapshot.space.metadataVersion,
                 occurredAt: request.occurredAt,
               });
             } catch (error) {
@@ -539,10 +577,9 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
               updatedSnapshot.space.spaceId,
               freezeKnowledgeSpace(updatedSnapshot.space),
             );
-            candidateInvitations.set(
-              persisted.invitationId,
-              freezeInvitation(persisted),
-            );
+            for (const item of updatedSnapshot.invitations) {
+              candidateInvitations.set(item.invitationId, freezeInvitation(item));
+            }
             const candidateBackgroundJobs = new Map(tx.backgroundJobs);
             candidateBackgroundJobs.set(expiryJob.jobId, cloneBackgroundJob(expiryJob));
             this._failOrdinaryMindIfRequested("invitation_after_record");
@@ -628,11 +665,14 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
             if (!SHA256_PATTERN.test(request.canonicalRequestHash)) {
               return Object.freeze({ kind: "invalid_record" });
             }
-            if (currentInvitation.version !== request.expectedInvitationVersion) {
-              return Object.freeze({ kind: "invitation_version_conflict" });
-            }
             if (!Number.isFinite(Date.parse(request.occurredAt))) {
               return Object.freeze({ kind: "invalid_record" });
+            }
+            if (currentInvitation.state === "expired") {
+              return Object.freeze({ kind: "invitation_expired" });
+            }
+            if (currentInvitation.version !== request.expectedInvitationVersion) {
+              return Object.freeze({ kind: "invitation_version_conflict" });
             }
             const aggregateMemberships = [...tx.memberships.values()].filter(
               (membership) => membership.spaceId === space.spaceId,
@@ -649,6 +689,29 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
               });
             } catch {
               return Object.freeze({ kind: "invalid_record" });
+            }
+            if (
+              currentInvitation.state === "pending" &&
+              Date.parse(currentInvitation.expiresAt) <= Date.parse(request.occurredAt)
+            ) {
+              const expired = aggregate.expireInvitation({
+                invitationId: currentInvitation.invitationId,
+                expectedInvitationVersion: currentInvitation.version,
+                occurredAt: request.occurredAt,
+              }).snapshot();
+              const expiredInvitation = expired.invitations.find(
+                (item) => item.invitationId === currentInvitation.invitationId,
+              );
+              if (!expiredInvitation) return Object.freeze({ kind: "invalid_record" });
+              tx.knowledgeSpaces.set(
+                expired.space.spaceId,
+                freezeKnowledgeSpace(expired.space),
+              );
+              tx.invitations.set(
+                expiredInvitation.invitationId,
+                freezeInvitation(expiredInvitation),
+              );
+              return Object.freeze({ kind: "invitation_expired" });
             }
             let acceptedMembership: Readonly<SpaceMembership> | null = null;
             try {
@@ -815,7 +878,24 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
             if (aggregateMemberships.some((item) => item.principalId === current.targetPrincipalId && item.state === "active")) {
               return Object.freeze({ kind: "active_membership_exists" });
             }
-            if (aggregateInvitations.some((item) => item.invitationId !== current.invitationId && item.targetPrincipalId === current.targetPrincipalId && item.state === "pending")) {
+            let aggregate;
+            try {
+              aggregate = SpaceAggregate.restoreOrdinary({
+                space,
+                memberships: aggregateMemberships,
+                invitations: aggregateInvitations,
+              });
+              aggregate = expireDueInvitations(
+                aggregate,
+                request.occurredAt,
+                (item) =>
+                  item.invitationId !== current.invitationId &&
+                  item.targetPrincipalId === current.targetPrincipalId,
+              ).aggregate;
+            } catch {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            if (aggregate.snapshot().invitations.some((item) => item.invitationId !== current.invitationId && item.targetPrincipalId === current.targetPrincipalId && item.state === "pending")) {
               return Object.freeze({ kind: "pending_invitation_exists" });
             }
             const replacement = freezeInvitation({
@@ -831,10 +911,8 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
               updatedAt: request.occurredAt,
               updatedBy: request.principalId,
             });
-            let aggregate;
             try {
-              aggregate = SpaceAggregate.restoreOrdinary({ space, memberships: aggregateMemberships, invitations: aggregateInvitations })
-                .reissueInvitation({
+              aggregate = aggregate.reissueInvitation({
                   invitationId: current.invitationId,
                   actorPrincipalId: request.principalId,
                   expectedInvitationVersion: request.expectedInvitationVersion,
@@ -887,6 +965,64 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
             tx.backgroundJobs = candidateJobs;
             tx.idempotencyRecords = candidateIdempotency;
             return Object.freeze({ kind: "reissued", invitation: snapshot, replayed: false });
+          },
+          reconcileInvitationExpiries: async (
+            request: Readonly<ReconcileInvitationExpiriesRequest>,
+          ): Promise<Readonly<ReconcileInvitationExpiriesResult>> => {
+            if (!Number.isFinite(Date.parse(request.occurredAt))) {
+              return Object.freeze({ expiredCount: 0 });
+            }
+            const principal = tx.principals.get(request.principalId);
+            if (!principal || principal.state !== "active") {
+              return Object.freeze({ expiredCount: 0 });
+            }
+            const visibleDue = [...tx.invitations.values()].filter(
+              (invitation) =>
+                invitation.state === "pending" &&
+                Date.parse(invitation.expiresAt) <= Date.parse(request.occurredAt) &&
+                (invitation.targetPrincipalId === request.principalId ||
+                  invitation.createdBy === request.principalId),
+            );
+            const spaceIds = new Set(visibleDue.map((invitation) => invitation.spaceId));
+            let expiredCount = 0;
+            for (const spaceId of spaceIds) {
+              const space = tx.knowledgeSpaces.get(spaceId);
+              if (!space || space.state !== "active") continue;
+              const memberships = [...tx.memberships.values()].filter(
+                (membership) => membership.spaceId === spaceId,
+              );
+              const invitations = [...tx.invitations.values()].filter(
+                (invitation) => invitation.spaceId === spaceId,
+              );
+              let aggregate: OrdinarySpaceAggregate;
+              try {
+                aggregate = SpaceAggregate.restoreOrdinary({
+                  space,
+                  memberships,
+                  invitations,
+                });
+                const reconciled = expireDueInvitations(
+                  aggregate,
+                  request.occurredAt,
+                  (invitation) =>
+                    invitation.targetPrincipalId === request.principalId ||
+                    invitation.createdBy === request.principalId,
+                );
+                aggregate = reconciled.aggregate;
+                expiredCount += reconciled.expiredCount;
+              } catch {
+                continue;
+              }
+              const snapshot = aggregate.snapshot();
+              tx.knowledgeSpaces.set(spaceId, freezeKnowledgeSpace(snapshot.space));
+              for (const invitation of snapshot.invitations) {
+                tx.invitations.set(
+                  invitation.invitationId,
+                  freezeInvitation(invitation),
+                );
+              }
+            }
+            return Object.freeze({ expiredCount });
           },
     });
   }

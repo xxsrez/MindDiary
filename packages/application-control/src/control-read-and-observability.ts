@@ -1,6 +1,6 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
-import type { AuthorizationStamp, Clock, ControlReadStore, McpTokenStore, PilotCohort, PrivacySafeObservabilityEvent, PrivacySafeObservabilitySink, PrincipalActivityKind, PrincipalActivitySurface, ServiceOperatorAuditIdGenerator, ServiceOperatorDirectoryQuery, ServiceOperatorDirectoryStore } from "@mind-diary/application-ports";
+import type { AuthorizationStamp, Clock, ControlReadStore, McpTokenStore, OrdinaryMindStore, PilotCohort, PrivacySafeObservabilityEvent, PrivacySafeObservabilitySink, PrincipalActivityKind, PrincipalActivitySurface, ServiceOperatorAuditIdGenerator, ServiceOperatorDirectoryQuery, ServiceOperatorDirectoryStore } from "@mind-diary/application-ports";
 import type { PrincipalId, SpaceId, UtcInstant } from "@mind-diary/domain";
 import type { AccountBootstrapSafeEvent } from "./account-bootstrap.js";
 import { registeredSitesPrincipal } from "./personal-mind-control.js";
@@ -72,10 +72,12 @@ function sameAuthorizationStamp(
 /** Current safe member/invitation projections for the trusted Sites UI. */
 export class ControlReadService {
   readonly #store: ControlReadStore;
+  readonly #invitationExpiries: OrdinaryMindStore | null;
   readonly #authorizer: CapabilityAuthorizer;
 
-  constructor(store: ControlReadStore) {
+  constructor(store: ControlReadStore, invitationExpiries?: OrdinaryMindStore) {
     this.#store = store;
+    this.#invitationExpiries = invitationExpiries ?? null;
     this.#authorizer = new CapabilityAuthorizer(store);
   }
 
@@ -139,7 +141,38 @@ export class ControlReadService {
       );
     }
     const invitations = await this.#store.listControlInvitations(principalId);
-    return Object.freeze({ invitations: Object.freeze([...invitations]) });
+    const now = Date.parse(actor.occurredAtUtc);
+    return Object.freeze({
+      invitations: Object.freeze(
+        invitations.filter(
+          (invitation) =>
+            invitation.state === "pending" &&
+            Date.parse(invitation.expiresAt) > now,
+        ),
+      ),
+    });
+  }
+
+  async reconcileInvitationExpiries(actor: ActorContext) {
+    const principalId = registeredSitesPrincipal(actor);
+    if (principalId === null) {
+      throw new ControlReadFailure(
+        "authentication_required",
+        "A registered Sites principal is required.",
+      );
+    }
+    if (this.#invitationExpiries === null) {
+      throw new ControlReadFailure(
+        "control_projection_unavailable",
+        "Invitation expiry reconciliation is unavailable.",
+      );
+    }
+    return this.#invitationExpiries.runOrdinaryMindTransaction((transaction) =>
+      transaction.reconcileInvitationExpiries({
+        principalId,
+        occurredAt: actor.occurredAtUtc,
+      }),
+    );
   }
 }
 
