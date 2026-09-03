@@ -476,10 +476,9 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(html, /data-import-receipt-revision/u);
   assert.match(html, /only UTF-8 Markdown/u);
   assert.match(html, /Never store a token in a repository/u);
-  assert.match(html, /data-personal-description-form[^>]+data-metadata-version="5"/u);
-  assert.match(html, /<textarea[^>]+id="personal-mind-description"/u);
-  assert.match(html, /Without a description, Codex may read this Mind only when you name it directly/u);
-  assert.match(html, /“Read and write” requires a description/u);
+  assert.doesNotMatch(html, /data-personal-description-form|personal-mind-description/u);
+  assert.match(html, /can write only after you directly request a specific save, update, or deletion/u);
+  assert.match(html, /Read and write permits only the specific writes you directly request/u);
   assert.match(html, /data-mind-usage-panel[^>]+data-mind-ref="\/me"/u);
   assert.doesNotMatch(html, /space_handle|hidden handle|data-(?:share|visibility|transfer|delete)/i);
   assert.doesNotMatch(html, /<iframe\b|contenteditable/i);

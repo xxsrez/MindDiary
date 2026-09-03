@@ -968,7 +968,8 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /Choose readable Minds and start/u);
   assert.match(codexHelpHtml, /current rights and credential scope checks/u);
   assert.match(codexHelpHtml, /Writing is optional/u);
-  assert.match(codexHelpHtml, /choose Read and write for exactly one described Mind/u);
+  assert.match(codexHelpHtml, /choose Read and write for exactly one Mind/u);
+  assert.match(codexHelpHtml, /Personal Mind needs your direct request for each specific write/u);
   assert.match(codexHelpHtml, /one account-wide choice is shared by every Connection and personal token/u);
   assert.match(codexHelpHtml, /Create the first useful Memory/);
   assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/);
@@ -1026,10 +1027,7 @@ test("authenticated Home and Minds both defer collection work behind their safe 
 });
 
 test("principal-wide Mind usage Web API is safe, atomic, versioned, and independent of credentials", async () => {
-  const personal = Object.freeze({
-    ...personalRoute,
-    description: "Personal decisions and durable preferences discussed with me.",
-  });
+  const personal = personalRoute;
   const research = Object.freeze({
     ...ordinaryOwnerRoute,
     description: "Research decisions, evidence, and reusable conclusions.",
@@ -1054,8 +1052,6 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
   ]);
   let usage = null;
   const commands = [];
-  const descriptionCommands = [];
-  let descriptionConflict = false;
   const mindUsage = {
     async read(actor) {
       assert.equal(actor, registeredActor);
@@ -1097,28 +1093,8 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
     resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
     csrf: { issue: () => "csrf-usage", verify: (_actor, token) => token === "csrf-usage" },
     control: { async execute(request) {
-      if (request.operation === "get_session") return {
-        ...sessionProjection,
-        personalMind: { ...sessionProjection.personalMind, description: personal.description },
-      };
       if (request.operation === "list_minds") return [personal, research, archive];
       if (request.operation === "get_mind_info") return byRef.get(request.input.mind_ref) ?? null;
-      if (request.operation === "update_personal_mind_description") {
-        descriptionCommands.push(request.input);
-        if (descriptionConflict) throw Object.assign(new Error("stale"), { code: "metadata_conflict" });
-        return {
-          principal: { principalId: "principal_must_not_escape", displayName: "Product Owner", profileVersion: 3 },
-          personalMind: {
-            mindId: "space_personal_must_not_escape",
-            route: "/me",
-            name: "Product Owner",
-            description: request.input.description,
-            metadataVersion: 3,
-            headRevisionId: "revision_must_not_escape",
-          },
-          replayed: false,
-        };
-      }
       throw new Error(`unexpected operation: ${request.operation}`);
     } },
     mindUsage,
@@ -1136,6 +1112,10 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
   assert.deepEqual(initialBody.data.items.map((item) => item.usage_mode), [
     "disabled", "disabled", "disabled",
   ]);
+  assert.equal(Object.hasOwn(initialBody.data.items[0], "description"), false);
+  assert.equal(initialBody.data.items[0].routing_profile, "personal_default");
+  assert.equal(initialBody.data.items[0].eligibility.can_write, true);
+  assert.equal(initialBody.data.items[0].eligibility.description_required, false);
   assert.equal(initialBody.data.items[2].description, null);
   assert.equal(initialBody.data.items[2].eligibility.can_read, true);
   assert.equal(initialBody.data.items[2].eligibility.can_write, false);
@@ -1210,51 +1190,40 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
   assert.equal(refreshed.data.usage_version, 3);
   assert.equal(refreshed.data.items[0].usage_mode, "read");
 
-  const description = await handler(new Request(`${origin}/api/v1/minds/me/description`, {
+  const removedDescriptionRoute = await handler(new Request(`${origin}/api/v1/minds/me/description`, {
     method: "PATCH",
     headers: {
       origin,
       "x-csrf-token": "csrf-usage",
       "content-type": "application/json",
-      "idempotency-key": "description:personal",
+      "idempotency-key": "description:removed",
     },
     body: JSON.stringify({
-      description: "Private durable preferences discussed with me.",
+      description: "This legacy field must not be accepted.",
       expected_metadata_version: 2,
     }),
   }));
-  assert.equal(description.status, 200);
-  const descriptionBody = await description.json();
-  assert.deepEqual(descriptionBody.data, {
-    personal_mind: {
-      route: "/me",
-      name: "Product Owner",
-      description: "Private durable preferences discussed with me.",
-      metadata_version: 3,
-    },
-    replayed: false,
-  });
-  assert.deepEqual(descriptionCommands[0], {
-    description: "Private durable preferences discussed with me.",
-    expectedMetadataVersion: 2,
-    idempotencyKey: "description:personal",
-    mind_ref: "me",
-  });
-  assert.doesNotMatch(JSON.stringify(descriptionBody), /principal|space_|revision_|mind_id/iu);
+  assert.equal(removedDescriptionRoute.status, 404);
+  assert.equal((await removedDescriptionRoute.json()).error.code, "not_found");
 
-  descriptionConflict = true;
-  const staleDescription = await handler(new Request(`${origin}/api/v1/minds/me/description`, {
-    method: "PATCH",
+  const commandCountBeforeUntrustedIntent = commands.length;
+  const untrustedIntent = await handler(new Request(`${origin}/api/v1/minds/me/usage`, {
+    method: "PUT",
     headers: {
       origin,
       "x-csrf-token": "csrf-usage",
       "content-type": "application/json",
-      "idempotency-key": "description:stale",
+      "idempotency-key": "usage:untrusted-intent",
     },
-    body: JSON.stringify({ description: null, expected_metadata_version: 2 }),
+    body: JSON.stringify({
+      usage_mode: "read_write",
+      expected_usage_version: 3,
+      user_requested_write: true,
+    }),
   }));
-  assert.equal(staleDescription.status, 409);
-  assert.equal((await staleDescription.json()).error.code, "metadata_conflict");
+  assert.equal(untrustedIntent.status, 400);
+  assert.equal((await untrustedIntent.json()).error.code, "invalid_request");
+  assert.equal(commands.length, commandCountBeforeUntrustedIntent);
 });
 
 test("ordinary Mind list and exact route wire the UAT management and deletion controls", async () => {

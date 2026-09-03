@@ -192,22 +192,6 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
   const secret = issuedData.secret;
   const personalTokenRef = issuedData.token.personal_token_ref;
 
-  const described = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/minds/me/description`, {
-      method: "PATCH",
-      headers: {
-        origin: ORIGIN,
-        "content-type": "application/json",
-        "x-csrf-token": csrf,
-        "idempotency-key": "description:server-generated-composition",
-      },
-      body: JSON.stringify({
-        description: "Durable generated documents explicitly discussed with the user",
-        expected_metadata_version: sessionData.personal_mind.metadata_version,
-      }),
-    },
-  ));
-  assert.equal(described.status, 200, await described.clone().text());
   const selected = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/minds/me/usage`, {
       method: "PUT",

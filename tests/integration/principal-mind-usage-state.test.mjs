@@ -7,7 +7,6 @@ import {
   AccountBootstrapService,
   OrdinaryMindControlFailure,
   OrdinaryMindControlService,
-  PersonalMindControlFailure,
   PersonalMindControlService,
   PrincipalMindUsageApplicationService,
 } from "@mind-diary/application-control";
@@ -479,6 +478,16 @@ test("writable mode requires description and active writer access", async () => 
     (await setMode(env, noDescription.mindId, "read_write", 0, "empty-write")).kind,
     "description_required",
   );
+  const spoofedPersonal = await env.api.usage.mutate({
+    actor: actor(env.account.principalId, "request_spoofed_personal", T1),
+    spaceId: noDescription.mindId,
+    usageMode: "read_write",
+    expectedUsageVersion: 0,
+    idempotencyKey: "spoofed-personal",
+    isPersonal: true,
+    route: "/me",
+  });
+  assert.equal(spoofedPersonal.kind, "description_required");
   assert.equal(
     (await setMode(env, noDescription.mindId, "read", 0, "empty-read")).kind,
     "applied",
@@ -498,41 +507,44 @@ test("writable mode requires description and active writer access", async () => 
   );
 });
 
-test("Personal Mind has durable owner-editable description and cannot clear it while writable", async () => {
+test("descriptionless Personal Mind is writable, idempotent, and survives restart", async () => {
   const env = await setup();
-  const ownerActor = actor(env.account.principalId, "personal-description", T1);
-  const initial = await env.api.personal.resolveMyMind(ownerActor);
-  assert.equal(initial.personalMind.description, null);
-  const described = await env.api.personal.updateMyMindDescription(ownerActor, {
-    description: "Durable personal preferences and decisions",
-    expectedMetadataVersion: initial.personalMind.metadataVersion,
-    idempotencyKey: "describe-personal",
-  });
-  assert.equal(described.personalMind.description, "Durable personal preferences and decisions");
-  const replayed = await env.api.personal.updateMyMindDescription(ownerActor, {
-    description: "Durable personal preferences and decisions",
-    expectedMetadataVersion: initial.personalMind.metadataVersion,
-    idempotencyKey: "describe-personal",
-  });
-  assert.equal(replayed.replayed, true);
-  assert.deepEqual(replayed.personalMind, described.personalMind);
+  const initial = await env.api.personal.resolveMyMind(
+    actor(env.account.principalId, "personal-descriptionless", T1),
+  );
+  assert.equal(Object.hasOwn(initial.personalMind, "description"), false);
   const writable = await setMode(
     env,
-    described.personalMind.mindId,
+    initial.personalMind.mindId,
     "read_write",
     0,
     "personal-writable",
   );
   assert.equal(writable.kind, "applied");
-  await assert.rejects(
-    env.api.personal.updateMyMindDescription(actor(env.account.principalId, "clear-personal", T2), {
-      description: null,
-      expectedMetadataVersion: described.personalMind.metadataVersion,
-      idempotencyKey: "clear-personal",
-    }),
-    (error) => error instanceof PersonalMindControlFailure &&
-      error.code === "description_required_for_write",
+  const generationId = writable.state.activeWriteGeneration.generationId;
+  assert.equal(await env.metadata.validatePrincipalMindUsageWritePin({
+    principalId: env.account.principalId,
+    spaceId: initial.personalMind.mindId,
+    generationId,
+  }), true);
+  const replayed = await setMode(
+    env,
+    initial.personalMind.mindId,
+    "read_write",
+    0,
+    "personal-writable",
   );
+  assert.equal(replayed.kind, "applied");
+  assert.equal(replayed.replayed, true);
+  assert.deepEqual(replayed.state, writable.state);
+  const restarted = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    env.metadata.exportDurableSnapshot(),
+  );
+  assert.equal(await restarted.validatePrincipalMindUsageWritePin({
+    principalId: env.account.principalId,
+    spaceId: initial.personalMind.mindId,
+    generationId,
+  }), true);
 });
 
 test("corrupt usage snapshots fail closed instead of reviving two writable destinations", async () => {
@@ -578,16 +590,40 @@ test("corrupt usage snapshots fail closed instead of reviving two writable desti
   );
 });
 
-test("Sites event persistence restores the principal snapshot without credential ownership", async () => {
+test("Sites persistence restores a descriptionless Personal writable pin and exact replay", async () => {
   const database = new FakeD1Database();
   let metadata = await createSitesMetadataStore(database);
   const env = await setup(metadata);
-  const writable = await setMode(env, env.second.mindId, "read_write", 0, "sites-write");
+  const personal = await env.api.personal.resolveMyMind(
+    actor(env.account.principalId, "sites-personal", T1),
+  );
+  assert.equal(Object.hasOwn(personal.personalMind, "description"), false);
+  const writable = await setMode(
+    env,
+    personal.personalMind.mindId,
+    "read_write",
+    0,
+    "sites-personal-write",
+  );
   assert.equal(writable.kind, "applied");
+  const replayed = await setMode(
+    env,
+    personal.personalMind.mindId,
+    "read_write",
+    0,
+    "sites-personal-write",
+  );
+  assert.equal(replayed.kind, "applied");
+  assert.equal(replayed.replayed, true);
 
   metadata = await createSitesMetadataStore(database);
   assert.deepEqual(
     await metadata.readPrincipalMindUsage(env.account.principalId),
     writable.state,
   );
+  assert.equal(await metadata.validatePrincipalMindUsageWritePin({
+    principalId: env.account.principalId,
+    spaceId: personal.personalMind.mindId,
+    generationId: writable.state.activeWriteGeneration.generationId,
+  }), true);
 });

@@ -20,6 +20,8 @@ export interface PrincipalMindUsageAuthority {
   readonly canRead: boolean;
   readonly currentRole: Role | null;
   readonly description: string | null;
+  /** Trusted server-side classification; it is never accepted from a client. */
+  readonly routingProfile: "personal_default" | "description_based";
 }
 
 export type PrincipalMindUsageTransition =
@@ -164,11 +166,13 @@ export function setPrincipalMindUsageMode(
     if (!writerRole(input.authority.currentRole)) {
       return { kind: "writer_access_required" };
     }
-    const normalized = input.authority.description === null
-      ? Object.freeze({ kind: "valid" as const, value: null })
-      : normalizeOrdinaryMindDescription(input.authority.description);
-    if (normalized.kind !== "valid" || normalized.value === null) {
-      return { kind: "description_required" };
+    if (input.authority.routingProfile === "description_based") {
+      const normalized = input.authority.description === null
+        ? Object.freeze({ kind: "valid" as const, value: null })
+        : normalizeOrdinaryMindDescription(input.authority.description);
+      if (normalized.kind !== "valid" || normalized.value === null) {
+        return { kind: "description_required" };
+      }
     }
   }
 

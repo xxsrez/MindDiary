@@ -6,7 +6,7 @@
       "name": "browse_entries",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:4d99961dffd10bf6bfd27966e8c86a363bfb684bc1da0faebe372826a6a678c7",
-      "output_schema_sha256": "sha256:7b822ef691355aa42faeee5716765a3f45565fcf64fc1aa5c8f34d584a3083a3"
+      "output_schema_sha256": "sha256:06c1f28cb3ef886954fd2708c65f702ab1de0bfa967f5bda825c14bd1674f3fb"
     },
     {
       "name": "commit_changeset",
@@ -30,7 +30,7 @@
       "name": "get_bundle_file_download",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:6bf84c53631d8c47e23e41a219cf5ee0325d6be2201c2202e611e9ba6f152b6f",
-      "output_schema_sha256": "sha256:bf4c2672cbacd88ee5b3ee5365061910c16398e6e8f56bae9c9480994f634589"
+      "output_schema_sha256": "sha256:130c32ead5cadc69376a618bba4087334fcad95a4af8c28ab2668a14551b510e"
     },
     {
       "name": "get_file_ingress_capabilities",
@@ -42,31 +42,31 @@
       "name": "get_mind_info",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:7572b22c658ec6f1dc159561f116d9812ef8d4bc890e14972ccbf13aa282b3a3",
-      "output_schema_sha256": "sha256:6e9fce8c8ebfe765aa22d1bbda3c8c75534b96bcf6129b863994e299ab8f1bd1"
+      "output_schema_sha256": "sha256:fb17bde2cc6c5e41f0b97b07021b3d62bb0228a72e36ddb75a1f9707239f403f"
     },
     {
       "name": "get_revision",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:6ea261a647807df048f10109dd889dbb4457b85e3037cacf4cb7bb45a3364cfb",
-      "output_schema_sha256": "sha256:dfa0b69111fb5e16782b62d67da2c6f8167bb92fc312028f125890ea238b1de2"
+      "output_schema_sha256": "sha256:ac6a6820432627b9eaf0c5c36bf1d51894e2f78c3cc011119a7215f0dba8a9d7"
     },
     {
       "name": "list_bundle_files",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:b1dd55463c61f46e0c519037cbbac6377a057d20b07885758f8743ee585273b2",
-      "output_schema_sha256": "sha256:bfcab72626443b8bae33958411e1821e8008ebef8df7e03346b6dcbee067034c"
+      "output_schema_sha256": "sha256:768e2553417c9911b86a8d96599dcced5db8ce5bac610ffed9330b7e95a685b0"
     },
     {
       "name": "list_minds",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:13f7102b7ce17d77e2e250384c8b2eb071862b0ee5c9e42780dc1d423e0c19eb",
-      "output_schema_sha256": "sha256:7e9739d2eced5167d7723f340ad0cfcbfb47b19b7b7f0bc23c6af819c0cdd124"
+      "output_schema_sha256": "sha256:84d786479d7ec6f6260f4a54e01b8aaa5d520ef1d6a3c3070ecb3f6bb1d2c8a9"
     },
     {
       "name": "list_revisions",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:44fa017cd21268061d1fb5201cc1d6dca2fa562bf8e9eeb8443a2c64f8953aa1",
-      "output_schema_sha256": "sha256:376128f866fb2bbfe01b4f90c95f429e5132f67b0ac624e665c8090788627d2d"
+      "output_schema_sha256": "sha256:1fcf5c10c69c0e0a6a40572b309f43a0b66615541bb60d348e7027ad97ee25f4"
     },
     {
       "name": "open_bundle_file_picker",
@@ -90,13 +90,13 @@
       "name": "resolve_mind",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:6935429077af9267917850448799ef0132f3598367d0f639a64c0f842f978ef5",
-      "output_schema_sha256": "sha256:2c0000bc29807940e1e0ce1d7d291f331a05cf151774332fe196855de542d278"
+      "output_schema_sha256": "sha256:a562e4d63910ebb687fad271dca02d28d72abec96b01a37243cc946f7aef239f"
     },
     {
       "name": "search",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:c6604b13fb10419e675218778cd6e2035fdefa64694bf0d75fddbaf9d8f6937f",
-      "output_schema_sha256": "sha256:7d8831607c75daa79556bafa5c4d52b7e9f20f1bd273a669bfdab9a888b0216a"
+      "output_schema_sha256": "sha256:b0c6ceb8e3c873bd1ffe7f0967db0b0586b70cda27972805d01ea1d089819c4f"
     },
     {
       "name": "stage_bundle_file",
@@ -108,7 +108,7 @@
       "name": "validate_mind",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:7572b22c658ec6f1dc159561f116d9812ef8d4bc890e14972ccbf13aa282b3a3",
-      "output_schema_sha256": "sha256:5272d8a96f77353da81968afbae50b538a0878daa2f6d5bdba5364e6f7792b32"
+      "output_schema_sha256": "sha256:b982f9c9fdaa9777208dfca029a5ce25e4dccd206cc6e9b60f20fbf351a6c442"
     }
   ]
 }

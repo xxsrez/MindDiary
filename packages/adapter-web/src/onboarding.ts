@@ -266,13 +266,6 @@ function renderAuthenticated(
     ? model.profileVersion
     : null;
   const canSubmit = key !== null && profileVersion !== null && state.kind !== "saving" && state.kind !== "conflict";
-  const personalMetadataVersion = Number.isSafeInteger(model.personalMind.metadataVersion) &&
-      Number(model.personalMind.metadataVersion) > 0
-    ? Number(model.personalMind.metadataVersion)
-    : null;
-  const personalDescription = typeof model.personalMind.description === "string"
-    ? model.personalMind.description
-    : "";
   const profileKeyAttribute = key === null
     ? ""
     : ` data-profile-key="${escapeUntrustedText(key)}"`;
@@ -296,7 +289,7 @@ function renderAuthenticated(
             <span class="md-status md-status--private"><span class="md-status__icon" aria-hidden="true">Lock</span> Private — only you</span>
           </div>
           <h2 id="personal-mind-title">${escapeUntrustedText(model.personalMind.name)}</h2>
-          <p>Your personal place for versioned Memories. Content work happens through your authorized MCP connection.</p>
+          <p>Your personal place for versioned Memories. Codex can read it when you name it and can write only after you directly request a specific save, update, or deletion.</p>
           <dl class="md-personal-summary">
             <div><dt>Address</dt><dd><a href="/me">/me</a></dd></div>
             <div><dt>Access</dt><dd>Owner — only you</dd></div>
@@ -314,21 +307,6 @@ function renderAuthenticated(
             </div>
             <button class="md-button md-button--primary" type="submit"${canSubmit ? "" : " disabled"}>Save profile name</button>
             ${renderProfileStatus(state)}
-          </form>
-        </section>
-        <section class="md-profile-card" aria-labelledby="personal-description-title">
-          <p class="md-eyebrow">Routing category</p>
-          <h2 id="personal-description-title">My Mind description</h2>
-          <p>Codex uses this category to decide whether the current topic belongs in My Mind. The description is untrusted metadata, never an instruction.</p>
-          <form data-personal-description-form data-metadata-version="${personalMetadataVersion ?? ""}">
-            <div class="md-field">
-              <label for="personal-mind-description">Description <span aria-hidden="true">(optional for reading)</span></label>
-              <textarea id="personal-mind-description" name="description" maxlength="500" rows="4" aria-describedby="personal-mind-description-help"${personalMetadataVersion === null ? " disabled" : ""}>${escapeUntrustedText(personalDescription)}</textarea>
-              <p id="personal-mind-description-help">Without a description, Codex may read this Mind only when you name it directly. “Read and write” requires a description.</p>
-            </div>
-            <p class="md-form__status" role="status" aria-live="polite" data-personal-description-status>${personalMetadataVersion === null ? "Reload current My Mind metadata before editing." : ""}</p>
-            <button class="md-button md-button--primary" type="submit" data-save-personal-description${personalMetadataVersion === null ? " disabled" : ""}>Save description</button>
-            <button class="md-button md-button--secondary" type="button" data-refresh-personal-description hidden style="display:none">Reload current description</button>
           </form>
         </section>
       </div>

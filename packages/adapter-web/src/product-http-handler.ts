@@ -489,38 +489,6 @@ export function createProductWebHttpHandler(
         }
         return json(200, { ok: true, data: snakeOutput(overview) });
       }
-      if (matched.operation === "update_personal_mind_description") {
-        const source = record(await dependencies.control.execute({
-          operation: matched.operation,
-          actor: identity.actor,
-          input,
-        }));
-        const personalMind = record(source?.personalMind);
-        const name = requiredString(personalMind?.name);
-        const description = personalMind?.description;
-        const metadataVersion = personalMind?.metadataVersion;
-        if (
-          source === null || personalMind?.route !== "/me" || name === null ||
-          !(description === null || typeof description === "string") ||
-          !Number.isSafeInteger(metadataVersion) || Number(metadataVersion) < 1 ||
-          !(source?.replayed === undefined || typeof source.replayed === "boolean")
-        ) throw new TypeError("safe Personal Mind description read-back is unavailable");
-        if (identity.kind === "authenticated") {
-          await activity.record(deferActivity, identity.actor, "control_write");
-        }
-        return json(200, {
-          ok: true,
-          data: snakeOutput(Object.freeze({
-            personalMind: Object.freeze({
-              route: "/me" as const,
-              name,
-              description,
-              metadataVersion: Number(metadataVersion),
-            }),
-            ...(source.replayed === undefined ? {} : { replayed: source.replayed }),
-          })),
-        });
-      }
       const data = await dependencies.control.execute({
         operation: matched.operation,
         actor: identity.actor,

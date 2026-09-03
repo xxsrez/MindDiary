@@ -515,11 +515,6 @@ class ProductControlApplication {
         return this.services.bootstrap.bootstrapAccount(actor as never, asRecord(input) as never);
       case "rename_account":
         return this.services.personal.renameAccount(actor as never, asRecord(input) as never);
-      case "update_personal_mind_description":
-        return this.services.personal.updateMyMindDescription(
-          actor as never,
-          asRecord(input) as never,
-        );
       case "get_account_deletion_impact":
         return this.services.accountDeletion.getAccountDeletionImpact(actor as never);
       case "delete_account":

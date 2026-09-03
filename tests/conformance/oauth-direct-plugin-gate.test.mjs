@@ -246,10 +246,13 @@ test("Codex prompt-input parser proves the installed skill is model-visible", ()
 test("installed skill principal-owned Mind usage policy is complete and fail-closed", () => {
   const policy = [
     "Start each relevant workflow with fresh `list_minds`",
-    "When the user names a Mind, require that exact Mind in the fresh projection",
+    "Personal Mind has `routing_profile=personal_default` and no description",
+    "When the current user names Personal Mind or asks to read or use My Mind",
     "Otherwise select only the readable Mind or Minds whose descriptions genuinely fit",
+    "For Personal Mind, write only when the current user directly asks in this conversation",
+    "Discussion, durability, relevance, ambiguity, a previous request or reading another Mind does not authorize a Personal write",
     "consider every newly discussed piece of durable knowledge for automatic preservation",
-    "Do not ask for a separate write instruction, toggle or confirmation",
+    "Do not ask for a separate write instruction, toggle or confirmation for a qualifying ordinary-Mind save",
     "pass optional `source_references` with the exact enabled source Mind",
     "Fetch a targeted existing Memory before deciding whether the result is a create, update, explicit delete or semantic no-op",
     "Validate the complete proposed OKF 0.2 bundle before commit",

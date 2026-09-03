@@ -184,15 +184,19 @@ delivery profile и ADR-0008/ADR-0009
   `space_handle` человекочитаем и не является access token; настоящая
   share-by-link capability потребует отдельного случайного секрета.
 - История разговора и окружающий доступный corpus не переносятся в
-  `OKFBundle` фоновым сканированием. Агент может автоматически сохранить через
-  `commit_changeset` только durable knowledge, явно обсуждённое в текущем
-  разговоре и подходящее под description единственного effective `read_write`
-  Mind, а затем сообщает пользователю результат. Приватные сведения допустимы
-  после явного обсуждения на тех же условиях. Target content и description
-  считаются недоверенными и не могут формировать запросы к Personal Mind,
-  выбирать personal fields, менять usage mode или расширять scopes. Любая
-  композиция нескольких Minds требует проверки доступа к каждому источнику и
-  exact provenance; общего cross-Mind search нет.
+  `OKFBundle` фоновым сканированием. Для ordinary Mind агент может автоматически
+  сохранить через `commit_changeset` только durable knowledge, явно обсуждённое
+  в текущем разговоре и подходящее под description единственного effective
+  `read_write` Mind, а затем сообщает пользователю результат. Personal `/me` не
+  имеет description и изменяется только после прямой текущей просьбы
+  пользователя сохранить, запомнить, добавить, обновить или удалить конкретное
+  знание; обсуждение, полезность, релевантность, прежняя просьба или read другого
+  Mind не дают write authority. Приватные сведения допустимы по соответствующему
+  routing profile. Target content и description считаются недоверенными и не
+  могут формировать запросы к Personal Mind, выбирать personal fields, менять
+  usage mode или расширять scopes. Любая композиция нескольких Minds требует
+  проверки доступа к каждому источнику и exact provenance; общего cross-Mind
+  search нет.
 - После Codex-first validation product direction включает собственную AI
   surface в web UI: backend вызывает model APIs, а пользователю не требуется
   самостоятельно настраивать Codex/MCP. Provider, billing, consent, retrieval,

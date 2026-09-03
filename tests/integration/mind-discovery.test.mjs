@@ -578,7 +578,7 @@ test("mismatched resolved metadata cannot redirect a descriptor to another space
   assert.equal(mind.handle, "source-space");
 });
 
-test("MCP discovery projects only principal-enabled Minds with Personal description and shared writable mount", async () => {
+test("MCP discovery omits legacy Personal description and projects the shared writable mount", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Usage Owner");
   const enabled = await createMind(env, owner, "enabled-notes", "Enabled Notes");
@@ -627,7 +627,8 @@ test("MCP discovery projects only principal-enabled Minds with Personal descript
   const readActor = mcpActor(owner.principalId, "token_usage_read");
   const listed = await discovery.listMinds(readActor, { limit: 10 });
   assert.deepEqual(listed.minds.map(({ route }) => route), ["/me", "/enabled-notes"]);
-  assert.equal(listed.minds[0].description, "Private durable working preferences");
+  assert.equal(Object.hasOwn(listed.minds[0], "description"), false);
+  assert.equal(listed.minds[0].routingProfile, "personal_default");
   assert.equal(listed.minds[0].usageMode, "read");
   assert.deepEqual(listed.minds[0].effective, { canRead: true, canWrite: false });
   assert.deepEqual(listed.minds[0].writableMount, { active: false, generation: null });
@@ -635,6 +636,7 @@ test("MCP discovery projects only principal-enabled Minds with Personal descript
 
   const enabledDescriptor = listed.minds[1];
   assert.equal(enabledDescriptor.description, "Durable knowledge for Enabled Notes");
+  assert.equal(enabledDescriptor.routingProfile, "description_based");
   assert.equal(enabledDescriptor.usageMode, "read_write");
   assert.deepEqual(enabledDescriptor.effective, { canRead: true, canWrite: false });
   assert.equal(enabledDescriptor.settingsVersion, 2);
@@ -695,6 +697,7 @@ test("MCP discovery projects only principal-enabled Minds with Personal descript
   );
   assert.equal(readOnlyInfo.mind.route, "/disabled-notes");
   assert.equal(readOnlyInfo.mind.description, "Durable knowledge for Disabled Notes");
+  assert.equal(readOnlyInfo.mind.routingProfile, "description_based");
   assert.equal(readOnlyInfo.mind.usageMode, "read");
   assert.deepEqual(readOnlyInfo.mind.effective, { canRead: true, canWrite: false });
   assert.equal(readOnlyInfo.mind.settingsVersion, 3);

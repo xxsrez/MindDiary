@@ -7,11 +7,13 @@ import { fileURLToPath } from "node:url";
 import {
   renderOrdinaryMindsManagementDocument,
 } from "../../../packages/adapter-web/dist/ordinary-minds-management.js";
+import { MindRouteService } from "../../../packages/application-control/dist/index.js";
 import {
   createProductUiStaticAssetResponse,
 } from "../../../packages/adapter-web/dist/product-http-static-assets.js";
 import {
   withCsrfMeta,
+  snakeOutput,
 } from "../../../packages/adapter-web/dist/product-http-request-helpers.js";
 
 const fixtureDirectory = fileURLToPath(new URL(".", import.meta.url));
@@ -240,16 +242,38 @@ function apiMind(mind) {
   };
 }
 
-function apiPersonalMind() {
-  return {
-    mind_id: personalMind.mindId,
-    handle: null,
-    route: "/me",
-    is_personal: true,
-    name: personalMind.name,
-    visibility: "private",
-    access: { kind: "membership", role: "owner" },
-  };
+const personalRouteService = new MindRouteService({
+  host: "fixture.mind-diary.example",
+  routes: {
+    async readPersonalMindProfile() {
+      return {
+        principalId: "principal_fixture_user",
+        displayName: personalMind.name,
+        profileVersion: 3,
+        personalMind: {
+          spaceId: personalMind.mindId,
+          name: personalMind.name,
+          // A legacy stored value must never re-enter the Personal route projection.
+          description: "Legacy value that routing and UI must ignore",
+          visibility: "private",
+          metadataVersion: 5,
+          headRevisionId: personalMind.headRevisionId,
+        },
+      };
+    },
+    async listActiveMembershipMindIds() { return []; },
+  },
+});
+
+async function apiPersonalMind() {
+  const [descriptor] = await personalRouteService.listMinds({
+    kind: "registered_principal",
+    principalId: "principal_fixture_user",
+    requestId: "request_fixture_list_minds",
+    occurredAtUtc: "2026-09-03T00:00:00.000Z",
+    authentication: { kind: "sites_identity" },
+  });
+  return snakeOutput(descriptor);
 }
 
 const contentTypes = new Map([
@@ -350,7 +374,7 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === "/api/v1/minds" && request.method === "GET") {
       recordCall("listMinds", request);
-      sendApiSuccess(response, [ordinaryMinds[1], apiPersonalMind(), ordinaryMinds[0]]
+      sendApiSuccess(response, [ordinaryMinds[1], await apiPersonalMind(), ordinaryMinds[0]]
         .filter(Boolean)
         .map((mind) => mind.is_personal === true ? mind : apiMind(mind)));
       return;

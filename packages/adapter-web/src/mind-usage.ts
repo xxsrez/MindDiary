@@ -18,8 +18,9 @@ export interface ProductWebMindUsageApplication
 export interface MindUsageUiItem {
   readonly mindRef: string;
   readonly name: string;
-  readonly description: string | null;
+  readonly description?: string | null;
   readonly isPersonal: boolean;
+  readonly routingProfile: "personal_default" | "description_based";
   readonly visibility: "private" | "unlisted" | "public";
   readonly role: "reader" | "editor" | "admin" | "owner";
   readonly usageMode: MindUsageUiMode;
@@ -74,6 +75,7 @@ function safeMindDescriptor(value: unknown): SafeMindDescriptor | null {
     (!isPersonal && route === "/me") ||
     !(visibility === "private" || visibility === "unlisted" || visibility === "public") ||
     !(role === "reader" || role === "editor" || role === "admin" || role === "owner") ||
+    (isPersonal && Object.prototype.hasOwnProperty.call(source, "description")) ||
     (!isPersonal && description === undefined)
   ) return null;
   return Object.freeze({
@@ -128,12 +130,13 @@ function projectionItem(
   usageMode: MindUsageUiMode,
 ): Readonly<MindUsageUiItem> {
   const hasDescription = mind.description !== null && mind.description.trim().length > 0;
-  const canWrite = writerRole(mind.role) && hasDescription;
+  const canWrite = writerRole(mind.role) && (mind.isPersonal || hasDescription);
   return Object.freeze({
     mindRef: mind.mindRef,
     name: mind.name,
-    description: mind.description,
+    ...(mind.isPersonal ? {} : { description: mind.description }),
     isPersonal: mind.isPersonal,
+    routingProfile: mind.isPersonal ? "personal_default" : "description_based",
     visibility: mind.visibility,
     role: mind.role,
     usageMode,
@@ -144,26 +147,9 @@ function projectionItem(
     eligibility: Object.freeze({
       canRead: true as const,
       canWrite,
-      descriptionRequired: !hasDescription,
+      descriptionRequired: !mind.isPersonal && !hasDescription,
     }),
   });
-}
-
-async function personalDescription(
-  control: ProductWebControlApplication,
-  actor: RegisteredSitesActor,
-): Promise<string | null> {
-  const session = record(await control.execute({
-    operation: "get_session",
-    actor,
-    input: Object.freeze({}),
-  }));
-  const personalMind = record(session?.personalMind);
-  const description = safeDescription(personalMind?.description);
-  if (description === undefined) {
-    throw new TypeError("safe Personal Mind description is unavailable");
-  }
-  return description;
 }
 
 async function allSafeMinds(
@@ -183,12 +169,6 @@ async function allSafeMinds(
   const minds = parsed.filter((mind): mind is SafeMindDescriptor => mind !== null);
   const personal = minds.find((mind) => mind?.isPersonal === true);
   if (personal === undefined) throw new TypeError("safe Personal Mind is unavailable");
-  if (personal.description === null) {
-    const description = await personalDescription(control, actor);
-    return Object.freeze(minds.map((mind) => mind?.isPersonal === true
-      ? Object.freeze({ ...mind, description })
-      : mind!));
-  }
   return Object.freeze(minds as SafeMindDescriptor[]);
 }
 
@@ -205,9 +185,6 @@ async function exactSafeMind(
   const mind = safeMindDescriptor(source);
   if (mind === null || mind.mindRef !== mindRef) {
     throw Object.assign(new Error("Mind was not found."), { code: "mind_not_found" });
-  }
-  if (mind.isPersonal && mind.description === null) {
-    return Object.freeze({ ...mind, description: await personalDescription(control, actor) });
   }
   return mind;
 }
@@ -336,7 +313,7 @@ export function renderMindUsageCollection(): string {
         <h2 id="mind-usage-heading">How Codex uses your Minds</h2>
       </div>
     </div>
-    <p>Choose one mode for every available Mind. The choice belongs to your account and is shared by all your Connections and personal tokens.</p>
+    <p>Choose one mode for every available Mind. My Mind accepts writes only when you directly ask Codex to save, update, or delete specific knowledge; ordinary Minds keep description-based automatic saving.</p>
     <p class="md-caveat"><strong>Credentials can only narrow access.</strong> A Connection or token still needs its own read or write scope, and current Mind rights are checked on every call.</p>
     <section class="md-state md-state--loading" aria-busy="true" data-mind-usage-state>
       <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -354,7 +331,7 @@ export function renderMindUsagePanel(mindRef: string): string {
     <div>
       <p class="md-eyebrow">Agent intent</p>
       <h2 id="mind-usage-heading">How Codex uses this Mind</h2>
-      <p>This account-wide setting is the same for every Connection and personal token. Their scopes can still narrow what is effective.</p>
+      <p>This account-wide setting is the same for every Connection and personal token. For My Mind, Read and write permits only the specific writes you directly request; it does not enable automatic saving.</p>
     </div>
     <section class="md-state md-state--loading" aria-busy="true" data-mind-usage-state>
       <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>

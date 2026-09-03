@@ -163,10 +163,6 @@ export function apiOperation(method: string, pathname: string): {
     if (three === "usage" && tail.length === 3 && method === "PUT") {
       return { operation: "set_mind_usage", path };
     }
-    if (
-      two === "me" && three === "description" && tail.length === 3 &&
-      method === "PATCH"
-    ) return { operation: "update_personal_mind_description", path };
     if (three === "capacity" && tail.length === 3 && method === "GET") return { operation: "get_capacity_usage", path };
     if (three === "exports" && tail.length === 3 && method === "POST") return { operation: "start_export", path };
     if (three === "markdown-import-plans" && tail.length === 3 && method === "POST") return { operation: "plan_markdown_import", path };

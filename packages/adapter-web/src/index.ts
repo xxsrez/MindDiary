@@ -58,7 +58,6 @@ export const WEB_CONTROL_ROUTES = [
   ["GET", "/api/v1/minds/{mind_ref}"],
   ["GET", "/api/v1/minds/{mind_ref}/usage"],
   ["PUT", "/api/v1/minds/{mind_ref}/usage"],
-  ["PATCH", "/api/v1/minds/me/description"],
   ["GET", "/api/v1/minds/{mind_ref}/capacity"],
   ["POST", "/api/v1/minds/{mind_ref}/exports"],
   ["GET", "/api/v1/export-jobs/{job_id}"],

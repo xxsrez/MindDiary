@@ -158,10 +158,12 @@ approval не являются prerequisite evidence.
 2. Fresh OAuth создаёт active connection на exact plugin/client, показывает
    client lifecycle и credential scopes и не показывает Mind selector,
    attach/detach, raw IDs или отдельную automatic-save policy.
-3. На `/minds` прочитать все доступные Minds с name, routing description,
-   configured mode и effective availability. Новый principal начинает с
-   `disabled`; пустой description допускает только direct-request `read` и не
-   допускает `read_write`.
+3. На `/minds` прочитать все доступные Minds с name, routing profile,
+   configured mode и effective availability. Personal `/me` не имеет
+   description и допускает `read_write`, но каждый content write требует
+   прямой текущей просьбы пользователя о конкретном знании. Ordinary Mind
+   сохраняет обязательный routing description для `read_write`. Новый
+   principal начинает с `disabled`.
 4. Через current `expected_usage_version` включить несколько `read` Minds и
    один `read_write`. Переключение второго Mind в `read_write` атомарно
    переводит прежний writable Mind в `read`; Codex/MCP не меняет этот state.
@@ -276,9 +278,10 @@ cleanup absence read-back.
 
 Для current candidate закрытая matrix дополнительно включает default
 `disabled`, несколько `read`, singleton/atomic switch `read_write`, одинаковую
-configured projection разных credentials, scope/ACL narrowing, description
-gate, persistence after redeploy и отсутствие Mind controls на обеих credential
-pages. Legacy target rows без этих direct observations не дают terminal PASS.
+configured projection разных credentials, scope/ACL narrowing, Personal
+requested-only write и ordinary description gate, persistence after redeploy и
+отсутствие Mind controls на обеих credential pages. Legacy target rows без этих
+direct observations не дают terminal PASS.
 
 Repository script намеренно не создаёт и не валидирует hosted PASS: authority
 опирается на direct same-run observations, а не на форму файла. Без них MD-358

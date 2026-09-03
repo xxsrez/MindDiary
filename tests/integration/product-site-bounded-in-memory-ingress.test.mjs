@@ -169,9 +169,6 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
   assert.equal(bootstrapped.status, 200);
   const bootstrapData = (await bootstrapped.json()).data;
   const principalId = bootstrapData.principal_id;
-  const session = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/session`));
-  const sessionData = (await session.json()).data;
-
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const csrf = csrfFromHtml(await settings.text());
   const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
@@ -189,22 +186,6 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
   const secret = issuedBody.data.secret;
   const personalTokenRef = issuedBody.data.token.personal_token_ref;
 
-  const described = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/minds/me/description`, {
-      method: "PATCH",
-      headers: {
-        origin: ORIGIN,
-        "content-type": "application/json",
-        "x-csrf-token": csrf,
-        "idempotency-key": "description:md321-bounded",
-      },
-      body: JSON.stringify({
-        description: "Durable generated charts explicitly discussed with the user",
-        expected_metadata_version: sessionData.personal_mind.metadata_version,
-      }),
-    },
-  ));
-  assert.equal(described.status, 200, await described.clone().text());
   const selected = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/minds/me/usage`, {
       method: "PUT",

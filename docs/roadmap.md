@@ -3,8 +3,10 @@
 > **Целевое уточнение Release 0.3 (MD-373, 2026-08-30).** Вместо
 > per-credential writable target принят principal-owned mode каждого Mind:
 > `disabled | read | read_write`, общий для всех OAuth grants и personal
-> tokens. Один `read_write` Mind включает automatic discussed-only save; точный
-> продуктовый контракт — [режимы использования Mind](specs/mind-usage-modes.md).
+> tokens. Для ordinary `read_write` Mind доступно automatic discussed-only save
+> по description; Personal `/me` пишет только по прямой текущей просьбе о
+> конкретном знании. Точный продуктовый контракт —
+> [режимы использования Mind](specs/mind-usage-modes.md).
 > Historical формулировки target/binding ниже не меняют это решение.
 
 Статус: зафиксированная product direction владельца проекта, обновлено

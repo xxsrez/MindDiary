@@ -173,13 +173,6 @@ async runPersonalMindTransaction<Result>(
             }
             if (account === null) return Object.freeze({ kind: "not_found" });
             const personalSpace = account.personalMind.space;
-            if (
-              request.description === null &&
-              this._principalMindUsageOwners.get(request.principalId)
-                ?.state.activeWriteGeneration?.spaceId === personalSpace.spaceId
-            ) {
-              return Object.freeze({ kind: "description_required_for_write" });
-            }
             const previous = idempotencyRecords.get(idempotencyRecordKey);
             if (previous !== undefined) {
               if (previous.canonicalRequestHash !== request.canonicalRequestHash) {

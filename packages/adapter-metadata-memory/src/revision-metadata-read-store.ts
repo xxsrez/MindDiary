@@ -974,10 +974,16 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       const principal = this._principals.get(pin.principalId);
       const space = this._knowledgeSpaces.get(pin.spaceId);
       const owner = this._principalMindUsageOwners.get(pin.principalId);
+      const linkedPersonalBinding = [...this._personalBindings.values()].find(
+        (binding) => binding.spaceId === pin.spaceId,
+      );
+      const isOwnPersonal = linkedPersonalBinding?.principalId === pin.principalId &&
+        this._personalBindings.get(pin.principalId)?.spaceId === pin.spaceId;
       if (
         principal?.state !== "active" ||
         space?.state !== "active" ||
         owner === undefined ||
+        (linkedPersonalBinding !== undefined && !isOwnPersonal) ||
         !principalMindUsageWritePinMatches(owner.state, pin)
       ) return false;
       const membership = [...this._memberships.values()].find((candidate) =>
@@ -986,9 +992,10 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         candidate.state === "active");
       if (
         membership === undefined ||
-        !["editor", "admin", "owner"].includes(membership.role) ||
-        typeof space.description !== "string"
+        !["editor", "admin", "owner"].includes(membership.role)
       ) return false;
+      if (isOwnPersonal) return true;
+      if (typeof space.description !== "string") return false;
       const normalized = normalizeOrdinaryMindDescription(space.description);
       return normalized.kind === "valid" && normalized.value !== null &&
         normalized.value === space.description;
@@ -1029,6 +1036,11 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
             const principal = this._principals.get(pin.principalId);
             const space = this._knowledgeSpaces.get(pin.spaceId);
             const owner = owners.get(pin.principalId);
+            const linkedPersonalBinding = [...this._personalBindings.values()].find(
+              (binding) => binding.spaceId === pin.spaceId,
+            );
+            const isOwnPersonal = linkedPersonalBinding?.principalId === pin.principalId &&
+              this._personalBindings.get(pin.principalId)?.spaceId === pin.spaceId;
             const membership = [...this._memberships.values()].find((candidate) =>
               candidate.principalId === pin.principalId &&
               candidate.spaceId === pin.spaceId &&
@@ -1037,11 +1049,13 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
               principal?.state !== "active" ||
               space?.state !== "active" ||
               owner === undefined ||
+              (linkedPersonalBinding !== undefined && !isOwnPersonal) ||
               membership === undefined ||
               !["editor", "admin", "owner"].includes(membership.role) ||
-              typeof space.description !== "string" ||
               !principalMindUsageWritePinMatches(owner.state, pin)
             ) return false;
+            if (isOwnPersonal) return true;
+            if (typeof space.description !== "string") return false;
             const normalized = normalizeOrdinaryMindDescription(space.description);
             return normalized.kind === "valid" && normalized.value !== null &&
               normalized.value === space.description;
@@ -1076,19 +1090,29 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
               candidate.state === "active");
             const canRead = membership !== undefined || space.visibility !== "private";
             if (!canRead) return Object.freeze({ kind: "read_access_required" });
+            const linkedPersonalBinding = [...this._personalBindings.values()].find(
+              (binding) => binding.spaceId === request.spaceId,
+            );
+            const isOwnPersonal = linkedPersonalBinding?.principalId === request.principalId &&
+              this._personalBindings.get(request.principalId)?.spaceId === request.spaceId;
+            if (linkedPersonalBinding !== undefined && !isOwnPersonal) {
+              return Object.freeze({ kind: "mind_not_found" });
+            }
             if (request.usageMode === "read_write") {
               if (
                 membership === undefined ||
                 !["editor", "admin", "owner"].includes(membership.role)
               ) return Object.freeze({ kind: "writer_access_required" });
-              const normalized = typeof space.description === "string"
-                ? normalizeOrdinaryMindDescription(space.description)
-                : Object.freeze({ kind: "valid" as const, value: null });
-              if (
-                normalized.kind !== "valid" ||
-                normalized.value === null ||
-                normalized.value !== space.description
-              ) return Object.freeze({ kind: "description_required" });
+              if (!isOwnPersonal) {
+                const normalized = typeof space.description === "string"
+                  ? normalizeOrdinaryMindDescription(space.description)
+                  : Object.freeze({ kind: "valid" as const, value: null });
+                if (
+                  normalized.kind !== "valid" ||
+                  normalized.value === null ||
+                  normalized.value !== space.description
+                ) return Object.freeze({ kind: "description_required" });
+              }
             }
             let owner = owners.get(request.principalId);
             if (owner !== undefined) {
@@ -1122,6 +1146,9 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
                 canRead,
                 currentRole: membership?.role ?? null,
                 description: space.description ?? null,
+                routingProfile: isOwnPersonal
+                  ? "personal_default" as const
+                  : "description_based" as const,
               },
               occurredAt: request.occurredAt,
             });

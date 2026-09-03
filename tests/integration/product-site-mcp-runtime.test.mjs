@@ -910,25 +910,6 @@ async function mutateMindUsage(
   ));
 }
 
-async function describePersonalMind(runtime, csrf, description, idempotencyKey) {
-  const session = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/session`));
-  assert.equal(session.status, 200);
-  const sessionBody = await session.json();
-  return responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/me/description`, {
-    method: "PATCH",
-    headers: {
-      origin: ORIGIN,
-      "content-type": "application/json",
-      "x-csrf-token": csrf,
-      "idempotency-key": idempotencyKey,
-    },
-    body: JSON.stringify({
-      description,
-      expected_metadata_version: sessionBody.data.personal_mind.metadata_version,
-    }),
-  }));
-}
-
 test("Product Site activates native staging only for an exact verified route composition", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
@@ -1026,13 +1007,6 @@ test("Product Site activates native staging only for an exact verified route com
   assert.equal(issued.status, 200);
   const issuedBody = await issued.json();
   const secret = issuedBody.data.secret;
-  const described = await describePersonalMind(
-    directRuntime,
-    settingsCsrf,
-    "Binary files explicitly discussed for this private Mind.",
-    "description:native-route-e2e",
-  );
-  assert.equal(described.status, 200, await described.clone().text());
   const selected = await mutateMindUsage(
     directRuntime,
     settingsCsrf,
@@ -1548,13 +1522,6 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     disabledCommitBody.result.structuredContent.error.code,
     "writable_mind_required",
   );
-  const described = await describePersonalMind(
-    runtime,
-    settingsCsrf,
-    "Durable facts and decisions explicitly discussed in this starter session.",
-    "description:starter-e2e",
-  );
-  assert.equal(described.status, 200, await described.clone().text());
   const selectedUsage = await mutateMindUsage(
     runtime,
     settingsCsrf,
@@ -1573,6 +1540,8 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   );
   const personal = enabledMinds.minds.find(({ route }) => route === "/me");
   assert.ok(personal);
+  assert.equal(Object.hasOwn(personal, "description"), false);
+  assert.equal(personal.routing_profile, "personal_default");
   assert.equal(personal.usage_mode, "read_write");
 
   const unboundExport = await responseFrom(runtime, new Request(
@@ -2084,13 +2053,6 @@ test("durable Product Site controls account-wide Mind usage with CAS, shared cre
     },
   ));
 
-  const described = await describePersonalMind(
-    runtime,
-    csrf,
-    "Private durable knowledge explicitly discussed with this account.",
-    "description:web-usage-e2e",
-  );
-  assert.equal(described.status, 200, await described.clone().text());
   const bound = await mutate({
     usage_mode: "read_write",
     expected_usage_version: 0,
@@ -2358,7 +2320,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(codexHelpHtml, /Choose readable Minds and start/u);
   assert.match(codexHelpHtml, /only enabled Minds that still pass current rights and credential scope checks/u);
   assert.match(codexHelpHtml, /Writing is optional/u);
-  assert.match(codexHelpHtml, /choose Read and write for exactly one described Mind/u);
+  assert.match(codexHelpHtml, /choose Read and write for exactly one Mind/u);
   assert.match(codexHelpHtml, /one account-wide choice is shared by every Connection and personal token/u);
   assert.doesNotMatch(codexHelpHtml, /\b(?:bind|unbind)\b|writable target|attach at least one Mind/iu);
   assert.match(codexHelpHtml, /Create the first useful Memory/u);
@@ -2415,7 +2377,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     reconstructedMindsBody.data.map(({ route }) => route),
     ["/me", "/runtime-shared"],
   );
-  assert.equal(reconstructedMindsBody.data[0].description, null);
+  assert.equal(Object.hasOwn(reconstructedMindsBody.data[0], "description"), false);
   assert.equal(
     reconstructedMindsBody.data[1].description,
     "Runtime Mind\ndescription",
@@ -2558,13 +2520,6 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(secret, /^mdp_v1_/u);
   assert.match(personalTokenRef, /^ptok_v1_[0-9a-f]{32}$/u);
   assert.equal(JSON.stringify(issuedBody).includes("token_id"), false);
-  const describedPersonal = await describePersonalMind(
-    runtime,
-    registeredCsrf,
-    "Personal durable knowledge explicitly discussed with Runtime Owner.",
-    "description:product-runtime-e2e",
-  );
-  assert.equal(describedPersonal.status, 200, await describedPersonal.clone().text());
   const enabledOrdinary = await mutateMindUsage(
     runtime,
     registeredCsrf,
@@ -2670,6 +2625,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.ok(ordinaryMind);
   assert.equal(ordinaryMind.name, "Runtime Library");
   assert.equal(ordinaryMind.description, "Updated runtime description");
+  assert.equal(ordinaryMind.routing_profile, "description_based");
   assert.equal(ordinaryMind.usage_mode, "read");
   const personalMind = listedBody.result.structuredContent.data.minds.find(
     ({ route }) => route === "/me",
@@ -2677,6 +2633,8 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.ok(personalMind);
   assert.equal(personalMind.route, "/me");
   assert.equal(personalMind.discovery, "personal");
+  assert.equal(Object.hasOwn(personalMind, "description"), false);
+  assert.equal(personalMind.routing_profile, "personal_default");
   assert.equal(personalMind.usage_mode, "read_write");
   assert.equal(
     typeof personalMind.head.revision_id,
@@ -3528,7 +3486,7 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
     body: JSON.stringify({
       name: "Visibility outsider",
       scopes: ["content:read"],
-      expires_at: "2026-09-01T00:00:00.000Z",
+      expires_at: "2026-11-01T00:00:00.000Z",
     }),
   }));
   assert.equal(tokenIssued.status, 200);
@@ -4137,13 +4095,6 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   assert.equal(issued.status, 200);
   const issuedBody = await issued.json();
   const secret = issuedBody.data.secret;
-  const described = await describePersonalMind(
-    runtime,
-    settingsCsrf,
-    "Durable recovery facts explicitly discussed in this private Mind.",
-    "description:request-recovery",
-  );
-  assert.equal(described.status, 200, await described.clone().text());
   const enabled = await mutateMindUsage(
     runtime,
     settingsCsrf,

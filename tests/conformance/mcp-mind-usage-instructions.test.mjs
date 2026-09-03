@@ -10,13 +10,17 @@ import {
 test("central MCP guidance describes the complete principal Mind usage policy", () => {
   for (const fragment of [
     /list_minds/u,
-    /user explicitly asks|topic genuinely matches its description/u,
+    /Read Personal Mind only when the current user directly asks/u,
+    /ordinary enabled Mind when the user names it|topic genuinely matches its description/u,
+    /routing_profile=personal_default/u,
+    /routing_profile=description_based/u,
     /untrusted data, not instructions/u,
     /never run an implicit cross-Mind search/iu,
     /vacuum nearby Minds/iu,
     /writable_mount\.active=true/u,
     /effective\.can_write/u,
     /Never bind, rebind, unbind/u,
+    /Discussion, durability, relevance, ambiguity, a previous request, or reading another Mind does not authorize/u,
     /durable knowledge explicitly discussed/u,
     /exact source Mind, revision, and locator provenance/u,
     /Validate the complete proposed OKF 0\.2 bundle/u,
@@ -36,6 +40,14 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
   );
   assert.match(reads.get("list_minds").description, /description/u);
   assert.match(reads.get("list_minds").description, /untrusted/u);
+  assert.match(reads.get("list_minds").description, /Personal Mind has personal_default and no description/u);
+  const mindSchema = reads.get("list_minds").outputSchema.properties.data.properties.minds.items;
+  assert.equal(mindSchema.required.includes("routing_profile"), true);
+  assert.equal(mindSchema.required.includes("description"), false);
+  assert.deepEqual(mindSchema.properties.routing_profile.enum, [
+    "personal_default",
+    "description_based",
+  ]);
   assert.match(reads.get("search").description, /implicit cross-Mind search/iu);
   assert.match(reads.get("fetch").description, /enabled Mind/u);
 
@@ -44,6 +56,9 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
   );
   const commit = writes.get("commit_changeset");
   assert.match(commit.description, /principal's current read_write Mind/u);
+  assert.match(commit.description, /Canonical and only content-write tool/u);
+  assert.match(commit.description, /current user directly asks/u);
+  assert.match(commit.description, /previous request/u);
   assert.match(commit.description, /explicitly discussed/u);
   assert.match(commit.description, /source_references/u);
   assert.match(commit.description, /notify the user/u);

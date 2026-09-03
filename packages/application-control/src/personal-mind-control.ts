@@ -73,7 +73,6 @@ export interface PersonalMindProfileDescriptor {
     readonly mindId: SpaceId;
     readonly route: "/me";
     readonly name: string;
-    readonly description: string | null;
     readonly visibility: "private";
     readonly metadataVersion: number;
     readonly headRevisionId: PersonalMindProfileSnapshot["personalMind"]["headRevisionId"];
@@ -174,7 +173,6 @@ function personalProfileDescriptor(
       mindId: profile.personalMind.spaceId,
       route: "/me",
       name: profile.personalMind.name,
-      description: profile.personalMind.description,
       visibility: "private",
       metadataVersion: profile.personalMind.metadataVersion,
       headRevisionId: profile.personalMind.headRevisionId,

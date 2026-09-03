@@ -118,8 +118,10 @@ export interface MindDiscoveryDescriptor {
   readonly route: string;
   readonly handle: string | null;
   readonly name: string;
-  /** Authorized service metadata used only as an untrusted routing category. */
-  readonly description: string | null;
+  /** Authorized untrusted routing category. Personal Mind intentionally omits it. */
+  readonly description?: string | null;
+  /** Model-visible selection/write policy derived only from the server-owned Mind kind. */
+  readonly routingProfile: "personal_default" | "description_based";
   readonly isPersonal: boolean;
   readonly visibility: "private" | "unlisted" | "public";
   readonly discovery:
@@ -1192,7 +1194,7 @@ export class MindDiscoveryService {
         route: "/me",
         handle: null,
         name: profile.personalMind.name,
-        description: profile.personalMind.description,
+        routingProfile: "personal_default",
         isPersonal: true,
         visibility: "private",
         discovery: "personal",
@@ -1329,6 +1331,7 @@ export class MindDiscoveryService {
         handle: snapshot.canonicalHandle,
         name: space.name,
         description: space.description ?? null,
+        routingProfile: "description_based",
         isPersonal: false,
         visibility: space.visibility,
         discovery: effectiveDiscovery,

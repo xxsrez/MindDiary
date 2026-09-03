@@ -464,20 +464,25 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   )) fail("initial_binding_state_not_empty");
   assertions.add("bindings.initial-empty");
 
-  const participantPersonalDescription = await actors.participant.api(
+  if (
+    Object.hasOwn(participantSession.personal_mind, "description") ||
+    Object.hasOwn(ownerSession.personal_mind, "description")
+  ) fail("personal_description_exposed");
+  const removedPersonalDescription = await actors.participant.api(
     "/api/v1/minds/me/description",
     {
       method: "PATCH",
       body: {
-        description: "Durable personal knowledge explicitly discussed in the synthetic scenario.",
+        description: "Must not restore the retired Personal description route.",
         expected_metadata_version: participantSession.personal_mind.metadata_version,
       },
-      idempotencyKey: `synthetic:${nonce}:description:participant-personal`,
+      idempotencyKey: `synthetic:${nonce}:retired-personal-description`,
       csrfPath: "/me",
+      expectedStatus: 404,
     },
   );
-  if (data(participantPersonalDescription).personal_mind?.description === null) {
-    fail("personal_description_not_saved");
+  if (removedPersonalDescription.body?.error?.code !== "not_found") {
+    fail("retired_personal_description_route_available");
   }
   for (const [actor, suffix] of [
     [actors.owner, "owner-personal"],
@@ -491,7 +496,12 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       usage.usage_version,
       `synthetic:${nonce}:usage:${suffix}`,
     ));
-    if (enabled.projection?.items?.find((item) => item.mind_ref === "/me")?.usage_mode !== "read") {
+    const personalItem = enabled.projection?.items?.find((item) => item.mind_ref === "/me");
+    if (
+      personalItem?.usage_mode !== "read" ||
+      personalItem?.routing_profile !== "personal_default" ||
+      Object.hasOwn(personalItem ?? {}, "description")
+    ) {
       fail("personal_usage_not_enabled");
     }
   }
@@ -502,7 +512,11 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   );
   if (
     ownerMinds.find((mind) => mind.route === "/me")?.mind_id !== ownerIds.mind ||
-    participantMinds.find((mind) => mind.route === "/me")?.mind_id !== participantIds.mind
+    participantMinds.find((mind) => mind.route === "/me")?.mind_id !== participantIds.mind ||
+    ownerMinds.find((mind) => mind.route === "/me")?.routing_profile !== "personal_default" ||
+    participantMinds.find((mind) => mind.route === "/me")?.routing_profile !== "personal_default" ||
+    Object.hasOwn(ownerMinds.find((mind) => mind.route === "/me") ?? {}, "description") ||
+    Object.hasOwn(participantMinds.find((mind) => mind.route === "/me") ?? {}, "description")
   ) fail("mcp_token_principal_mismatch");
   assertions.add("tokens.distinct-principal-bound");
   const crossPersonal = await actors.participant.mcp("get_mind_info", {
@@ -792,6 +806,11 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   ));
   if (
     reboundPersonal.projection?.items?.find((item) => item.mind_ref === "/me")?.usage_mode !== "read_write" ||
+    reboundPersonal.projection?.items?.find((item) => item.mind_ref === "/me")?.routing_profile !== "personal_default" ||
+    Object.hasOwn(
+      reboundPersonal.projection?.items?.find((item) => item.mind_ref === "/me") ?? {},
+      "description",
+    ) ||
     reboundPersonal.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read"
   ) fail("personal_rebind_mismatch");
   expectMcpError(

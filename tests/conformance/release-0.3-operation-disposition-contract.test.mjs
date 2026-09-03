@@ -348,7 +348,7 @@ test("every exported first-party REST route has exactly one disposition", () => 
     assert.ok(["keep", "change", "move", "remove"].includes(route.disposition), route.key);
     assert.match(specification, new RegExp(route.key.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"), route.key);
   }
-  assert.equal(current.length, 45);
+  assert.equal(current.length, 44);
 });
 
 test("auxiliary capability, delivery, OAuth, MCP, and retired Sites routes are explicit", () => {
@@ -767,7 +767,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "330dd1279f8fb84fa0e5dc99886db64d38caae39",
+      gitBlob: "6a4431577456e364eb18170dc4a4d11695fe52dd",
     },
     {
       surface: "plugin-label",
@@ -809,7 +809,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "package-probe-source",
         path: "scripts/run-oauth-direct-plugin-probe.mjs",
-        gitBlob: "b86de99f6e882715d9d66696012058cf7ccfd865",
+        gitBlob: "613b0129d88acebe1af50a2366c5f15ee000d67e",
       }],
     },
     {
@@ -835,7 +835,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "installed-skill-probe-source",
           path: "scripts/run-oauth-direct-plugin-probe.mjs",
-          gitBlob: "b86de99f6e882715d9d66696012058cf7ccfd865",
+          gitBlob: "613b0129d88acebe1af50a2366c5f15ee000d67e",
         },
       ],
     },
@@ -853,7 +853,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "330dd1279f8fb84fa0e5dc99886db64d38caae39",
+        gitBlob: "6a4431577456e364eb18170dc4a4d11695fe52dd",
       }],
     },
     {
@@ -865,7 +865,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-playbook-source",
           path: "packages/adapter-web/src/token-management.ts",
-          gitBlob: "8f6c6174c9b77975b338001d8a5db4d4ca475be7",
+          gitBlob: "f3b538b6a61538ea8391c8db766ff47e5d36ec7e",
         },
         {
           role: "help-route-source",

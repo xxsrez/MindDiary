@@ -24,6 +24,7 @@ import type {
 import type {
   KnowledgeSpaceMap,
   MembershipMap,
+  PersonalBindingMap,
 } from "./control-internals.js";
 import { BOUNDED_OPAQUE_ID, SHA256_PATTERN } from "./revision-internals.js";
 import type { MutableCredentialWriteTargetOwnerState } from "./credential-write-target-internals.js";
@@ -259,6 +260,7 @@ export function migrateLegacyCredentialTargetsToPrincipalUsage(
   legacyOwners: ReadonlyMap<string, Readonly<LegacyCredentialWriteTargetUpgradeSnapshot>>,
   spaces: KnowledgeSpaceMap,
   memberships: MembershipMap,
+  personalBindings: PersonalBindingMap,
 ): Map<PrincipalId, MutablePrincipalMindUsageOwnerState> {
   const candidates = new Map<PrincipalId, Set<SpaceId>>();
   const blockedPrincipals = new Set<PrincipalId>();
@@ -286,10 +288,16 @@ export function migrateLegacyCredentialTargetsToPrincipalUsage(
     if (blockedPrincipals.has(principalId) || spaceIds.size !== 1) continue;
     const spaceId = [...spaceIds][0]!;
     const space = spaces.get(spaceId);
+    const linkedPersonalBinding = [...personalBindings.values()].find(
+      (binding) => binding.spaceId === spaceId,
+    );
+    const isOwnPersonal = linkedPersonalBinding?.principalId === principalId &&
+      personalBindings.get(principalId)?.spaceId === spaceId;
     if (
       space?.state !== "active" ||
-      typeof space.description !== "string" ||
-      space.description.length === 0 ||
+      (linkedPersonalBinding !== undefined && !isOwnPersonal) ||
+      (!isOwnPersonal &&
+        (typeof space.description !== "string" || space.description.length === 0)) ||
       !currentWriter(principalId, spaceId, memberships)
     ) continue;
     const occurredAt = space.updatedAt;
@@ -303,7 +311,12 @@ export function migrateLegacyCredentialTargetsToPrincipalUsage(
       usageMode: "read_write",
       expectedUsageVersion: 0,
       generationId,
-      authority: { canRead: true, currentRole: "owner", description: space.description },
+      authority: {
+        canRead: true,
+        currentRole: "owner",
+        description: space.description ?? null,
+        routingProfile: isOwnPersonal ? "personal_default" : "description_based",
+      },
       occurredAt,
     });
     if (transition.kind !== "applied") continue;

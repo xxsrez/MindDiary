@@ -284,6 +284,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
             restored._legacyCredentialWriteTargetUpgrades,
             restored._knowledgeSpaces,
             restored._memberships,
+            restored._personalBindings,
           );
       restored._activeHandlesByKey = new Map(snapshot.activeHandlesByKey as ActiveHandleByKeyMap);
       restored._activeHandlesBySpace = new Map(snapshot.activeHandlesBySpace as ActiveHandleBySpaceMap);
