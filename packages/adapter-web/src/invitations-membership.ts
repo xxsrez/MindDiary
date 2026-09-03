@@ -9,12 +9,7 @@ import {
 export type InvitationMembershipRole = "reader" | "editor" | "admin" | "owner";
 export type InvitationProposedRole = Exclude<InvitationMembershipRole, "owner">;
 export type InvitationDirection = "incoming" | "outgoing";
-export type InvitationUiState =
-  | "pending"
-  | "expired"
-  | "accepted"
-  | "rejected"
-  | "cancelled";
+export type InvitationUiState = "pending";
 
 export interface InvitationMembershipMind {
   readonly mindId: string;
@@ -102,7 +97,6 @@ export interface InvitationsMembershipAdapter {
   acceptInvitation(command: InvitationLifecycleUiCommand): Promise<void>;
   rejectInvitation(command: InvitationLifecycleUiCommand): Promise<void>;
   cancelInvitation(command: InvitationLifecycleUiCommand): Promise<void>;
-  reissueInvitation(command: InvitationLifecycleUiCommand): Promise<void>;
   changeMemberRole(command: {
     readonly mindId: string;
     readonly memberId: string;
@@ -144,13 +138,6 @@ const ROLES: readonly InvitationMembershipRole[] = [
   "admin",
   "owner",
 ];
-const INVITATION_STATES: readonly InvitationUiState[] = [
-  "pending",
-  "expired",
-  "accepted",
-  "rejected",
-  "cancelled",
-];
 let fallbackIdempotencySequence = 0;
 
 function safeId(value: string): string | null {
@@ -166,12 +153,6 @@ function safeRole(value: unknown): InvitationMembershipRole | null {
 function safeProposedRole(value: unknown): InvitationProposedRole | null {
   const role = safeRole(value);
   return role === "reader" || role === "editor" || role === "admin" ? role : null;
-}
-
-function safeInvitationState(value: unknown): InvitationUiState {
-  return typeof value === "string" && INVITATION_STATES.includes(value as InvitationUiState)
-    ? (value as InvitationUiState)
-    : "expired";
 }
 
 function roleLabel(role: InvitationMembershipRole): string {
@@ -190,10 +171,6 @@ function visibilityEffect(visibility: InvitationMembershipMind["visibility"]): s
     return "Authenticated people with the exact URL can read the live HEAD and history.";
   }
   return "Only active participants can read this Mind.";
-}
-
-function stateLabel(state: InvitationUiState): string {
-  return `${state.slice(0, 1).toUpperCase()}${state.slice(1)}`;
 }
 
 function dateLabel(value: string): string {
@@ -236,31 +213,23 @@ function roleOptions(
 
 function renderInvitationAction(invitation: InvitationMembershipInvitation): string {
   const invitationId = safeId(invitation.invitationId);
-  const state = safeInvitationState(invitation.state);
-  if (invitationId === null) return `<span class="md-token-card__final-state">Unavailable</span>`;
+  if (invitationId === null || invitation.state !== "pending") {
+    return `<span class="md-token-card__final-state">Unavailable</span>`;
+  }
   const attributes = `data-invitation-id="${escapeUntrustedText(invitationId)}" data-invitation-version="${invitation.invitationVersion}" data-control-action`;
-  if (invitation.direction === "incoming" && state === "pending") {
+  if (invitation.direction === "incoming") {
     return `<div class="md-dialog__actions">
       <button class="md-button md-button--secondary" type="button" data-invitation-action="reject" ${attributes}>Reject</button>
       <button class="md-button md-button--primary" type="button" data-invitation-action="accept" ${attributes}>Accept</button>
     </div>`;
   }
-  if (invitation.direction === "outgoing" && state === "pending") {
+  if (invitation.direction === "outgoing") {
     if (invitation.canManage === false) {
       return `<span class="md-token-card__final-state">Current role cannot manage this invitation.</span>`;
     }
     return `<button class="md-button md-button--danger" type="button" data-invitation-action="cancel" ${attributes}>Cancel invitation</button>`;
   }
-  if (
-    invitation.direction === "outgoing" &&
-    (state === "expired" || state === "cancelled")
-  ) {
-    if (invitation.canManage === false) {
-      return `<span class="md-token-card__final-state">Current role cannot reissue this invitation.</span>`;
-    }
-    return `<button class="md-button md-button--secondary" type="button" data-invitation-action="reissue" ${attributes}>Reissue for 7 days</button>`;
-  }
-  return `<span class="md-token-card__final-state">${stateLabel(state)}</span>`;
+  return `<span class="md-token-card__final-state">Unavailable</span>`;
 }
 
 function renderGlobalInvitationCard(
@@ -280,7 +249,9 @@ function renderGlobalInvitationGroup(
   invitations: readonly InvitationMembershipGlobalInvitation[],
   direction: InvitationDirection,
 ): string {
-  const selected = invitations.filter((invitation) => invitation.direction === direction);
+  const selected = invitations.filter(
+    (invitation) => invitation.direction === direction && invitation.state === "pending",
+  );
   const heading = direction === "incoming" ? "Incoming invitations" : "Sent invitations";
   const empty = direction === "incoming"
     ? "No incoming invitations."
@@ -305,17 +276,15 @@ function renderGlobalInvitations(
 
 function renderInvitationCard(invitation: InvitationMembershipInvitation): string {
   const invitationId = safeId(invitation.invitationId);
-  const state = safeInvitationState(invitation.state);
   const direction = invitation.direction === "incoming" ? "incoming" : "outgoing";
   const proposedRole = safeProposedRole(invitation.proposedRole) ?? "reader";
-  const statusStyle = state === "pending" ? "active" : "expired";
-  return `<article class="md-token-card md-entity-row" data-invitation-card="${escapeUntrustedText(invitationId ?? "invalid-invitation-id")}" data-invitation-direction="${direction}" data-invitation-state="${state}" data-ia-row>
+  return `<article class="md-token-card md-entity-row" data-invitation-card="${escapeUntrustedText(invitationId ?? "invalid-invitation-id")}" data-invitation-direction="${direction}" data-invitation-state="pending" data-ia-row>
     <div class="md-token-card__heading">
       <div>
         <p class="md-eyebrow">${direction === "incoming" ? "From" : "To"}</p>
         <h3>${escapeUntrustedText(invitation.counterpartyDisplayName)}</h3>
       </div>
-      <span class="md-token-state md-token-state--${statusStyle}">${stateLabel(state)}</span>
+      <span class="md-token-state md-token-state--active">Pending</span>
     </div>
     <dl class="md-token-card__metadata">
       <div><dt>Direction</dt><dd>${direction === "incoming" ? "Incoming" : "Outgoing"}</dd></div>
@@ -330,7 +299,9 @@ function renderInvitationGroup(
   invitations: readonly InvitationMembershipInvitation[],
   direction: InvitationDirection,
 ): string {
-  const selected = invitations.filter((invitation) => invitation.direction === direction);
+  const selected = invitations.filter(
+    (invitation) => invitation.direction === direction && invitation.state === "pending",
+  );
   const heading = direction === "incoming" ? "Incoming invitations" : "Sent invitations";
   const empty = direction === "incoming"
     ? "No incoming invitations."
@@ -984,8 +955,6 @@ export function installInvitationsMembership(
         void runMutation(() => adapter.rejectInvitation(command), "Invitation rejected.");
       } else if (action === "cancel") {
         void runMutation(() => adapter.cancelInvitation(command), "Invitation cancelled before acceptance.");
-      } else if (action === "reissue") {
-        void runMutation(() => adapter.reissueInvitation(command), "Invitation reissued for a new 7-day period.");
       }
       return;
     }

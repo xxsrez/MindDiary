@@ -153,7 +153,7 @@ test("shipped direct route saves name and description under one metadata version
   expect(updateCall.idempotencyKey).toMatch(/^metadata:[0-9a-f-]{36}$/u);
 });
 
-test("shipped Access reveals exact-email invite, cancel, and seven-day reissue with current readback", async ({ page }) => {
+test("shipped Access removes a cancelled invite and reinvites through the normal form", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
   await expect(page.locator("[data-access-summary]")).toContainText("1 pending");
   await expect(page.locator("[data-access-participant-summary]")).toContainText("Morgan Editor");
@@ -171,7 +171,7 @@ test("shipped Access reveals exact-email invite, cancel, and seven-day reissue w
 
   await expect(page.locator("[data-access-summary]")).toContainText("2 pending");
   await page.locator("[data-access-invitations] summary").click();
-  const created = page.locator('[data-invitation-card="invitation-fixture-created"]');
+  const created = page.locator('[data-invitation-card="invitation-fixture-created-1"]');
   await expect(created).toContainText("Registered Person");
   await expect(created).toContainText("Sep 4, 2026");
   await Promise.all([
@@ -181,16 +181,23 @@ test("shipped Access reveals exact-email invite, cancel, and seven-day reissue w
 
   await expect(page.locator("[data-access-summary]")).toContainText("1 pending");
   await page.locator("[data-access-invitations] summary").click();
-  const cancelled = page.locator('[data-invitation-card="invitation-fixture-created"]');
-  await expect(cancelled).toHaveAttribute("data-invitation-state", "cancelled");
+  await expect(page.locator('[data-invitation-card="invitation-fixture-created-1"]')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reissue for 7 days" })).toHaveCount(0);
+  await page.getByLabel("Exact verified email").fill("registered@example.com");
+  await page.getByLabel("Role after acceptance").selectOption("editor");
   await Promise.all([
     page.waitForNavigation(),
-    cancelled.getByRole("button", { name: "Reissue for 7 days" }).click(),
+    page.getByRole("button", { name: "Send in-app invitation" }).click(),
   ]);
 
   await expect(page.locator("[data-access-summary]")).toContainText("2 pending");
+  await page.locator("[data-access-invitations] summary").click();
+  await expect(page.locator('[data-invitation-card="invitation-fixture-created-2"]'))
+    .toContainText("Registered Person");
   const calls = await fixtureCalls();
-  expect(calls.find(({ operation }) => operation === "createInvitation").command).toMatchObject({
+  const createCalls = calls.filter(({ operation }) => operation === "createInvitation");
+  expect(createCalls).toHaveLength(2);
+  expect(createCalls[0].command).toMatchObject({
     handle: "research-notes",
     target_verified_email: "registered@example.com",
     role: "editor",
@@ -198,8 +205,27 @@ test("shipped Access reveals exact-email invite, cancel, and seven-day reissue w
   });
   expect(calls.find(({ operation }) => operation === "cancelInvitation").command)
     .toMatchObject({ expected_invitation_version: 1 });
-  expect(calls.find(({ operation }) => operation === "reissueInvitation").command)
-    .toMatchObject({ expected_invitation_version: 2 });
+  expect(calls.some(({ operation }) => operation === "reissueInvitation")).toBe(false);
+});
+
+test("shipped late-action conflict announces expiry and reloads without a terminal card", async ({ page }) => {
+  await page.goto(`${origin}/research-notes`);
+  await page.locator("[data-access-invitations] summary").click();
+  const pending = page.locator('[data-invitation-card="invitation-fixture-pending"]');
+  await expect(pending).toHaveAttribute("data-invitation-state", "pending");
+  await setConflict("invitation-expiry");
+
+  const navigation = page.waitForNavigation();
+  await pending.getByRole("button", { name: "Cancel invitation" })
+    .evaluate((button) => button.click());
+  await expect(page.locator("[data-page-announcement]"))
+    .toContainText("expired. Reloading current state");
+  await navigation;
+
+  await expect(page.locator("[data-access-summary]")).toContainText("No pending invitations");
+  await page.locator("[data-access-invitations] summary").click();
+  await expect(page.locator('[data-invitation-card="invitation-fixture-pending"]')).toHaveCount(0);
+  await expect(page.locator('[data-invitation-state="expired"]')).toHaveCount(0);
 });
 
 test("metadata conflict reload removes every stale control after role downgrade", async ({ page }) => {

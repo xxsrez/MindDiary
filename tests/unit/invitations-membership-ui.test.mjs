@@ -188,31 +188,36 @@ test("global invitation inbox omits outgoing lifecycle even if unsafe input cont
     mindName: "Research Notes",
     mindRoute: "/research-notes",
   };
+  const terminalIncoming = {
+    ...incoming,
+    invitationId: "invite_incoming_terminal",
+    counterpartyDisplayName: "Former sender",
+    state: "expired",
+  };
   const html = renderInvitationsMembership({
     displayName: "Andrey",
-    collection: { kind: "global_ready", invitations: [incoming, outgoing] },
+    collection: { kind: "global_ready", invitations: [incoming, outgoing, terminalIncoming] },
   });
 
   assert.match(html, /Incoming invitations/);
   assert.match(html, /External Mind/);
-  assert.doesNotMatch(html, /Sent invitations|invite_outgoing_pending|Pending Candidate/);
+  assert.doesNotMatch(
+    html,
+    /Sent invitations|invite_outgoing_pending|Pending Candidate|invite_incoming_terminal|Former sender/,
+  );
 });
 
-test("incoming and outgoing invitation states expose only valid lifecycle actions", () => {
+test("active lists omit every terminal record and expose only pending actions", () => {
   const html = renderInvitationsMembership(model());
 
   assert.equal((html.match(/data-invitation-action="accept"/gu) ?? []).length, 1);
   assert.equal((html.match(/data-invitation-action="reject"/gu) ?? []).length, 1);
   assert.equal((html.match(/data-invitation-action="cancel"/gu) ?? []).length, 1);
-  assert.equal((html.match(/data-invitation-action="reissue"/gu) ?? []).length, 1);
-
-  const expiredIncoming = element(
+  assert.equal((html.match(/data-invitation-action="reissue"/gu) ?? []).length, 0);
+  assert.doesNotMatch(
     html,
-    'data-invitation-card="invite_incoming_expired"',
-    "article",
+    /invite_incoming_expired|Expired Sender|invite_outgoing_expired|Expired Candidate|>Expired</,
   );
-  assert.match(expiredIncoming, />Expired</);
-  assert.doesNotMatch(expiredIncoming, /data-invitation-action/);
 
   const pendingOutgoing = element(
     html,

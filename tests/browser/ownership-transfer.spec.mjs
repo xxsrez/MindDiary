@@ -76,3 +76,33 @@ test("revoked target race reloads authoritative roles and leaves the prior Owner
   await expect(page.locator("[data-page-announcement]")).toContainText("latest state is shown");
   await expect(page.locator('[data-transfer-form] option[value="member_editor"]')).toHaveCount(0);
 });
+
+test("active invitation views contain no terminal or boundary-expired cards", async ({ page }) => {
+  await page.goto(`${origin}/invitations`);
+  await expect(page.locator('[data-invitation-state="pending"]')).toHaveCount(2);
+  await expect(page.locator('[data-invitation-state="expired"]')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reissue for 7 days" })).toHaveCount(0);
+
+  await page.goto(`${origin}/invitations?scenario=at-expiry`);
+  await expect(page.locator("[data-invitation-card]")).toHaveCount(0);
+  await expect(page.getByText("No incoming invitations.", { exact: true })).toBeVisible();
+  await expect(page.getByText("No sent invitations for this Mind.", { exact: true })).toBeVisible();
+});
+
+test("late accept removes the stale card before a normal reinvite", async ({ page }) => {
+  await page.goto(`${origin}/invitations?scenario=conflict`);
+  const stale = page.locator('[data-invitation-card="invite_conflict"]');
+  await expect(stale).toHaveAttribute("data-invitation-state", "pending");
+  await stale.getByRole("button", { name: "Accept" }).click();
+
+  await expect(stale).toHaveCount(0);
+  await expect(page.locator("[data-page-announcement]"))
+    .toContainText("expired before the action completed");
+  await expect(page.locator('[data-invitation-state="expired"]')).toHaveCount(0);
+
+  await page.getByLabel("Exact verified email").fill("registered@example.com");
+  await page.getByLabel("Role after acceptance").selectOption("reader");
+  await page.getByRole("button", { name: "Send in-app invitation" }).click();
+  await expect(page.locator('[data-invitation-card="invite_created_2"]'))
+    .toHaveAttribute("data-invitation-state", "pending");
+});

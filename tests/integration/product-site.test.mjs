@@ -1732,6 +1732,18 @@ test("collaboration pages expose safe invitation metadata and map every browser 
             expiresAt: "2026-08-09T00:00:00.000Z",
             invitationVersion: 3,
           },
+          {
+            invitationId: "invitation_terminal_incoming",
+            mindId: "space_terminal",
+            mindName: "Former Collaboration",
+            mindRoute: "/former-collaboration",
+            direction: "incoming",
+            counterpartyDisplayName: "Former Owner",
+            proposedRole: "reader",
+            state: "expired",
+            expiresAt: "2026-08-09T00:00:00.000Z",
+            invitationVersion: 2,
+          },
         ],
       };
       return { applied: true };
@@ -1754,6 +1766,7 @@ test("collaboration pages expose safe invitation metadata and map every browser 
   assert.equal(overviewPayload.data.invitations[0].direction, "incoming");
   assert.equal(overviewPayload.data.invitations[0].mind_route, "/external-collaboration");
   assert.equal(JSON.stringify(overviewPayload).includes("invitation_outgoing"), false);
+  assert.equal(JSON.stringify(overviewPayload).includes("invitation_terminal_incoming"), false);
   assert.equal(JSON.stringify(overviewPayload).includes("must-not-render@example.com"), false);
   assert.equal(JSON.stringify(overviewPayload).includes("principal_must_not_render"), false);
   assert.equal(calls.filter(({ operation }) => operation === "get_invitations_overview").length, 1);
@@ -1767,6 +1780,7 @@ test("collaboration pages expose safe invitation metadata and map every browser 
   assert.match(collaborationClient, /api\/v1\/invitations-overview/);
   assert.match(collaborationClient, /data-invitation-action/);
   assert.match(collaborationClient, /exactEmail/);
+  assert.doesNotMatch(collaborationClient, /data-invitation-action[^\n]*reissue|Reissue for 7 days/u);
 
   const cases = [
     ["POST", "/api/v1/minds/research-notes/invitations", {

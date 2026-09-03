@@ -509,8 +509,7 @@ export function invitationUi(
     counterpartyDisplayName === null || expiresAt === null || invitationVersion === null ||
     !(direction === "incoming" || direction === "outgoing") ||
     !(proposedRole === "reader" || proposedRole === "editor" || proposedRole === "admin") ||
-    !(state === "pending" || state === "expired" || state === "accepted" ||
-      state === "rejected" || state === "cancelled")
+    state !== "pending"
   ) return null;
   const mind = minds.get(mindId);
   const mindRoute = sourceMindRoute !== null &&

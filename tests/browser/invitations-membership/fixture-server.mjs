@@ -34,16 +34,8 @@ function snapshot(scenario) {
       expiresAt: "2026-08-12T12:00:00.000Z",
       invitationVersion: 1,
     },
-    {
-      invitationId: "invite_expired",
-      direction: "outgoing",
-      counterpartyDisplayName: "Expired participant",
-      proposedRole: "editor",
-      state: "expired",
-      expiresAt: "2026-08-06T12:00:00.000Z",
-      invitationVersion: 2,
-    },
   ];
+  if (scenario === "at-expiry") invitations.length = 0;
   return {
     mind: {
       mindId: "mind_browser_fixture",

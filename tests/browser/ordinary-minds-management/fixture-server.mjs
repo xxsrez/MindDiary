@@ -71,6 +71,7 @@ let memberships;
 let calls;
 let conflictMode;
 let collaborationInvitations;
+let invitationSequence;
 
 function fixtureMemberId(handle, kind) {
   if (handle === "research-notes") {
@@ -98,6 +99,7 @@ function resetFixture() {
   }]]));
   calls = [];
   conflictMode = null;
+  invitationSequence = 0;
   collaborationInvitations = [{
     invitationId: "invitation-fixture-pending",
     direction: "outgoing",
@@ -145,10 +147,12 @@ function collaborationProjection(mind) {
         membershipVersion: members[0].membershipVersion,
       },
       members,
-      invitations: collaborationInvitations.map((invitation) => ({
-        ...invitation,
-        canManage: mind.role === "owner" || mind.role === "admin",
-      })),
+      invitations: collaborationInvitations
+        .filter((invitation) => invitation.state === "pending")
+        .map((invitation) => ({
+          ...invitation,
+          canManage: mind.role === "owner" || mind.role === "admin",
+        })),
     },
   };
 }
@@ -361,7 +365,7 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === "/_fixture/conflict" && request.method === "POST") {
       const body = await readJson(request);
-      conflictMode = ["downgrade", "revoke", "membership"].includes(body?.mode)
+      conflictMode = ["downgrade", "revoke", "membership", "invitation-expiry"].includes(body?.mode)
         ? body.mode
         : null;
       sendJson(response, 200, { ok: true, mode: conflictMode });
@@ -471,7 +475,7 @@ const server = createServer(async (request, response) => {
         return;
       }
       collaborationInvitations.push({
-        invitationId: "invitation-fixture-created",
+        invitationId: `invitation-fixture-created-${++invitationSequence}`,
         direction: "outgoing",
         counterpartyDisplayName: "Registered Person",
         proposedRole: body.role,
@@ -500,6 +504,13 @@ const server = createServer(async (request, response) => {
       if (!mutationAuthorized(request) || !invitation ||
           body?.expected_invitation_version !== invitation.invitationVersion) {
         sendApiError(response, 409, "invitation_conflict");
+        return;
+      }
+      if (!reissue && conflictMode === "invitation-expiry") {
+        invitation.state = "expired";
+        invitation.invitationVersion += 1;
+        conflictMode = null;
+        sendApiError(response, 409, "invitation_expired");
         return;
       }
       if (reissue) {

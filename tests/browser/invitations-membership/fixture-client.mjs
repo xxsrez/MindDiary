@@ -2,7 +2,6 @@ import { installInvitationsMembership } from "/ui/invitations-membership.js";
 
 const scenario = new URL(globalThis.location.href).searchParams.get("scenario") ?? "ready";
 let conflictInjected = false;
-let reissueSequence = 0;
 let unavailable = false;
 let snapshot = {
   mind: {
@@ -61,15 +60,6 @@ let snapshot = {
       expiresAt: "2026-08-12T12:00:00.000Z",
       invitationVersion: 1,
     },
-    {
-      invitationId: "invite_expired",
-      direction: "outgoing",
-      counterpartyDisplayName: "Expired participant",
-      proposedRole: "editor",
-      state: "expired",
-      expiresAt: "2026-08-06T12:00:00.000Z",
-      invitationVersion: 2,
-    },
   ],
 };
 
@@ -98,7 +88,11 @@ const adapter = {
     if (unavailable) {
       return { kind: "unavailable", message: "You no longer participate in this Mind." };
     }
-    return { kind: "ready", snapshot: clone(snapshot) };
+    const current = clone(snapshot);
+    current.invitations = current.invitations.filter(
+      (invitation) => invitation.state === "pending",
+    );
+    return { kind: "ready", snapshot: current };
   },
 
   async createInvitation(command) {
@@ -153,19 +147,6 @@ const adapter = {
     if (current.state !== "pending") throw failure("invitation_conflict", "Invitation changed.");
     current.state = "cancelled";
     current.invitationVersion += 1;
-  },
-
-  async reissueInvitation(command) {
-    await delay();
-    const current = requireInvitation(command);
-    if (current.state !== "expired" && current.state !== "cancelled") {
-      throw failure("invitation_conflict", "Invitation is not reissuable.");
-    }
-    reissueSequence += 1;
-    current.invitationId = `invite_reissued_${reissueSequence}`;
-    current.state = "pending";
-    current.invitationVersion = 1;
-    current.expiresAt = "2026-08-14T12:00:00.000Z";
   },
 
   async changeMemberRole(command) {

@@ -249,6 +249,23 @@ test("durable Sites membership CAS and safe read projections survive reconstruct
       idempotencyKey: "invite-member-two",
     },
   );
+  const pendingReads = new ControlReadService(metadata);
+  const ownerPending = await pendingReads.listInvitations(
+    actor(owner.principalId, "request_owner_pending"),
+  );
+  const targetPending = await pendingReads.listInvitations(
+    actor(target.principalId, "request_target_pending"),
+  );
+  assert.deepEqual(
+    ownerPending.invitations.map(({ invitationId, direction, state }) =>
+      [invitationId, direction, state]),
+    [[invitation.invitationId, "outgoing", "pending"]],
+  );
+  assert.deepEqual(
+    targetPending.invitations.map(({ invitationId, direction, state }) =>
+      [invitationId, direction, state]),
+    [[invitation.invitationId, "incoming", "pending"]],
+  );
   const accepted = await invitations.acceptInvitation(
     actor(target.principalId, "request_accept"),
     {
@@ -274,6 +291,12 @@ test("durable Sites membership CAS and safe read projections survive reconstruct
     actor(target.principalId, "request_invitations"),
   );
   assert.deepEqual(incoming.invitations, []);
+  assert.deepEqual(
+    (await reads.listInvitations(
+      actor(owner.principalId, "request_owner_invitations"),
+    )).invitations,
+    [],
+  );
 
   const memberships = new MembershipControlService({
     memberships: metadata,
@@ -367,6 +390,14 @@ test("request-time invitation reconciliation survives Sites restart and skips em
     [],
   );
   assert.deepEqual(
+    (await reads.listInvitations(actor(
+      owner.principalId,
+      "request_owner_at_expiry",
+      "2026-08-15T09:05:00.000Z",
+    ))).invitations,
+    [],
+  );
+  assert.deepEqual(
     await reads.reconcileInvitationExpiries(atExpiry),
     { expiredCount: 0 },
   );
@@ -378,4 +409,44 @@ test("request-time invitation reconciliation survives Sites restart and skips em
   assert.equal(recovered.invitations[0].state, "expired");
   assert.equal(recovered.invitations[0].version, 2);
   assert.equal(recovered.memberships.length, 1);
+
+  const reinvited = await new InvitationControlService({
+    invitations: metadata,
+    objects,
+    ids: generated,
+  }).createInvitation(
+    actor(
+      owner.principalId,
+      "request_reinvite_after_expiry",
+      "2026-08-15T09:05:00.001Z",
+    ),
+    {
+      mindId: mind.mindId,
+      targetVerifiedEmail: "member.2@example.com",
+      role: "editor",
+      expectedMetadataVersion: recovered.space.metadataVersion,
+      idempotencyKey: "reinvite-after-expiry",
+    },
+  );
+  const activeReads = new ControlReadService(metadata);
+  const ownerActive = await activeReads.listInvitations(actor(
+    owner.principalId,
+    "request_owner_reinvited",
+    "2026-08-15T09:05:00.001Z",
+  ));
+  const targetActive = await activeReads.listInvitations(actor(
+    target.principalId,
+    "request_target_reinvited",
+    "2026-08-15T09:05:00.001Z",
+  ));
+  assert.deepEqual(
+    ownerActive.invitations.map(({ invitationId, direction, state }) =>
+      [invitationId, direction, state]),
+    [[reinvited.invitationId, "outgoing", "pending"]],
+  );
+  assert.deepEqual(
+    targetActive.invitations.map(({ invitationId, direction, state }) =>
+      [invitationId, direction, state]),
+    [[reinvited.invitationId, "incoming", "pending"]],
+  );
 });
