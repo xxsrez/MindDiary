@@ -329,6 +329,14 @@ Invitation отображается адресату внутри Mind Diary. Em
 отменено и выпущено заново. Pending invitation не даёт access и не может стать
 target ownership transfer.
 
+`expires_at` — назначенная сервером UTC-граница, а не клиентский таймер. До неё
+ровно один атомарный transition может перевести `pending` в `accepted`,
+`rejected` или `cancelled`. В сам момент `expires_at` и после него effective
+state уже `expired`: acceptance не создаёт membership, а поздние lifecycle
+команды сначала наблюдают или фиксируют terminal expiry. Гонка определяется
+server `Clock` внутри той же metadata transaction; client time, заранее
+загруженная карточка и background scheduler не являются authority.
+
 Минимальные service records:
 
 ```text
@@ -353,8 +361,22 @@ SpaceInvitation:
 ```
 
 На `(space_id, principal_id)` существует не более одной active membership и не
-более одного актуального pending invitation. Membership/invitation — service
-metadata и не входят в `OKFBundle`.
+более одного **effective pending** invitation, то есть записи со
+`state = pending` и `server_now < expires_at`. Overdue-pending запись немедленно
+трактуется как `expired`, не участвует в uniqueness guard и не блокирует новый
+invite. Новое приглашение всегда получает новый opaque ID, новую семидневную
+границу и не оживляет старую запись. Exact retry той же canonical команды
+возвращает прежний result; competing accept/expire/cancel/reissue/create
+получают один transaction winner и fresh current-state read-back.
+
+Повседневные owner и recipient projections возвращают только effective pending
+invitations. `accepted | rejected | cancelled | expired` можно хранить для
+аудита и идемпотентности, но эти записи не входят в active lists, не несут
+actions, не считаются membership и не раскрывают доступ. Durable expiry job
+должен eventually материализовать overdue state и audit outcome, однако его
+задержка не меняет effective state, authorization или возможность пригласить
+того же principal заново. Membership/invitation — service metadata и не входят
+в `OKFBundle`.
 
 Смена роли, отзыв participation и самостоятельный выход всегда применяются к
 точной active membership под `expected_membership_version`. После успешной или

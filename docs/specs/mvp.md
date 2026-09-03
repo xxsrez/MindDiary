@@ -142,6 +142,14 @@ schemas, migration и UI в MD-336 не входят.
 - Admin может предложить `reader`/`editor`; Owner также `admin`.
 - Invitation требует accept/reject внутри Mind Diary, истекает через семь дней,
   может быть cancelled/reissued и не даёт access до acceptance.
+- `expires_at` назначается server-side в UTC. Acceptance допустим только при
+  `server_now < expires_at`; в сам момент границы и позже invitation effective
+  `expired`, membership не создаётся, а terminal record исчезает из рабочих
+  списков обеих сторон.
+- Active owner/incoming projections содержат только effective pending records.
+  Overdue запись не блокирует новый invite тому же principal; replacement
+  получает новый opaque ID и новый семидневный срок. Задержка фонового expiry
+  job не расширяет доступ и не меняет это правило.
 - Email delivery, invite для незарегистрированного адресата и fuzzy global user
   search не входят в прототип.
 - Роли: `reader`, `editor`, `admin`, `owner`. Editor включает read и полный
@@ -509,9 +517,10 @@ visibility в create flow. Exact ordinary route `/{space_handle}` показыв
 - Для accepted participant exact route сначала показывает компактный `Access`:
   effective visibility, current role, active participants и pending invitation
   states. Invite exact registered email, cancel/reissue и разрешённые member
-  actions находятся в progressive disclosure. Pending, expired, rejected и
-  cancelled invitation не отображаются как membership или действующий access;
-  семь дней expiry показываются из current server projection.
+  actions находятся в progressive disclosure. Только `pending` с
+  `server_now < expires_at` отображается как active invitation; accepted,
+  expired, rejected и cancelled records не входят в рабочие списки и не несут
+  controls. Семь дней expiry показываются из current server projection.
 
 Все browser mutations используют session CSRF, один retry-safe
 `Idempotency-Key` на exact attempt и server-owned identity/role. Direct route и
@@ -846,8 +855,12 @@ network, которого Sites пока не обещает. Если Streamabl
    меняет roles, audit, idempotency, ledger или reservations.
 6. Admin управляет Reader/Editor, но не Admin/Owner; Owner управляет Admin и
    visibility. Non-owner leave не оставляет stale access.
-7. Invitation зарегистрированному principal не даёт access до acceptance,
-   expires через семь дней и не создаёт duplicate membership при retry.
+7. Invitation зарегистрированному principal не даёт access до acceptance.
+   Acceptance до server-owned семидневной UTC-границы создаёт не более одной
+   membership; ровно на границе и после неё invitation effective `expired`, не
+   показывается как active и не блокирует новый opaque invite тому же principal.
+   Retry и concurrent accept/expire/reissue не создают duplicate invitation или
+   membership даже при задержанном background worker.
 8. Anonymous request не получает system access или product data. Signed-out
    `GET`/`HEAD` распознанного UI route может получить только одинаковый
    статический sign-in shell с `/signin-with-chatgpt`; authenticated public,

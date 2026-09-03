@@ -623,7 +623,22 @@ Storage transaction проверяет actor capability, target state/version,
 single-owner invariant, пишет state + audit event и возвращает idempotency
 result. Transfer меняет target на Owner и source на Admin в одной transaction.
 Invitation acceptance создаёт membership только если invitation pending,
-unexpired и target совпадает с authenticated principal.
+target совпадает с authenticated principal и trusted transaction time строго
+раньше server-owned `expires_at`. При `server_now >= expires_at` storage boundary
+сначала наблюдает или материализует `expired`; membership не создаётся.
+Effective-pending uniqueness и обе actionable projections используют то же
+условие `pending && now < expires_at`, поэтому overdue record не блокирует новый
+invite и не остаётся кнопкой в UI даже без фонового запуска. Accept, expire,
+reject, cancel, reissue и replacement create сериализуются одной transaction,
+а idempotency replay возвращает outcome победившего canonical request.
+
+Expiry worker отвечает за durable catch-up и observability, а не за
+authorization correctness. Bounded due-job discovery переживает cold isolate и
+redeploy, ранний `not_available` не теряет job, повторный/lease-recovered claim
+идемпотентно приводит запись к одному terminal `expired`. Foreground
+command/query reconciliation всё равно применяет effective expiry немедленно;
+background lag не выдаёт доступ, не возвращает terminal records в active lists
+и не мешает повторному приглашению с новым opaque ID и сроком.
 
 Personal Mind не использует ordinary membership/invitation commands после
 bootstrap. Его delete разрешён только account-deletion transaction.

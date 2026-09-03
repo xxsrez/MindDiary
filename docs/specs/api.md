@@ -1063,9 +1063,13 @@ Global inbox использует отдельную browser allowlist projectio
 Projection включает только incoming events current actor и не зависит от уже
 accepted membership list: canonical `mind_route` приходит из server-side join
 самой invitation с current active ordinary Mind. Invalid route или non-incoming
-row отбрасывается fail closed. Исходящие pending/terminal states читаются через
-contextual exact-Mind access section. Ни этот endpoint, ни exact-email create
-не возвращают directory suggestions, похожие accounts или email адреса.
+row отбрасывается fail closed. Оба рабочих списка — incoming overview и
+contextual outgoing exact-Mind section — содержат только effective pending rows:
+`state = pending` и `server_now < expires_at`. Terminal
+`accepted | rejected | cancelled | expired` records не возвращаются, не имеют
+`can_manage` и не появляются снова после late action/reload. Ни этот endpoint,
+ни exact-email create не возвращают directory suggestions, похожие accounts или
+email адреса.
 
 Account email возвращается только там, где он нужен exact invite workflow и
 caller уже имеет право его видеть; list/member responses по умолчанию используют
@@ -1088,6 +1092,15 @@ Server выполняет exact lookup зарегистрированного pr
 возвращает `registered_principal_not_found` без fuzzy alternatives. Success
 создаёт pending invitation с `expires_at` через семь дней, но не membership.
 
+`expires_at` — server-owned UTC boundary. `accept_invitation` создаёт membership
+только когда transaction наблюдает `state = pending` и
+`server_now < expires_at`. При `server_now >= expires_at` та же transaction
+переводит effective state в `expired` и возвращает current terminal result без
+membership. Это правило применяется до duplicate-pending guard и до любой
+actionable projection, поэтому overdue row не зависит от запуска scheduler, не
+даёт access и не мешает обычному `POST .../invitations` создать новый record с
+новым opaque ID и новым seven-day expiry.
+
 `POST /api/v1/invitations/{invitation_id}/reissue` вызывает internal command
 `reissue_invitation` с `expected_invitation_version` и `Idempotency-Key`.
 Command atomically завершает прежнюю invitation, создаёт replacement с новым
@@ -1095,6 +1108,14 @@ opaque ID и новым seven-day expiry и никогда не оставляе
 invitations для одной lifecycle transition. Replay того же canonical request
 возвращает тот же replacement; другой payload с тем же key получает
 `idempotency_conflict`.
+
+Если reissue гоняется с expiry, cancel, reject или accept, один metadata
+transaction становится winner. До expiry reissue terminalizes прежний pending
+record и создаёт replacement; на границе и после неё прежний record сначала
+считается `expired`. Normal create после effective expiry является основным UI
+путём повторного приглашения и не требует ID скрытой terminal записи. Все
+success/conflict/late-action ответы заставляют browser перечитать active-only
+projection; client time не выбирает winner.
 
 Role mutation:
 
@@ -1447,6 +1468,16 @@ R2 parts are reused and stale completion cannot win the version fence.
 Background handler получает service `ActorContext`, explicit job/aggregate ID и
 idempotency state. Он не доверяет serialized role/token claims из job payload и
 не изменяет canonical content без обычной domain command/CAS boundary.
+
+Invitation expiry использует две независимые границы. Foreground commands и
+projections всегда применяют effective expiry по trusted `Clock`, поэтому
+задержка worker не оставляет invitation actionable и не блокирует новый invite.
+Durable `expire_invitations` discovery/dispatch bounded-страницами находит due
+queued work без знания конкретного invitation ID и eventually фиксирует ровно
+один `expired` transition/audit outcome. Ранний claim возвращает
+`not_available`, но не потребляет job; повторный/concurrent claim, restart,
+redeploy и lease recovery сохраняют at-least-once delivery и idempotent terminal
+state. Этот background contract не переносит access correctness на scheduler.
 
 Каждый command возвращает typed success либо `ApplicationError`. Adapters
 отвечают за перевод в HTTP Problem Details или MCP tool result, но не меняют
