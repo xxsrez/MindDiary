@@ -9,7 +9,7 @@ const TITLE_TO_ASSERTION = Object.freeze({
   "ordinary Connections and Help never load personal-token history or diagnostics": "SC-PRIVACY-01",
   "Codex guide switches Desktop and CLI paths by keyboard and copies exact current inputs": "SC-NAV-01",
   "keyboard-only connection journey exposes progress, revoke, and reconnect states": "SC-OAUTH-02",
-  "Advanced MCP owns the personal-token target, history, and revoke journey": "SC-TOKEN-01",
+  "Advanced MCP shows credential scope without a token target and keeps revoke history": "SC-TOKEN-01",
   "Advanced MCP dialog receives and restores focus without exposing raw identifiers": "SC-TOKEN-02",
   "deterministic error fixtures keep actions unavailable on both credential surfaces": "SC-FAIL-CLOSED-01",
 });
