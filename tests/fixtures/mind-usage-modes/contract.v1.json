@@ -19,21 +19,40 @@
     "current_writer_role"
   ],
   "description": {
-    "appliesTo": ["ordinary_mind", "personal_mind"],
+    "appliesTo": ["ordinary_mind"],
+    "absentFrom": ["personal_mind"],
     "modelVisible": true,
     "trustedInstruction": false,
-    "requiredFor": ["read_write"],
+    "requiredFor": ["ordinary_read_write"],
     "routes": ["read", "write"]
   },
   "agentRouting": {
-    "readTriggers": ["explicit_user_request", "description_match"],
+    "profiles": {
+      "description_based": {
+        "appliesTo": "ordinary_mind",
+        "readTriggers": ["explicit_user_request", "description_match"],
+        "writeTriggers": ["description_match_after_explicit_discussion"],
+        "automaticSave": true
+      },
+      "personal_default": {
+        "appliesTo": "personal_mind",
+        "readTriggers": ["explicit_user_request"],
+        "writeTriggers": ["explicit_personal_write_request"],
+        "automaticSave": false
+      }
+    },
     "explicitRequestBypasses": ["description_match"],
     "explicitRequestDoesNotBypass": ["usage_mode", "credential_scope", "current_access"],
+    "personalWriteRequestExamples": ["save", "remember", "add", "update", "delete"],
+    "personalWriteNonTriggers": ["topic_match", "discussion_only", "read_request", "prior_request"],
+    "trustedClientIntentFlag": false,
     "crossMindSearch": false,
     "implicitPersonalMindFallback": false
   },
   "automaticSave": {
-    "enabledBy": "read_write",
+    "enabledBy": "ordinary_mind_read_write",
+    "routingProfile": "description_based",
+    "excludedRoutingProfiles": ["personal_default"],
     "separateToggle": false,
     "perWriteConfirmation": false,
     "requiresUserNotification": true,
@@ -45,6 +64,13 @@
     "retiredTargetTool": "capture_knowledge",
     "crossMindProvenance": ["source_mind", "source_revision", "source_locator"]
   },
+  "evaluationCases": [
+    {"id":"personal-read-write-null-description","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"mode_change","outcome":"allow"},
+    {"id":"personal-discussion-only-write","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"discussion_only","outcome":"no_write"},
+    {"id":"personal-explicit-requested-write","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"explicit_personal_write_request","outcome":"allow_write"},
+    {"id":"ordinary-read-write-null-description","mindType":"ordinary_mind","mode":"read_write","description":null,"trigger":"mode_change","outcome":"description_required"},
+    {"id":"ordinary-discussed-description-match-write","mindType":"ordinary_mind","mode":"read_write","description":"matching category","trigger":"description_match_after_explicit_discussion","outcome":"allow_write"}
+  ],
   "okf": {
     "version": "0.2",
     "validateBeforeCommit": "full_bundle",

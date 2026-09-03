@@ -1,12 +1,14 @@
 # Проверка ACL reads и singleton `read_write` Mind Release 0.3
 
-> **Current Web amendment MD-373/MD-375, 2026-08-30.** Principal задаёт для
+> **Current Web amendment MD-373/MD-383, 2026-09-03.** Principal задаёт для
 > каждого Mind
 > `disabled | read | read_write`, общий для всех OAuth connections и personal
 > tokens, с единственным `read_write` Mind. Connections и Advanced MCP остаются
 > lifecycle/scopes-only. Machine contract MD-344 и его `target_*` поля ниже
 > сохранены как историческое evidence прежней модели и не доказывают current
-> Web behavior без principal-usage read-back.
+> Web behavior без principal-usage read-back. Ordinary `read_write` требует
+> description; canonical Personal `/me` использует `personal_default` без него,
+> а write выполняется только после прямой просьбы пользователя.
 
 Статус: accepted operational verification contract для `MD-344`.
 
@@ -151,8 +153,9 @@ read-back предыдущего, а не локальное предполож�
 
 - новый principal — все Minds `disabled`, `usage_version=0`;
 - несколько Minds можно независимо перевести в `read`;
-- ровно один Mind можно перевести в `read_write`, только с непустым routing
-  description и current writer role;
+- ровно один Mind можно перевести в `read_write`: ordinary Mind — только с
+  непустым routing description, canonical Personal `/me` — без description;
+  current writer role требуется в обоих случаях;
 - второй `read_write` одним CAS атомарно демотирует прежний Mind в `read`;
 - два OAuth grants и personal token видят одинаковые configured modes;
 - read-only credential видит configured `read_write`, но получает
@@ -168,6 +171,12 @@ usage state. Browser передаёт только safe `mind_ref`, mode,
 generation остаются server authority.
 
 ### Writes и immutable revision read-back
+
+Перед общей матрицей отдельно подтвердить policy: topic match, обычное
+обсуждение, read request и прежняя просьба не вызывают Personal write; только
+прямая просьба текущего пользователя изменить конкретное знание приводит к
+`commit_changeset`. Это connector/model-visible evidence, а не доверенный
+клиентский флаг в server request.
 
 1. На странице exact run Mind задать `read_write` через usage-version CAS и
    прочитать результат через OAuth и personal-token MCP profiles.

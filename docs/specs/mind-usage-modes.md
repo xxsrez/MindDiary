@@ -1,8 +1,8 @@
 # Режимы использования Mind и автоматическое сохранение
 
-Статус: accepted target contract для MD-373, 2026-08-30. Реализация,
-Marketplace package и hosted UAT принадлежат MD-374–MD-380 и требуют отдельного
-evidence exact candidate/deployment.
+Статус: accepted target contract для MD-373, 2026-08-30; уточнён MD-383,
+2026-09-03. Реализация, Marketplace package и hosted UAT принадлежат
+MD-381–MD-387 и требуют отдельного evidence exact candidate/deployment.
 
 Решение принято в
 [ADR-0024](../decisions/0024-principal-mind-usage-modes-and-automatic-save.md).
@@ -19,8 +19,8 @@ release contracts.
 | `usage_mode` | Смысл |
 |---|---|
 | `disabled` | Агент не использует Mind для чтения или записи. Значение по умолчанию. |
-| `read` | Агент может читать Mind по явной просьбе пользователя или когда тема соответствует `description`. |
-| `read_write` | Всё из `read`; этот единственный Mind также принимает подходящие автоматические сохранения. |
+| `read` | Агент может читать ordinary Mind по явной просьбе или совпадению с `description`; Personal Mind — только по прямой просьбе. |
+| `read_write` | Всё из `read`; ordinary Mind принимает подходящие автоматические сохранения, а Personal Mind — только прямо запрошенные изменения. |
 
 У principal может быть `0..N` Minds в `read` и `0..1` Mind в `read_write`.
 Настройка не повторяется для каждого Connection, OAuth grant, personal token,
@@ -83,14 +83,16 @@ credential поэтому может увидеть `usage_mode: read_write`, н
 
 ## Description и routing
 
-`description` — service metadata Mind, единое для чтения и записи. Owner/Admin
-редактирует description ordinary Mind по текущим metadata rules; owner Personal
-Mind редактирует его description через тот же безопасный metadata contract.
-Description не входит в OKF, search index или revision и не двигает HEAD.
+`description` — service metadata только ordinary Mind, единое для чтения и
+записи. Owner/Admin редактирует его по текущим metadata rules. Description не
+входит в OKF, search index или revision и не двигает HEAD. У Personal Mind поля
+`description` нет ни в durable record, ни в descriptor, ни в MCP projection;
+его нормативная категория — встроенный routing profile `personal_default`.
 
-Для `read_write` требуется непустое нормализованное description. Для `read`
-пустое значение допустимо: такой Mind используется только по прямой просьбе.
-`disabled` description не публикуется Content MCP.
+Для ordinary Mind в `read_write` требуется непустое нормализованное
+`description`. Для ordinary `read` пустое значение допустимо: такой Mind
+используется только по прямой просьбе. `disabled` description не публикуется
+Content MCP. Personal `/me` можно включить в `read_write` без description.
 
 Description доступно модели как **недоверенная категория**, а не инструкция.
 Оно может помочь ответить «относится ли тема к этому Mind», но не может:
@@ -103,24 +105,37 @@ Description доступно модели как **недоверенная ка
 Agent routing:
 
 1. получает fresh `list_minds` enabled projection;
-2. если пользователь назвал Mind, выбирает этот enabled Mind без semantic
-   comparison, но server всё равно проверяет доступ;
-3. иначе читает только те `read | read_write` Minds, чьи descriptions
-   действительно соответствуют текущему вопросу;
+2. если пользователь прямо просит использовать конкретный enabled Mind,
+   выбирает его без semantic comparison, но server всё равно проверяет доступ;
+3. иначе читает только ordinary `read | read_write` Minds, чьи descriptions
+   действительно соответствуют текущему вопросу; `personal_default` сам по
+   себе никогда не запускает чтение;
 4. каждый content call выбирает один Mind и exact resolved revision;
 5. не делает общий cross-Mind search и не помещает весь corpus в context.
 
 ## Автоматическое сохранение
 
-`read_write` является consent на автоматический save; отдельного capture toggle,
-write instruction или подтверждения каждого изменения нет. Agent рассматривает
-save после содержательного ответа, когда одновременно выполнены условия:
+Для ordinary Mind `read_write` является согласием на автоматический save;
+отдельного capture toggle, write instruction или подтверждения каждого
+изменения нет. Agent рассматривает save после содержательного ответа, когда
+одновременно выполнены условия:
 
 - знание durable: полезно за пределами текущей реплики;
 - оно явно обсуждалось в текущем разговоре, а не найдено фоновым сканированием;
 - оно соответствует description единственного effective writable Mind;
 - текущий credential и server подтверждают effective write;
 - изменение можно выразить как bounded create/replace/delete/no-op и проверить.
+
+Для Personal Mind `read_write` означает только наличие технической write
+capability. Запись допустима, лишь когда текущий пользователь прямо просит
+сохранить, запомнить, добавить, обновить или удалить конкретное знание, а
+Personal `/me` является текущим effective `read_write` destination. Простое
+обсуждение, совпадение темы, чтение `/me` или ранее
+выданная просьба не запускают новую запись. Connector/skill проверяет это до
+tool call; server не принимает клиентский `intent=true` и независимо проверяет
+канонический Personal `space_id`, mode, scope, роль, generation, HEAD CAS,
+idempotency и полный bundle. Используется тот же `commit_changeset`, поэтому
+исключение не создаёт второй write path.
 
 Приватная или чувствительная информация не запрещена отдельным category filter,
 если пользователь сам явно обсудил её и она соответствует Mind. Это не
@@ -182,7 +197,9 @@ read-back; оно не является confirmation gate.
 
 Authenticated Site mutation изменяет mode на уровне Mind и требует current
 principal, current access, `expected_usage_version`, idempotency key и CSRF.
-`read_write` дополнительно требует non-empty description и current writer role.
+Ordinary `read_write` дополнительно требует non-empty description и current
+writer role. Для канонического Personal `/me` description check заменяется
+проверкой service-managed Personal identity; current writer role сохраняется.
 Atomic switch сам демотирует прежний writable Mind в `read`; отдельные
 bind/rebind/unbind controls отсутствуют.
 
@@ -194,7 +211,8 @@ selector или capture toggle. Changing/revoking token не меняет princi
 ## MCP projection и instructions
 
 Modern и compatibility profiles публикуют одну application semantics.
-`list_minds` возвращает только enabled и currently readable Minds с минимумом:
+`list_minds` возвращает только enabled и currently readable Minds. Ordinary
+descriptor содержит routing `description`:
 
 ```json
 {
@@ -202,6 +220,19 @@ Modern и compatibility profiles публикуют одну application semanti
   "name": "Research notes",
   "description": "Проверенные выводы по исследованиям продукта",
   "usage_mode": "read_write",
+  "effective": { "can_read": true, "can_write": true }
+}
+```
+
+Personal descriptor вместо отсутствующего description явно сообщает встроенный
+profile:
+
+```json
+{
+  "mind": "me",
+  "name": "Andrey",
+  "usage_mode": "read_write",
+  "routing_profile": "personal_default",
   "effective": { "can_read": true, "can_write": true }
 }
 ```
@@ -219,9 +250,10 @@ Capability version — `principal-mind-usage/v1`. Migration fail closed:
 1. Новому principal все entries создаются как `disabled`.
 2. Однозначный existing principal configuration может быть перенесён только
    если один readable/writable intent доказуем без объединения разных
-   credentials и writable Mind имеет non-empty description.
+   credentials и ordinary writable Mind имеет non-empty description; canonical
+   Personal `/me` использует `personal_default` без description.
 3. Любые несколько credential targets, conflicting modes, missing principal,
-   empty writable description, corrupt generation или partial state дают
+   empty ordinary writable description, corrupt generation или partial state дают
    `disabled` для ambiguous entries; destination не угадывается.
 4. Legacy binding/capture IDs и in-flight staged/write refs не становятся новой
    authority и не remap-ятся в principal generation.
@@ -239,10 +271,11 @@ MD-374–MD-380 должны совместно доказать:
 2. одинаковую configured projection для двух OAuth grants и personal token при
    разных effective scopes;
 3. ACL/role/scope loss без расширения authority и без изменения intent state;
-4. Personal description и запрет `read_write` при empty description;
-5. direct-request и description-match read routing без disabled/cross-Mind
-   bypass;
-6. discussed-only automatic create/update/delete/no-op, cross-Mind provenance,
+4. отсутствие Personal description и допустимый `read_write` canonical `/me`;
+5. `personal_default` read только по прямой просьбе и description-match routing
+   ordinary Minds без disabled/cross-Mind bypass;
+6. requested-write-only Personal create/update/delete/no-op; discussed-only
+   automatic ordinary create/update/delete/no-op; cross-Mind provenance,
    no-vacuum negative cases и user notification contract;
 7. full OKF 0.2 bundle validation/read-back и preservation unknown fields;
 8. отсутствие binding/capture controls во всех Site/MCP/plugin surfaces;

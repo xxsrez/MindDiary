@@ -1,14 +1,28 @@
 # Трассируемость требований Release 0.3
 
-> **Scope extension MD-372–MD-380, 2026-08-30.** Principal-owned Mind modes и
-> automatic OKF save добавлены поверх historical `MD-329`–`MD-367` registry.
+> **Scope extension MD-372–MD-387, обновлено 2026-09-03.** Principal-owned Mind
+> modes и automatic OKF save добавлены поверх historical `MD-329`–`MD-367`
+> registry. MD-383 уточняет два непересекающихся routing profile:
+> `description_based` для ordinary Minds и встроенный `personal_default` для
+> canonical `/me`. Последний допускает технический `read_write` без description,
+> но write — только после прямой просьбы текущего пользователя.
 > Closed target contract находится в
 > `tests/fixtures/mind-usage-modes/contract.v1.json`; новая delivery chain:
 > `MD-373 → {MD-374, MD-380}`, `MD-374 → {MD-375, MD-376, MD-379}`,
 > `MD-380 → MD-379`, `{MD-376, MD-379} → MD-377`,
 > `{MD-375, MD-377} → MD-378`, а `MD-372` закрывается только joined evidence
-> всех дочерних результатов. Registry v1 ниже остаётся historical evidence
-> прежнего Release 0.3 scope и не доказывает новые runtime/UAT outcomes.
+> всех дочерних результатов. Новая corrective chain:
+> `MD-382 → MD-383 → {MD-384, MD-386}`, `MD-384 → MD-385`,
+> `{MD-384, MD-385, MD-386} → MD-387`; parent MD-382 закрывается только после
+> joined evidence MD-387. Registry v1 ниже остаётся historical evidence прежнего
+> Release 0.3 scope и не доказывает новые runtime/UAT outcomes.
+
+MD-383 local evidence — closed fixture и conformance cases: Personal
+`read_write` без description положителен; Personal automatic/topic-only write
+отрицателен; direct requested Personal write положителен; ordinary empty-
+description `read_write` отрицателен; ordinary description-based discussed save
+положителен. MD-384–MD-386 реализуют server, UI и MCP/skill surfaces, MD-387
+связывает их с exact candidate/deployment и hosted read-back.
 
 Статус: accepted verification contract для MD-338, 2026-08-27.
 

@@ -47,8 +47,9 @@ principal-owned replacement принят MD-373 в ADR-0024.
    privacy/destructive disclosures и machine-check mapping для MD-347.
 12. [Режимы использования Mind и автоматическое сохранение](specs/mind-usage-modes.md)
    — целевой principal-owned `disabled | read | read_write`, единый writable
-   Mind, description routing, discussed-only automatic save и fail-closed
-   migration. Прежний [credential write target](specs/credential-write-target.md)
+   Mind, description routing ordinary Minds, requested-write-only Personal
+   `/me`, discussed-only automatic save и fail-closed migration. Прежний
+   [credential write target](specs/credential-write-target.md)
    и [Mind bindings](specs/mind-bindings.md) сохранены как historical evidence.
 13. [Границы реализации](specs/implementation-boundaries.md) — trusted
    `ActorContext`, application ports/façades, transaction boundaries и
@@ -268,8 +269,8 @@ principal-owned replacement принят MD-373 в ADR-0024.
   обязательный внешний hosted receipt без fabricated activation assertion.
 - [ADR-0024: пользовательские режимы Mind и автоматическое сохранение](decisions/0024-principal-mind-usage-modes-and-automatic-save.md)
   — приняты principal-owned `disabled | read | read_write`, один writable Mind,
-  description routing и automatic discussed-only OKF save без binding/capture
-  controls.
+  description routing ordinary Minds, `personal_default` с записью только по
+  прямой просьбе и automatic discussed-only OKF save без binding/capture controls.
 
 ## Исследования
 

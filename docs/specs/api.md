@@ -1,10 +1,15 @@
 # REST и MCP API Mind Diary
 
-> **Target amendment MD-373, 2026-08-30.** Следующая schema generation заменяет
+> **Target amendment MD-373/MD-383, 2026-09-03.** Следующая schema generation заменяет
 > credential target principal-owned `usage_mode`; `list_minds` проецирует только
-> enabled Minds с `description`, `usage_mode` и effective capabilities.
+> enabled Minds с `usage_mode` и effective capabilities. Ordinary descriptor
+> содержит nullable `description`; canonical Personal `/me` не содержит это
+> поле и объявляет `routing_profile: personal_default`. Personal `read_write`
+> не является автоматическим согласием: запись возможна только после прямой
+> просьбы пользователя о конкретном изменении знания.
 > Bind/unbind и `capture_knowledge` не входят в target catalog, automatic save
-> использует `commit_changeset`. Exact target contract —
+> ordinary Minds и requested Personal write используют `commit_changeset`.
+> Exact target contract —
 > [режимы использования Mind](mind-usage-modes.md); historical wire schemas
 > ниже сохраняются как evidence реализованных версий до MD-374–MD-380.
 

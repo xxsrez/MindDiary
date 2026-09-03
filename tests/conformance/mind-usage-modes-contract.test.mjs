@@ -15,6 +15,10 @@ const decision = await readFile(
   new URL("docs/decisions/0024-principal-mind-usage-modes-and-automatic-save.md", root),
   "utf8",
 );
+const pluginConnector = await readFile(
+  new URL("docs/specs/plugin-connector.md", root),
+  "utf8",
+);
 
 function exactKeys(value, expected, label) {
   assert.deepEqual(Object.keys(value).sort(), [...expected].sort(), label);
@@ -38,6 +42,7 @@ test("principal Mind usage fixture is a closed versioned contract", () => {
     "description",
     "agentRouting",
     "automaticSave",
+    "evaluationCases",
     "okf",
     "retiredControls",
     "migration",
@@ -55,11 +60,19 @@ test("principal Mind usage fixture is a closed versioned contract", () => {
 test("routing separates user intent, model policy and server authority", () => {
   assert.equal(fixture.description.modelVisible, true);
   assert.equal(fixture.description.trustedInstruction, false);
+  assert.deepEqual(fixture.description.appliesTo, ["ordinary_mind"]);
+  assert.deepEqual(fixture.description.absentFrom, ["personal_mind"]);
+  assert.deepEqual(fixture.description.requiredFor, ["ordinary_read_write"]);
   assert.deepEqual(fixture.description.routes, ["read", "write"]);
   assert.deepEqual(
-    fixture.agentRouting.readTriggers,
+    fixture.agentRouting.profiles.description_based.readTriggers,
     ["explicit_user_request", "description_match"],
   );
+  assert.deepEqual(
+    fixture.agentRouting.profiles.description_based.writeTriggers,
+    ["description_match_after_explicit_discussion"],
+  );
+  assert.equal(fixture.agentRouting.profiles.description_based.automaticSave, true);
   assert.deepEqual(
     fixture.agentRouting.explicitRequestDoesNotBypass,
     ["usage_mode", "credential_scope", "current_access"],
@@ -68,8 +81,30 @@ test("routing separates user intent, model policy and server authority", () => {
   assert.equal(fixture.agentRouting.implicitPersonalMindFallback, false);
 });
 
-test("automatic save is discussed-only canonical OKF work", () => {
-  assert.equal(fixture.automaticSave.enabledBy, "read_write");
+test("canonical Personal Mind is requested-write-only without description", () => {
+  const personal = fixture.agentRouting.profiles.personal_default;
+  assert.equal(personal.appliesTo, "personal_mind");
+  assert.deepEqual(personal.readTriggers, ["explicit_user_request"]);
+  assert.deepEqual(personal.writeTriggers, ["explicit_personal_write_request"]);
+  assert.equal(personal.automaticSave, false);
+  assert.deepEqual(fixture.agentRouting.personalWriteNonTriggers, [
+    "topic_match",
+    "discussion_only",
+    "read_request",
+    "prior_request",
+  ]);
+  assert.equal(fixture.agentRouting.trustedClientIntentFlag, false);
+  assert.match(specification, /Personal `\/me`.*без description/s);
+  assert.match(specification, /текущий пользователь прямо просит/s);
+  assert.match(pluginConnector, /ни совпадение темы, ни[\s\S]*не запускают write/u);
+  assert.match(pluginConnector, /только после прямой просьбы текущего[\s\S]*пользователя/u);
+  assert.match(pluginConnector, /клиентского intent[\s\S]*flag нет/u);
+});
+
+test("ordinary automatic save is discussed-only canonical OKF work", () => {
+  assert.equal(fixture.automaticSave.enabledBy, "ordinary_mind_read_write");
+  assert.equal(fixture.automaticSave.routingProfile, "description_based");
+  assert.deepEqual(fixture.automaticSave.excludedRoutingProfiles, ["personal_default"]);
   assert.equal(fixture.automaticSave.separateToggle, false);
   assert.equal(fixture.automaticSave.perWriteConfirmation, false);
   assert.equal(fixture.automaticSave.requiresUserNotification, true);
@@ -79,6 +114,26 @@ test("automatic save is discussed-only canonical OKF work", () => {
   assert.equal(fixture.okf.validateBeforeCommit, "full_bundle");
   assert.equal(fixture.okf.validateAfterCommit, "full_exact_revision");
   assert.equal(fixture.okf.preserveUnknownTypesAndFields, true);
+});
+
+test("routing evaluation matrix keeps Personal exception and ordinary guard closed", () => {
+  assert.deepEqual(
+    Object.fromEntries(fixture.evaluationCases.map(({ id, outcome }) => [id, outcome])),
+    {
+      "personal-read-write-null-description": "allow",
+      "personal-discussion-only-write": "no_write",
+      "personal-explicit-requested-write": "allow_write",
+      "ordinary-read-write-null-description": "description_required",
+      "ordinary-discussed-description-match-write": "allow_write",
+    },
+  );
+  for (const scenario of fixture.evaluationCases) {
+    assert.deepEqual(
+      Object.keys(scenario).sort(),
+      ["description", "id", "mindType", "mode", "outcome", "trigger"].sort(),
+      scenario.id,
+    );
+  }
 });
 
 test("legacy target and capture policies are explicitly superseded", () => {

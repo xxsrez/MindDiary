@@ -1,10 +1,12 @@
 # Спецификация первого прототипа
 
-> **Target amendment Release 0.3 (MD-373, 2026-08-30).** Product intent на
+> **Target amendment Release 0.3 (MD-373/MD-383, 2026-09-03).** Product intent на
 > уровне principal/Mind задаётся `disabled | read | read_write`; все credentials
 > используют одну настройку, а credential scope только сужает effective
-> capability. Единственный `read_write` Mind разрешает automatic discussed-only
-> OKF save через `commit_changeset`. Нормативная replacement specification —
+> capability. Ordinary `read_write` Mind разрешает automatic discussed-only OKF
+> save через `commit_changeset`. Personal `/me` не имеет description и при
+> `read_write` принимает только прямо запрошенные пользователем изменения через
+> тот же canonical write path. Нормативная replacement specification —
 > [режимы использования Mind](mind-usage-modes.md). Historical acceptance и
 > as-built catalogs ниже не переписываются задним числом.
 

@@ -1,11 +1,14 @@
 # Обзор Mind Diary
 
-> **Целевое уточнение Release 0.3 (MD-373, 2026-08-30).** Настройка работы
+> **Целевое уточнение Release 0.3 (MD-373/MD-383, 2026-09-03).** Настройка работы
 > агента теперь принадлежит principal и Mind: `disabled | read | read_write`,
 > одинакова для всех credentials и допускает ровно один `read_write` Mind.
-> Description маршрутизирует чтение и discussed-only automatic save через
-> `commit_changeset`; binding, per-credential target и отдельный capture toggle
-> остаются только историей. Нормативный контракт —
+> Description ordinary Mind маршрутизирует чтение и discussed-only automatic
+> save через `commit_changeset`. Personal `/me` не имеет description, использует
+> `personal_default` и принимает запись только по прямой просьбе пользователя;
+> его `read_write` — capability, а не автоматическое согласие. Binding,
+> per-credential target и отдельный capture toggle остаются только историей.
+> Нормативный контракт —
 > [режимы использования Mind](specs/mind-usage-modes.md). Прежние разделы ниже
 > сохраняют as-built evidence и не переопределяют ADR-0024.
 

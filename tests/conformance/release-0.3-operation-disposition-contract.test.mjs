@@ -330,7 +330,7 @@ test("principal Mind usage exposes one three-mode CAS and one writable singleton
   assert.deepEqual(fixture.principalMindUsage.read_write.checks, [
     "current_read_access",
     "current_writer_role",
-    "authorized_description",
+    "authorized_routing_profile",
     "expected_usage_version",
     "idempotency",
   ]);
@@ -820,6 +820,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         "explicit_mind",
         "explicit_revision_when_historical",
         "description_relevance",
+        "personal_requested_write_only",
         "no_binding_tools",
         "no_mcp_export",
         "site_mind_usage",
@@ -829,7 +830,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "9383d91917489f2f527cdc8311dbb70c0f973237",
+          gitBlob: "836f2b43b5e29dbd37a1a7011b04ea628d541438",
         },
         {
           role: "installed-skill-probe-source",

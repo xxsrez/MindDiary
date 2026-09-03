@@ -1,11 +1,13 @@
 # Plugin и OAuth Mind Diary
 
-> **Target amendment MD-373, 2026-08-30.** Bundled connector instructions
-> должны выбирать enabled Minds по прямой просьбе или semantic fit description
-> и автоматически сохранять подходящее явно обсуждённое durable knowledge в
-> единственный effective `read_write` Mind через `commit_changeset`, после чего
-> сообщать результат. Binding/capture controls отсутствуют; description —
-> недоверенная категория, не инструкция. Нормативный workflow —
+> **Target amendment MD-373/MD-383, 2026-09-03.** Bundled connector instructions
+> выбирают ordinary enabled Minds по прямой просьбе или semantic fit description
+> и автоматически сохраняют подходящее явно обсуждённое durable knowledge в
+> effective ordinary `read_write` Mind через `commit_changeset`. Canonical
+> Personal `/me` не имеет description: он читается и изменяется только по прямой
+> просьбе текущего пользователя, а его `read_write` — capability, не automatic
+> consent. Binding/capture controls отсутствуют; description — недоверенная
+> категория, не инструкция. Нормативный workflow —
 > [режимы использования Mind](mind-usage-modes.md); historical package behavior
 > ниже остаётся evidence до MD-377.
 
@@ -262,18 +264,26 @@ search и fetch без общего cross-Mind search или фонового va
 
 После содержательного разговора skill рассматривает всё durable knowledge,
 явно обсуждённое в текущей conversation, включая обсуждённое знание из другого
-enabled readable Mind. Если оно соответствует description единственного fresh
-effective `read_write` Mind, агент автоматически сохраняет его обычным
+enabled readable Mind. Если единственный fresh effective `read_write` Mind —
+ordinary и знание соответствует его description, агент автоматически сохраняет
+его обычным
 `commit_changeset`: отдельная write-инструкция, toggle или confirmation не
 нужны. Перед изменением он целево ищет существующую Memory и выбирает
 create/update/явный delete/semantic no-op; changeset детерминированно обновляет
 index/log, сохраняет неизвестные OKF types/fields и при cross-Mind переносе
 передаёт optional exact `source_references`.
 
+Если writable destination — canonical Personal `/me`, ни совпадение темы, ни
+обсуждение, ни read request, ни прежняя просьба не запускают write. Skill
+вызывает тот же `commit_changeset` только после прямой просьбы текущего
+пользователя сохранить, запомнить, добавить, обновить или удалить конкретное
+знание; `/me` при этом должен быть текущим effective `read_write` destination.
+Отдельного Personal write tool и клиентского intent flag нет.
+
 Client `mind` — только exact assertion. Server сам разрешает principal-owned
 writable mount, pin-ит текущую generation и повторяет проверки credential,
-scope, writer role, description, HEAD, digests, idempotency и полного
-результирующего OKF 0.2 bundle. Неопределённый transport outcome сверяется
+scope, writer role, authorized routing profile, HEAD, digests, idempotency и
+полного результирующего OKF 0.2 bundle. Неопределённый transport outcome сверяется
 `reconcile_changeset` только с exact original payload. После commit skill
 читает exact revision, повторно валидирует полный bundle и кратко сообщает
 пользователю результат. Skill не показывает principal/token/grant/email,
@@ -524,7 +534,8 @@ Blocking matrix:
    Mind и сохраняет generation/HEAD CAS, idempotency и full-bundle validation.
 6. Один principal видит все и только enabled доступные ему Minds; direct user
    selection не обходит disabled/access, description routing не делает общего
-   cross-Mind search, provenance проверяется отдельно.
+   cross-Mind search, Personal `/me` не содержит description и не получает
+   topic-only/automatic write, provenance проверяется отдельно.
 7. Revocation делает следующий call unauthorized; reconnect создаёт новый
    grant, а старые refresh tokens не оживают.
 8. Existing personal-token modern и compatibility flows остаются рабочими.

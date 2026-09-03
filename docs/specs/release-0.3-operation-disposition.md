@@ -1,12 +1,14 @@
 # Реестр операций Release 0.3
 
-> **Superseding disposition MD-373, 2026-08-30.** Principal-owned
+> **Superseding disposition MD-373/MD-383, 2026-09-03.** Principal-owned
 > `disabled | read | read_write` заменяет credential target. Site меняет mode
 > на уровне Mind; `list_minds` публикует enabled projection; bind/unbind,
 > credential target controls, capture toggle и `capture_knowledge` удаляются,
-> а automatic save использует `commit_changeset`. Нормативный delta и migration
-> зафиксированы в [режимах использования Mind](mind-usage-modes.md) и этом
-> обновлённом machine contract.
+> а writes используют `commit_changeset`. Ordinary Mind сохраняет description-
+> based automatic save. Canonical Personal `/me` работает без description и
+> допускает write только после прямой просьбы пользователя; `read_write` сам по
+> себе такого согласия не даёт. Нормативный delta и migration зафиксированы в
+> [режимах использования Mind](mind-usage-modes.md) и machine contract.
 
 Статус: accepted operation-disposition contract, 2026-08-27. Документ
 фиксирует целевое распределение уже существующих входных операций после
@@ -58,10 +60,10 @@ actor, authorization checks, базовую схему ошибок и прав�
 | `web-read` | Sites control; current registered Sites actor; identity и current ACL/visibility до metadata read | `401 authentication_required`, indistinguishable `404` where required; exact Mind only where route contains `mind_ref` |
 | `web-write` | Sites control; current registered Sites actor; same-origin `Origin`, session CSRF, idempotency/CAS where state changes, current named capability | typed `400/403/409`; no content revision unless operation is the internal final step of Site-owned import |
 | `web-import` | Sites control; current actor with exact Mind write authority; quota/reservation/session/CAS checks | bounded typed import errors; exact Mind and base revision, one final HEAD or no change |
-| `mind-usage-control` | Sites control; current registered principal, principal-owned settings, current Mind access, `expected_usage_version`, idempotency and singleton `read_write` invariant | `disabled | read | read_write`; unknown/foreign Mind is indistinguishable `404`; `read_write` additionally requires current writer role and authorized description |
+| `mind-usage-control` | Sites control; current registered principal, principal-owned settings, current Mind access, `expected_usage_version`, idempotency and singleton `read_write` invariant | `disabled | read | read_write`; unknown/foreign Mind is indistinguishable `404`; `read_write` additionally requires current writer role and either ordinary authorized description or canonical Personal identity |
 | `operator-read` | hidden support surface; current registered Sites actor in constructor-only service-operator allowlist | every other actor receives indistinguishable `404`; no content body or new authority |
 | `content-read` | Content MCP; OAuth/personal-token actor with `content:read`, principal usage `read | read_write`, current ACL/visibility and explicit Mind/revision whenever the operation targets content | disabled/inaccessible/missing stay indistinguishable where required; direct user request bypasses only description relevance, never usage/scope/access; no cross-Mind fallback |
-| `content-write` | Content MCP; current actor with `content:write`, exact current principal `read_write` Mind, principal-owned mount generation, current ACL/description, idempotency and HEAD CAS; optional source refs are reauthorized | `writable_mind_required`, `writable_mind_stale`, source/revision/idempotency conflicts; client `mind` is only exact-target assertion |
+| `content-write` | Content MCP; current actor with `content:write`, exact current principal `read_write` Mind, principal-owned mount generation, current ACL, authorized routing profile, idempotency and HEAD CAS; optional source refs are reauthorized | Ordinary automatic write requires description match after explicit discussion; Personal write requires a direct current-user request checked by connector policy. Server receives no trusted intent flag; client `mind` is only exact-target assertion |
 | `content-ingress` | Content MCP or capability-only HTTP; same principal mount checks as `content-write` plus source ownership, byte/digest/quota/expiry checks | no provider/local locator below adapter; staged result is pinned to current principal-owned mount generation |
 | `mcp-transport` | Content MCP; current OAuth/personal-token actor authenticated on every POST; per-method/per-tool scope and current access checks follow after protocol validation | OAuth challenge or protocol error before application call; no session actor cache |
 | `oauth` | OAuth adapter; public-client DCR/PKCE, exact redirect/resource, trusted Sites identity at consent, grant/token lifecycle | standard OAuth errors; resource remains canonical `/api/mcp` |
@@ -76,6 +78,14 @@ principal и одинакова для всех его OAuth grants и personal 
 конкретного credential может только сузить effective capability. MD-374
 реализует Site surface и singleton, MD-376 — MCP projection и инструкции,
 MD-379 — server-resolved write pin и transactional rechecks.
+
+MD-383 уточняет этот контракт без второй серверной операции. Для ordinary Mind
+`authorized_routing_profile` означает непустое authorized description. Для
+service-resolved canonical Personal `/me` он означает встроенный
+`personal_default`, который не требует description. Server проверяет только
+техническую authority. Connector/skill вызывает тот же `commit_changeset` для
+Personal Mind лишь после прямой просьбы текущего пользователя сохранить,
+запомнить, добавить, обновить или удалить конкретное знание.
 
 ## REST control routes
 
@@ -96,7 +106,7 @@ MD-379 — server-resolved write pin и transactional rechecks.
 | `GET /api/v1/minds/{mind_ref}` | keep → Sites control | Current metadata after authorization; no content body |
 | `GET /api/v1/minds/{mind_ref}/usage` | change → Sites control | Authorized per-Mind `disabled | read | read_write` projection; no credential selector. MD-374 |
 | `PUT /api/v1/minds/{mind_ref}/usage` | change → Sites control | `mind-usage-control`; exact mode, `expected_usage_version`, idempotency and singleton writable transition. MD-374 |
-| `PATCH /api/v1/minds/me/description` | change → Sites control | Updates the authorized Personal Mind category used for read relevance and `read_write` eligibility. MD-374 |
+| `PATCH /api/v1/minds/me/description` | remove → none | Personal Mind не имеет description; fresh route/catalog его не публикует. Реализация удаления — MD-381/MD-384 |
 | `GET /api/v1/minds/{mind_ref}/capacity` | keep → Sites control | Current authorized capacity projection |
 | `POST /api/v1/minds/{mind_ref}/exports` | keep → Sites control | Actor-owned exact-revision export start; explicit profile for mixed revisions; atomic idempotency, quota reservation and job creation. MD-361 |
 | `GET /api/v1/export-jobs/{job_id}` | keep → Sites control | Creator-private bounded status; current read access is rechecked before issuing a short-lived download grant. MD-361 |
@@ -167,7 +177,7 @@ indistinguishable `404` for every other actor.
 
 | Current tool | Disposition → target | Schema/error delta, compatibility и migration owner |
 |---|---|---|
-| `list_minds` | change → Content MCP | Lists only principal-enabled `read | read_write` Minds with authorized untrusted description, effective capability, settings version and singleton writable mount generation. MD-376 |
+| `list_minds` | change → Content MCP | Lists only principal-enabled `read | read_write` Minds with effective capability, settings version and singleton writable mount generation. Ordinary Minds получают authorized untrusted description; Personal `/me` — `routing_profile: personal_default` без description. MD-381/MD-386 |
 | `resolve_mind` | change → Content MCP | Exact enabled handle only; explicit user request never bypasses disabled/scope/current access. MD-376 |
 | `get_mind_info` | change → Content MCP | Explicit enabled Mind/revision and effective capability; historical mode remains read-only. MD-376 |
 | `get_mind_bindings` | remove → none | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1` and points to principal Mind usage on Site. MD-376 |
