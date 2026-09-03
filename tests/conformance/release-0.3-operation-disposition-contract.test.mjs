@@ -865,12 +865,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-playbook-source",
           path: "packages/adapter-web/src/token-management.ts",
-          gitBlob: "f3b538b6a61538ea8391c8db766ff47e5d36ec7e",
+          gitBlob: "bfc6179e67b7ec350ddb47dc0e0705618dca9aaa",
         },
         {
           role: "help-route-source",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "4cff03c81598673cb36308f8d46996c61fbb1c1a",
+          gitBlob: "56efa185f4d1450946dd3eaa2524bbc5459c555d",
         },
       ],
     },
