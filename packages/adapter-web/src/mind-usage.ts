@@ -327,11 +327,14 @@ export function renderMindUsagePanel(mindRef: string): string {
   const safeRef = /^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)
     ? mindRef
     : "";
+  const policyCopy = safeRef === "/me"
+    ? "For My Mind, Read and write permits only the specific writes you directly request; it does not enable automatic saving."
+    : "For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description.";
   return `<section class="md-usage-section" aria-labelledby="mind-usage-heading" data-mind-usage-panel data-mind-ref="${safeRef}">
     <div>
       <p class="md-eyebrow">Agent intent</p>
       <h2 id="mind-usage-heading">How Codex uses this Mind</h2>
-      <p>This account-wide setting is the same for every Connection and personal token. For My Mind, Read and write permits only the specific writes you directly request; it does not enable automatic saving.</p>
+      <p>This account-wide setting is the same for every Connection and personal token. ${policyCopy}</p>
     </div>
     <section class="md-state md-state--loading" aria-busy="true" data-mind-usage-state>
       <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>

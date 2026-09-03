@@ -133,6 +133,12 @@ test("shipped client keeps Personal first and creates private metadata", async (
 
 test("shipped direct route saves name and description under one metadata version", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  await expect(page.locator("[data-mind-usage-panel]")).toContainText(
+    "For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description.",
+  );
+  await expect(page.locator("[data-mind-usage-panel]")).not.toContainText(
+    "For My Mind, Read and write permits only the specific writes",
+  );
   await expect(page.locator("[data-route-description]")).toHaveText(
     "Research decisions and supporting notes.",
   );

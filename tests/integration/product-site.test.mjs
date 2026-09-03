@@ -1290,6 +1290,8 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.equal(detail.status, 200);
   const detailHtml = await detail.text();
   assert.match(detailHtml, /data-mind-route data-mind-handle="research-notes"[^>]*data-mind-visibility="private"/);
+  assert.match(detailHtml, /For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description\./u);
+  assert.doesNotMatch(detailHtml, /For My Mind, Read and write permits only the specific writes/u);
   assert.match(detailHtml, /data-owner-delete-controls/);
   assert.match(detailHtml, /data-owner-visibility-controls/);
   assert.match(detailHtml, /data-owner-transfer-controls/);
