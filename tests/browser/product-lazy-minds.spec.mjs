@@ -215,14 +215,14 @@ test("global invitation inbox accepts an incoming event and filters outgoing row
     accepted.getByRole("button", { name: "Accept" }).click(),
   ]);
   expect(acceptedBody).toEqual({ expected_invitation_version: 2 });
-  await expect(accepted).toHaveAttribute("data-invitation-state", "accepted");
+  await expect(accepted).toHaveCount(0);
   const rejected = page.locator('[data-invitation-card="invitation_browser_reject"]');
   await Promise.all([
     page.waitForNavigation(),
     rejected.getByRole("button", { name: "Reject" }).click(),
   ]);
   expect(rejectedBody).toEqual({ expected_invitation_version: 4 });
-  await expect(rejected).toHaveAttribute("data-invitation-state", "rejected");
+  await expect(rejected).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Accept|Reject/u })).toHaveCount(0);
 });
 

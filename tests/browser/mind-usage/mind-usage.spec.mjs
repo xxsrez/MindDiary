@@ -46,7 +46,7 @@ test("three account-wide modes enforce one writable Mind and reload server state
 
   await expect(page.getByRole("heading", { name: "How Codex uses your Minds" })).toBeVisible();
   await expect(page.locator("[data-mind-usage-card]")).toHaveCount(3);
-  await expect(page.getByText("The choice belongs to your account", { exact: false })).toBeVisible();
+  await expect(page.getByText("My Mind accepts writes only when you directly ask Codex", { exact: false })).toBeVisible();
   await expect(card(page, "/archive").locator('input[value="read_write"]')).toBeDisabled();
   await expect(card(page, "/archive")).toContainText("Add a routing description");
   await expect(card(page, "/archive")).toContainText("Read only still works when you name this Mind directly");

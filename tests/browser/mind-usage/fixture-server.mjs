@@ -20,7 +20,6 @@ const personal = Object.freeze({
   mindId: "space_personal_browser",
   route: "/me",
   name: "Personal strategy",
-  description: "Personal decisions and durable preferences discussed with me.",
   isPersonal: true,
   visibility: "private",
   discovery: "personal",
@@ -63,7 +62,6 @@ const control = {
       principal: { displayName: "Browser Fixture", profileVersion: 1 },
       personalMind: {
         name: personal.name,
-        description: personal.description,
         metadataVersion: personal.metadataVersion,
         headRevisionId: personal.headRevisionId,
       },
@@ -84,7 +82,7 @@ const mindUsage = {
     if (command.expectedUsageVersion !== version) return { kind: "usage_version_conflict" };
     const selected = minds.find((mind) => mind.mindId === command.spaceId);
     if (selected === undefined) return { kind: "mind_not_found" };
-    if (command.usageMode === "read_write" && selected.description === null) {
+    if (command.usageMode === "read_write" && !selected.isPersonal && selected.description === null) {
       return { kind: "description_required" };
     }
     if (command.usageMode === "read_write" && !["editor", "admin", "owner"].includes(selected.access.role)) {
@@ -120,7 +118,6 @@ const handler = createProductWebHttpHandler({
       principal: { displayName: "Browser Fixture", profileVersion: 1 },
       personalMind: {
         name: personal.name,
-        description: personal.description,
         metadataVersion: personal.metadataVersion,
         headRevisionId: personal.headRevisionId,
       },
