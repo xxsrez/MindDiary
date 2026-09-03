@@ -20,6 +20,7 @@ import type {
 import {
   bundleFileMediaType,
   opaqueId,
+  principalMindUsageWriteGeneration,
   utcInstant,
   type BundleFileMediaType,
   type IdempotencyKey,
@@ -1212,7 +1213,7 @@ export class BundleFileStagingService {
     assertedSpaceId: SpaceId,
   ): Promise<Readonly<PrincipalMindUsageWritePin> | null> {
     const state = await this.#metadata.readPrincipalMindUsage(principalId);
-    const generation = state?.activeWriteGeneration ?? null;
+    const generation = principalMindUsageWriteGeneration(state, assertedSpaceId);
     if (
       generation === null || generation.principalId !== principalId ||
       generation.spaceId !== assertedSpaceId

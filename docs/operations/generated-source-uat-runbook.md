@@ -57,8 +57,9 @@ rows одновременно остаются `not_available`, `none`, `0`.
    synthetic description;
 2. выпустить personal token с exact name `UAT Generated Sources`, active
    `content:write` и expiry не более восьми суток от `created_at`;
-3. через authenticated Site задать этому Mind режим `read_write` и перечитать
-   единственную active writable projection principal; exact usage generation
+3. через authenticated Site задать этому ordinary Mind режим `read_write` и
+   перечитать active ordinary writable projection principal; независимый
+   Personal lane не выбирается этим runner и не меняется, exact usage generation
    остаётся server-only, а credential/token page не выбирает destination;
 4. вызвать same-origin, CSRF-protected
    `POST /api/internal/uat/generated-sources` с JSON ровно
@@ -81,7 +82,7 @@ Mind, `principal_id`, `space_id`, binding owner, generation,
 filename/media/digest, provider locator, prompt/job или способ generation не
 являются input. Principal/mount/generation/version никогда не являются runner
 input. Trusted runtime разрешает principal из dedicated credential, читает его
-единственный active `read_write` Mind и pin-ит exact
+единственный active ordinary `read_write` Mind и pin-ит exact
 `principal_mind_usage_generation_id`. Credential scope и current role/ACL
 авторизуют вызов, но не выбирают destination. Ни route, ни Content MCP request
 не могут передать или заменить `write_binding_id`, `binding_owner_id`,

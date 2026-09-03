@@ -70,11 +70,12 @@ ADR-0024 и principal-owned Mind usage contract. Fresh runtime не реклам
 
 ### Release 0.3 principal-owned mount-generation amendment
 
-Для любого fresh stage, upload-intent, connector или generated-source ingress
-server сначала разрешает authenticated actor в immutable `principal_id`, затем
-читает единственный active `read_write` Mind этого principal. Credential scope,
-status и current ACL/role всё ещё обязательны, но только сужают capability и не
-выбирают destination.
+Для любого fresh stage, upload-intent или connector ingress server сначала
+разрешает authenticated actor в immutable `principal_id`, затем читает exact
+active `read_write` lane выбранного Mind: Personal requested-write либо
+единственный ordinary automatic-write. Generated-source runner выбирает только
+ordinary lane. Credential scope, status и current ACL/role всё ещё обязательны,
+но только сужают capability и не выбирают destination.
 
 - Application request может содержать exact Mind/`space_id` только как
   fail-closed assertion ожидаемого назначения. Server обязан получить тот же

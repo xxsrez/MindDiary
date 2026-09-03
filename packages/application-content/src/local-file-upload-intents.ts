@@ -13,14 +13,15 @@ import type {
   PrincipalMindUsageReader,
   PrincipalMindUsageWritePin,
 } from "@mind-diary/application-ports";
-import type {
-  Capability,
-  IdempotencyKey,
-  PrincipalMindUsageGenerationId,
-  Sha256Digest,
-  SpaceId,
-  StagedBundleFileId,
-  UtcInstant,
+import {
+  principalMindUsageWriteGeneration,
+  type Capability,
+  type IdempotencyKey,
+  type PrincipalMindUsageGenerationId,
+  type Sha256Digest,
+  type SpaceId,
+  type StagedBundleFileId,
+  type UtcInstant,
 } from "@mind-diary/domain";
 import {
   type BundleFileStagingService,
@@ -732,7 +733,7 @@ export class LocalFileUploadIntentService {
     assertedSpaceId: SpaceId,
   ): Promise<Readonly<PrincipalMindUsageWritePin> | null> {
     const state = await this.#usage.readPrincipalMindUsage(principalId);
-    const generation = state?.activeWriteGeneration ?? null;
+    const generation = principalMindUsageWriteGeneration(state, assertedSpaceId);
     if (
       generation === null || generation.principalId !== principalId ||
       generation.spaceId !== assertedSpaceId

@@ -110,7 +110,7 @@ function principalMountedMetadata(metadata) {
           usageMode: "read_write",
           writeGeneration: generation,
         })]),
-        activeWriteGeneration: generation,
+        ordinaryWriteGeneration: generation,
       })
     : null;
   const validatePin = async (pin) =>

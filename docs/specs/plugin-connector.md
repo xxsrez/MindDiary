@@ -6,7 +6,9 @@
 > effective ordinary `read_write` Mind через `commit_changeset`. Canonical
 > Personal `/me` не имеет description: он читается и изменяется только по прямой
 > просьбе текущего пользователя, а его `read_write` — capability, не automatic
-> consent. Binding/capture controls отсутствуют; description — недоверенная
+> consent. Personal requested-write lane независим от единственного ordinary
+> automatic-write lane, и оба могут быть effective одновременно.
+> Binding/capture controls отсутствуют; description — недоверенная
 > категория, не инструкция. Нормативный workflow —
 > [режимы использования Mind](mind-usage-modes.md); historical package behavior
 > ниже остаётся evidence до MD-377.
@@ -137,7 +139,7 @@ Diary доступной после обновления каталога. Он�
 | Installation | `AVAILABLE` + `ON_USE` | то же поведение |
 | OAuth | authorization code + PKCE, DCR | тот же protocol profile, но Mind Diary scopes и identity rules |
 | Data authorization | internal Task Manager user | internal immutable Mind Diary `principal_id` |
-| Tool surface | task operations | fresh principal-owned enabled projection + one exact server-resolved `read_write` destination |
+| Tool surface | task operations | fresh principal-owned enabled projection + exact selected `read_write` lane: `0..1` ordinary and independently Personal `/me` |
 
 Не следует механически копировать из Task Manager:
 
@@ -264,8 +266,8 @@ search и fetch без общего cross-Mind search или фонового va
 
 После содержательного разговора skill рассматривает всё durable knowledge,
 явно обсуждённое в текущей conversation, включая обсуждённое знание из другого
-enabled readable Mind. Если единственный fresh effective `read_write` Mind —
-ordinary и знание соответствует его description, агент автоматически сохраняет
+enabled readable Mind. Если единственный fresh effective ordinary
+`read_write` Mind соответствует знанию своим description, агент автоматически сохраняет
 его обычным
 `commit_changeset`: отдельная write-инструкция, toggle или confirmation не
 нужны. Перед изменением он целево ищет существующую Memory и выбирает
@@ -273,11 +275,12 @@ create/update/явный delete/semantic no-op; changeset детерминиро
 index/log, сохраняет неизвестные OKF types/fields и при cross-Mind переносе
 передаёт optional exact `source_references`.
 
-Если writable destination — canonical Personal `/me`, ни совпадение темы, ни
+Если выбранный writable destination — canonical Personal `/me`, ни совпадение темы, ни
 обсуждение, ни read request, ни прежняя просьба не запускают write. Skill
 вызывает тот же `commit_changeset` только после прямой просьбы текущего
 пользователя сохранить, запомнить, добавить, обновить или удалить конкретное
-знание; `/me` при этом должен быть текущим effective `read_write` destination.
+знание; `/me` при этом должен быть effective в своём `read_write` lane. Это не
+отключает и не заменяет ordinary automatic-write Mind.
 Отдельного Personal write tool и клиентского intent flag нет.
 
 Client `mind` — только exact assertion. Server сам разрешает principal-owned

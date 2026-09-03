@@ -67,7 +67,12 @@ export function freezePrincipalMindUsageState(
       .sort((left, right) => left.spaceId.localeCompare(right.spaceId))
       .map(freezeEntry),
   );
-  const writable = entries.filter((entry) => entry.usageMode === "read_write");
+  const ordinaryWritable = entries.filter((entry) =>
+    entry.routingProfile === "description_based" && entry.usageMode === "read_write"
+  );
+  const personalWritable = entries.filter((entry) =>
+    entry.routingProfile === "personal_default" && entry.usageMode === "read_write"
+  );
   const seenSpaces = new Set<SpaceId>();
   const structurallyValid =
     state.contractVersion === PRINCIPAL_MIND_USAGE_CONTRACT_VERSION &&
@@ -81,6 +86,8 @@ export function freezePrincipalMindUsageState(
         !Number.isSafeInteger(entry.entryVersion) ||
         entry.entryVersion < 1 ||
         !Number.isFinite(Date.parse(entry.updatedAt)) ||
+        (entry.routingProfile !== "personal_default" &&
+          entry.routingProfile !== "description_based") ||
         (entry.usageMode !== "read" && entry.usageMode !== "read_write")
       ) return false;
       seenSpaces.add(entry.spaceId);
@@ -95,29 +102,46 @@ export function freezePrincipalMindUsageState(
           generation.generation >= 1 &&
           Number.isFinite(Date.parse(generation.selectedAt));
     });
-  const writableGeneration = writable[0]?.writeGeneration ?? null;
-  const active = state.activeWriteGeneration;
+  const ordinaryGeneration = ordinaryWritable[0]?.writeGeneration ?? null;
+  const personalGeneration = personalWritable[0]?.writeGeneration ?? null;
+  const ordinary = state.ordinaryWriteGeneration;
+  const personal = state.personalWriteGeneration;
   if (
     !structurallyValid ||
-    writable.length > 1 ||
-    (writable.length === 0) !== (active === null) ||
-    (writableGeneration !== null && active !== null &&
-      (writableGeneration.generationId !== active.generationId ||
-        writableGeneration.principalId !== active.principalId ||
-        writableGeneration.spaceId !== active.spaceId ||
-        writableGeneration.generation !== active.generation ||
-        writableGeneration.selectedAt !== active.selectedAt))
+    ordinaryWritable.length > 1 ||
+    personalWritable.length > 1 ||
+    (ordinaryWritable.length === 0) !== (ordinary === null) ||
+    (personalWritable.length === 0) !== (personal === null) ||
+    !sameGeneration(ordinaryGeneration, ordinary) ||
+    !sameGeneration(personalGeneration, personal)
   ) {
-    throw new TypeError("Principal Mind usage singleton invariant is invalid");
+    throw new TypeError("Principal Mind usage write-lane invariant is invalid");
   }
   return Object.freeze({
     ...state,
     entries,
-    activeWriteGeneration:
-      state.activeWriteGeneration === null
+    ordinaryWriteGeneration:
+      state.ordinaryWriteGeneration === null
         ? null
-        : freezeGeneration(state.activeWriteGeneration),
+        : freezeGeneration(state.ordinaryWriteGeneration),
+    personalWriteGeneration:
+      state.personalWriteGeneration === null
+        ? null
+        : freezeGeneration(state.personalWriteGeneration),
   });
+}
+
+function sameGeneration(
+  entry: Readonly<PrincipalMindWriteGeneration> | null,
+  lane: Readonly<PrincipalMindWriteGeneration> | null,
+): boolean {
+  return entry === null && lane === null ||
+    entry !== null && lane !== null &&
+      entry.generationId === lane.generationId &&
+      entry.principalId === lane.principalId &&
+      entry.spaceId === lane.spaceId &&
+      entry.generation === lane.generation &&
+      entry.selectedAt === lane.selectedAt;
 }
 
 export function createFreshPrincipalMindUsageState(input: Readonly<{
@@ -129,7 +153,8 @@ export function createFreshPrincipalMindUsageState(input: Readonly<{
     contractVersion: PRINCIPAL_MIND_USAGE_CONTRACT_VERSION,
     usageVersion: mindUsageVersion(0),
     entries: [],
-    activeWriteGeneration: null,
+    ordinaryWriteGeneration: null,
+    personalWriteGeneration: null,
     createdAt: input.occurredAt,
     updatedAt: input.occurredAt,
   });
@@ -177,6 +202,12 @@ export function setPrincipalMindUsageMode(
   }
 
   const existing = current.entries.find((entry) => entry.spaceId === input.spaceId);
+  if (
+    existing !== undefined &&
+    existing.routingProfile !== input.authority.routingProfile
+  ) {
+    return { kind: "principal_mismatch" };
+  }
   if ((existing?.usageMode ?? "disabled") === input.usageMode) {
     return {
       kind: "applied",
@@ -189,7 +220,12 @@ export function setPrincipalMindUsageMode(
   const nextEntries: MindUsageEntry[] = [];
   for (const entry of current.entries) {
     if (entry.spaceId === input.spaceId) continue;
-    if (input.usageMode === "read_write" && entry.usageMode === "read_write") {
+    if (
+      input.usageMode === "read_write" &&
+      input.authority.routingProfile === "description_based" &&
+      entry.routingProfile === "description_based" &&
+      entry.usageMode === "read_write"
+    ) {
       nextEntries.push({
         ...entry,
         usageMode: "read",
@@ -202,38 +238,36 @@ export function setPrincipalMindUsageMode(
     }
   }
 
-  let activeWriteGeneration =
-    input.usageMode === "read_write"
-      ? Object.freeze({
-          generationId: input.generationId,
-          principalId: current.principalId,
-          spaceId: input.spaceId,
-          generation: nextUsageVersion,
-          selectedAt: input.occurredAt,
-        })
-      : input.spaceId === current.activeWriteGeneration?.spaceId
-        ? null
-        : current.activeWriteGeneration;
+  const selectedGeneration = input.usageMode === "read_write"
+    ? Object.freeze({
+        generationId: input.generationId,
+        principalId: current.principalId,
+        spaceId: input.spaceId,
+        generation: nextUsageVersion,
+        selectedAt: input.occurredAt,
+      })
+    : null;
 
   if (input.usageMode !== "disabled") {
     const nextEntry: MindUsageEntry = {
       principalId: current.principalId,
       spaceId: input.spaceId,
+      routingProfile: input.authority.routingProfile,
       usageMode: input.usageMode,
       entryVersion: version((existing?.entryVersion ?? 0) + 1),
       writeGeneration:
-        input.usageMode === "read_write" ? activeWriteGeneration : null,
+        input.usageMode === "read_write" ? selectedGeneration : null,
       updatedAt: input.occurredAt,
     };
     nextEntries.push(nextEntry);
   }
 
-  if (input.usageMode !== "read_write" && activeWriteGeneration !== null) {
-    const stillWritable = nextEntries.find(
-      (entry) => entry.spaceId === activeWriteGeneration?.spaceId,
-    );
-    if (stillWritable?.usageMode !== "read_write") activeWriteGeneration = null;
-  }
+  const ordinaryWriteGeneration = nextEntries.find((entry) =>
+    entry.routingProfile === "description_based" && entry.usageMode === "read_write"
+  )?.writeGeneration ?? null;
+  const personalWriteGeneration = nextEntries.find((entry) =>
+    entry.routingProfile === "personal_default" && entry.usageMode === "read_write"
+  )?.writeGeneration ?? null;
 
   return {
     kind: "applied",
@@ -241,7 +275,8 @@ export function setPrincipalMindUsageMode(
       ...current,
       usageVersion: nextUsageVersion,
       entries: nextEntries,
-      activeWriteGeneration,
+      ordinaryWriteGeneration,
+      personalWriteGeneration,
       updatedAt: input.occurredAt,
     }),
     changed: true,
@@ -256,10 +291,29 @@ export function principalMindUsageWritePinMatches(
     generationId: PrincipalMindUsageGenerationId;
   }>,
 ): boolean {
-  const generation = state.activeWriteGeneration;
+  const generation = principalMindUsageWriteGeneration(state, input.spaceId);
   return state.principalId === input.principalId &&
     generation !== null &&
     generation.principalId === input.principalId &&
     generation.spaceId === input.spaceId &&
     generation.generationId === input.generationId;
+}
+
+/** Resolves the exact current write generation in either independent lane. */
+export function principalMindUsageWriteGeneration(
+  state: Readonly<PrincipalMindUsageState> | null,
+  spaceId: SpaceId,
+): Readonly<PrincipalMindWriteGeneration> | null {
+  const entry = state?.entries?.find((candidate) =>
+    candidate.spaceId === spaceId && candidate.usageMode === "read_write"
+  );
+  if (entry?.writeGeneration !== undefined && entry.writeGeneration !== null) {
+    return entry.writeGeneration;
+  }
+  const lane = state?.ordinaryWriteGeneration?.spaceId === spaceId
+    ? state.ordinaryWriteGeneration
+    : state?.personalWriteGeneration?.spaceId === spaceId
+      ? state.personalWriteGeneration
+      : null;
+  return lane ?? null;
 }

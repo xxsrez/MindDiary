@@ -40,7 +40,7 @@ function actor(tokenId = AUTHORIZATION_RECORD_ID) {
 function usageSnapshot(spaceId = SPACE, generationId = GENERATION) {
   return Object.freeze({
     principalId: "principal_upload_intent",
-    activeWriteGeneration: Object.freeze({
+    ordinaryWriteGeneration: Object.freeze({
       principalId: "principal_upload_intent",
       spaceId,
       generationId,
@@ -128,7 +128,7 @@ async function harness(options = {}) {
         return usage;
       },
       async validatePrincipalMindUsageWritePin(pin) {
-        const generation = usage?.activeWriteGeneration;
+        const generation = usage?.ordinaryWriteGeneration;
         return generation?.principalId === pin.principalId &&
           generation?.spaceId === pin.spaceId &&
           generation?.generationId === pin.generationId;

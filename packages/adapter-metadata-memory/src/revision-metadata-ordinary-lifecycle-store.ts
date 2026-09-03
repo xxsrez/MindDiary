@@ -312,7 +312,7 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
               Object.prototype.hasOwnProperty.call(request, "description") &&
               request.description === null &&
               [...tx.principalMindUsageOwners.values()].some((owner) =>
-                owner.state.activeWriteGeneration?.spaceId === request.spaceId)
+                owner.state.ordinaryWriteGeneration?.spaceId === request.spaceId)
             ) {
               return Object.freeze({ kind: "description_required_for_write" });
             }

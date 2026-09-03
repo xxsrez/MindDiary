@@ -578,7 +578,7 @@ test("mismatched resolved metadata cannot redirect a descriptor to another space
   assert.equal(mind.handle, "source-space");
 });
 
-test("MCP discovery omits legacy Personal description and projects the shared writable mount", async () => {
+test("MCP discovery omits Personal description and projects both independent writable mounts", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Usage Owner");
   const enabled = await createMind(env, owner, "enabled-notes", "Enabled Notes");
@@ -611,6 +611,15 @@ test("MCP discovery omits legacy Personal description and projects the shared wr
     "enable-ordinary-write",
   );
   assert.equal(writable.kind, "applied");
+  const personalWritable = await setUsage(
+    env,
+    owner.principalId,
+    owner.personalMind.mindId,
+    "read_write",
+    2,
+    "enable-personal-write-independently",
+  );
+  assert.equal(personalWritable.kind, "applied");
 
   for (const token of [
     { id: "token_usage_read", scopes: ["content:read"] },
@@ -629,20 +638,23 @@ test("MCP discovery omits legacy Personal description and projects the shared wr
   assert.deepEqual(listed.minds.map(({ route }) => route), ["/me", "/enabled-notes"]);
   assert.equal(Object.hasOwn(listed.minds[0], "description"), false);
   assert.equal(listed.minds[0].routingProfile, "personal_default");
-  assert.equal(listed.minds[0].usageMode, "read");
+  assert.equal(listed.minds[0].usageMode, "read_write");
   assert.deepEqual(listed.minds[0].effective, { canRead: true, canWrite: false });
-  assert.deepEqual(listed.minds[0].writableMount, { active: false, generation: null });
-  assert.equal(listed.minds[0].settingsVersion, 2);
+  assert.deepEqual(listed.minds[0].writableMount, {
+    active: true,
+    generation: personalWritable.state.personalWriteGeneration.generationId,
+  });
+  assert.equal(listed.minds[0].settingsVersion, 3);
 
   const enabledDescriptor = listed.minds[1];
   assert.equal(enabledDescriptor.description, "Durable knowledge for Enabled Notes");
   assert.equal(enabledDescriptor.routingProfile, "description_based");
   assert.equal(enabledDescriptor.usageMode, "read_write");
   assert.deepEqual(enabledDescriptor.effective, { canRead: true, canWrite: false });
-  assert.equal(enabledDescriptor.settingsVersion, 2);
+  assert.equal(enabledDescriptor.settingsVersion, 3);
   assert.deepEqual(enabledDescriptor.writableMount, {
     active: true,
-    generation: writable.state.activeWriteGeneration.generationId,
+    generation: writable.state.ordinaryWriteGeneration.generationId,
   });
   assert.equal(enabledDescriptor.contentCapabilities, undefined);
 
@@ -658,6 +670,24 @@ test("MCP discovery omits legacy Personal description and projects the shared wr
   assert.equal(
     writeDescriptor.writableMount.generation,
     enabledDescriptor.writableMount.generation,
+  );
+  const personalWriteInfo = await discovery.getMindInfo(
+    mcpActor(
+      owner.principalId,
+      "token_usage_write",
+      ["content:read", "content:write"],
+    ),
+    owner.personalMind.mindId,
+    { kind: "head" },
+  );
+  const personalWriteDescriptor = personalWriteInfo.mind;
+  assert.deepEqual(personalWriteDescriptor.effective, {
+    canRead: true,
+    canWrite: true,
+  });
+  assert.equal(
+    personalWriteDescriptor.writableMount.generation,
+    personalWritable.state.personalWriteGeneration.generationId,
   );
 
   for (const selector of ["disabled-notes", "missing-notes"]) {
@@ -681,7 +711,7 @@ test("MCP discovery omits legacy Personal description and projects the shared wr
       owner.principalId,
       disabled.mindId,
       "read",
-      2,
+      3,
       "enable-disabled-as-read-only",
     )).kind,
     "applied",
@@ -700,7 +730,7 @@ test("MCP discovery omits legacy Personal description and projects the shared wr
   assert.equal(readOnlyInfo.mind.routingProfile, "description_based");
   assert.equal(readOnlyInfo.mind.usageMode, "read");
   assert.deepEqual(readOnlyInfo.mind.effective, { canRead: true, canWrite: false });
-  assert.equal(readOnlyInfo.mind.settingsVersion, 3);
+  assert.equal(readOnlyInfo.mind.settingsVersion, 4);
   assert.deepEqual(readOnlyInfo.mind.writableMount, {
     active: false,
     generation: null,
@@ -812,7 +842,7 @@ test("malformed principal usage state fails closed before descriptor projection"
       if (property === "readPrincipalMindUsage") {
         return async () => ({
           ...applied.state,
-          activeWriteGeneration: null,
+          ordinaryWriteGeneration: null,
         });
       }
       const value = Reflect.get(target, property, target);

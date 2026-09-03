@@ -4,7 +4,7 @@ import test from "node:test";
 
 const root = new URL("../../", import.meta.url);
 const fixture = JSON.parse(await readFile(
-  new URL("tests/fixtures/mind-usage-modes/contract.v1.json", root),
+  new URL("tests/fixtures/mind-usage-modes/contract.v2.json", root),
   "utf8",
 ));
 const specification = await readFile(
@@ -25,8 +25,8 @@ function exactKeys(value, expected, label) {
 }
 
 test("principal Mind usage fixture is a closed versioned contract", () => {
-  assert.equal(fixture.$schema, "mind-diary/principal-mind-usage/v1");
-  assert.equal(fixture.version, 1);
+  assert.equal(fixture.$schema, "mind-diary/principal-mind-usage/v2");
+  assert.equal(fixture.version, 2);
   exactKeys(fixture, [
     "$schema",
     "version",
@@ -37,6 +37,7 @@ test("principal Mind usage fixture is a closed versioned contract", () => {
     "modes",
     "cardinality",
     "switchBehavior",
+    "writeLanes",
     "sharedAcrossCredentials",
     "effectiveCapabilityChecks",
     "description",
@@ -50,7 +51,21 @@ test("principal Mind usage fixture is a closed versioned contract", () => {
   assert.deepEqual(fixture.modes, ["disabled", "read", "read_write"]);
   assert.equal(fixture.ownership, "principal");
   assert.equal(fixture.defaultMode, "disabled");
-  assert.equal(fixture.cardinality.read_write, "0..1");
+  assert.deepEqual(fixture.cardinality, {
+    read: "0..N",
+    ordinary_read_write: "0..1",
+    personal_read_write: "0..1",
+    combined_read_write: "0..2",
+  });
+  assert.deepEqual(fixture.writeLanes, {
+    independent: true,
+    ordinary: "automatic_save",
+    personal: "direct_request_only",
+  });
+  assert.equal(
+    fixture.switchBehavior,
+    "demote_previous_ordinary_read_write_to_read_atomically",
+  );
   assert.deepEqual(
     fixture.sharedAcrossCredentials,
     ["oauth_grant", "personal_token"],
@@ -95,7 +110,7 @@ test("canonical Personal Mind is requested-write-only without description", () =
   ]);
   assert.equal(fixture.agentRouting.trustedClientIntentFlag, false);
   assert.match(specification, /Personal `\/me`.*без description/s);
-  assert.match(specification, /текущий пользователь прямо просит/s);
+  assert.match(specification, /текущий пользователь прямо\s+просит/u);
   assert.match(pluginConnector, /ни совпадение темы, ни[\s\S]*не запускают write/u);
   assert.match(pluginConnector, /только после прямой просьбы текущего[\s\S]*пользователя/u);
   assert.match(pluginConnector, /клиентского intent[\s\S]*flag нет/u);
@@ -123,6 +138,7 @@ test("routing evaluation matrix keeps Personal exception and ordinary guard clos
       "personal-read-write-null-description": "allow",
       "personal-discussion-only-write": "no_write",
       "personal-explicit-requested-write": "allow_write",
+      "personal-and-ordinary-concurrent-write": "allow_both",
       "ordinary-read-write-null-description": "description_required",
       "ordinary-discussed-description-match-write": "allow_write",
     },

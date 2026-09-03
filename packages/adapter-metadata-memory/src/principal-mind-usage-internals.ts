@@ -80,6 +80,8 @@ function validEntry(principalId: PrincipalId, value: unknown): value is MindUsag
   const entry = value as MindUsageEntry;
   return entry.principalId === principalId &&
     typeof entry.spaceId === "string" && entry.spaceId.length > 0 &&
+    (entry.routingProfile === "personal_default" ||
+      entry.routingProfile === "description_based") &&
     (entry.usageMode === "read" || entry.usageMode === "read_write") &&
     Number.isSafeInteger(entry.entryVersion) && entry.entryVersion >= 1 &&
     validInstant(entry.updatedAt) &&
@@ -95,8 +97,92 @@ function validEntry(principalId: PrincipalId, value: unknown): value is MindUsag
         validInstant(entry.writeGeneration.selectedAt));
 }
 
+type LegacyPrincipalMindUsageState = Omit<
+  PrincipalMindUsageState,
+  "contractVersion" | "entries" | "ordinaryWriteGeneration" |
+    "personalWriteGeneration"
+> & {
+  readonly contractVersion: "principal-mind-usage/v1";
+  readonly entries: readonly (Omit<MindUsageEntry, "routingProfile"> & {
+    readonly routingProfile?: MindUsageEntry["routingProfile"];
+  })[];
+  readonly activeWriteGeneration?: MindUsageEntry["writeGeneration"];
+};
+
+function migrateLegacyPrincipalMindUsageState(
+  raw: Readonly<LegacyPrincipalMindUsageState | PrincipalMindUsageState>,
+  personalSpaceId: SpaceId | undefined,
+): Readonly<PrincipalMindUsageState> {
+  const entries = raw.entries.map((entry) => {
+    const routingProfile = entry.spaceId === personalSpaceId
+      ? "personal_default" as const
+      : "description_based" as const;
+    if (
+      "routingProfile" in entry &&
+      entry.routingProfile !== undefined &&
+      entry.routingProfile !== routingProfile
+    ) throw new TypeError("Principal Mind usage routing profile is invalid");
+    return Object.freeze({ ...entry, routingProfile });
+  });
+  return freezePrincipalMindUsageState({
+    ...raw,
+    contractVersion: PRINCIPAL_MIND_USAGE_CONTRACT_VERSION,
+    entries,
+    ordinaryWriteGeneration: entries.find((entry) =>
+      entry.routingProfile === "description_based" &&
+      entry.usageMode === "read_write"
+    )?.writeGeneration ?? null,
+    personalWriteGeneration: entries.find((entry) =>
+      entry.routingProfile === "personal_default" &&
+      entry.usageMode === "read_write"
+    )?.writeGeneration ?? null,
+  });
+}
+
+/** Upgrades persisted v1 singleton state into independent v2 write lanes. */
+export function migrateLegacyPrincipalMindUsageOwners(
+  owners: ReadonlyMap<PrincipalId, unknown>,
+  personalBindings: PersonalBindingMap,
+): Map<PrincipalId, MutablePrincipalMindUsageOwnerState> {
+  return new Map([...owners].map(([principalId, rawOwner]) => {
+    if (typeof rawOwner !== "object" || rawOwner === null) {
+      throw new TypeError("Principal Mind usage owner is invalid");
+    }
+    const owner = rawOwner as MutablePrincipalMindUsageOwnerState;
+    if (!(owner.retiredGenerationIds instanceof Set) ||
+      !(owner.idempotency instanceof Map)) {
+      throw new TypeError("Principal Mind usage owner is invalid");
+    }
+    const personalSpaceId = personalBindings.get(principalId)?.spaceId;
+    const state = migrateLegacyPrincipalMindUsageState(
+      owner.state as LegacyPrincipalMindUsageState | PrincipalMindUsageState,
+      personalSpaceId,
+    );
+    const idempotency = new Map([...owner.idempotency].map(([key, record]) => [
+      key,
+      Object.freeze({
+        canonicalRequestHash: record.canonicalRequestHash,
+        result: Object.freeze({
+          ...record.result,
+          state: migrateLegacyPrincipalMindUsageState(
+            record.result.state as LegacyPrincipalMindUsageState |
+              PrincipalMindUsageState,
+            personalSpaceId,
+          ),
+        }),
+      }),
+    ]));
+    return [principalId, {
+      state,
+      retiredGenerationIds: new Set(owner.retiredGenerationIds),
+      idempotency,
+    }];
+  }));
+}
+
 export function validPrincipalMindUsageOwnersSnapshot(
   owners: ReadonlyMap<PrincipalId, unknown>,
+  personalBindings?: ReadonlyMap<PrincipalId, { readonly spaceId: SpaceId }>,
 ): boolean {
   const generationOwners = new Map<string, PrincipalId>();
   const generationSignatures = new Map<string, string>();
@@ -137,6 +223,15 @@ export function validPrincipalMindUsageOwnersSnapshot(
     const seenSpaces = new Set<string>();
     for (const entry of state.entries) {
       if (!validEntry(principalId, entry) || seenSpaces.has(entry.spaceId)) return false;
+      const ownPersonalSpaceId = personalBindings?.get(principalId)?.spaceId;
+      const anyPersonalSpace = personalBindings === undefined
+        ? false
+        : [...personalBindings.values()].some((binding) => binding.spaceId === entry.spaceId);
+      if (
+        (entry.routingProfile === "personal_default" &&
+          entry.spaceId !== ownPersonalSpaceId) ||
+        (entry.routingProfile === "description_based" && anyPersonalSpace)
+      ) return false;
       seenSpaces.add(entry.spaceId);
       if (!registerGeneration(principalId, entry.writeGeneration)) return false;
     }
@@ -147,7 +242,9 @@ export function validPrincipalMindUsageOwnersSnapshot(
     }
     for (const generationId of owner.retiredGenerationIds) {
       if (!BOUNDED_OPAQUE_ID.test(generationId) ||
-        generationId === owner.state.activeWriteGeneration?.generationId) return false;
+        generationId === owner.state.ordinaryWriteGeneration?.generationId ||
+        generationId === owner.state.personalWriteGeneration?.generationId
+      ) return false;
       const previousOwner = generationOwners.get(generationId);
       if (previousOwner !== undefined && previousOwner !== principalId) return false;
       generationOwners.set(generationId, principalId);
@@ -167,7 +264,10 @@ export function validPrincipalMindUsageOwnersSnapshot(
       } catch {
         return false;
       }
-      if (!registerGeneration(principalId, replayState.activeWriteGeneration)) return false;
+      if (
+        !registerGeneration(principalId, replayState.ordinaryWriteGeneration) ||
+        !registerGeneration(principalId, replayState.personalWriteGeneration)
+      ) return false;
     }
   }
   return true;
@@ -340,14 +440,21 @@ export function purgePrincipalMindUsageForSpace(
     if (entry.writeGeneration !== null) {
       owner.retiredGenerationIds.add(entry.writeGeneration.generationId);
     }
+    const entries = owner.state.entries.filter((candidate) =>
+      candidate.spaceId !== spaceId
+    );
     owner.state = freezePrincipalMindUsageState({
       ...owner.state,
       usageVersion: mindUsageVersion(owner.state.usageVersion + 1),
-      entries: owner.state.entries.filter((candidate) => candidate.spaceId !== spaceId),
-      activeWriteGeneration:
-        owner.state.activeWriteGeneration?.spaceId === spaceId
-          ? null
-          : owner.state.activeWriteGeneration,
+      entries,
+      ordinaryWriteGeneration: entries.find((candidate) =>
+        candidate.routingProfile === "description_based" &&
+        candidate.usageMode === "read_write"
+      )?.writeGeneration ?? null,
+      personalWriteGeneration: entries.find((candidate) =>
+        candidate.routingProfile === "personal_default" &&
+        candidate.usageMode === "read_write"
+      )?.writeGeneration ?? null,
       updatedAt: occurredAt,
     });
   }

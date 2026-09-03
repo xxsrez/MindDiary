@@ -38,7 +38,7 @@ const ALLOWED = Object.freeze({
 function currentUsage(overrides = {}) {
   return {
     principalId: COMMON.actor.principalId,
-    activeWriteGeneration: {
+    ordinaryWriteGeneration: {
       generationId: TARGET_GENERATION,
       principalId: COMMON.actor.principalId,
       spaceId: COMMON.spaceId,
@@ -54,7 +54,7 @@ function usageReader(result = currentUsage(), reads = []) {
       return result;
     },
     async validatePrincipalMindUsageWritePin(pin) {
-      const generation = result?.activeWriteGeneration;
+      const generation = result?.ordinaryWriteGeneration;
       return generation?.generationId === pin.generationId &&
         generation?.principalId === pin.principalId &&
         generation?.spaceId === pin.spaceId;
@@ -141,9 +141,9 @@ test("current principal Mind mount and write authorization are checked before co
 
 test("principal mount failures are typed and stop before connector metadata", async () => {
   for (const [targetResult, code] of [
-    [currentUsage({ activeWriteGeneration: null }), "writable_target_required"],
+    [currentUsage({ ordinaryWriteGeneration: null }), "writable_target_required"],
     [currentUsage({
-      activeWriteGeneration: {
+      ordinaryWriteGeneration: {
         generationId: "target_generation_other",
         principalId: COMMON.actor.principalId,
         spaceId: "space_other",

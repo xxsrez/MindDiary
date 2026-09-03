@@ -1,6 +1,6 @@
 # Профиль `ship-work-release` для Mind Diary
 
-Статус: accepted project configuration, revision 5, 2026-08-24.
+Статус: accepted project configuration, revision 6, 2026-09-03.
 
 Документ задаёт project-specific параметры Mind Diary по
 [provider-neutral profile contract](../specs/ship-work-release-project-profile.md).
@@ -25,7 +25,8 @@ redacted receipt. Account/audience/allowlist setup, provider privacy read-back
 и external cleanup остаются отдельными explicit-authority prerequisites и не
 выполняются runner-ом. Final handoff дополнительно требует assertion о fresh
 real Marketplace/Codex first-user flow: install, read-first OAuth, explicit
-write step-up, singleton writable Mind, Markdown write/history/export и revoke
+write step-up, independent Personal/ordinary write lanes, Markdown
+write/history/export и revoke
 на exact deployment. Synthetic automation остаётся отдельным blocking gate и
 не заменяет этот receipt. Оба terminal outcome собираются после interim UAT
 cut; поэтому они не входят в ordinary `uat.smoke_rows` и не блокируют deploy,
@@ -40,12 +41,17 @@ CI после install выполняет только system-dependency step
 `npx playwright install-deps chromium`; browser binaries между clean jobs не
 кэшируются, а npm cache не является browser authority.
 
+Revision 6 заменяет прежний общий singleton write assertion двумя независимыми
+каналами: `0..1` ordinary automatic-write Mind и Personal `/me`
+requested-write capability. Synthetic и UAT evidence обязаны подтвердить, что
+оба lane могут быть активны одновременно и изменение одного не меняет другой.
+
 ## Canonical profile
 
 ~~~yaml
 schema: ship-work-release/project-profile/v1
 profile_id: mind-diary
-profile_revision: 5
+profile_revision: 6
 
 context:
   schema: ship-work-release/context-bindings/v1
@@ -820,7 +826,8 @@ evidence:
           - reads.multi-mind-current-acl
           - bindings.single-write-current-target
           - bindings.current-target-exactly-one-revision
-          - bindings.rebind-stale-no-side-effect
+          - bindings.personal-and-ordinary-write-independent
+          - writes.ordinary-and-personal-exact-lane-no-cross-effect
           - bindings.concurrent-rebind-cas
           - bindings.restart-persistence
           - bindings.unbind-write-fail-closed

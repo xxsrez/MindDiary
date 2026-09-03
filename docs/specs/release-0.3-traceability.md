@@ -5,9 +5,11 @@
 > registry. MD-383 уточняет два непересекающихся routing profile:
 > `description_based` для ordinary Minds и встроенный `personal_default` для
 > canonical `/me`. Последний допускает технический `read_write` без description,
-> но write — только после прямой просьбы текущего пользователя.
+> но write — только после прямой просьбы текущего пользователя. MD-382 отделяет
+> этот Personal requested-write lane от `0..1` ordinary automatic-write lane:
+> оба могут быть effective одновременно и переключаются независимо.
 > Closed target contract находится в
-> `tests/fixtures/mind-usage-modes/contract.v1.json`; новая delivery chain:
+> `tests/fixtures/mind-usage-modes/contract.v2.json`; новая delivery chain:
 > `MD-373 → {MD-374, MD-380}`, `MD-374 → {MD-375, MD-376, MD-379}`,
 > `MD-380 → MD-379`, `{MD-376, MD-379} → MD-377`,
 > `{MD-375, MD-377} → MD-378`, а `MD-372` закрывается только joined evidence

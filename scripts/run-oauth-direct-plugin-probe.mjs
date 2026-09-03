@@ -980,7 +980,7 @@ export async function runOAuthScenario({ assertions, nowState }) {
     (item) => item?.mind_ref === "/me",
   );
   if (
-    initialUsage.body?.data?.contract_version !== "principal-mind-usage/v1" ||
+    initialUsage.body?.data?.contract_version !== "principal-mind-usage/v2" ||
     initialUsage.body?.data?.usage_version !== 0 ||
     initialPersonalUsage?.usage_mode !== "disabled" ||
     initialPersonalUsage?.routing_profile !== "personal_default" ||

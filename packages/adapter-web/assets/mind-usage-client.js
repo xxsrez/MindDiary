@@ -59,14 +59,19 @@
   const safeProjection = (value) => {
     if (
       !value || typeof value !== "object" ||
-      value.contract_version !== "principal-mind-usage/v1" ||
+      value.contract_version !== "principal-mind-usage/v2" ||
       !Number.isSafeInteger(value.usage_version) || value.usage_version < 0 ||
       !Array.isArray(value.items)
     ) return null;
     const items = value.items.map(safeItem);
     if (items.some((item) => item === null)) return null;
     const refs = new Set(items.map((item) => item.mind_ref));
-    if (refs.size !== items.length || items.filter((item) => item.usage_mode === "read_write").length > 1) return null;
+    const writable = items.filter((item) => item.usage_mode === "read_write");
+    if (
+      refs.size !== items.length ||
+      writable.filter((item) => item.is_personal).length > 1 ||
+      writable.filter((item) => !item.is_personal).length > 1
+    ) return null;
     return { usageVersion: value.usage_version, items };
   };
   const modeLabel = (mode) => mode === "disabled"
@@ -121,7 +126,7 @@
     link.href = item.mind_ref;
     title.append(link);
     const description = node("p", "md-usage-copy", item.is_personal
-      ? "My Mind has no routing description. Codex uses it only when you name it, and writes only when you directly request a specific change."
+      ? "My Mind is independent of the ordinary automatic-save destination. Codex uses it only when you name it, and writes only when you directly request a specific change."
       : item.description ?? "No routing description. Semantic matching is unavailable.");
     const metadata = node("dl", "md-card__metadata");
     const definition = (term, value) => {
@@ -178,7 +183,9 @@
       const selected = form.querySelector('input[type="radio"]:checked')?.value ?? "";
       submit.disabled = !modes.has(selected) || selected === form.dataset.currentMode;
       const otherWritable = projection.items.find((candidate) =>
-        candidate.usage_mode === "read_write" && candidate.mind_ref !== item.mind_ref);
+        candidate.usage_mode === "read_write" &&
+        candidate.is_personal === item.is_personal &&
+        candidate.mind_ref !== item.mind_ref);
       status.textContent = selected === "read_write" && otherWritable
         ? `Saving will atomically move ${otherWritable.name} to Read only.`
         : "";

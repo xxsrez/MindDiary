@@ -6,7 +6,8 @@
 > capability. Ordinary `read_write` Mind разрешает automatic discussed-only OKF
 > save через `commit_changeset`. Personal `/me` не имеет description и при
 > `read_write` принимает только прямо запрошенные пользователем изменения через
-> тот же canonical write path. Нормативная replacement specification —
+> тот же canonical write path; его write capability независимо от `0..1`
+> ordinary automatic-write Mind. Нормативная replacement specification —
 > [режимы использования Mind](mind-usage-modes.md). Historical acceptance и
 > as-built catalogs ниже не переписываются задним числом.
 

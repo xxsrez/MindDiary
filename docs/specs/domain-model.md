@@ -2,7 +2,8 @@
 
 > **Target amendment MD-373/MD-383, 2026-09-03.** К service metadata добавлен
 > principal-owned `usage_mode: disabled | read | read_write`; у principal не
-> более одного `read_write` Mind. Description ordinary Mind model-visible как
+> более одного ordinary `read_write` Mind; Personal `/me` имеет независимый
+> requested-write lane, поэтому оба могут быть включены одновременно. Description ordinary Mind model-visible как
 > недоверенная routing category, но не входит в OKF/revision. У Personal Mind
 > description отсутствует, `/me` использует встроенный `personal_default`, а
 > запись разрешена только по прямой просьбе пользователя. Полный контракт —

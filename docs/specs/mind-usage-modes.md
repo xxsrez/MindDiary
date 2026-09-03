@@ -1,7 +1,7 @@
 # Режимы использования Mind и автоматическое сохранение
 
-Статус: accepted target contract для MD-373, 2026-08-30; уточнён MD-383,
-2026-09-03. Реализация, Marketplace package и hosted UAT принадлежат
+Статус: accepted target contract для MD-373, 2026-08-30; уточнён MD-383 и
+исправлен MD-382, 2026-09-03. Реализация, Marketplace package и hosted UAT принадлежат
 MD-381–MD-387 и требуют отдельного evidence exact candidate/deployment.
 
 Решение принято в
@@ -22,9 +22,12 @@ release contracts.
 | `read` | Агент может читать ordinary Mind по явной просьбе или совпадению с `description`; Personal Mind — только по прямой просьбе. |
 | `read_write` | Всё из `read`; ordinary Mind принимает подходящие автоматические сохранения, а Personal Mind — только прямо запрошенные изменения. |
 
-У principal может быть `0..N` Minds в `read` и `0..1` Mind в `read_write`.
-Настройка не повторяется для каждого Connection, OAuth grant, personal token,
-Codex session или MCP protocol profile.
+У principal может быть `0..N` Minds в `read`, `0..1` ordinary Mind в
+`read_write` для автоматического сохранения и независимо `0..1` Personal Mind
+`/me` в `read_write` для прямо запрошенных изменений. Поэтому одновременно
+могут быть writable Personal `/me` и один ordinary Mind. Настройка не
+повторяется для каждого Connection, OAuth grant, personal token, Codex session
+или MCP protocol profile.
 
 ## Authoritative state
 
@@ -34,13 +37,15 @@ Codex session или MCP protocol profile.
 PrincipalMindUsageState:
   principal_id             # trusted immutable owner
   usage_version            # monotonic CAS, initial 0
-  active_write_generation? # opaque immutable generation or null
+  ordinary_write_generation? # 0..1 automatic-save ordinary lane
+  personal_write_generation? # 0..1 direct-request-only /me lane
   created_at
   updated_at
 
 MindUsageEntry:
   principal_id
   space_id
+  routing_profile          # personal_default | description_based
   usage_mode               # disabled | read | read_write
   entry_version
   write_generation?        # only for current read_write entry
@@ -51,14 +56,18 @@ State принадлежит principal. Browser не передаёт `principal
 role, credential owner или generation как authority. Storage обеспечивает:
 
 - одно effective entry на `principal_id + space_id`;
-- не более одного active `read_write` и generation на principal;
+- не более одного ordinary `read_write` и одной независимой Personal `/me`
+  `read_write` generation на principal;
 - monotonic `usage_version` для atomic switch и stale-write rejection;
 - никогда не переиспользуемую write generation;
 - privacy-safe tombstone/reconciliation policy для stale in-flight work.
 
-Выбор второго `read_write` одной transaction создаёт новую generation и
-переводит прежний writable entry в `read`. Повтор exact mode — idempotent no-op
-без изменения versions. `disabled` удаляет Mind из MCP enabled projection.
+Выбор второго ordinary `read_write` одной transaction создаёт новую generation
+и переводит прежний ordinary writable entry в `read`. Personal `/me` имеет
+собственную generation: его включение, отключение или переход в `read` не
+меняет ordinary lane, а ordinary switch не меняет `/me`. Повтор exact mode —
+idempotent no-op без изменения versions. `disabled` удаляет Mind из MCP enabled
+projection.
 
 `usage_mode` — намерение пользователя, но не право доступа:
 
@@ -72,7 +81,7 @@ effective_write = usage_mode == read_write
                 ∩ active credential
                 ∩ content:write
                 ∩ current editor | admin | owner role
-                ∩ exact active principal write generation
+                ∩ exact active generation соответствующего Personal или ordinary lane
                 ∩ expected HEAD + idempotency + full validation
 ```
 
@@ -126,10 +135,10 @@ Agent routing:
 - текущий credential и server подтверждают effective write;
 - изменение можно выразить как bounded create/replace/delete/no-op и проверить.
 
-Для Personal Mind `read_write` означает только наличие технической write
-capability. Запись допустима, лишь когда текущий пользователь прямо просит
-сохранить, запомнить, добавить, обновить или удалить конкретное знание, а
-Personal `/me` является текущим effective `read_write` destination. Простое
+Для Personal Mind `read_write` означает только наличие независимой технической
+write capability. Запись допустима, лишь когда текущий пользователь прямо
+просит сохранить, запомнить, добавить, обновить или удалить конкретное знание,
+а Personal `/me` имеет effective `read_write` в собственном lane. Простое
 обсуждение, совпадение темы, чтение `/me` или ранее
 выданная просьба не запускают новую запись. Connector/skill проверяет это до
 tool call; server не принимает клиентский `intent=true` и независимо проверяет
@@ -168,9 +177,11 @@ content. Unknown OKF types/fields сохраняются. Partial validation т�
 Commit authority:
 
 1. server разрешает principal из authenticated credential;
-2. читает current principal usage state и pin-ит exact write generation;
+2. читает current principal usage state и pin-ит exact Personal либо ordinary
+   write generation выбранного Mind;
 3. требует `content:write` и current writer role exact Mind;
-4. требует request `mind` равным configured `read_write` destination;
+4. требует request `mind` равным configured `read_write` destination
+   соответствующего lane;
 5. повторяет generation, role, HEAD CAS, quota и idempotency checks в transaction;
 6. создаёт одну immutable revision, HEAD, audit/outbox/index effects либо ничего.
 
@@ -200,8 +211,9 @@ principal, current access, `expected_usage_version`, idempotency key и CSRF.
 Ordinary `read_write` дополнительно требует non-empty description и current
 writer role. Для канонического Personal `/me` description check заменяется
 проверкой service-managed Personal identity; current writer role сохраняется.
-Atomic switch сам демотирует прежний writable Mind в `read`; отдельные
-bind/rebind/unbind controls отсутствуют.
+Ordinary atomic switch сам демотирует прежний ordinary writable Mind в `read`,
+но не меняет Personal `/me`; изменение `/me` также не меняет ordinary lane.
+Отдельные bind/rebind/unbind controls отсутствуют.
 
 Connection и Advanced MCP pages показывают credential scopes/lifecycle и
 derived effective capability, но не владеют mode. Они не содержат target
@@ -245,7 +257,11 @@ side-effect-free versioned retired result с remediation на Site.
 
 ## Migration
 
-Capability version — `principal-mind-usage/v1`. Migration fail closed:
+Одновременная проекция может содержать два descriptor с
+`writable_mount.active=true`: максимум один `description_based` ordinary и
+один `personal_default`. Их generation различны и не являются client authority.
+
+Capability version — `principal-mind-usage/v2`. Migration fail closed:
 
 1. Новому principal все entries создаются как `disabled`.
 2. Однозначный existing principal configuration может быть перенесён только
@@ -266,8 +282,9 @@ Capability version — `principal-mind-usage/v1`. Migration fail closed:
 
 MD-374–MD-380 должны совместно доказать:
 
-1. default `disabled`, arbitrary `read` и global singleton `read_write` для
-   одного principal, включая atomic switch/CAS/idempotency/restart;
+1. default `disabled`, arbitrary `read`, singleton ordinary `read_write` и
+   независимый Personal `/me` `read_write` для одного principal, включая
+   concurrent lanes, ordinary-only atomic switch, CAS/idempotency/restart;
 2. одинаковую configured projection для двух OAuth grants и personal token при
    разных effective scopes;
 3. ACL/role/scope loss без расширения authority и без изменения intent state;

@@ -53,6 +53,7 @@ import type {
   PrincipalId,
   PrincipalMindUsageGenerationId,
   PrincipalMindUsageState,
+  PrincipalMindWriteGeneration,
   PrincipalMindUsageTransaction,
   PrincipalMindUsageWritePin,
   RegisterCredentialWriteTargetOwnerRequest,
@@ -1017,9 +1018,11 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         const generationUsed = (generationId: PrincipalMindUsageGenerationId) =>
           [...owners.values()].some((owner) =>
             owner.retiredGenerationIds.has(generationId) ||
-            owner.state.activeWriteGeneration?.generationId === generationId ||
+            owner.state.ordinaryWriteGeneration?.generationId === generationId ||
+            owner.state.personalWriteGeneration?.generationId === generationId ||
             [...owner.idempotency.values()].some((record) =>
-              record.result.state.activeWriteGeneration?.generationId === generationId));
+              record.result.state.ordinaryWriteGeneration?.generationId === generationId ||
+              record.result.state.personalWriteGeneration?.generationId === generationId));
 
         const transaction: PrincipalMindUsageTransaction = Object.freeze({
           kind: "principal-mind-usage-transaction" as const,
@@ -1164,16 +1167,27 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
                 (message) => message.auditEventId === request.auditEventId,
               )
             ) return Object.freeze({ kind: "effect_conflict" });
-            const previousGeneration = owner.state.activeWriteGeneration;
+            const previousGenerations = [
+              owner.state.ordinaryWriteGeneration,
+              owner.state.personalWriteGeneration,
+            ].filter((generation): generation is PrincipalMindWriteGeneration =>
+              generation !== null
+            );
             if (!owners.has(request.principalId)) {
               owners.set(request.principalId, owner);
             }
             owner.state = transition.state;
-            if (
-              previousGeneration !== null &&
-              previousGeneration.generationId !==
-                transition.state.activeWriteGeneration?.generationId
-            ) owner.retiredGenerationIds.add(previousGeneration.generationId);
+            const currentGenerationIds = new Set([
+              transition.state.ordinaryWriteGeneration?.generationId,
+              transition.state.personalWriteGeneration?.generationId,
+            ].filter((generationId): generationId is PrincipalMindUsageGenerationId =>
+              generationId !== undefined
+            ));
+            for (const previousGeneration of previousGenerations) {
+              if (!currentGenerationIds.has(previousGeneration.generationId)) {
+                owner.retiredGenerationIds.add(previousGeneration.generationId);
+              }
+            }
             const result = Object.freeze({
               kind: "applied" as const,
               state: transition.state,

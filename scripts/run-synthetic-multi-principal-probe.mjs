@@ -460,7 +460,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (initialUsage !== null && (
     initialUsage.usageVersion !== 0 ||
     initialUsage.entries.length !== 0 ||
-    initialUsage.activeWriteGeneration !== null
+    initialUsage.ordinaryWriteGeneration !== null ||
+    initialUsage.personalWriteGeneration !== null
   )) fail("initial_binding_state_not_empty");
   assertions.add("bindings.initial-empty");
 
@@ -748,7 +749,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     "commit_changeset",
     ordinaryCommitArguments,
   ));
-  const committedRevision = committed.revision?.revision_id;
+  let committedRevision = committed.revision?.revision_id;
   if (typeof committedRevision !== "string" || committedRevision === expectedRevision) {
     fail("editor_commit_failed");
   }
@@ -811,26 +812,28 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       reboundPersonal.projection?.items?.find((item) => item.mind_ref === "/me") ?? {},
       "description",
     ) ||
-    reboundPersonal.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read"
-  ) fail("personal_rebind_mismatch");
-  expectMcpError(
+    reboundPersonal.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read_write" ||
+    reboundPersonal.projection?.items?.filter((item) => item.usage_mode === "read_write").length !== 2
+  ) fail("independent_personal_write_lane_mismatch");
+  const preparedOrdinaryResult = mcpResultData(
     await actors.participant.mcp("commit_changeset", preparedOrdinaryCommit),
-    "writable_mind_required",
   );
-  const ordinaryAfterRebindDenial = mcpResultData(await actors.participant.mcp(
+  const ordinaryAfterPersonalEnable = mcpResultData(await actors.participant.mcp(
     "get_mind_info",
     { mind: `/${handle}` },
   )).resolved_revision.revision_id;
-  const personalAfterRebindDenial = mcpResultData(await actors.participant.mcp(
+  const personalAfterOrdinaryCommit = mcpResultData(await actors.participant.mcp(
     "get_mind_info",
     { mind: "/me" },
   )).resolved_revision.revision_id;
   if (
-    ordinaryAfterRebindDenial !== committedRevision ||
-    personalAfterRebindDenial !== personalBeforeRebind
-  ) fail("stale_write_after_rebind_created_side_effect");
-  assertions.add("bindings.rebind-stale-no-side-effect");
-  assertions.add("writes.wrong-mind-no-side-effect");
+    preparedOrdinaryResult.revision?.revision_id !== ordinaryAfterPersonalEnable ||
+    ordinaryAfterPersonalEnable === committedRevision ||
+    personalAfterOrdinaryCommit !== personalBeforeRebind
+  ) fail("ordinary_write_disabled_by_personal_lane");
+  committedRevision = ordinaryAfterPersonalEnable;
+  assertions.add("bindings.personal-and-ordinary-write-independent");
+  assertions.add("writes.ordinary-and-personal-exact-lane-no-cross-effect");
 
   const personalCommitArguments = {
     mind: "/me",
@@ -864,7 +867,19 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   ) fail("personal_bound_commit_not_exactly_once");
   assertions.add("bindings.current-target-exactly-one-revision");
 
-  const usageBeforeConcurrentSwitch = await readMindUsage(actors.participant);
+  const usageBeforeOrdinaryRead = await readMindUsage(actors.participant);
+  const ordinaryRead = data(await setMindUsage(
+    actors.participant,
+    `/${handle}`,
+    "read",
+    usageBeforeOrdinaryRead.usage_version,
+    `synthetic:${nonce}:target:ordinary:read-before-concurrent`,
+  ));
+  if (
+    ordinaryRead.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read" ||
+    ordinaryRead.projection?.items?.find((item) => item.mind_ref === "/me")?.usage_mode !== "read_write"
+  ) fail("ordinary_lane_change_affected_personal_lane");
+  const usageBeforeConcurrentSwitch = ordinaryRead.projection;
   const concurrentRebinds = await Promise.all([
     setMindUsage(
       actors.participant,
@@ -906,8 +921,9 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   const winningRebind = data(successfulRebinds[0]);
   if (
     winningRebind.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read_write" ||
-    winningRebind.projection?.items?.filter((item) => item.usage_mode === "read_write").length !== 1
-  ) fail("concurrent_rebind_result_not_singleton");
+    winningRebind.projection?.items?.find((item) => item.mind_ref === "/me")?.usage_mode !== "read_write" ||
+    winningRebind.projection?.items?.filter((item) => item.usage_mode === "read_write").length !== 2
+  ) fail("concurrent_rebind_result_not_independent");
   assertions.add("bindings.concurrent-rebind-cas");
 
   const materializedWork = await drainScheduled({
@@ -997,8 +1013,9 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   );
   if (
     restartedUsage === null ||
-    restartedUsage.activeWriteGeneration?.spaceId !== restartedParticipant.mind_id ||
-    restartedUsage.entries.filter((entry) => entry.usageMode === "read_write").length !== 1
+    restartedUsage.ordinaryWriteGeneration?.spaceId !== restartedParticipant.mind_id ||
+    restartedUsage.personalWriteGeneration?.spaceId !== participantIds.mind ||
+    restartedUsage.entries.filter((entry) => entry.usageMode === "read_write").length !== 2
   ) fail("restart_binding_state_changed");
   assertions.add("bindings.restart-persistence");
 
@@ -1020,7 +1037,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   ));
   if (
     unbound.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "disabled" ||
-    unbound.projection?.items?.some((item) => item.usage_mode === "read_write")
+    unbound.projection?.items?.find((item) => item.mind_ref === "/me")?.usage_mode !== "read_write" ||
+    unbound.projection?.items?.filter((item) => item.usage_mode === "read_write").length !== 1
   ) fail("detach_unbind_transition_mismatch");
   expectMcpError(
     await actors.participant.mcp("commit_changeset", {
@@ -1093,7 +1111,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (
     usageAfterMindDelete === null ||
     usageAfterMindDelete.entries.some((entry) => entry.spaceId === restartedParticipant.mind_id) ||
-    usageAfterMindDelete.activeWriteGeneration !== null
+    usageAfterMindDelete.ordinaryWriteGeneration !== null ||
+    usageAfterMindDelete.personalWriteGeneration?.spaceId !== participantIds.mind
   ) fail("mind_delete_did_not_invalidate_bindings");
   assertions.add("bindings.mind-delete-invalidates-target");
   const credentialInspection = await createSitesMetadataStore(database);
@@ -1130,7 +1149,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     revokedParticipantUsage === null ||
     revokedParticipantUsage.usageVersion !== usageAfterMindDelete.usageVersion ||
     revokedParticipantUsage.entries.length !== usageAfterMindDelete.entries.length ||
-    revokedParticipantUsage.activeWriteGeneration !== null
+    revokedParticipantUsage.ordinaryWriteGeneration !== null ||
+    revokedParticipantUsage.personalWriteGeneration?.spaceId !== participantIds.mind
   ) fail("target_owner_revoke_state_mismatch", {
     hasUsage: revokedParticipantUsage !== null,
     usageVersion: revokedParticipantUsage?.usageVersion ?? null,

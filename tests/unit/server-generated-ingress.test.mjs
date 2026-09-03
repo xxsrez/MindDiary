@@ -29,7 +29,7 @@ const COMMON = {
 function currentUsage(overrides = {}) {
   return {
     principalId: COMMON.actor.principalId,
-    activeWriteGeneration: {
+    ordinaryWriteGeneration: {
       generationId: TARGET_GENERATION,
       principalId: COMMON.actor.principalId,
       spaceId: COMMON.spaceId,
@@ -45,7 +45,7 @@ function usageReader(result = currentUsage(), reads = []) {
       return result;
     },
     async validatePrincipalMindUsageWritePin(pin) {
-      const generation = result?.activeWriteGeneration;
+      const generation = result?.ordinaryWriteGeneration;
       return generation?.generationId === pin.generationId &&
         generation?.principalId === pin.principalId &&
         generation?.spaceId === pin.spaceId;
@@ -167,9 +167,9 @@ test("the accepted producer lease and size ceiling are exact and cannot widen", 
 
 test("principal Mind mount is required and exact before producer acquisition", async () => {
   for (const [targetResult, code] of [
-    [currentUsage({ activeWriteGeneration: null }), "writable_target_required"],
+    [currentUsage({ ordinaryWriteGeneration: null }), "writable_target_required"],
     [currentUsage({
-      activeWriteGeneration: {
+      ordinaryWriteGeneration: {
         generationId: "target_generation_other",
         principalId: COMMON.actor.principalId,
         spaceId: "space_other",

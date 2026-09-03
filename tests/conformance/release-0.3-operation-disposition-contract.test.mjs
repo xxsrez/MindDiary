@@ -305,7 +305,7 @@ test("operation-disposition fixture is a closed versioned contract", () => {
   }
 });
 
-test("principal Mind usage exposes one three-mode CAS and one writable singleton", () => {
+test("principal Mind usage exposes one three-mode CAS and independent write lanes", () => {
   assert.deepEqual(fixture.profiles["mind-usage-control"].checks, [
     "sites_identity",
     "principal_owned_settings",
@@ -809,7 +809,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "package-probe-source",
         path: "scripts/run-oauth-direct-plugin-probe.mjs",
-        gitBlob: "edaf3074f5089b5f56651d9904e4c658cb6a222a",
+        gitBlob: "7080f9137f5c8eb24ad82ca1fed16882c84ac322",
       }],
     },
     {
@@ -830,12 +830,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "836f2b43b5e29dbd37a1a7011b04ea628d541438",
+          gitBlob: "27f4581f612aade152da7b745a481aff5ef4de3b",
         },
         {
           role: "installed-skill-probe-source",
           path: "scripts/run-oauth-direct-plugin-probe.mjs",
-          gitBlob: "edaf3074f5089b5f56651d9904e4c658cb6a222a",
+          gitBlob: "7080f9137f5c8eb24ad82ca1fed16882c84ac322",
         },
       ],
     },

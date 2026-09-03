@@ -93,13 +93,18 @@ const mindUsage = {
     else {
       if (command.usageMode === "read_write") {
         for (const [spaceId, mode] of entries) {
-          if (mode === "read_write" && spaceId !== command.spaceId) entries.set(spaceId, "read");
+          if (
+            !selected.isPersonal &&
+            spaceId !== personal.mindId &&
+            mode === "read_write" &&
+            spaceId !== command.spaceId
+          ) entries.set(spaceId, "read");
         }
       }
       entries.set(command.spaceId, command.usageMode);
     }
     usage = Object.freeze({
-      contractVersion: "principal-mind-usage/v1",
+      contractVersion: "principal-mind-usage/v2",
       principalId: actor.principalId,
       usageVersion: version + 1,
       entries: Object.freeze([...entries].map(([spaceId, usageMode]) =>
@@ -143,7 +148,7 @@ const server = createServer(async (incoming, outgoing) => {
   }
   if (url.pathname === "/_fixture/conflict" && incoming.method === "POST") {
     const current = usage ?? {
-      contractVersion: "principal-mind-usage/v1",
+      contractVersion: "principal-mind-usage/v2",
       principalId: actor.principalId,
       usageVersion: 0,
       entries: Object.freeze([]),

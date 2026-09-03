@@ -1,6 +1,6 @@
 {
-  "$schema": "mind-diary/principal-mind-usage/v1",
-  "version": 1,
+  "$schema": "mind-diary/principal-mind-usage/v2",
+  "version": 2,
   "source": "docs/specs/mind-usage-modes.md",
   "decision": "docs/decisions/0024-principal-mind-usage-modes-and-automatic-save.md",
   "ownership": "principal",
@@ -8,9 +8,16 @@
   "modes": ["disabled", "read", "read_write"],
   "cardinality": {
     "read": "0..N",
-    "read_write": "0..1"
+    "ordinary_read_write": "0..1",
+    "personal_read_write": "0..1",
+    "combined_read_write": "0..2"
   },
-  "switchBehavior": "demote_previous_read_write_to_read_atomically",
+  "switchBehavior": "demote_previous_ordinary_read_write_to_read_atomically",
+  "writeLanes": {
+    "independent": true,
+    "ordinary": "automatic_save",
+    "personal": "direct_request_only"
+  },
   "sharedAcrossCredentials": ["oauth_grant", "personal_token"],
   "effectiveCapabilityChecks": [
     "active_credential",
@@ -68,6 +75,7 @@
     {"id":"personal-read-write-null-description","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"mode_change","outcome":"allow"},
     {"id":"personal-discussion-only-write","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"discussion_only","outcome":"no_write"},
     {"id":"personal-explicit-requested-write","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"explicit_personal_write_request","outcome":"allow_write"},
+    {"id":"personal-and-ordinary-concurrent-write","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"ordinary_read_write_already_enabled","outcome":"allow_both"},
     {"id":"ordinary-read-write-null-description","mindType":"ordinary_mind","mode":"read_write","description":null,"trigger":"mode_change","outcome":"description_required"},
     {"id":"ordinary-discussed-description-match-write","mindType":"ordinary_mind","mode":"read_write","description":"matching category","trigger":"description_match_after_explicit_discussion","outcome":"allow_write"}
   ],
@@ -86,7 +94,7 @@
     "capture_toggle"
   ],
   "migration": {
-    "capability": "principal-mind-usage/v1",
+    "capability": "principal-mind-usage/v2",
     "ambiguousOutcome": "disabled",
     "legacyWriteRefsRemapped": false,
     "mixedRuntimeSemantics": false

@@ -22,6 +22,7 @@ import {
   canonicalBundleFilePath,
   canonicalMarkdownPath,
   opaqueId,
+  principalMindUsageWriteGeneration,
   serializeRevisionManifest,
   version,
   type CanonicalRevisionEnvelope,
@@ -1099,7 +1100,7 @@ export class ChangesetCommitService {
     spaceId: SpaceId,
   ): Promise<WritePinResolution> {
     const state = await this.#metadata.readPrincipalMindUsage(principalId);
-    const generation = state?.activeWriteGeneration ?? null;
+    const generation = principalMindUsageWriteGeneration(state, spaceId);
     if (
       generation === null ||
       generation.principalId !== principalId ||

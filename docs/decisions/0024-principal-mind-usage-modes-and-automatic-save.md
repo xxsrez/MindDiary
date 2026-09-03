@@ -1,8 +1,9 @@
 # ADR-0024: пользовательские режимы Mind и автоматическое сохранение знаний
 
-Статус: accepted, 2026-08-30; уточнено MD-383, 2026-09-03. Решение MD-373
-задаёт целевой контракт Release 0.3, а MD-383 вводит узкое исключение для
-канонического Personal Mind `/me`. Документ сам по себе не утверждает, что
+Статус: accepted, 2026-08-30; уточнено MD-383 и исправлено MD-382,
+2026-09-03. Решение MD-373 задаёт целевой контракт Release 0.3, MD-383 вводит
+исключение для канонического Personal Mind `/me`, а MD-382 отделяет его
+requested-write permission от ordinary automatic-save singleton. Документ сам по себе не утверждает, что
 runtime, Product Site, MCP, Marketplace package или UAT уже обновлены.
 
 ADR заменяет целевую семантику
@@ -27,8 +28,11 @@ bind/unbind или отдельное включение capture. Такая м�
 1. Для каждой пары `principal + Mind` Product Site хранит один режим:
    `disabled | read | read_write`. Начальное значение — `disabled`.
 2. У principal может быть сколько угодно `read` Minds и не более одного
-   `read_write` Mind. Переключение второго Mind в `read_write` атомарно
-   переводит прежний writable Mind в `read`.
+   ordinary `read_write` Mind для automatic save. Personal `/me` независимо
+   может иметь `read_write` для прямо запрошенных изменений, поэтому оба lane
+   могут быть включены одновременно. Переключение второго ordinary Mind в
+   `read_write` атомарно переводит в `read` только прежний ordinary writable
+   Mind; `/me` при этом не меняется, и наоборот.
 3. Настройка принадлежит principal и одинаково проецируется во все его OAuth
    grants и personal tokens. Credential scopes и текущий ACL не меняют
    намерение пользователя, а только сужают effective read/write capability
@@ -66,8 +70,8 @@ bind/unbind или отдельное включение capture. Такая м�
    revision. До commit и после него валидируется весь OKF 0.2 bundle. Агент не
    спрашивает отдельное подтверждение каждого save, но сообщает пользователю
    его результат.
-10. Server остаётся authority для principal, канонического `/me`, mode
-    generation, singleton invariant, credential scopes, current ACL/role,
+10. Server остаётся authority для principal, канонического `/me`, двух mode
+    generations, ordinary singleton и независимого Personal lane, credential scopes, current ACL/role,
     exact destination, HEAD CAS, idempotency и bundle validation. Connector и
     agent instructions отвечают за semantic routing и direct-request policy;
     клиент не передаёт server доверенный intent flag. После записи agent

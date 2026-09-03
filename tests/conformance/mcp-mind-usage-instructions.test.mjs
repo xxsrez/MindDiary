@@ -55,7 +55,8 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
     MCP_COMMIT_EXPORT_TOOL_DEFINITIONS.map((definition) => [definition.name, definition]),
   );
   const commit = writes.get("commit_changeset");
-  assert.match(commit.description, /principal's current read_write Mind/u);
+  assert.match(commit.description, /exact Mind's current principal-owned read_write lane/u);
+  assert.match(commit.description, /Personal and ordinary write lanes are independent/u);
   assert.match(commit.description, /Canonical and only content-write tool/u);
   assert.match(commit.description, /current user directly asks/u);
   assert.match(commit.description, /previous request/u);

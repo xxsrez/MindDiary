@@ -1,9 +1,10 @@
 import type { McpTokenActorContext } from "@mind-diary/application-contracts";
 import type { PrincipalMindUsageReader } from "@mind-diary/application-ports";
-import type {
-  PrincipalMindUsageGenerationId,
-  Sha256Digest,
-  SpaceId,
+import {
+  principalMindUsageWriteGeneration,
+  type PrincipalMindUsageGenerationId,
+  type Sha256Digest,
+  type SpaceId,
 } from "@mind-diary/domain";
 import {
   BUNDLE_FILE_LIMITS,
@@ -458,8 +459,14 @@ export class AuthorizedConnectorIngressService {
     if (snapshot !== null && snapshot.principalId !== actor.principalId) {
       return writableTargetFailure("writable_target_unavailable");
     }
-    const generation = snapshot?.activeWriteGeneration ?? null;
-    if (generation === null) return writableTargetFailure("writable_target_required");
+    const generation = principalMindUsageWriteGeneration(snapshot, spaceId);
+    if (generation === null) {
+      const anotherLane = snapshot?.ordinaryWriteGeneration ??
+        snapshot?.personalWriteGeneration ?? null;
+      return writableTargetFailure(anotherLane === null
+        ? "writable_target_required"
+        : "writable_target_mismatch");
+    }
     if (
       generation.principalId !== actor.principalId ||
       generation.spaceId !== spaceId

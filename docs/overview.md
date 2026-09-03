@@ -2,7 +2,8 @@
 
 > **Целевое уточнение Release 0.3 (MD-373/MD-383, 2026-09-03).** Настройка работы
 > агента теперь принадлежит principal и Mind: `disabled | read | read_write`,
-> одинакова для всех credentials и допускает ровно один `read_write` Mind.
+> одинакова для всех credentials и допускает один ordinary `read_write` Mind
+> плюс независимый Personal `/me = read_write`.
 > Description ordinary Mind маршрутизирует чтение и discussed-only automatic
 > save через `commit_changeset`. Personal `/me` не имеет description, использует
 > `personal_default` и принимает запись только по прямой просьбе пользователя;

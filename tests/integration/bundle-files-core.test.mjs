@@ -217,7 +217,7 @@ async function bindWrite(metadata) {
 function principalMountedMetadata(metadata) {
   const mountedState = Object.freeze({
     principalId: PRINCIPALS.editor.principalId,
-    activeWriteGeneration: Object.freeze({
+    ordinaryWriteGeneration: Object.freeze({
       principalId: PRINCIPALS.editor.principalId,
       spaceId: MINDS.ordinary.spaceId,
       generationId: MOUNT_GENERATION_ID,

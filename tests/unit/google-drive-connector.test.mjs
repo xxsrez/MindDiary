@@ -50,7 +50,7 @@ function usageReader(spaceId = SPACE) {
       assert.equal(principalId, ACTOR.principalId);
       return {
         principalId: ACTOR.principalId,
-        activeWriteGeneration: {
+        ordinaryWriteGeneration: {
           generationId: TARGET_GENERATION,
           principalId: ACTOR.principalId,
           spaceId,

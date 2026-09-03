@@ -1,9 +1,10 @@
-# Проверка ACL reads и singleton `read_write` Mind Release 0.3
+# Проверка ACL reads и независимых `read_write` lanes Release 0.3
 
 > **Current Web amendment MD-373/MD-383, 2026-09-03.** Principal задаёт для
 > каждого Mind
 > `disabled | read | read_write`, общий для всех OAuth connections и personal
-> tokens, с единственным `read_write` Mind. Connections и Advanced MCP остаются
+> tokens, с `0..1` ordinary automatic-write Mind и независимым Personal `/me`
+> requested-write Mind. Connections и Advanced MCP остаются
 > lifecycle/scopes-only. Machine contract MD-344 и его `target_*` поля ниже
 > сохранены как историческое evidence прежней модели и не доказывают current
 > Web behavior без principal-usage read-back. Ordinary `read_write` требует
@@ -89,7 +90,7 @@ Local receipt фиксирует hashes двух probe receipts, каждого 
 Это frozen MD-344 receipt прежней target-модели. Упоминания target generation,
 empty target, capture и credential owner в его registry описывают только
 историческую проверку/migration. Fresh MD-375 acceptance дополнительно требует
-current Web/API evidence `principal-mind-usage/v1`, singleton `read_write` и
+current Web/API evidence `principal-mind-usage/v2`, independent write lanes и
 отсутствия credential-level controls; historical PASS не заменяет эти строки.
 
 Локальный gate подтверждает исторический MD-344 contract:
@@ -153,10 +154,12 @@ read-back предыдущего, а не локальное предполож�
 
 - новый principal — все Minds `disabled`, `usage_version=0`;
 - несколько Minds можно независимо перевести в `read`;
-- ровно один Mind можно перевести в `read_write`: ordinary Mind — только с
-  непустым routing description, canonical Personal `/me` — без description;
+- ровно один ordinary Mind можно перевести в `read_write`, только с непустым
+  routing description; независимо canonical Personal `/me` можно перевести в
+  `read_write` без description;
   current writer role требуется в обоих случаях;
-- второй `read_write` одним CAS атомарно демотирует прежний Mind в `read`;
+- второй ordinary `read_write` одним CAS атомарно демотирует прежний ordinary
+  Mind в `read`; изменение Personal `/me` не меняет ordinary lane и наоборот;
 - два OAuth grants и personal token видят одинаковые configured modes;
 - read-only credential видит configured `read_write`, но получает
   `effective.can_write=false`;
@@ -187,10 +190,13 @@ generation остаются server authority.
    hashes content должны совпасть.
 4. Повторить тот же idempotency key: новый revision не появляется.
 5. Отправить stale HEAD: `revision_conflict`, HEAD и history не меняются.
-6. Атомарно переключить `read_write` на другой Mind и отправить подготовленный
-   write в прежний Mind: write отклоняется как current writable-Mind mismatch;
-   HEAD/history обоих Minds не меняются.
-7. Потерять writer role: следующий write denied. Reduce-only изменение mode
+6. Включить Personal `/me` в `read_write`, не меняя ordinary Mind; выполнить
+   отдельно exact ordinary и прямо запрошенный Personal changeset, подтвердив
+   два независимых HEAD/read-back.
+7. Переключить ordinary `read_write` на другой ordinary Mind и отправить
+   подготовленный write в прежний: write отклоняется как current lane mismatch,
+   а Personal write generation остаётся активной.
+8. Потерять writer role: следующий write denied. Reduce-only изменение mode
    выполняется на Site через current `expected_usage_version`; credential page
    не получает control action.
 

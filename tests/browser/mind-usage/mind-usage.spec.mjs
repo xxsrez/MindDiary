@@ -35,7 +35,7 @@ function card(page, ref) {
   return page.locator(`[data-mind-usage-card="${ref}"]`);
 }
 
-test("three account-wide modes enforce one writable Mind and reload server state on conflict", async ({
+test("Personal and ordinary write modes stay independent and reload server state on conflict", async ({
   browser,
 }) => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -58,22 +58,20 @@ test("three account-wide modes enforce one writable Mind and reload server state
   await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read and write/u);
 
   await card(page, "/me").locator('input[value="read_write"]').check();
-  await expect(card(page, "/me").getByRole("status")).toContainText(
-    "atomically move Research notes to Read only",
-  );
+  await expect(card(page, "/me").getByRole("status")).toBeEmpty();
   await card(page, "/me").getByRole("button", { name: "Save agent mode" }).click();
   await expect(card(page, "/me")).toContainText(/Configured intent\s*Read and write/u);
-  await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read only/u);
-  await expect(page.locator('input[value="read_write"]:checked')).toHaveCount(1);
+  await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read and write/u);
+  await expect(page.locator('input[value="read_write"]:checked')).toHaveCount(2);
 
-  await card(page, "/research-notes").locator('input[value="read_write"]').check();
+  await card(page, "/research-notes").locator('input[value="read"]').check();
   expect((await context.request.post(`${origin}/_fixture/conflict`)).ok()).toBe(true);
   await card(page, "/research-notes").getByRole("button", { name: "Save agent mode" }).click();
   await expect(page.getByText(
     "Intent changed in another session. Current server settings were reloaded.",
   )).toBeVisible();
   await expect(card(page, "/me")).toContainText(/Configured intent\s*Read and write/u);
-  await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read only/u);
+  await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read and write/u);
   await expect(page.getByText("After an automatic write, Codex should report what changed", {
     exact: false,
   }).first()).toBeVisible();

@@ -5,6 +5,7 @@ import type {
 } from "@mind-diary/application-ports";
 import {
   bundleFileMediaType,
+  principalMindUsageWriteGeneration,
   type PrincipalMindUsageGenerationId,
   type SpaceId,
 } from "@mind-diary/domain";
@@ -382,8 +383,14 @@ export class TrustedServerGeneratedIngressService {
     if (snapshot !== null && snapshot.principalId !== actor.principalId) {
       return writableTargetFailure("writable_target_unavailable");
     }
-    const generation = snapshot?.activeWriteGeneration ?? null;
-    if (generation === null) return writableTargetFailure("writable_target_required");
+    const generation = principalMindUsageWriteGeneration(snapshot, spaceId);
+    if (generation === null) {
+      const anotherLane = snapshot?.ordinaryWriteGeneration ??
+        snapshot?.personalWriteGeneration ?? null;
+      return writableTargetFailure(anotherLane === null
+        ? "writable_target_required"
+        : "writable_target_mismatch");
+    }
     if (
       generation.principalId !== actor.principalId ||
       generation.spaceId !== spaceId

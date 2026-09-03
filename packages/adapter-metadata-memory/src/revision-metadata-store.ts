@@ -77,6 +77,7 @@ import {
   clonePrincipalMindUsageOwners,
   migrateLegacyCredentialTargetsToPrincipalUsage,
   migrateLegacyMindBindingOwners,
+  migrateLegacyPrincipalMindUsageOwners,
   validCredentialWriteTargetOwnersSnapshot,
   validLegacyCredentialWriteTargetUpgradesSnapshot,
   validPrincipalMindUsageOwnersSnapshot,
@@ -117,11 +118,37 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         "activeHandlesByKey", "activeHandlesBySpace", "retiredHandles",
         "publicMindCatalogSnapshots", "authorizationStates",
       ] as const;
+      let principalMindUsageOwners: Map<
+        PrincipalId,
+        MutablePrincipalMindUsageOwnerState
+      > | null = null;
       if (
-        (snapshot.v !== 1 && snapshot.v !== 2 && snapshot.v !== 3) ||
+        (snapshot.v === 3 || snapshot.v === 4) &&
+        snapshot.principalMindUsageOwners instanceof Map &&
+        snapshot.personalBindings instanceof Map
+      ) {
+        try {
+          principalMindUsageOwners = snapshot.v === 3
+            ? migrateLegacyPrincipalMindUsageOwners(
+                snapshot.principalMindUsageOwners as Map<PrincipalId, unknown>,
+                snapshot.personalBindings as PersonalBindingMap,
+              )
+            : clonePrincipalMindUsageOwners(
+                snapshot.principalMindUsageOwners as Map<
+                  PrincipalId,
+                  MutablePrincipalMindUsageOwnerState
+                >,
+              );
+        } catch {
+          principalMindUsageOwners = null;
+        }
+      }
+      if (
+        (snapshot.v !== 1 && snapshot.v !== 2 && snapshot.v !== 3 &&
+          snapshot.v !== 4) ||
         !mapFields.every((field) => snapshot[field] instanceof Map) ||
         (snapshot.v === 1 && !(snapshot.mindBindingOwners instanceof Map)) ||
-        ((snapshot.v === 2 || snapshot.v === 3) &&
+        ((snapshot.v === 2 || snapshot.v === 3 || snapshot.v === 4) &&
           (!(snapshot.credentialWriteTargetOwners instanceof Map) ||
             !(snapshot.legacyCredentialWriteTargetUpgrades instanceof Map) ||
             !validCredentialWriteTargetOwnersSnapshot(
@@ -135,10 +162,11 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
                 (snapshot.legacyCredentialWriteTargetUpgrades as Map<MindBindingOwnerId, unknown>)
                   .has(ownerId),
               ))) ||
-        (snapshot.v === 3 &&
-          (!(snapshot.principalMindUsageOwners instanceof Map) ||
+        ((snapshot.v === 3 || snapshot.v === 4) &&
+          (principalMindUsageOwners === null ||
             !validPrincipalMindUsageOwnersSnapshot(
-              snapshot.principalMindUsageOwners as Map<PrincipalId, unknown>,
+              principalMindUsageOwners,
+              snapshot.personalBindings as PersonalBindingMap,
             ))) ||
         !(snapshot.publicMindCatalogSpaceIds instanceof Set) ||
         !Number.isSafeInteger(snapshot.publicMindCatalogGeneration) ||
@@ -272,13 +300,8 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         // A forward snapshot never revives the removed legacy authority model.
         restored._mindBindingOwners = new Map();
       }
-      restored._principalMindUsageOwners = snapshot.v === 3
-        ? clonePrincipalMindUsageOwners(
-            snapshot.principalMindUsageOwners as Map<
-              PrincipalId,
-              MutablePrincipalMindUsageOwnerState
-            >,
-          )
+      restored._principalMindUsageOwners = snapshot.v === 3 || snapshot.v === 4
+        ? clonePrincipalMindUsageOwners(principalMindUsageOwners!)
         : migrateLegacyCredentialTargetsToPrincipalUsage(
             restored._credentialWriteTargetOwners,
             restored._legacyCredentialWriteTargetUpgrades,

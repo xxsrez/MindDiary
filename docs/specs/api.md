@@ -6,7 +6,9 @@
 > содержит nullable `description`; canonical Personal `/me` не содержит это
 > поле и объявляет `routing_profile: personal_default`. Personal `read_write`
 > не является автоматическим согласием: запись возможна только после прямой
-> просьбы пользователя о конкретном изменении знания.
+> просьбы пользователя о конкретном изменении знания. Personal requested-write
+> lane независим от `0..1` ordinary automatic-write lane, поэтому оба могут
+> быть effective одновременно.
 > Bind/unbind и `capture_knowledge` не входят в target catalog, automatic save
 > ordinary Minds и requested Personal write используют `commit_changeset`.
 > Exact target contract —

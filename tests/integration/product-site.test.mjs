@@ -624,7 +624,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     assert.match(body, new RegExp(marker.replaceAll("/", "\\/")));
     if (path.endsWith(".js")) assert.doesNotThrow(() => new vm.Script(body));
     if (path === "/ui/mind-diary-ordinary-minds-list-client.js") {
-      assert.match(body, /principal-mind-usage\/v1/u);
+      assert.match(body, /principal-mind-usage\/v2/u);
       assert.match(body, /\/api\/v1\/mind-usage/u);
     }
     if (path === "/ui/mind-diary-connections-client.js") {
@@ -1071,7 +1071,12 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
       else {
         if (command.usageMode === "read_write") {
           for (const [spaceId, mode] of entries) {
-            if (mode === "read_write" && spaceId !== command.spaceId) {
+            if (
+              command.spaceId !== personal.mindId &&
+              spaceId !== personal.mindId &&
+              mode === "read_write" &&
+              spaceId !== command.spaceId
+            ) {
               entries.set(spaceId, "read");
             }
           }
@@ -1079,7 +1084,7 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
         entries.set(command.spaceId, command.usageMode);
       }
       usage = Object.freeze({
-        contractVersion: "principal-mind-usage/v1",
+        contractVersion: "principal-mind-usage/v2",
         principalId: registeredActor.principalId,
         usageVersion: currentVersion + 1,
         entries: Object.freeze([...entries].map(([spaceId, usageMode]) =>
@@ -1107,7 +1112,7 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
   const initial = await handler(new Request(`${origin}/api/v1/mind-usage`));
   assert.equal(initial.status, 200);
   const initialBody = await initial.json();
-  assert.equal(initialBody.data.contract_version, "principal-mind-usage/v1");
+  assert.equal(initialBody.data.contract_version, "principal-mind-usage/v2");
   assert.equal(initialBody.data.usage_version, 0);
   assert.deepEqual(initialBody.data.items.map((item) => item.usage_mode), [
     "disabled", "disabled", "disabled",
@@ -1164,11 +1169,11 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
     item.usage_mode,
   ]), [
     ["/me", "read_write"],
-    ["/research-notes", "read"],
+    ["/research-notes", "read_write"],
     ["/archive", "read"],
   ]);
   assert.equal(personalWrite.body.data.projection.items.filter((item) =>
-    item.usage_mode === "read_write").length, 1);
+    item.usage_mode === "read_write").length, 2);
   assert.doesNotMatch(JSON.stringify(personalWrite.body), /principal_one|space_|revision_|mind_id|generation/iu);
   assert.deepEqual(commands.map((command) => ({
     spaceId: command.spaceId,
@@ -1188,7 +1193,7 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
     `${origin}/api/v1/minds/research-notes/usage`,
   ))).json();
   assert.equal(refreshed.data.usage_version, 3);
-  assert.equal(refreshed.data.items[0].usage_mode, "read");
+  assert.equal(refreshed.data.items[0].usage_mode, "read_write");
 
   const removedDescriptionRoute = await handler(new Request(`${origin}/api/v1/minds/me/description`, {
     method: "PATCH",
@@ -1290,7 +1295,7 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.equal(detail.status, 200);
   const detailHtml = await detail.text();
   assert.match(detailHtml, /data-mind-route data-mind-handle="research-notes"[^>]*data-mind-visibility="private"/);
-  assert.match(detailHtml, /For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description\./u);
+  assert.match(detailHtml, /For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description; My Mind is controlled independently\./u);
   assert.doesNotMatch(detailHtml, /For My Mind, Read and write permits only the specific writes/u);
   assert.match(detailHtml, /data-owner-delete-controls/);
   assert.match(detailHtml, /data-owner-visibility-controls/);

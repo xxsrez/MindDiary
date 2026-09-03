@@ -7,8 +7,10 @@
 > routing и automatic save определены в
 > [режимах использования Mind](specs/mind-usage-modes.md); исторические
 > sequence/storage sections ниже остаются evidence до реализации. Personal
-> `/me` определяется server-side без description; connector разрешает его write
-> только по прямой просьбе пользователя и не передаёт intent как authority.
+> `/me` определяется server-side без description; его requested-write lane
+> независим от единственного ordinary automatic-write lane. Connector разрешает
+> Personal write только по прямой просьбе пользователя и не передаёт intent как
+> authority.
 
 Статус: proposal, обновлено 2026-08-27. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как

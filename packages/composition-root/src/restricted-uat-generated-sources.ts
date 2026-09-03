@@ -249,7 +249,7 @@ export function createRestrictedUatGeneratedSourceHandler(dependencies: Readonly
 
     const bindingOwnerId = metadataToken.tokenId as unknown as MindBindingOwnerId;
     const usage = await dependencies.metadata.readPrincipalMindUsage(principalId);
-    const generation = usage?.activeWriteGeneration ?? null;
+    const generation = usage?.ordinaryWriteGeneration ?? null;
     const usageEntry = generation === null
       ? null
       : usage?.entries.find((entry) => entry.spaceId === generation.spaceId) ?? null;

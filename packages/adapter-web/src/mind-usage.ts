@@ -36,7 +36,7 @@ export interface MindUsageUiItem {
 }
 
 export interface MindUsageUiProjection {
-  readonly contractVersion: "principal-mind-usage/v1";
+  readonly contractVersion: "principal-mind-usage/v2";
   readonly usageVersion: number;
   readonly items: readonly Readonly<MindUsageUiItem>[];
 }
@@ -99,7 +99,7 @@ function safeUsageState(value: unknown, principalId: string): Readonly<{
   const source = record(value);
   if (
     source?.principalId !== principalId ||
-    source.contractVersion !== "principal-mind-usage/v1" ||
+    source.contractVersion !== "principal-mind-usage/v2" ||
     !Number.isSafeInteger(source.usageVersion) ||
     Number(source.usageVersion) < 0 ||
     !Array.isArray(source.entries)
@@ -115,7 +115,7 @@ function safeUsageState(value: unknown, principalId: string): Readonly<{
     ) throw new TypeError("safe Mind usage state is unavailable");
     modes.set(spaceId, mode);
   }
-  if ([...modes.values()].filter((mode) => mode === "read_write").length > 1) {
+  if ([...modes.values()].filter((mode) => mode === "read_write").length > 2) {
     throw new TypeError("safe Mind usage state is unavailable");
   }
   return Object.freeze({ usageVersion: Number(source.usageVersion), modes });
@@ -202,7 +202,7 @@ export async function readMindUsageProjection(input: {
       ]);
   const usage = safeUsageState(await input.mindUsage.read(input.actor), input.actor.principalId);
   return Object.freeze({
-    contractVersion: "principal-mind-usage/v1" as const,
+    contractVersion: "principal-mind-usage/v2" as const,
     usageVersion: usage.usageVersion,
     items: Object.freeze(minds.map((mind) =>
       projectionItem(mind, usage.modes.get(mind.mindId) ?? "disabled"))),
@@ -229,7 +229,7 @@ async function readMindUsageProjectionIncluding(
     input.actor.principalId,
   );
   return Object.freeze({
-    contractVersion: "principal-mind-usage/v1" as const,
+    contractVersion: "principal-mind-usage/v2" as const,
     usageVersion: usage.usageVersion,
     items: Object.freeze(minds.map((listedMind) =>
       projectionItem(listedMind, usage.modes.get(listedMind.mindId) ?? "disabled"))),
@@ -313,7 +313,7 @@ export function renderMindUsageCollection(): string {
         <h2 id="mind-usage-heading">How Codex uses your Minds</h2>
       </div>
     </div>
-    <p>Choose one mode for every available Mind. My Mind accepts writes only when you directly ask Codex to save, update, or delete specific knowledge; ordinary Minds keep description-based automatic saving.</p>
+    <p>Choose one mode for every available Mind. My Mind accepts writes only when you directly ask Codex to save, update, or delete specific knowledge. That permission is independent of the single ordinary Mind that may use description-based automatic saving, so both can be enabled at once.</p>
     <p class="md-caveat"><strong>Credentials can only narrow access.</strong> A Connection or token still needs its own read or write scope, and current Mind rights are checked on every call.</p>
     <section class="md-state md-state--loading" aria-busy="true" data-mind-usage-state>
       <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -328,8 +328,8 @@ export function renderMindUsagePanel(mindRef: string): string {
     ? mindRef
     : "";
   const policyCopy = safeRef === "/me"
-    ? "For My Mind, Read and write permits only the specific writes you directly request; it does not enable automatic saving."
-    : "For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description.";
+    ? "For My Mind, Read and write permits only the specific writes you directly request; it does not enable automatic saving or replace the ordinary automatic-save Mind."
+    : "For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description; My Mind is controlled independently.";
   return `<section class="md-usage-section" aria-labelledby="mind-usage-heading" data-mind-usage-panel data-mind-ref="${safeRef}">
     <div>
       <p class="md-eyebrow">Agent intent</p>

@@ -230,7 +230,7 @@ function principalMountedMetadata(metadata) {
         usageMode: "read_write",
         writeGeneration: current,
       })]),
-      activeWriteGeneration: current,
+      ordinaryWriteGeneration: current,
     });
   };
   const validatePin = async (pin) => {

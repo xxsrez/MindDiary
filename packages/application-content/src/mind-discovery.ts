@@ -22,6 +22,7 @@ import {
   isRevisionIndexTerminalFailureCode,
   isReservedTopLevelHandle,
   parseCanonicalSpaceHandle,
+  principalMindUsageWriteGeneration,
   utcInstant,
   type CanonicalRevisionEnvelope,
   type Capability,
@@ -517,7 +518,7 @@ function enabledUsageProjection(
     });
   }
   const generation = entry.writeGeneration;
-  const active = state.activeWriteGeneration;
+  const active = principalMindUsageWriteGeneration(state, spaceId);
   if (
     entry.usageMode !== "read_write" ||
     generation === null ||
