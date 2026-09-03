@@ -2305,6 +2305,124 @@ test("get_mind_info resolves one exact Mind from one D1 read-session", async () 
   assert.deepEqual(database.metadataReadLog, ["tail"]);
 });
 
+test("Sites request recovery discovers due invitation jobs after cold restart", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const generators = ids();
+  const boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const app = services(boundary, generators);
+  const owner = await app.bootstrap.bootstrapAccount(preRegistrationActor(1), {
+    action: "create_isolated_account",
+  });
+  const target = await app.bootstrap.bootstrapAccount(preRegistrationActor(2), {
+    action: "create_isolated_account",
+  });
+  const mind = await app.ordinary.createSpaceWithOwner(
+    actor(owner.principalId, "request_recovery_mind", T1),
+    {
+      name: "Invitation recovery",
+      handle: "invitation-recovery",
+      idempotencyKey: "create-invitation-recovery",
+    },
+  );
+  const invitation = await app.invitations.createInvitation(
+    actor(owner.principalId, "request_recovery_invite", T2),
+    {
+      mindId: mind.mindId,
+      targetVerifiedEmail: "sites.persistence.2@example.invalid",
+      role: "reader",
+      expectedMetadataVersion: mind.metadataVersion,
+      idempotencyKey: "invite-for-recovery",
+    },
+  );
+  const now = new Date("2026-08-15T08:09:59.999Z");
+  const telemetry = [];
+  const runtimeOptions = {
+    database,
+    bucket,
+    publicOrigin: "https://mind-diary.example",
+    identity: {
+      readVerifiedIdentity() {
+        return {
+          kind: "authenticated",
+          verifiedEmail: "sites.persistence.2@example.invalid",
+          verifiedFullName: "Sites Principal 2",
+        };
+      },
+    },
+    tokenVerifierKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 1),
+    locatorKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 33),
+    exportDownloadVerifierKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 65),
+    csrfKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 97),
+    now: () => now,
+    observabilityWriter: { write(line) { telemetry.push(line); } },
+    schedule() {},
+  };
+
+  const beforeDue = await createSitesMetadataStore(database);
+  assert.deepEqual(
+    await beforeDue.listRecoverableInvitationExpiryJobs(now.toISOString(), 10),
+    [],
+  );
+  assert.equal(
+    (await beforeDue.inspectOrdinaryMindStateForTest(mind.mindId))
+      .invitations[0].state,
+    "pending",
+  );
+
+  now.setTime(Date.parse(invitation.expiresAt));
+  const first = await createProductSiteRuntime(runtimeOptions);
+  const second = await createProductSiteRuntime(runtimeOptions);
+  const recovered = await Promise.all([
+    first.recoverBackground(1, "request"),
+    second.recoverBackground(1, "request"),
+  ]);
+  assert.ok(recovered.reduce((sum, result) => sum + result.dispatched, 0) >= 1);
+
+  const afterDue = await createSitesMetadataStore(database);
+  const state = await afterDue.inspectOrdinaryMindStateForTest(mind.mindId);
+  assert.ok(state);
+  assert.equal(state.invitations[0].state, "expired");
+  assert.equal(state.invitations[0].version, 2);
+  assert.equal(state.memberships.length, 1);
+  assert.deepEqual(
+    await afterDue.listRecoverableInvitationExpiryJobs(
+      invitation.expiresAt,
+      10,
+    ),
+    [],
+  );
+
+  const encoded = telemetry.join("\n");
+  assert.equal(encoded.includes("sites.persistence.2@example.invalid"), false);
+  assert.equal(encoded.includes(mind.mindId), false);
+  const events = telemetry.map((line) => JSON.parse(line));
+  assert.equal(events.some((event) =>
+    Object.hasOwn(event, "invitationId") ||
+    Object.hasOwn(event, "spaceId") ||
+    Object.hasOwn(event, "principalId")), false);
+  assert.equal(
+    events.some(({ metric, outcome }) =>
+      metric === "invitation_outcome" && outcome === "due"),
+    true,
+  );
+  assert.equal(
+    events.some(({ metric, outcome }) =>
+      metric === "invitation_outcome" && outcome === "claimed"),
+    true,
+  );
+  assert.equal(
+    events.some(({ metric, outcome }) =>
+      metric === "invitation_outcome" && outcome === "completed"),
+    true,
+  );
+  assert.equal(
+    events.some(({ metric, value }) =>
+      metric === "invitation_expiry_lag_ms" && value === 0),
+    true,
+  );
+});
+
 test("Sites composition persists account, invitation, ownership, HEAD CAS, idempotency and token state across isolates", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();

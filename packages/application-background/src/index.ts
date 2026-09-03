@@ -142,6 +142,48 @@ export class BackgroundPrivacySafeObservability {
     });
   }
 
+  recordInvitationExpiry(event: {
+    readonly actor: Pick<ActorContext, "requestId">;
+    readonly jobId: JobId;
+    readonly occurredAtUtc: UtcInstant;
+    readonly outcome:
+      | "due"
+      | "claimed"
+      | "completed"
+      | "retried"
+      | "unavailable"
+      | "resolved";
+    readonly lagMs: number | null;
+  }): void {
+    recordBackgroundMetric(this.#sink, {
+      kind: "operational",
+      metric: "invitation_outcome",
+      surface: "background",
+      operation: "invitation",
+      outcome: event.outcome,
+      unit: "count",
+      value: 1,
+      occurredAtUtc: event.occurredAtUtc,
+      requestId: event.actor.requestId,
+      jobId: event.jobId,
+      cohort: null,
+    });
+    if (event.lagMs === null) return;
+    recordBackgroundMetric(this.#sink, {
+      kind: "operational",
+      metric: "invitation_expiry_lag_ms",
+      surface: "background",
+      operation: "invitation",
+      outcome: event.outcome,
+      unit: "milliseconds",
+      value: Math.max(0, event.lagMs),
+      occurredAtUtc: event.occurredAtUtc,
+      requestId: event.actor.requestId,
+      jobId: event.jobId,
+      cohort: null,
+    });
+  }
+
   recordCleanup(event: {
     readonly actor: Pick<ActorContext, "requestId">;
     readonly occurredAtUtc: UtcInstant;
@@ -180,6 +222,7 @@ export class BackgroundPrivacySafeObservability {
     readonly stage:
       | "recovery_index_gaps"
       | "recovery_index_dispatch"
+      | "recovery_invitation_expiry_dispatch"
       | "recovery_export_dispatch"
       | "recovery_staging_cleanup"
       | "recovery_import_cleanup"
@@ -504,6 +547,7 @@ export class AuditOutboxDeliveryHandler {
 export class InvitationExpiryJobHandler {
   readonly #jobs: InvitationExpiryJobStore;
   readonly #clock: Clock;
+  readonly #observability: BackgroundPrivacySafeObservability | undefined;
   readonly #retryDelayMs: number;
   readonly #claimLeaseMs: number;
 
@@ -512,9 +556,11 @@ export class InvitationExpiryJobHandler {
     readonly clock: Clock;
     readonly retryDelayMs?: number;
     readonly claimLeaseMs?: number;
+    readonly observability?: BackgroundPrivacySafeObservability;
   }) {
     this.#jobs = dependencies.jobs;
     this.#clock = dependencies.clock;
+    this.#observability = dependencies.observability;
     this.#retryDelayMs = boundedDuration(dependencies.retryDelayMs ?? 1_000, "invitation retry delay", 24 * 60 * 60 * 1_000);
     this.#claimLeaseMs = boundedDuration(dependencies.claimLeaseMs ?? DEFAULT_BACKGROUND_CLAIM_LEASE_MS, "invitation claim lease", MAX_BACKGROUND_CLAIM_LEASE_MS);
   }
@@ -527,7 +573,23 @@ export class InvitationExpiryJobHandler {
       claimedAt,
       retryAt(claimedAt, this.#claimLeaseMs),
     );
-    if (claim.kind !== "claimed") return mapClaim(claim.kind);
+    if (claim.kind !== "claimed") {
+      this.#observability?.recordInvitationExpiry({
+        actor: request.actor,
+        jobId: request.jobId,
+        occurredAtUtc: claimedAt,
+        outcome: claim.kind === "not_available" ? "unavailable" : "resolved",
+        lagMs: null,
+      });
+      return mapClaim(claim.kind);
+    }
+    this.#observability?.recordInvitationExpiry({
+      actor: request.actor,
+      jobId: request.jobId,
+      occurredAtUtc: claimedAt,
+      outcome: "claimed",
+      lagMs: null,
+    });
     try {
       const completed = await this.#jobs.completeInvitationExpiryJob(
         request.jobId,
@@ -535,8 +597,22 @@ export class InvitationExpiryJobHandler {
         this.#clock.now(),
       );
       if (completed.kind === "expired" || completed.kind === "already_terminal") {
+        this.#observability?.recordInvitationExpiry({
+          actor: request.actor,
+          jobId: request.jobId,
+          occurredAtUtc: this.#clock.now(),
+          outcome: "completed",
+          lagMs: null,
+        });
         return Object.freeze({ kind: "completed" });
       }
+      this.#observability?.recordInvitationExpiry({
+        actor: request.actor,
+        jobId: request.jobId,
+        occurredAtUtc: this.#clock.now(),
+        outcome: "unavailable",
+        lagMs: null,
+      });
       return Object.freeze({ kind: completed.kind });
     } catch {
       const failedAt = this.#clock.now();
@@ -546,6 +622,13 @@ export class InvitationExpiryJobHandler {
         failedAt,
         retryAt(failedAt, this.#retryDelayMs),
       );
+      this.#observability?.recordInvitationExpiry({
+        actor: request.actor,
+        jobId: request.jobId,
+        occurredAtUtc: failedAt,
+        outcome: "retried",
+        lagMs: null,
+      });
       return Object.freeze({ kind: "failed", failureCode: "invitation_expiry_failed" });
     }
   }

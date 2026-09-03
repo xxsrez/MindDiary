@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createBackgroundServiceActor } from "@mind-diary/adapter-background";
+import { InMemoryPrivacySafeObservabilitySink } from "@mind-diary/adapter-audit-memory";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
-import { InvitationExpiryJobHandler } from "@mind-diary/application-background";
+import {
+  BackgroundPrivacySafeObservability,
+  InvitationExpiryJobHandler,
+} from "@mind-diary/application-background";
 import {
   AccountBootstrapService,
   InvitationControlFailure,
@@ -487,6 +491,18 @@ test("durable expiry re-reads invitation state, survives reconstruction and lose
   assert.ok(job);
   assert.equal(job.target.kind, "expire_invitation");
   assert.deepEqual(Object.keys(job.target), ["kind", "invitationId"]);
+  assert.deepEqual(
+    await env.metadata.listRecoverableInvitationExpiryJobs(
+      "2026-08-14T06:14:59.999Z",
+      10,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    (await env.metadata.listRecoverableInvitationExpiryJobs(EXPIRES, 10))
+      .map((candidate) => candidate.jobId),
+    [job.jobId],
+  );
   const now = { value: "2026-08-14T06:14:59.999Z" };
   const clock = { now: () => now.value };
   let handler = new InvitationExpiryJobHandler({ jobs: env.metadata, clock });
@@ -508,8 +524,74 @@ test("durable expiry re-reads invitation state, survives reconstruction and lose
   const final = await state(env, mind.mindId);
   assert.equal(final.invitations[0].state, "expired");
   assert.equal(final.memberships.length, 1);
+  assert.deepEqual(
+    await env.metadata.listRecoverableInvitationExpiryJobs(EXPIRES, 10),
+    [],
+  );
   handler = new InvitationExpiryJobHandler({ jobs: env.metadata, clock });
   assert.equal((await handler.handle({ actor: serviceActor(), jobId: job.jobId })).kind, "already_completed");
+});
+
+test("due invitation discovery paginates a backlog without exact job IDs", async () => {
+  const { env, owner, other, mind } = await fixture("reader");
+  await env.invitations.createInvitation(
+    actor(owner.principalId, "invite-backlog-second"),
+    {
+      mindId: mind.mindId,
+      targetVerifiedEmail: "lifecycle.3@example.com",
+      role: "editor",
+      expectedMetadataVersion: 2,
+      idempotencyKey: "invite-backlog-second",
+    },
+  );
+  const allJobs = (await env.metadata.listBackgroundJobsForTest())
+    .filter((job) => job.target.kind === "expire_invitation")
+    .sort((left, right) => String(left.jobId).localeCompare(String(right.jobId)));
+  assert.equal(allJobs.length, 2);
+
+  const firstPage = await env.metadata.listRecoverableInvitationExpiryJobs(
+    EXPIRES,
+    1,
+  );
+  assert.deepEqual(firstPage.map((job) => job.jobId), [allJobs[0].jobId]);
+  const handler = new InvitationExpiryJobHandler({
+    jobs: env.metadata,
+    clock: { now: () => EXPIRES },
+  });
+  assert.equal(
+    (await handler.handle({
+      actor: createBackgroundServiceActor({
+        serviceId: "expiry-worker",
+        requestId: "expire-backlog-first",
+        occurredAtUtc: EXPIRES,
+      }),
+      jobId: firstPage[0].jobId,
+    })).kind,
+    "completed",
+  );
+  const secondPage = await env.metadata.listRecoverableInvitationExpiryJobs(
+    EXPIRES,
+    1,
+  );
+  assert.deepEqual(secondPage.map((job) => job.jobId), [allJobs[1].jobId]);
+  assert.equal(
+    (await handler.handle({
+      actor: createBackgroundServiceActor({
+        serviceId: "expiry-worker",
+        requestId: "expire-backlog-second",
+        occurredAtUtc: EXPIRES,
+      }),
+      jobId: secondPage[0].jobId,
+    })).kind,
+    "completed",
+  );
+  assert.deepEqual(
+    await env.metadata.listRecoverableInvitationExpiryJobs(EXPIRES, 1),
+    [],
+  );
+  const final = await state(env, mind.mindId);
+  assert.equal(final.invitations.every((invitation) => invitation.state === "expired"), true);
+  assert.equal(final.memberships.some((item) => item.principalId === other.principalId), false);
 });
 
 test("expiry claims are lease/version fenced and stale workers cannot settle a reclaimed job", async () => {
@@ -562,19 +644,38 @@ test("injected lifecycle and expiry failures roll back exact state and remain re
   );
   assert.ok(job);
   const clock = { now: () => EXPIRES };
-  const handler = new InvitationExpiryJobHandler({ jobs: expiring.env.metadata, clock });
+  const sink = new InMemoryPrivacySafeObservabilitySink();
+  const observability = new BackgroundPrivacySafeObservability({
+    sink,
+    cohort: "close_circle",
+  });
+  const handler = new InvitationExpiryJobHandler({
+    jobs: expiring.env.metadata,
+    clock,
+    observability,
+  });
   expiring.env.metadata.failNextOrdinaryMindAtForTest("invitation_expiry_before_commit");
   const failed = await handler.handle({
-    actor: createBackgroundServiceActor({ serviceId: "expiry-worker", requestId: "rollback-expiry", occurredAtUtc: EXPIRES }),
+    actor: createBackgroundServiceActor({ serviceId: "expiry-worker", requestId: "request_rollback_expiry", occurredAtUtc: EXPIRES }),
     jobId: job.jobId,
   });
   assert.equal(failed.kind, "failed");
   assert.equal((await state(expiring.env, expiring.mind.mindId)).invitations[0].state, "pending");
   const retryAt = "2026-08-14T06:15:01.000Z";
-  const retried = await new InvitationExpiryJobHandler({ jobs: expiring.env.metadata, clock: { now: () => retryAt } }).handle({
-    actor: createBackgroundServiceActor({ serviceId: "expiry-worker", requestId: "recover-expiry", occurredAtUtc: retryAt }),
+  const retried = await new InvitationExpiryJobHandler({
+    jobs: expiring.env.metadata,
+    clock: { now: () => retryAt },
+    observability,
+  }).handle({
+    actor: createBackgroundServiceActor({ serviceId: "expiry-worker", requestId: "request_recover_expiry", occurredAtUtc: retryAt }),
     jobId: job.jobId,
   });
   assert.equal(retried.kind, "completed");
   assert.equal((await state(expiring.env, expiring.mind.mindId)).invitations[0].state, "expired");
+  assert.deepEqual(
+    sink.eventsForTest()
+      .filter((event) => event.metric === "invitation_outcome")
+      .map((event) => event.outcome),
+    ["claimed", "retried", "claimed", "completed"],
+  );
 });

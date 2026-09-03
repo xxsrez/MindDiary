@@ -176,8 +176,8 @@ export interface ProductSiteTrustedIdentityReader {
 
 /**
  * Full recovery is operator/background work. The request pulse is deliberately
- * limited to exact-revision index reconciliation so it cannot run cleanup or
- * export scans on the foreground metadata queue.
+ * limited to bounded index reconciliation and due invitation expiry, so it
+ * cannot run cleanup or export scans on the foreground metadata queue.
  */
 export type ProductSiteRecoveryMode = "full" | "request";
 
@@ -224,7 +224,7 @@ export interface ProductSiteRuntime {
   ) => Promise<Response | null>;
   /** Trusted constructor-owned bytes ingress; never an HTTP or MCP route. */
   readonly boundedInMemoryIngress: BoundedInMemoryIngressPort;
-  /** Bounded recovery; request mode is restricted to exact-revision index work. */
+  /** Bounded recovery; request mode handles index work and due invitation expiry. */
   readonly recoverBackground: (
     limit?: number,
     mode?: ProductSiteRecoveryMode,
@@ -1800,7 +1800,11 @@ export async function createProductSiteRuntime(
     clock,
   });
   const auditJobs = new AuditOutboxDeliveryHandler({ work: metadata, audit, clock });
-  const invitationJobs = new InvitationExpiryJobHandler({ jobs: metadata, clock });
+  const invitationJobs = new InvitationExpiryJobHandler({
+    jobs: metadata,
+    clock,
+    observability: backgroundObservability,
+  });
   const exportExpiry = new ExportJobExpiryHandler({ jobs: metadata, archives: objects, clock });
   const objectCleanup = new BoundedObjectCleanupHandler({
     objects,
@@ -1922,6 +1926,7 @@ export async function createProductSiteRuntime(
       operation:
         | "recovery_index_gaps"
         | "recovery_index_dispatch"
+        | "recovery_invitation_expiry_dispatch"
         | "recovery_export_dispatch"
         | "recovery_staging_cleanup"
         | "recovery_import_cleanup"
@@ -2030,6 +2035,37 @@ export async function createProductSiteRuntime(
         }
         return settled;
       });
+      const invitationResults = await stage(
+        "recovery_invitation_expiry_dispatch",
+        async () => {
+          const due = await metadata.listRecoverableInvitationExpiryJobs(
+            clock.now(),
+            limit,
+          );
+          const settled: PromiseSettledResult<unknown>[] = [];
+          for (const job of due) {
+            backgroundObservability.recordInvitationExpiry({
+              actor: recoveryActor,
+              jobId: job.jobId,
+              occurredAtUtc: nowUtc,
+              outcome: "due",
+              lagMs: Math.max(0, Date.parse(nowUtc) - Date.parse(job.availableAt)),
+            });
+            try {
+              settled.push({
+                status: "fulfilled",
+                value: await dispatchBackground({
+                  kind: "invitation_expiry",
+                  jobId: job.jobId,
+                }),
+              });
+            } catch (reason) {
+              settled.push({ status: "rejected", reason });
+            }
+          }
+          return settled;
+        },
+      );
       const exportResults = requestTick
         ? []
         : await stage("recovery_export_dispatch", async () => {
@@ -2093,9 +2129,15 @@ export async function createProductSiteRuntime(
       const result = Object.freeze({
         backfilled: reconciliation.backfilled,
         repaired: reconciliation.repaired,
-        dispatched: results.length + exportResults.length,
+        dispatched:
+          results.length + invitationResults.length + exportResults.length,
         failed:
           results.filter((entry) =>
+            entry.status === "rejected" ||
+            (typeof entry.value === "object" && entry.value !== null &&
+              "kind" in entry.value && entry.value.kind === "failed")
+          ).length +
+          invitationResults.filter((entry) =>
             entry.status === "rejected" ||
             (typeof entry.value === "object" && entry.value !== null &&
               "kind" in entry.value && entry.value.kind === "failed")

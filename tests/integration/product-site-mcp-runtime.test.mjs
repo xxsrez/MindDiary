@@ -25,7 +25,6 @@ import { MIND_DIARY_STARTER_OKF_TEMPLATE } from "../../packages/adapter-web/dist
 import { createProductSiteRuntime } from "../../packages/composition-root/dist/index.js";
 import {
   createMindDiaryProductWorker,
-  REQUEST_RECOVERY_PULSE_HEADER,
   RequestRecoveryCoordinator,
 } from "../../apps/mind-diary-site/worker/request-recovery.js";
 
@@ -1687,7 +1686,12 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     .filter((operation) => operation?.startsWith("recovery_"));
   assert.deepEqual(
     requestRecoveryOperations.sort(),
-    ["recovery_index_dispatch", "recovery_index_gaps", "recovery_total"].sort(),
+    [
+      "recovery_index_dispatch",
+      "recovery_index_gaps",
+      "recovery_invitation_expiry_dispatch",
+      "recovery_total",
+    ].sort(),
   );
 
   for (const [id, digest, expectedStatus, expectedCode] of [
@@ -1846,6 +1850,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "stage_total",
     "recovery_index_gaps",
     "recovery_index_dispatch",
+    "recovery_invitation_expiry_dispatch",
     "recovery_export_dispatch",
     "recovery_staging_cleanup",
     "recovery_import_cleanup",
@@ -2296,7 +2301,8 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.deepEqual(invitationOverviewBody.data.invitations, []);
   assert.equal(deferredInvitationsActivity.length, 1);
   await Promise.all(deferredInvitationsActivity);
-  assert.equal(database.metadataTailReads - tailReadsBeforeInvitationsPage, 3);
+  // Page read, expiry reconciliation, consistent overview read, and deferred activity.
+  assert.equal(database.metadataTailReads - tailReadsBeforeInvitationsPage, 4);
 
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   assert.equal(settings.status, 200);
@@ -4272,28 +4278,6 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     documentResponse.headers.get("x-mind-diary-performance-correlation-id"),
     null,
   );
-  assert.equal(recoveryWaits.length, 1);
-  await Promise.all(recoveryWaits.splice(0));
-
-  const recoveryPulse = await restartedWorker.fetch(
-    new Request(`${ORIGIN}/`, {
-      method: "HEAD",
-      headers: {
-        accept: "text/html",
-        [REQUEST_RECOVERY_PULSE_HEADER]: "1",
-        "user-agent": "request-recovery-test",
-        "oai-authenticated-user-email": "recovery.owner@example.com",
-        "oai-authenticated-user-full-name": "Recovery%20Owner",
-        "oai-authenticated-user-full-name-encoding": "percent-encoded-utf-8",
-      },
-    }),
-    recoveryEnvironment,
-    {
-      waitUntil: (promise) => recoveryWaits.push(promise),
-      passThroughOnException() {},
-    },
-  );
-  assert.equal(recoveryPulse.status, 200);
   assert.equal(recoveryWaits.length, 2);
   await Promise.all(recoveryWaits);
   assert.ok(restartedRuntime);

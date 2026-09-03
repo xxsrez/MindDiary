@@ -882,6 +882,10 @@ export type CompleteInvitationExpiryJobResult =
 
 /** Durable invitation expiry jobs carry only an invitation ID, never authority. */
 export interface InvitationExpiryJobStore extends MetadataStore {
+  listRecoverableInvitationExpiryJobs(
+    now: UtcInstant,
+    limit: number,
+  ): Promise<readonly Readonly<BackgroundJob>[]>;
   claimInvitationExpiryJob(
     jobId: JobId,
     now: UtcInstant,

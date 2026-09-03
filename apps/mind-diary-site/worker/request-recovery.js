@@ -36,8 +36,13 @@ export const REQUEST_RECOVERY_IDLE_MS = 5_000;
 export const REQUEST_RECOVERY_PULSE_HEADER = "x-mind-diary-recovery-pulse";
 
 function isRecoveryCandidateRequest(request) {
-  if (request.method !== "HEAD") return false;
-  if (request.headers.get(REQUEST_RECOVERY_PULSE_HEADER) !== "1") return false;
+  const explicitPulse =
+    request.method === "HEAD" &&
+    request.headers.get(REQUEST_RECOVERY_PULSE_HEADER) === "1";
+  const authenticatedNavigation =
+    request.method === "GET" &&
+    request.headers.has("oai-authenticated-user-email");
+  if (!explicitPulse && !authenticatedNavigation) return false;
   const path = new URL(request.url).pathname;
   if (NON_DOCUMENT_PATHS.has(path) ||
       NON_DOCUMENT_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) {
@@ -219,11 +224,10 @@ export function createMindDiaryProductWorker(options) {
   const runtimeInitializationTimeoutMs =
     options.runtimeInitializationTimeoutMs ?? RUNTIME_INITIALIZATION_TIMEOUT_MS;
   // Sites shares the Worker/D1 resource budget between foreground requests and
-  // waitUntil work. Keep request-triggered recovery opt-in until a dedicated
-  // scheduler exists; operator-owned full recovery remains available through
-  // the runtime API and foreground reads stay isolated from maintenance.
+  // waitUntil work. Recovery therefore starts only after a quiet window, runs
+  // a bounded request-mode batch, and never delays the document response.
   const recoveryCoordinator = options.recoveryCoordinator ??
-    new RequestRecoveryCoordinator({ enabled: false });
+    new RequestRecoveryCoordinator();
   return Object.freeze({
     async fetch(request, environment, context) {
       let failureStage = "static-assets";

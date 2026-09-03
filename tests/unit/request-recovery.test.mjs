@@ -26,13 +26,22 @@ function recoveryPulse(path = "/") {
   });
 }
 
+function authenticatedNavigation(path = "/") {
+  return new Request(`${ORIGIN}${path}`, {
+    headers: {
+      accept: "text/html",
+      "oai-authenticated-user-email": "recovery.user@example.com",
+    },
+  });
+}
+
 test("product UI does not schedule request-triggered recovery work", () => {
   assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /requestIdleCallback/u);
   assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /setTimeout\(.*15000/su);
   assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /x-mind-diary-recovery-pulse/u);
 });
 
-test("production Worker disables request-triggered recovery by default", async () => {
+test("production Worker enables bounded request-triggered recovery by default", async () => {
   let recoveries = 0;
   const waits = [];
   const worker = createMindDiaryProductWorker({
@@ -50,8 +59,9 @@ test("production Worker disables request-triggered recovery by default", async (
     waitUntil: (promise) => waits.push(promise),
   });
   assert.equal(response.status, 200);
-  assert.equal(recoveries, 0);
-  assert.equal(waits.length, 0);
+  assert.equal(waits.length, 1);
+  await waits[0];
+  assert.equal(recoveries, 1);
 });
 
 test("a cold runtime timeout returns bounded 503s without retaining request contexts or duplicating initialization", async () => {
@@ -395,7 +405,7 @@ test("generated-source test composition installs only for exact restricted UAT l
   });
 });
 
-test("only a successful explicit post-load HEAD pulse can trigger recovery", () => {
+test("only successful authenticated navigation or an explicit HEAD pulse can trigger recovery", () => {
   const mobile = new Request(`${ORIGIN}/`, {
     headers: {
       accept: "text/html,application/xhtml+xml",
@@ -403,6 +413,10 @@ test("only a successful explicit post-load HEAD pulse can trigger recovery", () 
     },
   });
   assert.equal(isRecoveryEligibleRequest(mobile, new Response("ok")), false);
+  assert.equal(
+    isRecoveryEligibleRequest(authenticatedNavigation(), new Response("ok")),
+    true,
+  );
   assert.equal(isRecoveryEligibleRequest(recoveryPulse(), new Response("ok")), true);
   for (const path of [
     "/_next/static/app.js",

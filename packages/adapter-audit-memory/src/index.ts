@@ -123,6 +123,7 @@ const METRIC_UNITS: Readonly<Record<PrivacySafeObservabilityMetric, PrivacySafeO
     cas_conflict: "count",
     index_lag_ms: "milliseconds",
     export_lag_ms: "milliseconds",
+    invitation_expiry_lag_ms: "milliseconds",
     invitation_outcome: "count",
     token_outcome: "count",
     deletion_outcome: "count",

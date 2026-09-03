@@ -146,6 +146,39 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
       });
     }
 
+  async listRecoverableInvitationExpiryJobs(
+      now: UtcInstant,
+      limit: number,
+    ): Promise<readonly Readonly<BackgroundJob>[]> {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+        return Object.freeze([]);
+      }
+      const nowMs = Date.parse(now);
+      if (!Number.isFinite(nowMs)) return Object.freeze([]);
+      return Object.freeze(
+        [...this._backgroundJobs.values()]
+          .filter((job) => {
+            if (job.target.kind !== "expire_invitation" || job.attempts >= 5) {
+              return false;
+            }
+            if (job.state === "queued" || job.state === "failed") {
+              return Date.parse(job.availableAt) <= nowMs;
+            }
+            return job.state === "running" &&
+              job.claimExpiresAt !== null &&
+              Date.parse(job.claimExpiresAt) <= nowMs;
+          })
+          .sort((left, right) => {
+            const availability = left.availableAt.localeCompare(right.availableAt);
+            return availability === 0
+              ? String(left.jobId).localeCompare(String(right.jobId), "en")
+              : availability;
+          })
+          .slice(0, limit)
+          .map(cloneBackgroundJob),
+      );
+    }
+
   async claimInvitationExpiryJob(
       jobId: JobId,
       now: SpaceInvitation["updatedAt"],
