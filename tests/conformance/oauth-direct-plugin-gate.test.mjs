@@ -298,7 +298,7 @@ test("Codex prompt-input discovery fails closed for cache-only, wrong-source, an
 });
 
 test("Codex client version and prompt-input command availability fail closed", async () => {
-  assertCodexClientVersion("codex-cli 0.151.0\n");
+  assertCodexClientVersion("codex-cli 0.152.1\n");
   assert.throws(
     () => assertCodexClientVersion("codex-cli 0.150.1\n"),
     (error) => error instanceof ProbeFailure && error.code === "codex_version_mismatch",
