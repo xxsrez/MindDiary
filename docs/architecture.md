@@ -912,15 +912,17 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   одинакового deployment/config fingerprint и single-flight-ит concurrent cold
   initialization. Request `ExecutionContext`, request/response и private actor
   state в cache не сохраняются; background promises прикрепляются только к
-  текущему request context. Пятисекундный request timeout ограничивает только
-  ожидание конкретного запроса: исходный initialization flight остаётся
-  единственным источником истины до фактического завершения. Поздний успех
-  переиспользуется следующими запросами, а только фактическая ошибка удаляет
-  slot и разрешает чистый retry; поэтому timeout не создаёт параллельную
-  initialization и не переносит request context в cache. Если provider promise
-  не завершается вообще, каждый request получает bounded `503`, пока не
-  изменится config fingerprint или не будет пересоздан isolate. Config drift
-  сразу создаёт чистое поколение.
+  текущему request context. Пятисекундный request timeout ограничивает ожидание
+  конкретного запроса, а pending initialization остаётся единственным flight в
+  пределах lease, равной трём таким timeout (`15 s` в Product Worker). Это даёт
+  обычному позднему успеху переиспользоваться без параллельного cold start, но
+  не оставляет отменённый request-context provider promise бессрочно отравлять
+  isolate: первый следующий acquire после истечения lease retire-ит slot и
+  создаёт чистое поколение. Поздний исход retired flight не может заменить
+  новое поколение или dispatch-ить накопленную работу. Поэтому recovery после
+  отменённой навигации ограничен по времени, а overlap возможен только после
+  истечения lease и остаётся fenced exact slot identity. Config drift сразу
+  создаёт чистое поколение.
 - Request-triggered recovery остаётся opt-in и в текущем UAT Worker отключён.
   При явном включении его запускает только отдельный same-origin `HEAD` pulse;
   обычный document GET, OAuth, API, MCP и static assets recovery не запускают.

@@ -14,6 +14,9 @@ export declare class IsolateRuntimeCache<
   Runtime,
   Work,
 > {
+  constructor(options?: {
+    readonly now?: () => number;
+  });
   acquire(options: {
     readonly environment: Environment;
     readonly fingerprint: string;

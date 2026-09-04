@@ -1,4 +1,5 @@
 export const RUNTIME_INITIALIZATION_TIMEOUT_MS = 5_000;
+const RUNTIME_INITIALIZATION_LEASE_MULTIPLIER = 3;
 
 async function withInitializationTimeout(operation, timeoutMs) {
   let timer;
@@ -23,6 +24,14 @@ async function withInitializationTimeout(operation, timeoutMs) {
  */
 export class IsolateRuntimeCache {
   #environments = new WeakMap();
+  #now;
+
+  constructor({ now = Date.now } = {}) {
+    if (typeof now !== "function") {
+      throw new TypeError("runtime cache clock must be a function");
+    }
+    this.#now = now;
+  }
 
   #retire(environmentSlots, slot) {
     if (environmentSlots.slots.get(slot.fingerprint) === slot) {
@@ -49,6 +58,10 @@ export class IsolateRuntimeCache {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
       throw new TypeError("runtime initialization timeout must be a positive integer");
     }
+    const leaseMs = timeoutMs * RUNTIME_INITIALIZATION_LEASE_MULTIPLIER;
+    if (!Number.isSafeInteger(leaseMs)) {
+      throw new TypeError("runtime initialization lease must be a safe integer");
+    }
     let environmentSlots = this.#environments.get(options.environment);
     if (environmentSlots === undefined) {
       environmentSlots = {
@@ -71,10 +84,19 @@ export class IsolateRuntimeCache {
     }
 
     let slot = environmentSlots.slots.get(options.fingerprint);
+    if (
+      slot !== undefined &&
+      slot.state === "pending" &&
+      this.#now() >= slot.leaseExpiresAt
+    ) {
+      this.#retire(environmentSlots, slot);
+      slot = undefined;
+    }
     if (slot === undefined) {
       const created = {
         fingerprint: options.fingerprint,
         state: "pending",
+        leaseExpiresAt: this.#now() + leaseMs,
         initialization: undefined,
         dispatch: options.dispatch,
         acceptsScheduledWork: true,
@@ -92,9 +114,9 @@ export class IsolateRuntimeCache {
       // schedule can safely share the same immutable flight.
       const initialization = Promise.resolve().then(() => options.create(schedule));
       created.initialization = initialization;
-      // A request timeout bounds only that request. Pending obsolete flights
-      // remain addressable by exact fingerprint, while settled obsolete or
-      // rejected generations are retired together with their queued work.
+      // A request timeout bounds only that request. Pending flights remain
+      // reusable until their lease expires, while settled obsolete, rejected,
+      // or expired generations are fenced together with their queued work.
       void initialization.then(
         () => {
           created.state = "fulfilled";

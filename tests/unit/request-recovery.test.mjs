@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   PRODUCT_UI_CLIENT_JAVASCRIPT,
 } from "../../packages/adapter-web/dist/product-ui-assets.js";
+import { IsolateRuntimeCache } from "../../apps/mind-diary-site/worker/runtime-cache.js";
 
 import {
   REQUEST_RECOVERY_PULSE_HEADER,
@@ -112,6 +113,40 @@ test("a cold runtime timeout returns bounded 503s without retaining request cont
   assert.equal(third.status, 200);
   assert.equal(await third.text(), "ok");
   assert.equal(attempts, 1);
+});
+
+test("Product Worker replaces a canceled cold start after its initialization lease", async () => {
+  let now = 0;
+  const environment = {};
+  let attempts = 0;
+  const worker = createMindDiaryProductWorker({
+    runtimeCache: new IsolateRuntimeCache({ now: () => now }),
+    runtimeInitializationTimeoutMs: 10,
+    async createRuntime() {
+      attempts += 1;
+      if (attempts === 1) return new Promise(() => {});
+      return {
+        async fetch() { return new Response("recovered"); },
+        async recoverBackground() {},
+        async dispatchBackground() {},
+      };
+    },
+    readConfig() { return { publicOrigin: ORIGIN }; },
+    async fallbackFetch() { return new Response("fallback", { status: 404 }); },
+  });
+  const request = () => new Request(`${ORIGIN}/minds`, {
+    headers: { accept: "text/html" },
+  });
+
+  const first = await worker.fetch(request(), environment, { waitUntil() {} });
+  assert.equal(first.status, 503);
+  assert.equal(attempts, 1);
+
+  now = 30;
+  const recovered = await worker.fetch(request(), environment, { waitUntil() {} });
+  assert.equal(recovered.status, 200);
+  assert.equal(await recovered.text(), "recovered");
+  assert.equal(attempts, 2);
 });
 
 test("late cold-start work waits for the next live request context", async () => {

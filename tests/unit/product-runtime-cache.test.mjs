@@ -46,7 +46,8 @@ test("failed initialization is evicted and configuration mismatch creates a clea
 });
 
 test("a timed-out request leaves the sole initialization flight shared with an early retry", async () => {
-  const cache = new IsolateRuntimeCache();
+  let now = 0;
+  const cache = new IsolateRuntimeCache({ now: () => now });
   const environment = {};
   let attempts = 0;
   let concurrent = 0;
@@ -80,6 +81,7 @@ test("a timed-out request leaves the sole initialization flight shared with an e
   assert.match(firstOutcome.message, /timed out/u);
   assert.equal(attempts, 1);
 
+  now = 50;
   const retry = cache.acquire({
     environment,
     fingerprint: "a",
@@ -110,6 +112,64 @@ test("a timed-out request leaves the sole initialization flight shared with an e
     { generation: 1 },
   );
   assert.equal(attempts, 1);
+});
+
+test("an expired initialization lease retires a canceled flight and fences its late work", async () => {
+  let now = 0;
+  const cache = new IsolateRuntimeCache({ now: () => now });
+  const environment = {};
+  let attempts = 0;
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const dispatched = [];
+  const create = async (schedule) => {
+    const generation = ++attempts;
+    if (generation === 1) {
+      await firstGate;
+      schedule({ id: "work-from-retired-generation" });
+    }
+    return { generation };
+  };
+  const dispatch = async (runtime, work) => {
+    dispatched.push([runtime.generation, work.id]);
+  };
+
+  const first = cache.acquire({
+    environment,
+    fingerprint: "a",
+    create,
+    dispatch,
+    initializationTimeoutMs: 25,
+  });
+  await assert.rejects(first.runtime, { code: "runtime_initialization_timeout" });
+  assert.equal(attempts, 1);
+
+  now = 75;
+  const replacement = cache.acquire({
+    environment,
+    fingerprint: "a",
+    create,
+    dispatch,
+    initializationTimeoutMs: 25,
+  });
+  assert.deepEqual(await replacement.runtime, { generation: 2 });
+  assert.equal(attempts, 2);
+
+  releaseFirst();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(first.drainInitializationScheduled(), []);
+  assert.deepEqual(replacement.drainInitializationScheduled(), []);
+  assert.deepEqual(dispatched, []);
+  assert.deepEqual(
+    await cache.acquire({
+      environment,
+      fingerprint: "a",
+      create,
+      dispatch,
+    }).runtime,
+    { generation: 2 },
+  );
 });
 
 test("in-flight A to B to A configuration changes rejoin each exact fingerprint", async () => {
