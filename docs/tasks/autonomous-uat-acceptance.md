@@ -297,4 +297,23 @@ lock digest, exact input hashes и server SHA в `.openai/acceptance-build.json`
 `npm --prefix apps/mind-diary-acceptance run verify` проверяет clean exact HEAD,
 manifest/bindings, bytes и все input hashes; dirty build уже отвергнут в
 negative probe. Эти build/verify steps включены в CI после общего gate.
-Полный gate и live cut этой итерации ещё не выполнены.
+Полный gate прошёл: 1126 tests, 68 browser tests; CI `33991112972` succeeded.
+Candidate `e9ddcd3abd60ec30227ef252c7cc7c2ac9c66777`, source mirror
+`ac60f1cf934cb130040c36f619aec41bf9d11229`, subtree
+`5ce7dd452b0065ba0745453ad726ab849f673c49`. Проверка 226 inputs прошла локально
+и в CI с одинаковым server hash
+`5426eec2df77c8b5dd1c3a4b8ddaa3f775498232a2a2824d8524534533cbf50d`;
+намеренно изменённый серверный файл отвергнут, исходные bytes восстановлены
+и снова проверены. Common digest
+`dd4eec363c8e13efae6c9ebc39ab375140fbed4a7f1f87fbb2a73e1cdd254ffb`, adapter digest
+`2cb17fa0621828d5441ea8e1d486317156d63ce63261e7aad1bbb84703235261`.
+
+Test Site version 2: deployment `appgdep_example373017a764e95319` и
+controlled redeploy `appgdep_exampled5f4e82d46eb3b49` succeeded, env
+revision 2. Live `/_acceptance/build` совпал с artifact; session со spoofed
+email и MCP без product credential дали 401. Обычная страница Connections
+отрисована в Codex Browser в signed-out состоянии, без account bootstrap.
+D1/R2 marker пережил redeploy; cleanup и повторный cleanup подтверждены.
+CI browser run `33991356905` succeeded на том же candidate, два independent
+contexts. MD-402 готова; следующий этап — MD-403. Продуктовые users/runs и
+enforcement run/session limits ещё не реализованы и не объявлены готовыми.
