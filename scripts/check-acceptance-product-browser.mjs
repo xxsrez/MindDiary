@@ -72,7 +72,7 @@ try {
     await form.getByRole("button", { name: "Create token", exact: true }).click();
     const response = await issued; assert.equal(response.status(), 200);
     const body = await response.json();
-    assert.equal(body.data.scopes.includes("personal:configure"), configure);
+    assert.equal(body.data.token.scopes.includes("personal:configure"), configure);
     await page.locator("[data-secret-dialog][open]").waitFor();
     await page.locator("[data-run-mcp-self-check]").click();
     await page.locator('[data-mcp-self-check][data-diagnostic-state="passed"]').waitFor();
