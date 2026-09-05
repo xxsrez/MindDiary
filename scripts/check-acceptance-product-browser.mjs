@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
 import { chromium } from "@playwright/test";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 
@@ -34,6 +35,25 @@ const browser = await chromium.launch({ headless: true });
 const contexts = [];
 const callback = "http://127.0.0.1:1455/auth/callback";
 let callbackUrl;
+// A real loopback listener is required: Playwright does not route subsequent
+// requests in an HTTP redirect chain. Never launch an external browser.
+const callbackServer = createServer((request, response) => {
+  const url = new URL(request.url, callback);
+  if (request.method !== "GET" || url.origin + url.pathname !== callback) {
+    response.writeHead(404); response.end(); return;
+  }
+  if (request.headers["oai-sites-authorization"] || request.headers.authorization) {
+    diagnostics.push({ event: "callback_credential_leak" });
+    response.writeHead(400); response.end(); return;
+  }
+  callbackUrl = url;
+  response.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
+  response.end("Callback received by isolated acceptance runner");
+});
+await new Promise((resolve, reject) => {
+  callbackServer.once("error", reject);
+  callbackServer.listen(1455, "127.0.0.1", resolve);
+});
 const formRequest = async (path, fields) => {
   const response = await fetch(origin + path, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(45000),
     headers: { "OAI-Sites-Authorization": `Bearer ${platformToken}`, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) });
@@ -51,11 +71,18 @@ try {
     context.setDefaultTimeout(30000);
     await context.route("**/*", async route => {
       const url = new URL(route.request().url());
-      if (url.origin === origin) return route.continue({ headers: { ...route.request().headers(), "OAI-Sites-Authorization": `Bearer ${platformToken}`,
-        ...(url.pathname.startsWith("/api/mcp") ? { "x-md-acceptance-run": run.run_id } : {}) } });
+      if (url.origin === origin) {
+        const headers = { ...route.request().headers(), "OAI-Sites-Authorization": `Bearer ${platformToken}`,
+          ...(url.pathname.startsWith("/api/mcp") ? { "x-md-acceptance-run": run.run_id } : {}) };
+        // Keep the platform credential on the Site request only. A continue()
+        // header override would propagate it to the OAuth redirect destination.
+        if (url.pathname === "/oauth/authorize" && route.request().method() === "POST") {
+          return route.fulfill({ response: await route.fetch({ headers, maxRedirects: 0 }) });
+        }
+        return route.continue({ headers });
+      }
       if (url.origin + url.pathname === callback) {
-        callbackUrl = url;
-        return route.fulfill({ status: 200, contentType: "text/plain", body: "Callback received by isolated acceptance runner" });
+        return route.continue();
       }
       return route.abort();
     });
@@ -134,6 +161,8 @@ try {
   phase = "oauth_callback_navigation";
   await page.waitForURL(url => url.origin + url.pathname === callback);
   phase = "oauth_callback_state";
+  assert.ok(callbackUrl, "loopback_callback_missing");
+  assert.equal(diagnostics.some(event => event.event === "callback_credential_leak"), false);
   assert.equal(callbackUrl.searchParams.get("state"), state);
   const exchange = { grant_type: "authorization_code", client_id: clientId, redirect_uri: callback, resource: origin + "/api/mcp", code: callbackUrl.searchParams.get("code"), code_verifier: verifier };
   phase = "oauth_code_exchange";
@@ -152,6 +181,7 @@ try {
   verified = true;
 } finally {
   await browser.close();
+  await new Promise(resolve => callbackServer.close(resolve));
   const cleanup = await client.cleanup();
   assert.equal(cleanup.state, "cleaned");
   const final = await client.control("/_acceptance/inventory");
