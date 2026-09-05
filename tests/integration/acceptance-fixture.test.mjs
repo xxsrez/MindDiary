@@ -15,18 +15,20 @@ test("SDK fixture creates real memberships, resumes without duplicate Minds and 
       const baseline = await client.control("/_acceptance/inventory");
       assert.equal(baseline.complete, true); assert.equal(baseline.principals, 0); assert.equal(baseline.object_count, 0);
     }
-    if (name === "first") {
+    for (const failurePoint of name === "first" ? ["bootstrap", "commit"] : []) {
       let lost = false;
       client.transport = async (url, options) => {
         const response = await runtime.fetch(url, options);
         const body = options.body ? JSON.parse(options.body) : null;
-        if (!lost && body?.params?.name === "commit_changeset") {
-          assert.equal((await response.clone().json()).result.isError, false);
-          lost = true; throw new Error("lost_commit_response");
+        const matches = failurePoint === "bootstrap" ? body?.action === "create_isolated_account" : body?.params?.name === "commit_changeset";
+        if (!lost && matches) {
+          assert.equal(response.status, 200);
+          if (failurePoint === "commit") assert.equal((await response.clone().json()).result.isError, false);
+          lost = true; throw new Error("lost_" + failurePoint + "_response");
         }
         return response;
       };
-      await assert.rejects(createCollaborationFixture(client), /lost_commit_response/);
+      await assert.rejects(createCollaborationFixture(client), new RegExp("lost_" + failurePoint + "_response"));
       client = await new AcceptanceClient(config).open();
     }
     clients.push(client);

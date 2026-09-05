@@ -415,3 +415,26 @@ owned Minds, R2 objects/bytes, search, OAuth, actor/session/journal rows — н�
 `MD_ACCEPTANCE_INJECT_LOST_COMMIT=1`, проверяет роли/историю и выполняет bounded
 cleanup с отрицательным MCP probe и final/baseline inventory. Повтор того же tag
 использует прежний журнал; новый tag означает новый изолированный run.
+
+### Полный hosted fixture завершён
+
+Candidate/runner `5641cb739b8ab93c10a98ae4252039219e121e3b`, CI `33994274005`,
+source mirror `081d33b0630809e1f8a87b71af7f6791ac7c702c`, Site version 5,
+deployment `appgdep_examplee517106e18d6a642` succeeded (env 2).
+Server SHA `2fadad3b1efaaeeae29a93c651e9bd39618a473588517b0448604fb57a124a28`,
+archive hash `afe29f172302241470d6dbfd96017dd9ede402fd5963d2bed0184bfd7bca2a24`.
+Run tag `md404-fixture-recovery-20260905` завершился `verified=true`, `cleaned`:
+четыре роли, две lanes, три revisions каждой, реальная потеря ответа committed
+изменения и восстановление через reconcile без дубликата. Cleanup выполнил
+четыре bounded steps, удалил пять Minds, отозвал token; следующий MCP запрос
+отклонён. Complete final inventory совпал с нулевым baseline по principals,
+owned Minds, R2 objects/bytes, search, OAuth, actors/sessions/cleanup journal.
+Закрытый журнал хранит receipt; секреты операций удалены после cleanup.
+
+Дополнительное локальное failure injection после normal bootstrap выявило
+особенность: повтор POST регистрации после успешного создания даёт 401,
+поэтому generic retry недостаточен. SDK теперь сначала читает session и
+сохраняет подтверждённый normal principal/Personal read-back как reconciled
+результат. Сквозной тест последовательно теряет ответы bootstrap и MCP commit,
+пересоздаёт SDK после каждого и подтверждает отсутствие дублей и полный cleanup.
+Это изменение клиента не меняет опубликованный Worker.

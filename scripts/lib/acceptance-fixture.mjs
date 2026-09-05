@@ -17,12 +17,14 @@ export async function createCollaborationFixture(client) {
     return token;
   };
   const mutate = async (name, actor, request, page) => {
+    if (client.state.operations[name]?.phase === "completed") return client.state.operations[name].result;
     const pending = client.state.operations[name]?.payload;
     if (pending) request = { path: pending.path, method: pending.method, body: pending.body };
     return client.mutation(name, actor.actor_id, { ...request, csrf: await csrf(actor, page) });
   };
   for (const [role, actor] of Object.entries(actors)) {
     await client.session(actor.actor_id);
+    await client.reconcileBootstrap(`bootstrap:${role}`, actor.actor_id);
     await mutate(`bootstrap:${role}`, actor, { path: "/api/v1/account", body: { action: "create_isolated_account" } }, "/");
   }
   const handle = `uat-${run.run_id}`;

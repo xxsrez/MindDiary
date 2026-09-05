@@ -76,6 +76,18 @@ export class AcceptanceClient {
     operation.result = await response.json(); operation.phase = "completed"; await this.save();
     return operation.result;
   }
+  async reconcileBootstrap(name, actorId) {
+    const operation = this.state.operations[name];
+    if (!operation || operation.phase === "completed") return;
+    if (operation.payload.actorId !== actorId || operation.payload.path !== "/api/v1/account" || operation.payload.method !== "POST"
+      || operation.payload.body?.action !== "create_isolated_account") throw new Error("invalid_bootstrap_reconciliation");
+    const response = await this.request("/api/v1/session", { headers: { cookie: this.state.actors[actorId].cookie } });
+    const body = await response.json();
+    if (response.status === 409 && body.error?.code === "registration_required") return;
+    if (response.status !== 200 || !body.data?.principal?.principal_id || !body.data.personal_mind?.mind_id) throw new Error("bootstrap_reconciliation_failed");
+    operation.result = { ok: true, data: { principal_id: body.data.principal.principal_id, personal_mind: body.data.personal_mind, replayed: true } };
+    operation.reconciled = true; operation.phase = "completed"; await this.save();
+  }
   async cleanup() {
     if (this.state.phase === "cleaned") return this.state.receipt;
     if (!this.state.run) await this.setup(this.state.runInput ?? {});
