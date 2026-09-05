@@ -16,16 +16,16 @@ Personal explicit-only; с ним — тематический. При совп�
 
 ## План агента и зависимости
 
-1. Domain/storage: optional metadata, null migration, routing version CAS и
+1. **Завершено (MD-395 Done).** Domain/storage: optional metadata, null migration, routing version CAS и
    сохранение personal identity/независимых generations.
-2. MCP: узкая Personal metadata operation и nullable enabled projection,
+2. **Завершено (MD-396 Done).** MCP: узкая Personal metadata operation и nullable enabled projection,
    auth/capability, idempotency, read-back, modern/compat parity. Зависит от 1.
-3. Site: projection/help и mode×description; настройка description остаётся
+3. **Завершено (MD-397 Done).** Site: projection/help и mode×description; настройка description остаётся
    MCP workflow. Зависит от 1.
-4. Plugin: инструкции выбора/настройки, два bounded reads и независимых
+4. **Реализовано, проверка In Review (MD-398).** Plugin: инструкции выбора/настройки, два bounded reads и независимых
    saves/no-ops/reconciliation, source boundary и fresh-session scenarios.
    Зависит от 2. Hooks только если проверка покажет необходимость.
-5. Integrated acceptance: полный gate, dev smoke и exact-artifact UAT по
+5. **In Progress (MD-399).** Integrated acceptance: полный gate, dev smoke и exact-artifact UAT по
    [профилю доставки](../operations/ship-work-release-profile.md). Зависит от 2–4.
 
 Реализуемое решение задачи 2: отдельная узкая credential capability
@@ -60,10 +60,10 @@ partial/unknown outcome и freshness после compaction. Два commits не 
 Exact duplicate не найден; MD-382 остаётся завершённым предшествующим решением.
 Пользовательских вложений нет. Authoritative статус реализации принадлежит трекеру.
 
-MD-395–398 In Review после локальной реализации и targeted tests. MD-399 In Progress.
-Полный gate: 1122/1122 unit/integration/conformance; браузерное падение
-на старом Personal fixture исправлено (targeted 3/3). Финальный aggregate
-на обновлённом candidate, dev и UAT выполняются далее.
+MD-395–397 Done, MD-398 In Review, MD-399 In Progress.
+Полный gate и CI на `9090dadf`: 1122/1122 code tests, 68/68 browser tests.
+Dev и synthetic gates прошли. UAT 123 опубликован; часть hosted evidence
+остаётся открытой, как перечислено в отчёте.
 
 ## Continuity Issue Grinder
 
@@ -76,8 +76,8 @@ MD-395–398 In Review после локальной реализации и tar
   принадлежат этому разговору. Startup inventory: 4 доступных checkout,
   прочие три clean и unrelated; 93 missing/prunable записи не изменялись;
   193 branches, matching MD-394–399 candidates отсутствуют.
-- Goal active в текущем thread; MD-394/399 In Progress, MD-395–398 In Review.
-- Frontier: MD-399 integrated acceptance. MD-395–398 In Review.
+- Goal active в текущем thread; MD-394/399 In Progress, MD-395–397 Done, MD-398 In Review.
+- Frontier: MD-399 hosted acceptance и оставшиеся scenarios MD-398.
 - Marketplace source: `../Srez Marketplace/plugins/mind-diary`, package
   `0.1.0+codex.20260905180700`. Canonical skill/plugin validators прошли;
   policy/schema tests 21/21; route/storage 23/23; browser base case 1/1.
@@ -90,7 +90,7 @@ MD-395–398 In Review после локальной реализации и tar
 
 ## Текущая контрольная точка
 
-Реализация 1–4 завершена и опубликована: candidate `9090dadf`, UAT 123,
+Код и пакет пунктов 1–4 реализованы и опубликованы: candidate `9090dadf`, UAT 123,
 package `0.1.0+codex.20260905180700`. Пункт 5 остаётся In Progress:
 локальная и synthetic приёмка прошла, hosted configuration/performance и
 применимые canary ещё требуют доказательств. Полный перечень результатов и
