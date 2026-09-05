@@ -1,0 +1,25 @@
+name: Acceptance platform capability
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: acceptance-platform-capability
+  cancel-in-progress: false
+jobs:
+  probe:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install-deps chromium
+      - name: Verify isolated browser contexts on the private test Site
+        env:
+          MD_ACCEPTANCE_PLATFORM_TOKEN: ${{ secrets.MD_ACCEPTANCE_PLATFORM_TOKEN }}
+        run: node scripts/check-acceptance-hosted-browser.mjs
