@@ -101,18 +101,21 @@ export class AcceptanceClient {
     this.state.phase = "cleaned"; this.state.actors = {}; this.state.operations = {};
     await this.save(); return this.state.receipt;
   }
-  async mcp(token, name, args = {}) {
+  async mcpEnvelope(token, method, params = {}) {
     const response = await this.request("/api/mcp", { method: "POST", headers: {
       authorization: `Bearer ${token}`, "x-md-acceptance-run": this.state.run.run_id,
-      "mcp-method": "tools/call", "mcp-name": name, "mcp-protocol-version": "2026-07-28",
+      "mcp-method": method, ...(params.name ? { "mcp-name": params.name } : {}), "mcp-protocol-version": "2026-07-28",
       "content-type": "application/json", accept: "application/json, text/event-stream",
-    }, body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args, _meta: {
+    }, body: { jsonrpc: "2.0", id: 1, method, params: { ...params, _meta: {
       "io.modelcontextprotocol/protocolVersion": "2026-07-28",
       "io.modelcontextprotocol/clientInfo": { name: "mind-diary-acceptance", version: "1" },
       "io.modelcontextprotocol/clientCapabilities": {},
     } } } });
     if (!response.ok) throw new Error(`mcp_http_${response.status}`);
-    const envelope = await response.json(), result = envelope.result;
+    return response.json();
+  }
+  async mcp(token, name, args = {}) {
+    const envelope = await this.mcpEnvelope(token, "tools/call", { name, arguments: args }), result = envelope.result;
     if (envelope.error || result?.isError || !result?.structuredContent?.ok) throw new Error("mcp_tool_failed:" + (result?.structuredContent?.error?.code ?? "protocol_error"));
     return result.structuredContent.data;
   }
