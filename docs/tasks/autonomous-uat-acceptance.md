@@ -501,3 +501,24 @@ access/refresh rows. In-process composition проверяет отсутств�
 восстановление legacy orphan, идемпотентный recover и сохранение active grant.
 Inventory v2 включает также authorization codes/requests. Живая проверка
 исправления требует нового test deployment и пока не выполнена.
+
+### Уточнение browser runner и закрытия одноразового токена
+
+CI runner принимает OAuth callback настоящим listener на `127.0.0.1:1455`:
+Playwright не маршрутизирует следующий запрос в HTTP redirect chain. Исходный
+POST отправляется с platform header отдельно, с `maxRedirects: 0`; браузерный
+переход на callback не получает этот header. Loopback handler отвергает
+credential headers. Отдельный локальный browser probe подтвердил реальный
+callback без переноса platform credential. Это не изменение OAuth authority.
+
+Закрытие окна одноразового токена должно немедленно стирать secret и запускать
+не более одной перезагрузки: click и dialog close могут произойти оба. Локальное
+исполнение текущего browser asset воспроизвело две перезагрузки. Исправление
+должно сохранить wipe при каждом close, но потреблять refresh flag однократно.
+
+Test cut v6 (`39f89e28d9b09a6d22df7f60ca9c90def9e53540`, deployment
+`appgdep_example099442449e0ce969`) прошёл локальный полный gate
+(1150 tests + 68 browser checks) и CI `33997529179`. Live orphan recovery удалил
+один оставшийся grant и один code; полный inventory v2 вернулся к нулю.
+CI `33997824494` и `33998257100` также подтвердили cleanup до baseline после
+неуспешной browser проверки. Это подтверждение OAuth cleanup, не полная MD-405.
