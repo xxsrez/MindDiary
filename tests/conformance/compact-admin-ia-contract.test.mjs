@@ -84,7 +84,7 @@ test("breakpoints, geometry, and every acceptance viewport have executable expec
       wideRows: [fixture.geometry.wideRowMinHeightPx, fixture.geometry.wideRowMaxHeightPx],
       compactRow: fixture.geometry.compactRowMinHeightPx,
     },
-    { rail: 240, content: 1120, hit: 44, overflow: 1, wideRows: [44, 56], compactRow: 56 },
+    { rail: 208, content: 1440, hit: 44, overflow: 1, wideRows: [44, 56], compactRow: 56 },
   );
 
   assert.deepEqual(

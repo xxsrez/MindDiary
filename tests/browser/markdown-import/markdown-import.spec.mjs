@@ -57,6 +57,7 @@ test("writer reviews exact changes and commits one mobile-safe revision receipt"
   await reset(request, "fresh");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${origin}/research-notes`);
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
 
   await expect(page.locator("[data-import-target]")).toHaveText("/research-notes");
   await expect(page.locator("[data-import-base-revision]")).toHaveText("revision_import_base");
@@ -90,6 +91,7 @@ test("writer reviews exact changes and commits one mobile-safe revision receipt"
 test("empty, path, UTF-8 and capacity conflicts stay before confirmation", async ({ page, request }) => {
   await reset(request, "fresh");
   await page.goto(`${origin}/research-notes`);
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
   await page.locator("[data-plan-markdown-import]").click();
   await expect(page.locator("[data-import-path-check]")).toContainText("Select at least one");
 
@@ -103,6 +105,7 @@ test("empty, path, UTF-8 and capacity conflicts stay before confirmation", async
 
   await reset(request, "capacity");
   await page.reload();
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
   await page.locator("[data-import-files]").setInputFiles(directory("one"));
   await page.locator("[data-plan-markdown-import]").click();
   await expect(page.locator("[data-import-capacity-check]")).toHaveAttribute("data-check-state", "failed");
@@ -117,6 +120,7 @@ test("refresh and navigation recover the actor-owned checkpoint without duplicat
   await expect(page.locator("[data-cancel-markdown-import]")).toBeVisible();
 
   await page.reload();
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
   await expect(page.locator("[data-import-status]")).toContainText("recovered");
   await page.goto(`${origin}/help`);
   await page.goBack();
@@ -153,6 +157,7 @@ test("a transient 503 keeps the exact locator and resumes safely after refresh",
   await expect(page.locator("body")).not.toContainText("private/redeploy/storage-shard");
 
   await page.reload();
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
   await expect(page.locator("[data-import-status]")).toContainText("validation can resume");
   await expect(page.locator("[data-retry-markdown-import-status]")).toBeHidden();
   expect(page.url()).toContain(resume);
@@ -169,6 +174,7 @@ test("a transient 503 keeps the exact locator and resumes safely after refresh",
 test("concurrent HEAD change requires a fresh plan before or during commit", async ({ page, request }) => {
   await reset(request, "head-plan");
   await page.goto(`${origin}/research-notes`);
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
   await page.locator("[data-import-files]").setInputFiles(directory("changed"));
   await page.locator("[data-plan-markdown-import]").click();
   await expect(page.locator("[data-replan-markdown-import]")).toBeVisible();
@@ -176,6 +182,7 @@ test("concurrent HEAD change requires a fresh plan before or during commit", asy
 
   await reset(request, "head-commit");
   await page.reload();
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
   await page.locator("[data-import-files]").setInputFiles(directory("changed-again"));
   await page.locator("[data-plan-markdown-import]").click();
   await page.locator("[data-import-confirm]").check();
@@ -201,6 +208,7 @@ test("readers and revoked actors cannot see import controls or private operation
 test("server failures are summarized without technical storage disclosure", async ({ page, request }) => {
   await reset(request, "server-error");
   await page.goto(`${origin}/research-notes`);
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
   await page.locator("[data-import-files]").setInputFiles(directory("one"));
   await page.locator("[data-plan-markdown-import]").click();
   await expect(page.locator("[data-import-status]")).toContainText("could not finish");

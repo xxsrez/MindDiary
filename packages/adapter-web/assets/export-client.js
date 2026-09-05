@@ -372,6 +372,10 @@
   downloadButton?.addEventListener("click", () => { void verifyAndSave(); });
 
   saved = readStored();
+  if (saved) {
+    const disclosure = panel.closest("details.md-disclosure");
+    if (disclosure) disclosure.open = true;
+  }
   if (saved !== null) {
     if (saved.selector.kind === "revision") {
       if (historical) historical.checked = true;

@@ -311,6 +311,7 @@ function renderAuthenticated(
         </section>
       </div>
       ${renderMindUsagePanel("/me")}
+      <details class="md-disclosure"><summary>Connect Codex</summary>
       <section class="md-setup-card md-setup-card--single" aria-labelledby="optional-codex-setup-title" data-optional-codex-setup>
         <div>
           <p class="md-eyebrow">Optional Codex connection</p>
@@ -322,16 +323,21 @@ function renderAuthenticated(
           <a class="md-button md-button--secondary" href="/settings/connections">View Connections</a>
         </nav>
       </section>
+      </details>
+      <details class="md-disclosure"><summary>Export this Mind</summary>
       ${renderProductExportWorkflowPanel({
         mindRef: "me",
         route: "/me",
         name: model.personalMind.name,
         headRevisionId: model.personalMind.headRevisionId,
-      })}
+      })}</details>
+      <details class="md-disclosure"><summary>Import Markdown</summary>
       ${renderMarkdownImportPanel({
         mindRef: "me",
         headRevisionId: model.personalMind.headRevisionId,
       })}
+      </details>
+      <details class="md-disclosure"><summary>Create your first Memory</summary>
       <section class="md-setup-card md-setup-card--single" aria-labelledby="first-result-title" data-starter-mind-guide>
         <p class="md-eyebrow">About 15 minutes</p>
         <h2 id="first-result-title">Create your first useful Memory</h2>
@@ -347,6 +353,7 @@ function renderAuthenticated(
         </details>
         <p><a href="/settings/developer/mcp">Open Advanced MCP</a> for personal-token and endpoint instructions. Never store a token in a repository or paste the full canonical corpus into a prompt.</p>
       </section>
+    </details>
     </main>
     ${renderMindDiaryAuthenticatedFooter("my-mind")}
   </div>`;

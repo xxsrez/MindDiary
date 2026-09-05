@@ -7,6 +7,28 @@ design handoff для compact Product Site shell. MD-355 уточняет вну
 компоновку и доступность Product Site. Его наличие не доказывает реализацию
 или deployment.
 
+## Уточнение редизайна от 2026-09-05
+
+Принято пользователем: сохранить все действующие функции и перенять концепцию
+раннего прототипа MD-331, без буквального копирования. Этот раздел заменяет
+прежние размеры и приоритет крупных поясняющих блоков ниже.
+
+- Постоянная панель — 208px; рабочая область занимает доступную ширину до
+  1440px. Отступы — 16–24px, заголовок страницы — 24px, раздела — 18px.
+  Интерфейс использует системный sans-serif; знак и фиолетовый акцент сохраняются.
+- Список Minds открывает страницу. Имя, описание, роль, видимость и действие
+  сравниваются по выровненным столбцам; Personal Mind остаётся первым.
+  На узком экране поля переносятся с сохранением подписей и полного доступа.
+- Настройка Codex для всего списка раскрывается отдельно после списка, а не
+  вытесняет Minds с первого экрана. На странице Mind она остаётся доступной.
+- Импорт, экспорт, подробное использование storage и передача владельца
+  получают именованные раскрываемые разделы. Все формы, предупреждения,
+  проверки текущих прав и подтверждения остаются внутри своей операции.
+- Размеры интерактивных целей остаются не меньше 44px. Компактность достигается
+  компоновкой и сокращением повторов, а не уменьшением безопасной цели нажатия.
+- Проверки должны использовать настоящий renderer списка с включённой
+  настройкой Codex, длинными именами и несколькими Minds, а не только shell fixture.
+
 ## Цель и источник направления
 
 После регистрации человек должен быстро находить свой Personal Mind, список
@@ -71,7 +93,7 @@ server session:
 ### Wide shell
 
 При ширине viewport `>= 1024px` shell состоит из постоянного rail шириной
-`240px` и content column. Rail занимает `100dvh`, остаётся видимым при
+`208px` и content column. Rail занимает `100dvh`, остаётся видимым при
 вертикальном scroll content и имеет два блока:
 
 ```text
@@ -243,8 +265,8 @@ checklist, progress, completion либо nagging state этим контракт
 |---|---:|---|
 | compact | `320–767px` | Top app bar + drawer; one-column content. |
 | medium | `768–1023px` | Top app bar + drawer; content может использовать две bounded columns. |
-| wide | `>= 1024px` | Persistent `240px` rail + content. |
-| content max | `1120px` | Main inner column; центрируется в оставшейся ширине. |
+| wide | `>= 1024px` | Persistent `208px` rail + content. |
+| content max | `1440px` | Main inner column; центрируется в оставшейся ширине. |
 | page inline padding | `16px` compact, `24px` medium, `32px` wide | Не уменьшается из-за длинного текста. |
 | rail item / control hit target | минимум `44×44px` | Включая icon-only controls. |
 | compact desktop row | `44–56px` | Базовая metadata row без раскрытого content. |
@@ -439,7 +461,7 @@ fallback в implementation test.
 | `IA-SETTINGS-02` | Stable `/help/codex` link присутствует на каждом registered shell независимо от Connections empty/loading/ready/error и connection revoke/reconnect; Help не становится Settings child. |
 | `IA-SETTINGS-03` | Direct canonical routes и browser Back работают без wizard/redirect chain; единственный legacy `/settings/mcp` использует принятый session-dependent transition без второй IA. |
 | `IA-GEOMETRY-01` | Fixture viewports проходят document/body/major-region overflow budget `<= 1px`. |
-| `IA-GEOMETRY-02` | Rail `240px` на wide, drawer `min(320px, 88vw)`, content `<= 1120px`, hit targets `>= 44px`. |
+| `IA-GEOMETRY-02` | Rail `208px` на wide, drawer `min(320px, 88vw)`, content `<= 1440px`, hit targets `>= 44px`. |
 | `IA-DENSITY-01` | Ready collections используют bounded rows: `44–56px` wide, `>=56px` compact; no card wall. |
 | `IA-FIRST-01` | Геометрические assertions подтверждают first-viewport expectations на всех fixture viewports. |
 | `IA-A11Y-01` | Landmarks, one `h1`, heading order, skip focus, DOM/visual order и dialog focus return. |

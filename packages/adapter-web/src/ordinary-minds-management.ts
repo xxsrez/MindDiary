@@ -300,10 +300,10 @@ function renderMindCard(mind: OrdinaryMindUiMind): string {
 function renderPersonalMindCard(mind: PersonalMindUiMind): string {
   return `<article class="md-token-card md-entity-row md-mind-row" tabindex="-1" data-mind-card="me" data-mind-role="owner" data-personal-mind data-ia-row data-ia-disclosure>
     <div class="md-token-card__heading">
-      <div><p class="md-eyebrow">Personal first</p><h3><a href="/me">My Mind</a></h3><code>/me</code></div>
+      <div><h3><a href="/me">My Mind</a></h3><code>/me</code></div>
       <span class="md-token-state md-token-state--active"><span aria-hidden="true">●</span> Personal</span>
     </div>
-    <p class="md-card__description"><strong>Service-managed Personal Mind:</strong> private, follows ${escapeUntrustedText(mind.name)}’s profile, and has no separate rename, description, publication, transfer, or deletion.</p>
+    <p class="md-card__description">Private to you. Follows ${escapeUntrustedText(mind.name)}’s profile; no separate rename, description, publication, transfer, or deletion.</p>
     <dl class="md-token-card__metadata">
       <div><dt>Access</dt><dd>Sole Owner</dd></div>
       <div><dt>Visibility</dt><dd>Private, always</dd></div>
@@ -344,7 +344,7 @@ function renderCollection(collection: OrdinaryMindsUiCollectionState): string {
       return `<section aria-labelledby="ordinary-minds-heading" data-minds-collection data-ia-collection>
         <div class="md-section-heading">
           <div>
-            <p class="md-eyebrow">Personal and available</p>
+
             <h2 id="ordinary-minds-heading">Your Minds</h2>
           </div>
           <button class="md-button md-button--primary" type="button" data-open-create-mind>Create a Mind</button>
@@ -404,14 +404,16 @@ function renderListView(
   return `<main id="main-content" class="md-main" tabindex="-1" data-ia-main>
     <div class="md-page-heading" data-ia-page-header>
       <div>
-        <p class="md-eyebrow">Build a Mind from Memories</p>
         <h1>Minds</h1>
-        <p>Open your service-managed Personal Mind first, then manage ordinary Minds available through membership or visibility.</p>
+        <p>Your knowledge spaces, access and settings.</p>
       </div>
       ${renderAnnouncement(announcement)}
     </div>
-    ${renderMindUsageCollection()}
     ${renderCollection(view.collection)}
+    <details class="md-disclosure" data-agent-settings-disclosure>
+      <summary>Codex access across your Minds</summary>
+      ${renderMindUsageCollection()}
+    </details>
   </main>
   ${renderCreateDialog()}`;
 }
@@ -444,7 +446,7 @@ function renderMetadataPanel(mind: OrdinaryMindUiMind, handle: string): string {
   return `<article class="md-profile-card">
     <p class="md-eyebrow">Display settings</p>
     <h2>Name and description</h2>
-    <p>The description is one routing category for agent reads and writes. It remains untrusted service metadata; the permanent route stays <strong>/${escapeUntrustedText(handle)}</strong> and no content revision is created.</p>
+    <p>Renaming never changes this route: <strong>/${escapeUntrustedText(handle)}</strong>.</p>
     <form data-rename-mind-form data-metadata-version="${version}">
       <div class="md-field">
         <label for="ordinary-mind-rename">Mind name</label>
@@ -777,9 +779,9 @@ function renderDetailView(
   return `<main id="main-content" class="md-main" tabindex="-1" data-ia-main data-mind-route data-mind-handle="${handle}" data-mind-id="${escapeUntrustedText(mind.mindId)}" data-mind-visibility="${visibility}">
     <div class="md-page-heading" data-ia-page-header>
       <div>
-        <p class="md-eyebrow">Route-specific management</p>
+        <a class="md-breadcrumb" href="/minds">Minds /</a>
           <h1 data-route-mind-name>${escapeUntrustedText(mind.name)}</h1>
-        <p>Manage /${escapeUntrustedText(handle)} and import a bounded Markdown snapshot when your role can write content.</p>
+        <p>/${escapeUntrustedText(handle)} · ${titleCase(role)} · ${visibilityLabel(visibility)}</p>
       </div>
       ${renderAnnouncement(announcement)}
     </div>
@@ -789,7 +791,7 @@ function renderDetailView(
           <span class="md-card__personal">Ordinary Mind</span>
           <h2 data-route-summary-name>${escapeUntrustedText(mind.name)}</h2>
           <p data-route-description>${mind.description === null ? "No description yet." : escapeUntrustedText(mind.description)}</p>
-          <p>The handle is immutable in this prototype. Renaming never changes this route.</p>
+
           <dl class="md-personal-summary">
             <div><dt>Route</dt><dd><a href="/${handle}">/${handle}</a></dd></div>
             <div><dt>Access</dt><dd data-route-role>${titleCase(role)}</dd></div>
@@ -800,18 +802,19 @@ function renderDetailView(
       </div>
       ${renderMindUsagePanel(`/${handle}`)}
       ${renderVisibilityPanel(mind, handle)}
+      <details class="md-disclosure"><summary>Export this Mind</summary>
       ${renderProductExportWorkflowPanel({
         mindRef: handle,
         route: `/${handle}`,
         name: mind.name,
         headRevisionId: mind.headRevisionId,
-      })}
+      })}</details>
       ${role === "reader" || mind.accessKind === "visibility"
         ? ""
-        : renderMarkdownImportPanel({ mindRef: handle, headRevisionId: mind.headRevisionId })}
-      ${renderCapacityPanel(mind, capacity)}
+        : `<details class="md-disclosure"><summary>Import Markdown</summary>${renderMarkdownImportPanel({ mindRef: handle, headRevisionId: mind.headRevisionId })}</details>`}
+      ${role === "owner" ? `<details class="md-disclosure"><summary>Storage details</summary>${renderCapacityPanel(mind, capacity)}</details>` : ""}
       ${renderCollaborationPanel(mind, collaboration)}
-      ${renderOwnershipPanel(mind, ownership)}
+      ${role === "owner" ? `<details class="md-disclosure"><summary>Transfer ownership</summary>${renderOwnershipPanel(mind, ownership)}</details>` : ""}
       ${renderDeletePanel(mind, handle)}
     </div>
   </main>

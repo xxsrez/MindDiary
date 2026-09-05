@@ -430,6 +430,8 @@
   const loadSaved = async () => {
     const id = saved();
     if (!id) return;
+    const disclosure = panel.closest("details.md-disclosure");
+    if (disclosure) disclosure.open = true;
     recoveryPending = true;
     sync();
     say("Checking the saved import status…");

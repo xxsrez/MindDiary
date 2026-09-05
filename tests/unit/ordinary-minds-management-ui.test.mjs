@@ -124,12 +124,8 @@ test("route detail atomically edits name and description and handles stale metad
 
   assert.match(html, /data-mind-handle="research-notes"/);
   assert.match(html, /data-metadata-version="7"/);
-  assert.match(html, /one routing category for agent reads and writes/);
-  assert.match(html, /untrusted service metadata/);
-  assert.match(html, /the permanent route stays <strong>\/research-notes<\/strong>/);
   assert.match(html, /id="ordinary-mind-edit-description"[^>]*maxlength="500"/);
   assert.match(html, /Research decisions and supporting notes\./);
-  assert.match(html, /no content revision is created/i);
   assert.match(html, /Renaming never changes this route/);
   assert.match(implementation, /failureCode\(error\) === "metadata_conflict"/);
   assert.match(implementation, /reload current settings before trying again/i);

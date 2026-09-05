@@ -44,7 +44,8 @@ test("Personal and ordinary write modes stay independent and reload server state
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${origin}/minds`);
 
-  await expect(page.getByRole("heading", { name: "How Codex uses your Minds" })).toBeVisible();
+  await page.locator("[data-agent-settings-disclosure] > summary").click();
+  await expect(page.locator("[data-mind-usage-card]").first()).toBeVisible();
   await expect(page.locator("[data-mind-usage-card]")).toHaveCount(3);
   await expect(page.getByText("My Mind accepts writes only when you directly ask Codex", { exact: false })).toBeVisible();
   await expect(card(page, "/archive").locator('input[value="read_write"]')).toBeDisabled();

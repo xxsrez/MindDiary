@@ -105,6 +105,8 @@ test.afterAll(async () => {
 
 test("shipped client keeps Personal first and creates private metadata", async ({ page }) => {
   await page.goto(`${origin}/minds`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await expect(page.locator('script[src="/ui/mind-diary-ordinary-minds-list-client.js"]')).toHaveCount(1);
   await expect(page.locator("[data-minds-list] [data-mind-card]").first()).toHaveAttribute(
     "data-mind-card",
@@ -133,6 +135,8 @@ test("shipped client keeps Personal first and creates private metadata", async (
 
 test("shipped direct route saves name and description under one metadata version", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await expect(page.locator("[data-mind-usage-panel]")).toContainText(
     "For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description; My Mind is controlled independently.",
   );
@@ -161,6 +165,8 @@ test("shipped direct route saves name and description under one metadata version
 
 test("shipped Access removes a cancelled invite and reinvites through the normal form", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await expect(page.locator("[data-access-summary]")).toContainText("1 pending");
   await expect(page.locator("[data-access-participant-summary]")).toContainText("Morgan Editor");
   await expect(page.locator("[data-invitation-form]")).not.toBeVisible();
@@ -216,6 +222,8 @@ test("shipped Access removes a cancelled invite and reinvites through the normal
 
 test("shipped late-action conflict announces expiry and reloads without a terminal card", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await page.locator("[data-access-invitations] summary").click();
   const pending = page.locator('[data-invitation-card="invitation-fixture-pending"]');
   await expect(pending).toHaveAttribute("data-invitation-state", "pending");
@@ -236,8 +244,12 @@ test("shipped late-action conflict announces expiry and reloads without a termin
 
 test("metadata conflict reload removes every stale control after role downgrade", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await expect(page.locator("[data-owner-delete-controls]")).toBeVisible();
   await expect(page.locator("[data-owner-visibility-controls]")).toBeVisible();
+  await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
+  await page.locator("summary").filter({ hasText: /^Storage details$/ }).click();
   await expect(page.locator("[data-markdown-import]")).toBeVisible();
   await expect(page.locator("[data-capacity-state]")).toBeVisible();
   await expect(page.locator('script[src="/ui/mind-diary-ordinary-minds-client.js"]')).toHaveCount(1);
@@ -263,6 +275,8 @@ test("metadata conflict reload removes every stale control after role downgrade"
 
 test("metadata conflict reload fails closed after access revocation", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await setConflict("revoke");
   await page.getByLabel("Mind name").fill("Conflicting name");
   await page.getByRole("button", { name: "Save metadata" }).click();
@@ -277,6 +291,8 @@ test("metadata conflict reload fails closed after access revocation", async ({ p
 
 test("shipped visibility flow requires exact disclosure acknowledgment", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   const form = page.locator("[data-visibility-form]");
   await form.locator("[data-visibility-selector]").selectOption("public");
   await expect(form.locator("[data-visibility-exposure]")).toBeVisible();
@@ -301,6 +317,8 @@ test("shipped visibility flow requires exact disclosure acknowledgment", async (
 
 test("shipped ownership flow reloads the former Owner as Admin", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   const form = page.locator("[data-ownership-transfer-form]");
   await form.getByLabel("New Owner").selectOption("member-fixture-editor");
   await form.getByLabel(/sole Owner/u).check();
@@ -325,6 +343,8 @@ test("shipped ownership flow reloads the former Owner as Admin", async ({ page }
 
 test("role change waits for contextual confirmation and sends the rendered membership version", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await revealParticipants(page);
   const card = participantCard(page);
   await card.getByLabel("Role").selectOption("reader");
@@ -353,6 +373,8 @@ test("role change waits for contextual confirmation and sends the rendered membe
 
 test("membership conflict discards every stale action and renders the concurrent role", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await setConflict("membership");
   await revealParticipants(page);
   const card = participantCard(page);
@@ -371,6 +393,8 @@ test("membership conflict discards every stale action and renders the concurrent
 
 test("public revoke explains and preserves visibility-only read without write or management", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   const visibility = page.locator("[data-visibility-form]");
   await visibility.locator("[data-visibility-selector]").selectOption("public");
   await visibility.locator("[data-visibility-ack]").check();
@@ -397,6 +421,8 @@ test("public revoke explains and preserves visibility-only read without write or
 
 test("unlisted leave reloads as exact-link baseline read with no membership controls", async ({ page }) => {
   await page.goto(`${origin}/shared-library`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await revealParticipants(page);
   await page.getByRole("button", { name: "Leave this Mind" }).click();
   const dialog = page.locator("[data-membership-confirmation-dialog]");
@@ -415,6 +441,8 @@ test("unlisted leave reloads as exact-link baseline read with no membership cont
 
 test("private leave reloads to a non-disclosing unavailable route", async ({ page }) => {
   await page.goto(`${origin}/private-room`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await revealParticipants(page);
   await page.getByRole("button", { name: "Leave this Mind" }).click();
   const dialog = page.locator("[data-membership-confirmation-dialog]");
@@ -429,6 +457,8 @@ test("private leave reloads to a non-disclosing unavailable route", async ({ pag
 
 test("shipped deletion uses a fresh preview and conscious confirmation", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
+  if (await transferDisclosure.count()) await transferDisclosure.click();
   await page.getByRole("button", { name: "Review deletion impact" }).click();
   await expect(page.locator("[data-impact-revisions]")).toHaveText("12");
   await expect(page.locator("[data-impact-members]")).toHaveText("3");

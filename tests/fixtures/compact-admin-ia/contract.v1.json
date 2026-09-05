@@ -8,10 +8,10 @@
     "wide": { "minWidthPx": 1024 }
   },
   "geometry": {
-    "railWidthPx": 240,
+    "railWidthPx": 208,
     "drawerMaxWidthPx": 320,
     "drawerViewportWidthRatio": 0.88,
-    "contentMaxWidthPx": 1120,
+    "contentMaxWidthPx": 1440,
     "minimumHitTargetPx": 44,
     "wideRowMinHeightPx": 44,
     "wideRowMaxHeightPx": 56,
