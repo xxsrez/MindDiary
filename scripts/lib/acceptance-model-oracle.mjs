@@ -12,6 +12,7 @@ export function verifyModelTrace(events, scenario) {
     for (const nested of Object.values(value)) if (nested && typeof nested === "object") registerEntries(nested, mind);
   };
   for (const event of events) {
+    assert.equal(["commandExecution", "fileChange", "webSearch", "collabAgentToolCall"].includes(event.params?.item?.type), false, "unexpected_builtin_tool");
     if (event.method !== "acceptance/tool") continue;
     const call = event.params, data = call.result.structuredContent?.data;
     if (call.tool === "list_minds" && !call.result.isError) for (const mind of data.minds) {
@@ -27,7 +28,18 @@ export function verifyModelTrace(events, scenario) {
   assert.equal(calls.some(c => ["get_personal_mind_configuration", "set_personal_mind_description"].includes(c.tool)), false, "unsolicited_configuration");
   const reads = calls.filter(c => ["search", "fetch", "browse_entries"].includes(c.tool));
   const scopedReads = calls.filter(c => ["get_mind_info", "search", "fetch", "browse_entries", "list_revisions", "get_revision", "validate_mind"].includes(c.tool));
-  const commits = calls.filter(c => c.tool === "commit_changeset");
+  const attempts = calls.filter(c => c.tool === "commit_changeset");
+  const commits = [...attempts];
+  for (const uncertain of attempts.filter(c => c.result.structuredContent?.error?.code === "transport_outcome_unknown")) {
+    const reconciled = calls.slice(calls.indexOf(uncertain) + 1).find(c => c.tool === "reconcile_changeset");
+    assert.ok(reconciled, "unknown_commit_not_reconciled");
+    assert.deepEqual(reconciled.arguments, uncertain.arguments, "unknown_commit_payload_changed");
+    assert.equal(reconciled.result.structuredContent?.data?.status, "committed", "unknown_commit_not_confirmed");
+    const retriedBeforeReconcile = calls.slice(calls.indexOf(uncertain) + 1, calls.indexOf(reconciled)).some(c => c.tool === "commit_changeset");
+    assert.equal(retriedBeforeReconcile, false, "unknown_commit_blind_retry");
+    commits.push(reconciled);
+  }
+  if (scenario.unknownCommit) assert.equal(attempts.some(c => c.result.structuredContent?.error?.code === "transport_outcome_unknown"), true, "unknown_commit_injection_missing");
   for (const read of scopedReads) assert.equal(scenario.reads.includes(read.resolvedMind), true, "unexpected_read_source");
   for (const mind of scenario.requiredReads) assert.equal(reads.some(c => c.resolvedMind === mind && !c.result.isError), true, "required_read_missing");
   for (const write of commits) assert.equal(scenario.writes.includes(write.resolvedMind), true, "unexpected_write_destination");

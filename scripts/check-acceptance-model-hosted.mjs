@@ -66,10 +66,12 @@ try {
     { id: "null-personal-explicit-save", description: null, prompt: "Save this specific decision only in My Mind: my personal synthetic acceptance experiments use the Cedar checklist before each trial. Do not save it in another Mind.", reads: ["/me"], requiredReads: ["/me"], writes: ["/me"] },
     { id: "described-personal-read-only", mode: "read", description: topics, prompt: "Our lasting engineering decision: synthetic acceptance run reports retain a checksum of their test plan, called the Juniper checksum. Explain this policy.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: [shared] },
     { id: "described-personal-disabled", mode: "disabled", description: topics, prompt: "Our lasting engineering decision: synthetic acceptance rollback rehearsals use an isolated Maple checkpoint before publication. Explain this policy.", reads: [shared], requiredReads: [shared], writes: [shared] },
+    { id: "overlap-unknown-commit", description: topics, unknownCommit: true, prompt: "Our lasting engineering decision: synthetic acceptance evidence uses a Granite manifest that lists all completed checks and their checksums. Explain how that helps future releases.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: ["/me", shared] },
   ];
   const selectedIds = process.env.MD_ACCEPTANCE_MODEL_CASES?.split(",");
   if (selectedIds && (new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => !cases.some(c => c.id === id)))) throw new Error("invalid_model_case_selection");
   const selectedCases = selectedIds ? cases.filter(c => selectedIds.includes(c.id)) : cases;
+  if (selectedIds?.includes("overlap-semantic-noop") && !selectedIds.includes("overlap-automatic-save")) throw new Error("noop_case_requires_preceding_save_case");
   receipt.coverage = { required: cases.map(c => c.id), selected: selectedCases.map(c => c.id), complete: selectedCases.length === cases.length };
   let personalMode = "read_write";
   for (const scenario of selectedCases) {
@@ -87,12 +89,24 @@ try {
     const config = await client.mcp(token, "get_personal_mind_configuration");
     await client.mcp(token, "set_personal_mind_description", { description: scenario.description, expected_metadata_version: config.metadata_version, idempotency_key: `acceptance-model:${crypto.randomUUID()}` });
     const directory = join(client.directory, "models", scenario.id); await mkdir(directory, { recursive: true, mode: 0o700 });
+    let unknownInjected = false;
     server = new AcceptanceModelServer({ directory, maxTokens: 400000, maxCalls: 50,
       onTrace: event => appendFile(join(directory, "events.jsonl"), JSON.stringify(event) + "\n", { mode: 0o600 }),
       onTool: async (tool, args) => {
       if (!tools.some(t => t.name === tool)) throw new Error("unknown_model_tool");
-      const envelope = await client.mcpEnvelope(token, "tools/call", { name: tool, arguments: args });
-      return envelope.result ?? { isError: true, content: [{ type: "text", text: "Protocol error" }] };
+      let envelope;
+      try { envelope = await client.mcpEnvelope(token, "tools/call", { name: tool, arguments: args }); }
+      catch (error) {
+        if (!/^mcp_http_\d{3}$/.test(error.message)) throw error;
+        return { isError: true, structuredContent: { ok: false, error: { code: error.message } }, content: [{ type: "text", text: error.message }] };
+      }
+      const result = envelope.result ?? { isError: true, content: [{ type: "text", text: "Protocol error" }] };
+      if (scenario.unknownCommit && !unknownInjected && tool === "commit_changeset" && !result.isError) {
+        unknownInjected = true;
+        await appendFile(join(directory, "events.jsonl"), JSON.stringify({ method: "acceptance/injectedLostResponse", params: { arguments: args, committedResult: result } }) + "\n", { mode: 0o600 });
+        return { isError: true, structuredContent: { ok: false, error: { code: "transport_outcome_unknown" } }, content: [{ type: "text", text: "Transport ended before a response was received. The operation may have committed; its outcome is unknown." }] };
+      }
+      return result;
     } });
     await server.start(); await server.thread({ model: receipt.model, tools, skill });
     assert.equal(server.model, receipt.model);
@@ -107,6 +121,7 @@ try {
         events = [...events, ...after];
       }
       const calls = verifyModelTrace(events, scenario);
+      if (scenario.unknownCommit) assert.equal(unknownInjected, true);
       receipt.cases.push({ id: scenario.id, status: "passed", calls, compacted: scenario.compact === true, usage: server.usage });
       console.log(JSON.stringify({ phase, status: "passed", calls: calls.length, compacted: scenario.compact === true }));
     } finally {

@@ -23,3 +23,16 @@ test("a successful write is insufficient without exact committed content and OKF
   assert.throws(() => verifyModelTrace(valid, writing), /committed_content_readback_missing/);
   assert.doesNotThrow(() => verifyModelTrace([...valid, call("fetch", { id: "opaque-entry" }, { entry: { entry_id: "opaque-entry", revision_id: "revision-2" } })], writing));
 });
+test("unknown commits require exact reconciliation before any retry", () => {
+  const request = { mind: "/shared", idempotency_key: "original", expected_revision: "revision-1", operations: [] };
+  const unknown = call("commit_changeset", request, {});
+  unknown.params.result = { isError: true, structuredContent: { error: { code: "transport_outcome_unknown" } } };
+  const scenarioWithFault = { ...scenario, writes: ["/shared"], unknownCommit: true };
+  assert.throws(() => verifyModelTrace([...prefix, unknown], scenarioWithFault), /unknown_commit_not_reconciled/);
+  assert.throws(() => verifyModelTrace([...prefix, unknown, call("reconcile_changeset", { ...request, idempotency_key: "changed" }, { status: "committed" })], scenarioWithFault), /unknown_commit_payload_changed/);
+  const tail = [call("reconcile_changeset", request, { status: "committed", revision: { revision_id: "revision-2" } }),
+    call("validate_mind", { mind: "/shared" }, { valid: true, resolved_revision: { revision_id: "revision-2" } }),
+    call("fetch", { id: "opaque-entry" }, { entry: { entry_id: "opaque-entry", revision_id: "revision-2" } })];
+  assert.doesNotThrow(() => verifyModelTrace([...prefix, unknown, ...tail], scenarioWithFault));
+  assert.throws(() => verifyModelTrace([...prefix, unknown, call("commit_changeset", request, {}), ...tail], scenarioWithFault), /unknown_commit_blind_retry/);
+});
