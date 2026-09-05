@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "build": "node build.mjs", "test": "node --test ../../tests/integration/acceptance-platform-probe.test.mjs" },
+  "scripts": {
+    "build": "node build.mjs",
+    "verify": "node ../../scripts/check-acceptance-artifact.mjs",
+    "test": "node --test ../../tests/integration/acceptance-platform-probe.test.mjs ../../tests/integration/acceptance-target-isolation.test.mjs"
+  },
   "engines": { "node": ">=22.13.0" }
 }

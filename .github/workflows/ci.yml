@@ -33,3 +33,5 @@ jobs:
         run: npx playwright install-deps chromium
       - name: Run canonical full check
         run: npm run check
+      - name: Build and verify separate acceptance artifact
+        run: npm --prefix apps/mind-diary-acceptance run build && npm --prefix apps/mind-diary-acceptance run verify

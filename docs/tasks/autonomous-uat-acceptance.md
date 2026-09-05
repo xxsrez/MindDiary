@@ -274,3 +274,27 @@ private Site с platform token. Runner SHA
 `40e3596c0dd95e92ea1986d60a4d865932bde5f7`; это отдельный carrier от deployment
 candidate. Ни эти результаты, ни принятый ADR не являются полной продуктовой
 приёмкой или основанием закрыть MD-399.
+
+## MD-402: отдельная product composition
+
+MD-401 переведена в Done с read-back, MD-402 — в In Progress. Новый entrypoint
+собирает обычные domain/application/UI/protocol/storage modules и общий
+request-recovery/runtime-cache. Synthetic namespace задаётся только здесь;
+до MD-403 identity reader всегда unauthenticated, включая запрос с
+`oai-authenticated-user-email`. Локальный запуск реального bundle на isolated
+fake D1/R2 подтвердил `401/authentication_required` для такого запроса.
+
+Входной guard до обращения к probe/assets/runtime требует exact test origin,
+environment project ID и public origin; внешний operator allowlist запрещён.
+Четыре targeted negative tests прошли. Конфигурация run/session limits задана
+в `runtime-target.mjs`; её enforcement относится к issuer MD-403, поскольку
+эта итерация ещё не создаёт runs/actors. Secret environment revision 2 содержит
+независимые product token/locator/export/CSRF/performance keys.
+
+Build использует pinned esbuild 0.28.2 (npm audit: 0 vulnerabilities) и пишет
+candidate/dirty state, отдельные common-module/test-adapter/dependency digests,
+lock digest, exact input hashes и server SHA в `.openai/acceptance-build.json`.
+`npm --prefix apps/mind-diary-acceptance run verify` проверяет clean exact HEAD,
+manifest/bindings, bytes и все input hashes; dirty build уже отвергнут в
+negative probe. Эти build/verify steps включены в CI после общего gate.
+Полный gate и live cut этой итерации ещё не выполнены.
