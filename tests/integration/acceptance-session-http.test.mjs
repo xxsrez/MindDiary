@@ -11,7 +11,7 @@ test("controller and browser exchange reject forged identity, origin and oversiz
   const call = (path, body, headers = {}) => handleAcceptanceSession(new Request(ACCEPTANCE_ORIGIN + path, {
     method: "POST", headers: { "content-type": "application/json", ...headers }, body: typeof body === "string" ? body : JSON.stringify(body),
   }), store, key);
-  const controller = { "x-md-acceptance-controller": key, "idempotency-key": "http-test-run-0001" };
+  const controller = { authorization: `Bearer ${key}`, "idempotency-key": "http-test-run-0001" };
   assert.equal((await call("/_acceptance/runs", {})).status, 401);
   assert.equal((await call("/_acceptance/runs", {}, { ...controller, origin: "https://foreign.invalid" })).status, 403);
   assert.equal((await call("/_acceptance/runs", { email: "owner@example.com" }, controller)).status, 400);

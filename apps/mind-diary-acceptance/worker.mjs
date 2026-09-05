@@ -5,7 +5,7 @@ const json = (body, status = 200) => Response.json(body, { status, headers });
 
 async function authorized(request, env) {
   const expected = env.MD_ACCEPTANCE_CONTROLLER_KEY;
-  const actual = request.headers.get("x-md-acceptance-controller");
+  const actual = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.get("authorization") ?? "")?.[1];
   if (typeof expected !== "string" || expected.length < 43 || !actual || actual.length > 256) return false;
   const hash = async (value) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   const [a, b] = await Promise.all([hash(actual), hash(expected)]);

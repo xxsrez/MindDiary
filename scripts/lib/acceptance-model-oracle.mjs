@@ -35,7 +35,7 @@ export function verifyModelTrace(events, scenario) {
     assert.ok(reconciled, "unknown_commit_not_reconciled");
     assert.deepEqual(reconciled.arguments, uncertain.arguments, "unknown_commit_payload_changed");
     assert.equal(reconciled.result.structuredContent?.data?.status, "committed", "unknown_commit_not_confirmed");
-    const retriedBeforeReconcile = calls.slice(calls.indexOf(uncertain) + 1, calls.indexOf(reconciled)).some(c => c.tool === "commit_changeset");
+    const retriedBeforeReconcile = calls.slice(calls.indexOf(uncertain) + 1, calls.indexOf(reconciled)).some(c => c.tool === "commit_changeset" && c.resolvedMind === uncertain.resolvedMind);
     assert.equal(retriedBeforeReconcile, false, "unknown_commit_blind_retry");
     commits.push(reconciled);
   }

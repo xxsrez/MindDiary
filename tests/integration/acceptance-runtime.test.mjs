@@ -20,7 +20,7 @@ test("four real bootstraps and normal bearer auth remain constrained by the run"
   for (const [i, name] of ["TOKEN_VERIFIER", "LOCATOR", "EXPORT_DOWNLOAD_VERIFIER", "CSRF"].entries()) env[`MIND_DIARY_${name}_KEY`] = Buffer.alloc(32, i + 1).toString("base64url");
   const pending = [];
   const call = (path, options = {}) => worker.fetch(new Request(ACCEPTANCE_ORIGIN + path, options), env, { waitUntil(p) { pending.push(p); } });
-  const control = (path, method = "GET", body) => call(path, { method, headers: { "x-md-acceptance-controller": env.MD_ACCEPTANCE_CONTROLLER_KEY, "idempotency-key": "runtime-test-run-0001", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const control = (path, method = "GET", body) => call(path, { method, headers: { authorization: `Bearer ${env.MD_ACCEPTANCE_CONTROLLER_KEY}`, "idempotency-key": "runtime-test-run-0001", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const runResponse = await control("/_acceptance/runs", "POST", {});
   assert.equal(runResponse.status, 200);
   const run = await runResponse.json(), principals = new Set(), minds = new Set();

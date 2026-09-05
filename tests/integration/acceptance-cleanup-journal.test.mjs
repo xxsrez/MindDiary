@@ -44,7 +44,7 @@ test("reaper skips active runs and selects only expired or revoked runs", async 
   const expired = await store.create({ ttl_seconds: 60 }, "reaper-expired-run-0001"); now += 60001;
   const visited = [];
   const response = await handleAcceptanceSession(new Request(ACCEPTANCE_ORIGIN + "/_acceptance/recover", {
-    method: "POST", headers: { "x-md-acceptance-controller": "a".repeat(43) }, body: "{}",
+    method: "POST", headers: { authorization: `Bearer ${"a".repeat(43)}` }, body: "{}",
   }), store, "a".repeat(43), async id => { visited.push(id); return { state: "cleaned" }; });
   assert.equal(response.status, 200); assert.deepEqual(visited, [expired.id]);
   assert.equal((await store.run(active.id)).state, "active");

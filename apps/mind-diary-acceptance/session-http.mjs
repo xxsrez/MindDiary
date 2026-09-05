@@ -25,7 +25,7 @@ async function body(request) {
 }
 
 async function controller(request, expected) {
-  const actual = request.headers.get("x-md-acceptance-controller");
+  const actual = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.get("authorization") ?? "")?.[1];
   if (typeof expected !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(expected) || !actual || actual.length > 256) return false;
   const hash = async (s) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
   const [a, b] = await Promise.all([hash(actual), hash(expected)]);

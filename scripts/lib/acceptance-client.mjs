@@ -4,9 +4,9 @@ import { ACCEPTANCE_ORIGIN } from "../../apps/mind-diary-acceptance/runtime-targ
 
 // Private recovery journal: exact payloads and credentials never reach stdout.
 export class AcceptanceClient {
-  constructor({ directory, platformToken, controllerKey, fetch: transport = fetch }) {
+  constructor({ directory, platformToken, controllerKey, fetch: transport = fetch, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
     this.directory = directory; this.platformToken = platformToken;
-    this.controllerKey = controllerKey; this.transport = transport;
+    this.controllerKey = controllerKey; this.transport = transport; this.sleep = sleep;
   }
   async open() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -37,7 +37,7 @@ export class AcceptanceClient {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: "manual", signal: AbortSignal.timeout(45000) });
   }
   async control(path, method = "GET", body) {
-    const response = await this.request(path, { method, body, headers: { "x-md-acceptance-controller": this.controllerKey,
+    const response = await this.request(path, { method, body, headers: { authorization: `Bearer ${this.controllerKey}`,
       "idempotency-key": this.state.runKey, "content-type": "application/json" } });
     if (!response.ok) throw new Error(`acceptance_control_http_${response.status}`);
     return response.json();
@@ -88,16 +88,23 @@ export class AcceptanceClient {
     operation.result = { ok: true, data: { principal_id: body.data.principal.principal_id, personal_mind: body.data.personal_mind, replayed: true } };
     operation.reconciled = true; operation.phase = "completed"; await this.save();
   }
-  async cleanup() {
+  async cleanup({ retryTransient = true } = {}) {
     if (this.state.phase === "cleaned") return this.state.receipt;
     if (!this.state.run) await this.setup(this.state.runInput ?? {});
     this.state.phase = "cleanup_pending"; await this.save();
-    for (let attempt = 0; attempt < 9; attempt++) {
-      this.state.receipt = await this.control(`/_acceptance/runs/${this.state.run.run_id}/cleanup`, "POST", {});
+    const deadline = Date.now() + 300000;
+    for (let attempt = 0; attempt < 16; attempt++) {
+      try { this.state.receipt = await this.control(`/_acceptance/runs/${this.state.run.run_id}/cleanup`, "POST", {}); }
+      catch (error) {
+        const transient = error.message === "acceptance_control_http_503" || ["AbortError", "TimeoutError"].includes(error.name);
+        if (!retryTransient || !transient || attempt === 15 || Date.now() >= deadline) throw error;
+        await this.sleep(Math.min(15000, 1000 * 2 ** Math.min(attempt, 4)));
+        continue;
+      }
       await this.save();
       if (this.state.receipt.state === "cleaned") break;
     }
-    if (this.state.receipt.state !== "cleaned") throw new Error("cleanup_still_pending");
+    if (this.state.receipt?.state !== "cleaned") throw new Error("cleanup_still_pending");
     this.state.phase = "cleaned"; this.state.actors = {}; this.state.operations = {};
     await this.save(); return this.state.receipt;
   }

@@ -39,6 +39,9 @@ const receipt = { schema: "mind-diary/acceptance-model/v1", candidate: expected,
   cli: execFileSync("/opt/homebrew/bin/codex", ["--version"], { encoding: "utf8" }).trim(), model: "gpt-6-astra", package_hash: packageHasher.digest("hex"),
   skill_hash: createHash("sha256").update(skill).digest("hex"), cases: [] };
 const baseline = await client.control("/_acceptance/inventory"); assert.equal(baseline.complete, true);
+client.state.modelBaseline = baseline; await client.save();
+const saveReceipt = () => writeFile(join(client.directory, "model-receipt.json"), JSON.stringify(receipt), { mode: 0o600 });
+await saveReceipt();
 let server;
 try {
   phase = "fixture";
@@ -143,6 +146,7 @@ try {
       }
       if (scenario.unknownCommit) assert.equal(unknownInjected, true);
       receipt.cases.push({ id: scenario.id, status: "passed", calls, compacted: scenario.compact === true, ...(scenario.partialCommit ? { first_committed_mind: firstCommittedMind, failed_write_mind: partialReadOnlyMind } : {}), usage: server.usage });
+      await saveReceipt();
       console.log(JSON.stringify({ phase, status: "passed", calls: calls.length, compacted: scenario.compact === true }));
     } finally {
       await writeFile(join(directory, "trace.json"), JSON.stringify({ receipt: { ...receipt, cases: [] }, scenario, events: server.events }), { mode: 0o600 });
@@ -150,11 +154,20 @@ try {
     }
   }
   receipt.status = "passed";
+ } catch (error) {
+  receipt.status = "failed";
+  throw error;
 } finally {
   server?.close();
-  const cleanup = await client.cleanup(); assert.equal(cleanup.state, "cleaned");
-  const final = await client.control("/_acceptance/inventory"); assert.deepEqual(final, baseline);
-  receipt.cleanup = "baseline_restored";
-  await writeFile(join(client.directory, "model-receipt.json"), JSON.stringify(receipt), { mode: 0o600 });
-  console.log(JSON.stringify({ phase: "model_cleanup", status: receipt.status ?? "failed", cases: receipt.cases.length, cleanup: receipt.cleanup, runner_dirty: receipt.runner_dirty }));
+  try {
+    const cleanup = await client.cleanup(); assert.equal(cleanup.state, "cleaned");
+    const final = await client.control("/_acceptance/inventory"); assert.deepEqual(final, baseline);
+    receipt.cleanup = "baseline_restored";
+  } catch (error) {
+    receipt.cleanup = "pending"; receipt.status = "failed";
+    throw error;
+  } finally {
+    await saveReceipt();
+    console.log(JSON.stringify({ phase: "model_cleanup", status: receipt.status ?? "failed", cases: receipt.cases.length, cleanup: receipt.cleanup, runner_dirty: receipt.runner_dirty }));
+  }
 }

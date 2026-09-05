@@ -5,7 +5,7 @@ import worker from "../../apps/mind-diary-acceptance/worker.mjs";
 const secret = "a".repeat(43);
 const env = { MD_ACCEPTANCE_CONTROLLER_KEY: secret, DB: { prepare() { throw new Error("must not reach storage"); } } };
 const request = (body, key = secret, origin) => new Request("https://acceptance.invalid/api/probe", {
-  method: "POST", headers: { "x-md-acceptance-controller": key, ...(origin ? { origin } : {}) }, body: JSON.stringify(body),
+  method: "POST", headers: { authorization: `Bearer ${key}`, ...(origin ? { origin } : {}) }, body: JSON.stringify(body),
 });
 
 test("platform probe rejects missing/wrong controller authority before storage", async () => {

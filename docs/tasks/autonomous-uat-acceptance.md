@@ -579,3 +579,25 @@ connector и сохраняет его result; длинный замер тре�
 измеренный request до перехода к следующему; после записи выборки run остаётся
 активен до join/cleanup. При падении доступен тот же закрытый recovery journal.
 Это пока реализованные команды и локальные проверки, не live performance pass.
+
+### Устойчивость после расширенного model run
+
+Unknown-response case реально выполнил Personal commit, затем независимый
+ordinary commit, затем exact Personal reconcile. Прежний oracle ошибочно
+считал любой intervening commit слепым retry. Запрет уточнён: до reconcile
+нельзя повторять mutation того же Mind; независимый второй канал разрешён.
+Сохранённый trace не подменяет новый полный run.
+
+Большой cleanup пережил клиентский timeout, а server lock ещё действовал.
+SDK повторяет только 503 и transport timeout по тому же run, максимум 16
+обращений/пять минут с backoff до 15 секунд. Неизвестные ошибки и 401 не
+повторяются; журнал остаётся пригодным для восстановления. Tests могут явно
+отключить retry для моделирования прерывания процесса.
+
+Проверка provider logs показала, что нестандартный controller header не
+редактируется платформой. Controller capability переводится на стандартный
+`Authorization: Bearer` только на test control endpoints; прежний header
+больше не принимается. Ключ ротируется в Sites и CI, затем проверяется отказ
+старого значения. Значения секретов в evidence не сохраняются. При анализе
+provider logs управляющий агент извлекает только безопасные поля и не выводит
+целый request headers object.

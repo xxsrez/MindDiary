@@ -42,7 +42,7 @@ for (const mode of ["normal", "interrupted", "legacy-orphan"]) test(`real OAuth 
     };
     return statement;
   };
-  if (mode === "interrupted") await assert.rejects(client.cleanup(), /acceptance_control_http_503/);
+  if (mode === "interrupted") await assert.rejects(client.cleanup({ retryTransient: false }), /acceptance_control_http_503/);
   assert.equal((await client.cleanup()).state, "cleaned");
   runtime.db.prepare = prepare;
   if (mode === "legacy-orphan") {
