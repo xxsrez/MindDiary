@@ -435,7 +435,7 @@ test("all current MCP tools have a disposition and the target catalog is exact",
       "get_export_status",
     ],
   );
-  assert.equal(fixture.targetMcpCatalog.length, 18);
+  assert.equal(fixture.targetMcpCatalog.length, 20);
   for (const tool of fixture.mcpTools) {
     assertExactKeys(tool, ["name", "disposition", "profile", "mindScope", "owner"], tool.name);
     assert.ok(profiles.has(tool.profile), `${tool.name}: unknown profile`);
@@ -767,7 +767,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "6a4431577456e364eb18170dc4a4d11695fe52dd",
+      gitBlob: "398007cb764e34276cfa344b1c0a2692902ae9e8",
     },
     {
       surface: "plugin-label",
@@ -809,7 +809,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "package-probe-source",
         path: "scripts/run-oauth-direct-plugin-probe.mjs",
-        gitBlob: "7080f9137f5c8eb24ad82ca1fed16882c84ac322",
+        gitBlob: "54279f2610ec4d695e2044f21ac023b1131ab820",
       }],
     },
     {
@@ -830,12 +830,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "27f4581f612aade152da7b745a481aff5ef4de3b",
+          gitBlob: "2a89fe4cbe7d08e13a15eadfabd567e875d9bdec",
         },
         {
           role: "installed-skill-probe-source",
           path: "scripts/run-oauth-direct-plugin-probe.mjs",
-          gitBlob: "7080f9137f5c8eb24ad82ca1fed16882c84ac322",
+          gitBlob: "54279f2610ec4d695e2044f21ac023b1131ab820",
         },
       ],
     },
@@ -853,7 +853,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "6a4431577456e364eb18170dc4a4d11695fe52dd",
+        gitBlob: "398007cb764e34276cfa344b1c0a2692902ae9e8",
       }],
     },
     {
@@ -865,12 +865,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-playbook-source",
           path: "packages/adapter-web/src/token-management.ts",
-          gitBlob: "bfc6179e67b7ec350ddb47dc0e0705618dca9aaa",
+          gitBlob: "f70e17b303652d169972ef43d5dc70f24ae6b725",
         },
         {
           role: "help-route-source",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "579522aa53a53746cf5dda5661380fabfc41e483",
+          gitBlob: "79c957eb21ed119d2be21736eb5cc48fb931c13a",
         },
       ],
     },

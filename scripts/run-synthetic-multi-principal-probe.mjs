@@ -466,9 +466,9 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   assertions.add("bindings.initial-empty");
 
   if (
-    Object.hasOwn(participantSession.personal_mind, "description") ||
-    Object.hasOwn(ownerSession.personal_mind, "description")
-  ) fail("personal_description_exposed");
+    participantSession.personal_mind.description !== null ||
+    ownerSession.personal_mind.description !== null
+  ) fail("personal_description_default_invalid");
   const removedPersonalDescription = await actors.participant.api(
     "/api/v1/minds/me/description",
     {
@@ -501,7 +501,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     if (
       personalItem?.usage_mode !== "read" ||
       personalItem?.routing_profile !== "personal_default" ||
-      Object.hasOwn(personalItem ?? {}, "description")
+      personalItem?.description !== null
     ) {
       fail("personal_usage_not_enabled");
     }
@@ -516,8 +516,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     participantMinds.find((mind) => mind.route === "/me")?.mind_id !== participantIds.mind ||
     ownerMinds.find((mind) => mind.route === "/me")?.routing_profile !== "personal_default" ||
     participantMinds.find((mind) => mind.route === "/me")?.routing_profile !== "personal_default" ||
-    Object.hasOwn(ownerMinds.find((mind) => mind.route === "/me") ?? {}, "description") ||
-    Object.hasOwn(participantMinds.find((mind) => mind.route === "/me") ?? {}, "description")
+    ownerMinds.find((mind) => mind.route === "/me")?.description !== null ||
+    participantMinds.find((mind) => mind.route === "/me")?.description !== null
   ) fail("mcp_token_principal_mismatch");
   assertions.add("tokens.distinct-principal-bound");
   const crossPersonal = await actors.participant.mcp("get_mind_info", {
@@ -808,10 +808,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (
     reboundPersonal.projection?.items?.find((item) => item.mind_ref === "/me")?.usage_mode !== "read_write" ||
     reboundPersonal.projection?.items?.find((item) => item.mind_ref === "/me")?.routing_profile !== "personal_default" ||
-    Object.hasOwn(
-      reboundPersonal.projection?.items?.find((item) => item.mind_ref === "/me") ?? {},
-      "description",
-    ) ||
+    reboundPersonal.projection?.items?.find((item) => item.mind_ref === "/me")?.description !== null ||
     reboundPersonal.projection?.items?.find((item) => item.mind_ref === `/${handle}`)?.usage_mode !== "read_write" ||
     reboundPersonal.projection?.items?.filter((item) => item.usage_mode === "read_write").length !== 2
   ) fail("independent_personal_write_lane_mismatch");

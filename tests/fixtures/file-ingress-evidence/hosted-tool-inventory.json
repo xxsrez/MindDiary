@@ -47,7 +47,7 @@
     {
       "name": "get_personal_mind_configuration",
       "source": "mind-diary-hosted-mcp-tools-list",
-      "input_schema_sha256": "sha256:99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+      "input_schema_sha256": "sha256:71fc596a20f27da3dec80050e5d1f553eba34aea24c2853b853488a811e6b892",
       "output_schema_sha256": "sha256:4aad45e56c4bda99565df4ea919ea88402279b801a883462ac34921e197f0c5e"
     },
     {
@@ -107,7 +107,7 @@
     {
       "name": "set_personal_mind_description",
       "source": "mind-diary-hosted-mcp-tools-list",
-      "input_schema_sha256": "sha256:669116a745648933daf036a348163f9daae6bdf7773d4b2b1fa382cea4d3e95d",
+      "input_schema_sha256": "sha256:333082f9a7aa05806cd5b32966f8774b6dd07c548ef5f13a5a86652ac028da62",
       "output_schema_sha256": "sha256:4aad45e56c4bda99565df4ea919ea88402279b801a883462ac34921e197f0c5e"
     },
     {

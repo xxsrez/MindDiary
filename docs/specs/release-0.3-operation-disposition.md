@@ -354,3 +354,13 @@ with the repository source candidate. It does **not** prove runtime migration,
 plugin publication, UAT behavior, OAuth reconsent, persistence migration or
 production deployment. Those claims require their owning implementation and
 exact hosted evidence.
+
+## Поправка ADR-0025: Personal configuration
+
+`get_personal_mind_configuration` и `set_personal_mind_description` добавляют
+узкую metadata surface собственного Personal Mind. Оба требуют отдельный
+`personal:configure`; второй также metadata CAS и idempotency. Они не выбирают
+Mind, principal, mode или scopes, не читают corpus и не меняют HEAD. Совпадение
+тем разрешает независимое использование двух Minds по
+[новому routing-контракту](mind-usage-modes.md). Это дополнение не возвращает
+удалённые общие control-plane инструменты в MCP.

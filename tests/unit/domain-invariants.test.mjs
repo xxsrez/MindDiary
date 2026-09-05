@@ -105,7 +105,7 @@ test("role policy exposes named capabilities and write scope always includes rea
     "content:read",
     "content:write",
   ]);
-  assert.throws(() => normalizeTokenScopes([]), /must include/);
+  assert.throws(() => normalizeTokenScopes([]), /scope is required/);
 });
 
 test("active ordinary Mind restores only with exactly one Owner", () => {

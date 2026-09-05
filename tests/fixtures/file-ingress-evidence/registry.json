@@ -98,7 +98,7 @@
       },
       "tool_inventory": {
         "path": "tests/fixtures/file-ingress-evidence/direct-tool-inventory.json",
-        "sha256": "bdc20d50239c3a296571e2ef446426df548f7a4d536356d6cd3789fbbd8f3c6c"
+        "sha256": "a85b04c7cb4ae6f8d92441ad11088d9ca28d2146112a3cbc71a91c0ea36f45d2"
       },
       "resource_inventory": null
     },
@@ -128,7 +128,7 @@
       },
       "tool_inventory": {
         "path": "tests/fixtures/file-ingress-evidence/direct-tool-inventory.json",
-        "sha256": "bdc20d50239c3a296571e2ef446426df548f7a4d536356d6cd3789fbbd8f3c6c"
+        "sha256": "a85b04c7cb4ae6f8d92441ad11088d9ca28d2146112a3cbc71a91c0ea36f45d2"
       },
       "resource_inventory": null
     },
@@ -150,7 +150,7 @@
       },
       "tool_inventory": {
         "path": "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
-        "sha256": "805e6763a56d12b6ef2ddbad8250f33bb64163aa5f2dee5543efd8ecce16cfab"
+        "sha256": "5baf6bd0610e11b12c255b3cbbc8f2f13fdacafb4fb3f9938466d0dad8643791"
       },
       "resource_inventory": {
         "path": "tests/fixtures/file-ingress-evidence/apps-resource-inventory.json",

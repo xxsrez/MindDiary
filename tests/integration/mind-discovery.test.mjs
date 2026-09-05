@@ -578,7 +578,7 @@ test("mismatched resolved metadata cannot redirect a descriptor to another space
   assert.equal(mind.handle, "source-space");
 });
 
-test("MCP discovery omits Personal description and projects both independent writable mounts", async () => {
+test("MCP discovery exposes optional Personal description and projects both independent writable mounts", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Usage Owner");
   const enabled = await createMind(env, owner, "enabled-notes", "Enabled Notes");
@@ -636,7 +636,7 @@ test("MCP discovery omits Personal description and projects both independent wri
   const readActor = mcpActor(owner.principalId, "token_usage_read");
   const listed = await discovery.listMinds(readActor, { limit: 10 });
   assert.deepEqual(listed.minds.map(({ route }) => route), ["/me", "/enabled-notes"]);
-  assert.equal(listed.minds[0].description, null);
+  assert.equal(listed.minds[0].description, "Private durable working preferences");
   assert.equal(listed.minds[0].routingProfile, "personal_default");
   assert.equal(listed.minds[0].usageMode, "read_write");
   assert.deepEqual(listed.minds[0].effective, { canRead: true, canWrite: false });

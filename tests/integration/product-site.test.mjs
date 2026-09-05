@@ -152,6 +152,7 @@ const sessionProjection = Object.freeze({
 });
 
 const personalRoute = Object.freeze({
+  description: null,
   mindId: "space_personal",
   route: "/me",
   name: "Product Owner",
@@ -177,7 +178,7 @@ const ordinaryOwnerRoute = Object.freeze({
   headRevisionId: "revision_research",
 });
 
-test("ordinary web projections require description while Personal intentionally omits it", () => {
+test("web projections expose nullable Personal and ordinary descriptions", () => {
   assert.equal(personalRoute.description, null);
   assert.notEqual(uiMind(personalRoute), null);
 

@@ -478,7 +478,7 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(html, /Never store a token in a repository/u);
   assert.doesNotMatch(html, /data-personal-description-form|personal-mind-description/u);
   assert.match(html, /can write only after you directly request a specific save, update, or deletion/u);
-  assert.match(html, /Read and write permits only the specific writes you directly request/u);
+  assert.match(html, /My Mind without a description is used only when you ask/u);
   assert.match(html, /data-mind-usage-panel[^>]+data-mind-ref="\/me"/u);
   assert.doesNotMatch(html, /space_handle|hidden handle|data-(?:share|visibility|transfer|delete)/i);
   assert.doesNotMatch(html, /<iframe\b|contenteditable/i);

@@ -15,6 +15,7 @@
     "get_bundle_file_download",
     "get_file_ingress_capabilities",
     "get_mind_info",
+    "get_personal_mind_configuration",
     "get_revision",
     "list_bundle_files",
     "list_minds",
@@ -23,6 +24,7 @@
     "reconcile_file_stage",
     "resolve_mind",
     "search",
+    "set_personal_mind_description",
     "validate_mind"
   ],
   "removedOrMovedTools": [
