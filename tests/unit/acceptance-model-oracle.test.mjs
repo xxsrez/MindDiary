@@ -36,3 +36,15 @@ test("unknown commits require exact reconciliation before any retry", () => {
   assert.doesNotThrow(() => verifyModelTrace([...prefix, unknown, ...tail], scenarioWithFault));
   assert.throws(() => verifyModelTrace([...prefix, unknown, call("commit_changeset", request, {}), ...tail], scenarioWithFault), /unknown_commit_blind_retry/);
 });
+test("partial writes require a real denial and read-back of the independent successful commit", () => {
+  const partial = { reads: ["/shared", "/me"], requiredReads: ["/shared"], writes: ["/shared", "/me"], requiredWrites: ["/shared"], failedWrite: "/me", partialCommit: true };
+  const denied = call("commit_changeset", { mind: "/me" }, {});
+  denied.params.result = { isError: true, structuredContent: { error: { code: "usage_read_only" } } };
+  const success = [call("commit_changeset", { mind: "/shared" }, { revision: { revision_id: "revision-2" } }),
+    call("validate_mind", { mind: "/shared" }, { valid: true, resolved_revision: { revision_id: "revision-2" } }),
+    call("fetch", { id: "opaque-entry" }, { entry: { entry_id: "opaque-entry", revision_id: "revision-2" } })];
+  assert.doesNotThrow(() => verifyModelTrace([...prefix, ...success, denied], partial));
+  assert.throws(() => verifyModelTrace([...prefix, ...success], partial), /partial_failure_missing/);
+  assert.throws(() => verifyModelTrace([...prefix, denied], partial), /required_commit_missing/);
+  assert.throws(() => verifyModelTrace([...prefix, ...success, denied, call("commit_changeset", { mind: "/me" }, {})], partial), /partial_failed_destination_committed/);
+});

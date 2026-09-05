@@ -67,6 +67,7 @@ try {
     { id: "described-personal-read-only", mode: "read", description: topics, prompt: "Our lasting engineering decision: synthetic acceptance run reports retain a checksum of their test plan, called the Juniper checksum. Explain this policy.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: [shared] },
     { id: "described-personal-disabled", mode: "disabled", description: topics, prompt: "Our lasting engineering decision: synthetic acceptance rollback rehearsals use an isolated Maple checkpoint before publication. Explain this policy.", reads: [shared], requiredReads: [shared], writes: [shared] },
     { id: "overlap-unknown-commit", description: topics, unknownCommit: true, prompt: "Our lasting engineering decision: synthetic acceptance evidence uses a Granite manifest that lists all completed checks and their checksums. Explain how that helps future releases.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: ["/me", shared] },
+    { id: "overlap-partial-write", description: topics, partialCommit: true, prompt: "Our lasting engineering decision: synthetic acceptance recovery drills use an Obsidian checklist that records the last verified commit before retrying. Explain why we use it.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: ["/me", shared] },
   ];
   const selectedIds = process.env.MD_ACCEPTANCE_MODEL_CASES?.split(",");
   if (selectedIds && (new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => !cases.some(c => c.id === id)))) throw new Error("invalid_model_case_selection");
@@ -89,11 +90,23 @@ try {
     const config = await client.mcp(token, "get_personal_mind_configuration");
     await client.mcp(token, "set_personal_mind_description", { description: scenario.description, expected_metadata_version: config.metadata_version, idempotency_key: `acceptance-model:${crypto.randomUUID()}` });
     const directory = join(client.directory, "models", scenario.id); await mkdir(directory, { recursive: true, mode: 0o700 });
-    let unknownInjected = false;
+    let unknownInjected = false, firstCommittedMind = null, partialReadOnlyMind = null;
     server = new AcceptanceModelServer({ directory, maxTokens: 400000, maxCalls: 50,
       onTrace: event => appendFile(join(directory, "events.jsonl"), JSON.stringify(event) + "\n", { mode: 0o600 }),
       onTool: async (tool, args) => {
       if (!tools.some(t => t.name === tool)) throw new Error("unknown_model_tool");
+      if (scenario.partialCommit && firstCommittedMind && tool === "commit_changeset" && args.mind !== firstCommittedMind && !partialReadOnlyMind) {
+        assert.ok(["/me", shared].includes(args.mind), "unexpected_partial_destination");
+        const owner = fixture.actors.owner.actor_id;
+        const cookie = await client.session(owner);
+        const projection = await (await client.request("/api/v1/mind-usage", { headers: { cookie } })).json();
+        const accountPage = await client.request("/settings/account", { headers: { cookie } });
+        const csrf = /name="mind-diary-csrf-token" content="([^"]+)"/.exec(await accountPage.text())[1];
+        await client.mutation(`model:partial:${scenario.id}`, owner, { path: `/api/v1/minds/${args.mind === "/me" ? "me" : fixture.handle}/usage`, method: "PUT", csrf,
+          body: { usage_mode: "read", expected_usage_version: projection.data.usage_version } });
+        partialReadOnlyMind = args.mind;
+        await appendFile(join(directory, "events.jsonl"), JSON.stringify({ method: "acceptance/injectedUsageChange", params: { mind: args.mind, usage_mode: "read", first_committed_mind: firstCommittedMind } }) + "\n", { mode: 0o600 });
+      }
       let envelope;
       try { envelope = await client.mcpEnvelope(token, "tools/call", { name: tool, arguments: args }); }
       catch (error) {
@@ -101,6 +114,7 @@ try {
         return { isError: true, structuredContent: { ok: false, error: { code: error.message } }, content: [{ type: "text", text: error.message }] };
       }
       const result = envelope.result ?? { isError: true, content: [{ type: "text", text: "Protocol error" }] };
+      if (scenario.partialCommit && tool === "commit_changeset" && !result.isError && !firstCommittedMind) firstCommittedMind = args.mind;
       if (scenario.unknownCommit && !unknownInjected && tool === "commit_changeset" && !result.isError) {
         unknownInjected = true;
         await appendFile(join(directory, "events.jsonl"), JSON.stringify({ method: "acceptance/injectedLostResponse", params: { arguments: args, committedResult: result } }) + "\n", { mode: 0o600 });
@@ -120,9 +134,15 @@ try {
         assert.equal(calls[0]?.params.tool, "list_minds");
         events = [...events, ...after];
       }
-      const calls = verifyModelTrace(events, scenario);
+      const oracleScenario = scenario.partialCommit ? { ...scenario, requiredWrites: [firstCommittedMind], failedWrite: partialReadOnlyMind } : scenario;
+      const calls = verifyModelTrace(events, oracleScenario);
+      if (scenario.partialCommit) {
+        assert.ok(firstCommittedMind && partialReadOnlyMind && firstCommittedMind !== partialReadOnlyMind, "partial_write_injection_missing");
+        const messages = events.filter(event => event.method === "item/completed" && event.params?.item?.type === "agentMessage").map(event => event.params.item.text).join("\n");
+        assert.match(messages, /could(?:n't| not)|unable|failed|read.only|not saved|not written|не удалось|только для чтения|не сохран/i, "partial_failure_not_reported");
+      }
       if (scenario.unknownCommit) assert.equal(unknownInjected, true);
-      receipt.cases.push({ id: scenario.id, status: "passed", calls, compacted: scenario.compact === true, usage: server.usage });
+      receipt.cases.push({ id: scenario.id, status: "passed", calls, compacted: scenario.compact === true, ...(scenario.partialCommit ? { first_committed_mind: firstCommittedMind, failed_write_mind: partialReadOnlyMind } : {}), usage: server.usage });
       console.log(JSON.stringify({ phase, status: "passed", calls: calls.length, compacted: scenario.compact === true }));
     } finally {
       await writeFile(join(directory, "trace.json"), JSON.stringify({ receipt: { ...receipt, cases: [] }, scenario, events: server.events }), { mode: 0o600 });

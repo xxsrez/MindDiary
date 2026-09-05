@@ -43,7 +43,12 @@ export function verifyModelTrace(events, scenario) {
   for (const read of scopedReads) assert.equal(scenario.reads.includes(read.resolvedMind), true, "unexpected_read_source");
   for (const mind of scenario.requiredReads) assert.equal(reads.some(c => c.resolvedMind === mind && !c.result.isError), true, "required_read_missing");
   for (const write of commits) assert.equal(scenario.writes.includes(write.resolvedMind), true, "unexpected_write_destination");
-  for (const mind of scenario.writes) assert.equal(commits.some(c => c.resolvedMind === mind && !c.result.isError), true, "required_commit_missing");
+  for (const mind of scenario.requiredWrites ?? scenario.writes) assert.equal(commits.some(c => c.resolvedMind === mind && !c.result.isError), true, "required_commit_missing");
+  if (scenario.partialCommit) {
+    assert.equal(typeof scenario.failedWrite, "string", "partial_failure_destination_missing");
+    assert.equal(commits.some(c => c.resolvedMind === scenario.failedWrite && c.result.isError), true, "partial_failure_missing");
+    assert.equal(commits.some(c => c.resolvedMind === scenario.failedWrite && !c.result.isError), false, "partial_failed_destination_committed");
+  }
   for (const commit of commits.filter(c => !c.result.isError)) {
     const revision = commit.result.structuredContent?.data?.revision?.revision_id;
     assert.equal(typeof revision, "string", "commit_revision_missing");
