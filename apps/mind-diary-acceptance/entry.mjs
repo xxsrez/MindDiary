@@ -10,6 +10,8 @@ import { AcceptanceSessionStore } from "./session-store.mjs";
 import { handleAcceptanceSession } from "./session-http.mjs";
 import { cleanupRun } from "./cleanup.mjs";
 import { acceptanceInventory } from "./inventory.mjs";
+import { recoverOrphanOAuth } from "./oauth-recovery.mjs";
+import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 
 const stores = new WeakMap();
 const runtimeEnvironments = new WeakMap();
@@ -55,7 +57,10 @@ export default {
         try { return await product.fetch(internalRequest, environment, context); }
         finally { recoveryIdentities.delete(internalRequest); }
       },
-      (input) => runtimes.get(environment.DB).resumeAccountDeletion(input)), () => acceptanceInventory(environment));
+      (input) => runtimes.get(environment.DB).resumeAccountDeletion(input)), () => acceptanceInventory(environment), async () => {
+        await product.fetch(new Request(ACCEPTANCE_ORIGIN + "/api/v1/session"), environment, context);
+        return recoverOrphanOAuth(environment.DB, principalId => runtimes.get(environment.DB).purgeDeletedPrincipalOAuth(principalId));
+      });
     if (sessionResponse) return sessionResponse;
     const actor = await store.actorForRequest(request);
     if (path === "/" && !actor) return probe.fetch(request, environment);

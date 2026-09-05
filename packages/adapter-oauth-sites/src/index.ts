@@ -123,6 +123,8 @@ export interface SitesOAuthConnector {
     connectionRef: string,
   ) => Promise<boolean>;
   readonly revokePrincipalConnections: (principalId: string) => Promise<void>;
+  /** Trusted composition only, after authoritative account deletion. */
+  readonly deletePrincipalConnections: (principalId: string) => Promise<void>;
 }
 
 type DbRow = Record<string, unknown>;
@@ -1576,6 +1578,19 @@ export async function createSitesOAuthConnector(
     ]);
   };
 
+  const deletePrincipalConnections = async (principalId: string): Promise<void> => {
+    await ensureSchema();
+    // Mirrors have already been removed by the authoritative account cascade.
+    // Re-revoking a mirror through a deleted actor can fail and retain all rows.
+    await options.database.batch([
+      options.database.prepare(`/*md-oauth-principal-requests-purge*/ DELETE FROM md_oauth_authorization_requests WHERE principal_id = ?`).bind(principalId),
+      options.database.prepare(`/*md-oauth-principal-codes-purge*/ DELETE FROM md_oauth_authorization_codes WHERE principal_id = ?`).bind(principalId),
+      options.database.prepare(`/*md-oauth-principal-access-purge*/ DELETE FROM md_oauth_access_tokens WHERE principal_id = ?`).bind(principalId),
+      options.database.prepare(`/*md-oauth-principal-refresh-purge*/ DELETE FROM md_oauth_refresh_tokens WHERE principal_id = ?`).bind(principalId),
+      options.database.prepare(`/*md-oauth-principal-grants-purge*/ DELETE FROM md_oauth_grants WHERE principal_id = ?`).bind(principalId),
+    ]);
+  };
+
   const handle = async (request: Request): Promise<Response | null> => {
     const url = new URL(request.url);
     try {
@@ -1628,5 +1643,6 @@ export async function createSitesOAuthConnector(
     readConnection,
     revokeConnection,
     revokePrincipalConnections,
+    deletePrincipalConnections,
   });
 }

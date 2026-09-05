@@ -472,3 +472,32 @@ credential scope narrowing, revision conflict, reconcile, history и полны�
 validation. Те же assertions доступны hosted runner; их локальный успех не
 является hosted evidence. MD-401–404 завершены; MD-405 в работе, MD-406–407
 остаются открытыми.
+
+### Проверенное чтение моделью и обнаруженный OAuth cleanup defect
+
+Runner `7c2293d4bd17e0a37272c4f371e8e51e1d7229d5` на test candidate
+`5641cb739b8ab93c10a98ae4252039219e121e3b` завершил четыре live model cases:
+Personal без description не выбран автоматически; overlap читает оба; явный
+Personal запрос читает только его; посторонняя тема не вызывает corpus reads.
+Overlap действительно прошёл compaction и повторный `list_minds` перед обоими
+reads. Model `gpt-6-astra`, CLI `0.153.0`, installed package hash
+`90a63cb105f12ebc29044f8c5efa4424c146ff0a6f869a2310bbd38345d3fc55`, skill hash
+`36e1ed4c850ea065ee512b9950f2dd5cfcd5b2c1ce0c0df8e0e4ada8a895db79`.
+Private tag `md405-model-read-v2-20260905`: passed, four cases, baseline restored.
+Расширенные write/injection/no-op cases этим receipt не покрываются.
+
+CI browser `33996861901` прошёл token opt-in формы и оба MCP self-check profiles.
+Остановка OAuth/cleanup не объявляется успехом. Inventory после cleanup показал
+один normalized OAuth grant при нулевых accounts/Minds/objects. Локальный
+normal OAuth code exchange воспроизвёл оставшиеся rows после удаления account.
+MD-404 повторно открыт: прежний personal-token fixture этого не проверял.
+
+Исправление следует принятому ADR-0010: после authoritative account cascade
+отдельный OAuth port удаляет normalized grants, authorization codes/requests,
+access/refresh rows. In-process composition проверяет отсутствие account;
+контроллер не пишет product SQL. Bounded orphan recovery восстанавливает
+остатки прежних test cuts и пропускает active accounts. Локальные проверки
+подтвердили обычный OAuth lifecycle, два сбоя purge с повторным cleanup,
+восстановление legacy orphan, идемпотентный recover и сохранение active grant.
+Inventory v2 включает также authorization codes/requests. Живая проверка
+исправления требует нового test deployment и пока не выполнена.

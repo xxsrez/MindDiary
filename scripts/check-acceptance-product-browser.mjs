@@ -34,8 +34,13 @@ const browser = await chromium.launch({ headless: true });
 const contexts = [];
 const callback = "http://127.0.0.1:1455/auth/callback";
 let callbackUrl;
-const formRequest = async (path, fields) => fetch(origin + path, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(45000),
-  headers: { "OAI-Sites-Authorization": `Bearer ${platformToken}`, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) });
+const formRequest = async (path, fields) => {
+  const response = await fetch(origin + path, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(45000),
+    headers: { "OAI-Sites-Authorization": `Bearer ${platformToken}`, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) });
+  let body; try { body = await response.clone().json(); } catch {}
+  diagnostics.push({ path, status: response.status, ...(typeof body?.error === "string" && /^[a-z_]{1,80}$/.test(body.error) ? { code: body.error } : {}) });
+  return response;
+};
 let verified = false;
 try {
   const run = await client.setup();
@@ -112,8 +117,10 @@ try {
   await page.goto(authorize.href, { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await page.waitForURL(callback + "?**");
+  phase = "oauth_callback_state";
   assert.equal(callbackUrl.searchParams.get("state"), state);
   const exchange = { grant_type: "authorization_code", client_id: clientId, redirect_uri: callback, resource: origin + "/api/mcp", code: callbackUrl.searchParams.get("code"), code_verifier: verifier };
+  phase = "oauth_code_exchange";
   const issued = await formRequest("/oauth/token", exchange); assert.equal(issued.status, 200);
   phase = "oauth_tokens";
   const tokens = await issued.json();
@@ -132,6 +139,7 @@ try {
   const cleanup = await client.cleanup();
   assert.equal(cleanup.state, "cleaned");
   const final = await client.control("/_acceptance/inventory");
+  if (JSON.stringify(final) !== JSON.stringify(baseline)) console.error(JSON.stringify({ phase: "cleanup_inventory", baseline, final }));
   assert.deepEqual(final, baseline);
   console.log(JSON.stringify({ schema: "mind-diary/acceptance-product-browser/v1", status: verified ? "passed" : "failed", candidate: expected, runner_sha: process.env.GITHUB_SHA, contexts: contexts.length,
     bootstrap_forms: verified, token_opt_in_forms: verified, modern_compat_self_check: verified, oauth_pkce_consent_rotation_revoke: verified, cleanup: "baseline_restored" }));

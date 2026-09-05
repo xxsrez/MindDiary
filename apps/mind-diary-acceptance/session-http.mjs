@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -58,7 +58,8 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
         try { results.push(await cleanup(run.id)); }
         catch { results.push({ run_id: run.id, state: "cleanup_pending" }); }
       }
-      return json({ results }, results.some((r) => r.state !== "cleaned") ? 503 : 200);
+      const oauth = recoverOAuth ? await recoverOAuth() : undefined;
+      return json({ results, ...(oauth ? { oauth } : {}) }, results.some((r) => r.state !== "cleaned") ? 503 : 200);
     }
     const cleanupRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/cleanup$/.exec(pathname);
     if (cleanupRoute && request.method === "POST" && cleanup) {

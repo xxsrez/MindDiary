@@ -220,6 +220,7 @@ export interface ProductSiteRuntime {
   readonly resumeAccountDeletion: (input: Readonly<{
     principalId: string; impactId: string; idempotencyKey: string;
   }>) => Promise<Readonly<{ pending: false }>>;
+  readonly purgeDeletedPrincipalOAuth: (principalId: string) => Promise<Readonly<{ purged: boolean }>>;
   /** Trusted in-process producer route; deliberately absent from HTTP/MCP discovery. */
   readonly serverGeneratedIngress: Readonly<
     Pick<TrustedServerGeneratedIngressService, "stage">
@@ -1714,7 +1715,8 @@ export async function createProductSiteRuntime(
           request.actor.kind === "registered_principal"
         ) {
           try {
-            await oauth.revokePrincipalConnections(String(request.actor.principalId));
+            if (await metadata.readAccount(request.actor.principalId as PrincipalId) !== null) throw new Error("Account is still active.");
+            await oauth.deletePrincipalConnections(String(request.actor.principalId));
           } catch {
             // The authoritative account cascade already revoked mirrored MCP
             // authorization records; normalized OAuth cleanup is best effort.
@@ -2208,11 +2210,16 @@ export async function createProductSiteRuntime(
           deploymentCapabilities: [], occurredAtUtc: clock.now(),
         }, { impactId: input.impactId, idempotencyKey: input.idempotencyKey, confirmation: "delete-account" });
       }
-      await oauth.revokePrincipalConnections(input.principalId);
+      await oauth.deletePrincipalConnections(input.principalId);
       if (await metadata.readAccountDeletionContext(principalId, input.impactId) !== null) {
         throw new Error("Deletion cleanup is still pending.");
       }
       return Object.freeze({ pending: false as const });
+    },
+    async purgeDeletedPrincipalOAuth(principalId: string) {
+      if (await metadata.readAccount(principalId as PrincipalId) !== null) return Object.freeze({ purged: false });
+      await oauth.deletePrincipalConnections(principalId);
+      return Object.freeze({ purged: true });
     },
     async fetch(
       request: Request,

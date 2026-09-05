@@ -2,7 +2,7 @@ import { createSitesMetadataStore } from "../../packages/adapter-metadata-sites/
 
 const tables = ["md_acceptance_actors", "md_acceptance_sessions", "md_acceptance_cleanup_journal",
   "md_search_documents", "md_search_revision_documents", "md_exact_revision_search",
-  "md_oauth_grants", "md_oauth_access_tokens", "md_oauth_refresh_tokens"];
+  "md_oauth_grants", "md_oauth_access_tokens", "md_oauth_refresh_tokens", "md_oauth_authorization_codes", "md_oauth_authorization_requests"];
 export async function acceptanceInventory(environment) {
   const metadata = await createSitesMetadataStore(environment.DB);
   const page = await metadata.listServiceOperatorPrincipals({ sort: "registered_at", direction: "asc", limit: 100 });
@@ -12,7 +12,7 @@ export async function acceptanceInventory(environment) {
   const rows = {};
   for (const table of tables) rows[table] = names.has(table)
     ? (await environment.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first()).count : 0;
-  return { schema: "mind-diary/acceptance-inventory/v1", complete: page.nextCursor === null && !objects.truncated,
+  return { schema: "mind-diary/acceptance-inventory/v2", complete: page.nextCursor === null && !objects.truncated,
     principals: page.principals.length, owned_minds: page.principals.reduce((total, p) => total + p.ownedMindCount, 0),
     object_count: objects.objects.length, object_bytes: objects.objects.reduce((total, o) => total + o.size, 0), rows };
 }

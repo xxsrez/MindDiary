@@ -140,6 +140,22 @@ MD-394/399 и исторические receipts автоматически не 
 
 ## Уточнение recovery contract (MD-404)
 
+Приёмка OAuth выявила оставшиеся normalized grants после удаления account.
+По принятому ADR-0010 они удаляются после authoritative cascade, а не только
+помечаются revoked. Общий OAuth adapter предоставляет узкую in-process операцию
+удаления records exact principal; composition вызывает её лишь после проверки
+отсутствия active account. Тестовый cleanup не отмечает actor завершённым, пока
+этот шаг не выполнен. DCR client остаётся отдельной постоянной настройкой.
+
+Для исторических остатков старого test deployment controller `recover` также
+проверяет ограниченную выборку principal IDs из OAuth tables. Он использует
+тот же защищённый composition port и пропускает active accounts. Это доступно
+только внутри isolated target, в котором все product identities создаются
+test-session adapter-ом; ordinary Worker не получает такого HTTP endpoint.
+Нет клиентского principal selector или прямого удаления product rows контроллером.
+Inventory отдельно считает grants, access/refresh tokens, authorization requests
+и codes, чтобы неполная очистка не скрывалась за пустым списком accounts.
+
 Cleanup сначала переводит run в `cleaning`, прекращая обычный web/MCP доступ.
 Контроллер не получает recovery cookie: сервер создаёт in-process requests
 только для session/account preview/delete на identity принадлежащего run actor.
