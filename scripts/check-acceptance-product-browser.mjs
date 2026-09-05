@@ -9,7 +9,8 @@ import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 // Playwright error messages can include callback URLs or show-once values.
 // Publish the bounded phase only; never serialize assertion inputs or raw errors.
 let phase = "configuration";
-process.once("uncaughtException", () => { console.error(JSON.stringify({ status: "failed", phase })); process.exit(1); });
+const diagnostics = [];
+process.once("uncaughtException", () => { console.error(JSON.stringify({ status: "failed", phase, diagnostics: diagnostics.slice(-12) })); process.exit(1); });
 
 const origin = "https://mind-diary-acceptance.example.invalid";
 const platformToken = process.env.MD_ACCEPTANCE_PLATFORM_TOKEN;
@@ -49,6 +50,13 @@ try {
     const split = cookie.indexOf("=");
     await context.addCookies([{ name: cookie.slice(0, split), value: cookie.slice(split + 1), url: origin, secure: true, httpOnly: true, sameSite: "Lax" }]);
     const page = await context.newPage();
+    page.on("response", async response => {
+      const url = new URL(response.url());
+      if (url.origin !== origin || !["/api/v1/account", "/api/v1/mcp-tokens", "/api/v1/session", "/api/mcp", "/api/mcp/2025-11-25"].includes(url.pathname)) return;
+      let body; try { body = await response.json(); } catch {}
+      const code = body?.error?.code ?? body?.result?.structuredContent?.error?.code;
+      diagnostics.push({ path: url.pathname, status: response.status(), ...(typeof code === "string" && /^[a-z_]{1,80}$/.test(code) ? { code } : {}) });
+    });
     await page.goto(origin, { waitUntil: "domcontentloaded" });
     const created = page.waitForResponse(r => r.url() === origin + "/api/v1/account" && r.request().method() === "POST");
     await page.getByRole("button", { name: "Create isolated account", exact: true }).click();
@@ -72,10 +80,17 @@ try {
     await form.getByRole("button", { name: "Create token", exact: true }).click();
     const response = await issued; assert.equal(response.status(), 200);
     const body = await response.json();
+    phase = "token_scope_readback";
     assert.equal(body.data.token.scopes.includes("personal:configure"), configure);
+    phase = "token_secret_dialog";
     await page.locator("[data-secret-dialog][open]").waitFor();
+    phase = "token_self_check";
     await page.locator("[data-run-mcp-self-check]").click();
-    await page.locator('[data-mcp-self-check][data-diagnostic-state="passed"]').waitFor();
+    await page.locator('[data-mcp-self-check][data-diagnostic-state="passed"], [data-mcp-self-check][data-diagnostic-state="failed"]').waitFor();
+    const diagnostic = await page.locator('[data-mcp-self-check]').getAttribute('data-diagnostic-state');
+    console.log(JSON.stringify({ phase, diagnostic }));
+    assert.equal(diagnostic, "passed");
+    phase = "token_secret_close";
     await page.getByRole("button", { name: "Close permanently", exact: true }).click();
     assert.doesNotMatch(await page.locator("[data-secret-value]").textContent(), /mdp_v1_/);
   }
