@@ -108,3 +108,10 @@ checkbox scope в browser payload. MD-396/397 переоткрыты In Progress
 Regression воспроизводит empty discovery до исправления и проходит после;
 browser checkbox regression также проходит. Следующий frontier — новый exact
 candidate/full gate/UAT cut, затем повторение всей hosted matrix и cleanup.
+
+Новый candidate `d54718de` прошёл full gate, CI и три synthetic gates.
+Сборка и локальный Sites mirror подготовлены. Source push остановлен runtime
+approval policy `never` до запуска команды; обходов не предпринималось.
+Все временные UAT tokens отозваны, настройки восстановлены. Пользовательское
+разрешение на UAT тесты больше не является blocker; нужен доступ инструмента
+к отправке подготовленного source. Goal остаётся active до blocked audit.
