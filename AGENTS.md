@@ -174,8 +174,8 @@ delivery profile и ADR-0008/ADR-0009
   `content:read`/`content:write`.
   `content:write` всегда включает `content:read`; write-only token запрещён.
   Token не даёт общего control-plane доступа и не привязан к одному Mind.
-  Узкая новая capability настройки Personal description планируется по ADR-0025
-  отдельно и не добавляется существующим credentials автоматически.
+  Узкая capability `personal:configure` настройки Personal description
+  реализована по ADR-0025 и не добавляется существующим credentials автоматически.
 - Membership management остаётся в trusted Sites control plane и не
   публикуется рядом с corpus tools в content MCP.
 - В прототипе `public`/`unlisted` открывают authenticated non-members весь live
@@ -186,7 +186,7 @@ delivery profile и ADR-0008/ADR-0009
   `space_handle` человекочитаем и не является access token; настоящая
   share-by-link capability потребует отдельного случайного секрета.
 - Целевой routing-контракт задают ADR-0025 и `docs/specs/mind-usage-modes.md`
-  (2026-09-05; реализация этой поправки отдельно планируется). `usage_mode`
+  (2026-09-05; реализация опубликована в UAT, полная приёмка MD-399 открыта). `usage_mode`
   определяет разрешённые действия, nullable description — темы автоматического
   чтения/записи. Personal без description используется только по прямой просьбе;
   с description — по теме в пределах effective mode/scopes/ACL. Personal identity

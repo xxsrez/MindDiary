@@ -81,9 +81,18 @@ MD-395–398 In Review после локальной реализации и tar
 - Marketplace source: `../Srez Marketplace/plugins/mind-diary`, package
   `0.1.0+codex.20260905180700`. Canonical skill/plugin validators прошли;
   policy/schema tests 21/21; route/storage 23/23; browser base case 1/1.
-  Publication/cache/fresh session ещё не подтверждены.
+  Publication/cache/fresh prompt-input подтверждены на Codex 0.153.0.
 - Реализация: description update атомарно меняет поколение только своего Mind;
   no-op/replay без изменения. Modern/compat config-only token, CAS/restart/clear
   проверены; OAuth suite 6/6, usage storage suite 14/14 (memory и Sites).
 - Проверка реализации продолжается: local evidence отделяется от ещё
   не подтверждённых CI/dev/UAT и установленного пакета.
+
+## Текущая контрольная точка
+
+Реализация 1–4 завершена и опубликована: candidate `9090dadf`, UAT 123,
+package `0.1.0+codex.20260905180700`. Пункт 5 остаётся In Progress:
+локальная и synthetic приёмка прошла, hosted configuration/performance и
+применимые canary ещё требуют доказательств. Полный перечень результатов и
+ограничений — [отчёт](../reports/2026-09-05-personal-description-routing.md).
+Goal остаётся активным; завершённой поставкой всей MD-394 это не объявляется.

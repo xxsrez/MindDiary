@@ -14,7 +14,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 Release 0.1/0.2 API, Connections и Mind bindings, а также ранний
 credential-scoped target Release 0.3 сохраняются как historical as-built;
 principal-owned replacement принят MD-373 в ADR-0024; Personal description
-и двойное тематическое использование приняты ADR-0025 (2026-09-05), ещё не реализованы.
+и двойное тематическое использование приняты ADR-0025 (2026-09-05).
+Реализация опубликована в UAT; границы подтверждения и незакрытая приёмка —
+в [отчёте Personal description](reports/2026-09-05-personal-description-routing.md).
 
 ## Начать отсюда
 
@@ -48,8 +50,8 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
    privacy/destructive disclosures и machine-check mapping для MD-347.
 12. [Режимы использования Mind и автоматическое сохранение](specs/mind-usage-modes.md)
    — целевой principal-owned `disabled | read | read_write`, единый writable
-   Mind, description routing ordinary Minds, requested-write-only Personal
-   `/me`, discussed-only automatic save и fail-closed migration. Прежний
+   ordinary Mind плюс независимый Personal, тематические descriptions и
+   explicit-only Personal без description, discussed-only automatic save и fail-closed migration. Прежний
    [credential write target](specs/credential-write-target.md)
    и [Mind bindings](specs/mind-bindings.md) сохранены как historical evidence.
 13. [Границы реализации](specs/implementation-boundaries.md) — trusted
