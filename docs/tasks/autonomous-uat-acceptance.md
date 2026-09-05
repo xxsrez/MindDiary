@@ -522,3 +522,60 @@ Test cut v6 (`39f89e28d9b09a6d22df7f60ca9c90def9e53540`, deployment
 один оставшийся grant и один code; полный inventory v2 вернулся к нулю.
 CI `33997824494` и `33998257100` также подтвердили cleanup до baseline после
 неуспешной browser проверки. Это подтверждение OAuth cleanup, не полная MD-405.
+
+### Контракт объединённого отчёта MD-406
+
+Новый `mind-diary/acceptance-suite/v1` действует только для явного autonomous
+scope. Исторические receipts и требования MD-399 не переписываются. Каждый
+компонент связывает candidate, project, deployment, common-module и test-adapter
+hashes с точным runner SHA. Model component дополнительно содержит проверенный
+installed package hash, полный список cases и настоящий compaction trace.
+Объединение требует product, browser, model, recovery, persistence и performance
+components; missing/failed assertion или cleanup, duplicate component и любое
+несовпадение identity отклоняются. Hash отчёта обеспечивает целостность, но сам
+по себе не подтверждает происхождение: ожидаемые hashes исходных receipts
+должны поступать из закрытого журнала управляющего запуска, а не из проверяемого
+отчёта. Performance использует существующий строгий gate и provider capture;
+локальные или придуманные measurements не подходят.
+
+Проверка model partial-write делает первый обычный commit, затем меняет режим
+второго Mind штатным control API на `read` перед второй попыткой. Oracle требует
+настоящий отказ второго commit, сохранённый и проверенный первый результат,
+а также сообщение о частичном отказе. Потерянный ответ проверяется отдельно
+через выполненный сервером commit и exact `reconcile_changeset`.
+
+MD-404 повторно завершена после CI browser `33998378523`: настоящий OAuth
+code exchange, code replay denial, refresh/revoke и полный cleanup прошли.
+MD-405 и MD-406 в работе, MD-407 пока Todo. Исправление повторного reload
+токен-диалога `7417ece5e29dee78f3a4ee8cdfa2f6ddae004987` прошло полный локальный
+gate; этот новый UI asset ещё не опубликован в test target.
+
+Performance fixture создаёт два обычных accounts; у каждого Personal и
+ordinary Mind, история обоих Minds равна соответственно 1 или 10 revisions.
+Число файлов и bytes берётся из реальных manifest summaries, fixture bindings
+и opaque fetch locator — из обычного MCP. Provisioning correlation использует
+сохранённый idempotency key настоящего create/token request, read-back —
+server request ID. `cookie_env` — optional backward-compatible transport
+extension scenario v3 только для web; inline Cookie и cookie на MCP запрещены.
+
+Для Sites logs новый capture v2 фиксирует digest фактического tool response,
+provider event IDs и единственную provider script version. API не возвращает
+control-plane request ID, поэтому runner его не придумывает. Отбираются только
+метрики с подтверждённым сервером подписанным benchmark correlation. V1 receipts
+сохраняют прежнюю проверку. Без внешнего capture замер не может стать passed.
+
+Команды для управляющего агента (файлы только в private evidence directory):
+
+```text
+node scripts/check-acceptance-performance-hosted.mjs <tag> sample <identity.json>
+node scripts/check-acceptance-performance-hosted.mjs <tag> finalize <sites-log-response.json>
+node scripts/check-acceptance-performance-hosted.mjs <tag> cleanup
+node scripts/join-acceptance-suite.mjs <manifest.json> <report.json> <six-component-files...>
+```
+
+Между `sample` и `finalize` агент получает настоящие Sites worker logs через
+connector и сохраняет его result; длинный замер требует bounded captures во
+время исполнения, чтобы не потерять начало выборки. `sample` сохраняет каждый
+измеренный request до перехода к следующему; после записи выборки run остаётся
+активен до join/cleanup. При падении доступен тот же закрытый recovery journal.
+Это пока реализованные команды и локальные проверки, не live performance pass.

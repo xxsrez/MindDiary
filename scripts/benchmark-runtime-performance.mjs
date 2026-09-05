@@ -54,6 +54,11 @@ function requestHeaders(definition, benchmarkCorrelationId, signature) {
     if (!credential) throw new Error(`missing environment ${definition.sites_authorization_env}`);
     headers.set("oai-sites-authorization", credential);
   }
+  if (definition.cookie_env) {
+    const cookie = process.env[definition.cookie_env];
+    if (!cookie) throw new Error(`missing environment ${definition.cookie_env}`);
+    headers.set("cookie", cookie);
+  }
   return headers;
 }
 
@@ -74,6 +79,7 @@ async function timedFetch(targetUrl, definition, correlationKey) {
     headers: requestHeaders(definition, benchmarkCorrelationId, signature),
     ...(definition.body === undefined ? {} : { body: JSON.stringify(definition.body) }),
     redirect: "manual",
+    signal: AbortSignal.timeout(45000),
   });
   const bytes = await response.arrayBuffer();
   const elapsed = Math.max(0, performance.now() - startedAt);
@@ -147,6 +153,55 @@ export async function waitForTelemetry(
   throw lastError ?? new Error("performance telemetry unavailable");
 }
 
+export async function collectPerformanceSamples(scenario, correlationKey, onSample) {
+  const startedAt = new Date().toISOString();
+  const connectorResults = [];
+  for (const definition of scenario.requests) {
+    const observedCold = await timedFetch(scenario.target_url, definition, correlationKey);
+    await onSample?.({ definition_id: definition.id, kind: "cold", index: 0, ...observedCold });
+    const warm = [];
+    const sampleWindows = [{
+      kind: "cold",
+      index: 0,
+      started_at: observedCold.started_at,
+      completed_at: observedCold.completed_at,
+      request_id: observedCold.request_id,
+      benchmark_correlation_id: observedCold.benchmark_correlation_id,
+    }];
+    let completedAt = observedCold.completed_at;
+    for (let sample = 0; sample < scenario.warm_samples; sample += 1) {
+      const observed = await timedFetch(scenario.target_url, definition, correlationKey);
+      await onSample?.({ definition_id: definition.id, kind: "warm", index: sample, ...observed });
+      warm.push(observed.elapsed_ms);
+      sampleWindows.push({
+        kind: "warm",
+        index: sample,
+        started_at: observed.started_at,
+        completed_at: observed.completed_at,
+        request_id: observed.request_id,
+        benchmark_correlation_id: observed.benchmark_correlation_id,
+      });
+      completedAt = observed.completed_at;
+    }
+    connectorResults.push(Object.freeze({
+      id: definition.id,
+      profile: definition.profile,
+      fixture_profile_id: definition.fixture_profile_id,
+      operation: definition.operation,
+      response_verified: true,
+      fixture_binding_verified: true,
+      observed_cold_ms: observedCold.elapsed_ms,
+      warm_ms: Object.freeze(warm),
+      sample_windows: Object.freeze(sampleWindows.map(Object.freeze)),
+      started_at: observedCold.started_at,
+      cold_completed_at: observedCold.completed_at,
+      completed_at: completedAt,
+    }));
+  }
+  const completedAt = new Date().toISOString();
+  return { startedAt, completedAt, connectorResults };
+}
+
 async function main() {
   const args = argumentsMap(process.argv.slice(2));
   const scenarioPath = required(args, "scenario");
@@ -184,49 +239,7 @@ async function main() {
   const correlationKey = Buffer.from(encodedCorrelationKey, "base64url");
   if (correlationKey.byteLength !== 32) throw new Error("performance correlation key is invalid");
 
-  const startedAt = new Date().toISOString();
-  const connectorResults = [];
-  for (const definition of scenario.requests) {
-    const observedCold = await timedFetch(scenario.target_url, definition, correlationKey);
-    const warm = [];
-    const sampleWindows = [{
-      kind: "cold",
-      index: 0,
-      started_at: observedCold.started_at,
-      completed_at: observedCold.completed_at,
-      request_id: observedCold.request_id,
-      benchmark_correlation_id: observedCold.benchmark_correlation_id,
-    }];
-    let completedAt = observedCold.completed_at;
-    for (let sample = 0; sample < scenario.warm_samples; sample += 1) {
-      const observed = await timedFetch(scenario.target_url, definition, correlationKey);
-      warm.push(observed.elapsed_ms);
-      sampleWindows.push({
-        kind: "warm",
-        index: sample,
-        started_at: observed.started_at,
-        completed_at: observed.completed_at,
-        request_id: observed.request_id,
-        benchmark_correlation_id: observed.benchmark_correlation_id,
-      });
-      completedAt = observed.completed_at;
-    }
-    connectorResults.push(Object.freeze({
-      id: definition.id,
-      profile: definition.profile,
-      fixture_profile_id: definition.fixture_profile_id,
-      operation: definition.operation,
-      response_verified: true,
-      fixture_binding_verified: true,
-      observed_cold_ms: observedCold.elapsed_ms,
-      warm_ms: Object.freeze(warm),
-      sample_windows: Object.freeze(sampleWindows.map(Object.freeze)),
-      started_at: observedCold.started_at,
-      cold_completed_at: observedCold.completed_at,
-      completed_at: completedAt,
-    }));
-  }
-  const completedAt = new Date().toISOString();
+  const { startedAt, completedAt, connectorResults } = await collectPerformanceSamples(scenario, correlationKey);
   const report = await waitForTelemetry({
     telemetryPath,
     telemetryCapturePath,

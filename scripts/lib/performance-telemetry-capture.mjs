@@ -152,6 +152,7 @@ export function createPerformanceTelemetryCaptureReceipt(input, telemetryJsonl) 
 }
 
 export function verifyPerformanceTelemetryCaptureReceipt(value, telemetryJsonl) {
+  if (value?.schema === "mind-diary/performance-telemetry-capture/v2") return verifySitesLogPerformanceCapture(value, telemetryJsonl);
   assertExactKeys(value, TOP_LEVEL_KEYS, "invalid_capture_receipt");
   if (typeof value.artifact_sha256 !== "string" || !SHA256.test(value.artifact_sha256)) {
     fail("invalid_capture_hash");
@@ -171,5 +172,58 @@ export function verifyPerformanceTelemetryCaptureReceipt(value, telemetryJsonl) 
     value.schema !== PERFORMANCE_TELEMETRY_CAPTURE_SCHEMA ||
     canonical(value) !== canonical(recreated)
   ) fail("invalid_capture_receipt");
+  return recreated;
+}
+
+// Sites exposes a log-result envelope, not a control-plane request id. V2
+// records the actual envelope digest and provider event/version identifiers;
+// it never invents a request_* id. Expected source digests are anchored by the
+// caller's private control-plane journal, independently of this receipt.
+const SITES_LOG_CAPTURE_SCHEMA = "mind-diary/performance-telemetry-capture/v2";
+const SITES_LOG_CAPTURE_GENERATOR = "mind-diary/sites-log-envelope-capture/v2";
+function sitesCaptureUnsigned(value, projection) {
+  const source = value.control_plane_source;
+  assertExactKeys(source, new Set(["tool", "project_id", "result_sha256", "provider_script", "provider_version_ids", "event_ids"]), "invalid_sites_log_source");
+  if (source.tool !== "sites_get_site_worker_logs" || source.project_id !== value.deployment?.site_project_id ||
+    typeof source.result_sha256 !== "string" || !SHA256.test(source.result_sha256) || typeof source.provider_script !== "string" || !source.provider_script ||
+    !Array.isArray(source.event_ids) || source.event_ids.length < 1 || new Set(source.event_ids).size !== source.event_ids.length ||
+    source.event_ids.some(id => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) ||
+    !Array.isArray(source.provider_version_ids) || source.provider_version_ids.length !== 1 || typeof source.provider_version_ids[0] !== "string") fail("invalid_sites_log_source");
+  if (value.status !== "passed" || !SHA.test(value.candidate_sha ?? "") || value.environment !== "uat" || value.generator !== SITES_LOG_CAPTURE_GENERATOR) fail("invalid_sites_log_capture");
+  const startedAt = exactUtc(value.started_at, "invalid_started_at"), completedAt = exactUtc(value.completed_at, "invalid_completed_at");
+  if (Date.parse(completedAt) < Date.parse(startedAt)) fail("invalid_capture_window");
+  return { schema: SITES_LOG_CAPTURE_SCHEMA, status: "passed", candidate_sha: value.candidate_sha, environment: "uat", target_url: exactTargetUrl(value.target_url),
+    deployment: exactDeployment(value.deployment), started_at: startedAt, completed_at: completedAt, generator: SITES_LOG_CAPTURE_GENERATOR,
+    control_plane_source: source, ...projection };
+}
+export function createSitesLogPerformanceCapture(input, result, correlationIds) {
+  if (result?.project_id !== input.deployment?.site_project_id || !Array.isArray(result.events)) fail("wrong_sites_log_project");
+  const selected = result.events.filter(event => correlationIds.includes(event.source?.benchmarkCorrelationId));
+  if (!selected.length) fail("signed_provider_telemetry_missing");
+  const ids = new Set(), versions = new Set(), telemetry = [];
+  for (const event of selected) {
+    const source = event.source, workers = event.$workers;
+    if (source.event !== "mind-diary.privacy-safe-observability" || source.schema !== "mind-diary/privacy-safe-observability/v2" ||
+      workers?.scriptName !== input.provider_script || workers.truncated === true || !event.$metadata?.id || !workers.scriptVersion?.id) fail("invalid_provider_event");
+    if (ids.has(event.$metadata.id)) continue;
+    ids.add(event.$metadata.id); versions.add(workers.scriptVersion.id);
+    telemetry.push({ event: "mind-diary.performance-gate-telemetry", schema: "mind-diary/performance-gate-telemetry/v1",
+      kind: source.kind, metric: source.metric, surface: source.surface, operation: source.operation, outcome: source.outcome, unit: source.unit,
+      value: source.value, occurredAtUtc: source.occurredAtUtc, requestId: source.requestId ?? null, jobId: source.jobId ?? null, cohort: source.cohort ?? null,
+      lineage: { candidateSha: input.candidate_sha, siteVersionId: input.deployment.site_version_id, deploymentId: input.deployment.deployment_id },
+      benchmarkCorrelationId: source.benchmarkCorrelationId });
+  }
+  const text = telemetry.map(event => JSON.stringify(event)).join("\n") + "\n";
+  const unsigned = sitesCaptureUnsigned({ ...input, status: "passed", generator: SITES_LOG_CAPTURE_GENERATOR, control_plane_source: {
+    tool: "sites_get_site_worker_logs", project_id: result.project_id, result_sha256: digest(canonical(result)), provider_script: input.provider_script,
+    provider_version_ids: [...versions].sort(), event_ids: [...ids].sort(),
+  } }, telemetryProjection(text));
+  return { telemetry, telemetryJsonl: text, receipt: { ...unsigned, artifact_sha256: digest(canonical(unsigned)) } };
+}
+function verifySitesLogPerformanceCapture(value, text) {
+  const projection = text === undefined ? { telemetry_jsonl_sha256: value.telemetry_jsonl_sha256, event_count: value.event_count } : telemetryProjection(text);
+  if (!SHA256.test(projection.telemetry_jsonl_sha256 ?? "") || !Number.isSafeInteger(projection.event_count) || projection.event_count < 1) fail("invalid_telemetry_projection");
+  const unsigned = sitesCaptureUnsigned(value, projection), recreated = { ...unsigned, artifact_sha256: digest(canonical(unsigned)) };
+  if (canonical(value) !== canonical(recreated)) fail("invalid_capture_receipt");
   return recreated;
 }

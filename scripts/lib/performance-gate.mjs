@@ -98,6 +98,7 @@ const REQUEST_KEYS = new Set([
   "headers",
   "bearer_token_env",
   "sites_authorization_env",
+  "cookie_env",
   "body",
   "history_comparison",
 ]);
@@ -248,7 +249,7 @@ function scenarioRequest(value, fixtureProfiles) {
     typeof value.path !== "string" || !value.path.startsWith("/") || value.path.includes("?") ||
     !Number.isInteger(value.expected_status) || value.expected_status < 200 || value.expected_status >= 300 ||
     !optionalEnvironmentReference(value.bearer_token_env) ||
-    !optionalEnvironmentReference(value.sites_authorization_env)
+    !optionalEnvironmentReference(value.sites_authorization_env) || !optionalEnvironmentReference(value.cookie_env)
   ) reject("invalid_scenario_request");
   if (value.headers !== undefined) {
     if (!isRecord(value.headers)) reject("invalid_scenario_headers");
@@ -282,7 +283,7 @@ function scenarioRequest(value, fixtureProfiles) {
     const headers = normalizedHeaders(value.headers);
     const protocolVersion = value.profile === "mcp_modern" ? "2026-07-28" : "2025-11-25";
     if (
-      !READ_OPERATIONS.has(value.operation) || value.method !== "POST" ||
+      value.cookie_env !== undefined || !READ_OPERATIONS.has(value.operation) || value.method !== "POST" ||
       value.path !== expectedPath || value.expected_status !== 200 ||
       value.bearer_token_env === undefined || value.sites_authorization_env === undefined ||
       headers.get("accept") !== "application/json, text/event-stream" ||
