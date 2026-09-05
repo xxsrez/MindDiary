@@ -1,0 +1,71 @@
+import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
+
+const json = (value, status = 200, extra = {}) => Response.json(value, { status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff", ...extra } });
+const projection = (run) => ({ run_id: run.id, state: run.state, profile: run.profile, expires_at: run.expires_at,
+  actors: run.actors.map((a) => ({ actor_id: a.id, ordinal: a.ordinal, subject: a.subject, registered: a.principal_id !== null })) });
+
+async function body(request) {
+  const reader = request.body?.getReader();
+  if (!reader) throw new Error("invalid_request");
+  const chunks = []; let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      size += value.byteLength;
+      if (size > 16384) { await reader.cancel(); throw new Error("invalid_request"); }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_request");
+    return value;
+  } catch { throw new Error("invalid_request"); }
+  finally { reader.releaseLock(); }
+}
+
+async function controller(request, expected) {
+  const actual = request.headers.get("x-md-acceptance-controller");
+  if (typeof expected !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(expected) || !actual || actual.length > 256) return false;
+  const hash = async (s) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
+  const [a, b] = await Promise.all([hash(actual), hash(expected)]);
+  let difference = 0; for (let i = 0; i < a.length; i++) difference |= a[i] ^ b[i];
+  return difference === 0;
+}
+
+export async function handleAcceptanceSession(request, store, controllerKey) {
+  const { pathname, origin } = new URL(request.url);
+  if (!pathname.startsWith("/_acceptance/")) return null;
+  if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
+  const callerOrigin = request.headers.get("origin");
+  if (callerOrigin && callerOrigin !== origin) return json({ error: "origin_denied" }, 403);
+  try {
+    if (pathname === "/_acceptance/session" && request.method === "POST") {
+      if (callerOrigin !== origin) return json({ error: "origin_required" }, 403);
+      const value = await body(request);
+      if (Object.keys(value).length !== 1 || typeof value.code !== "string") return json({ error: "invalid_request" }, 400);
+      const session = await store.exchange(value.code, origin);
+      return json({ status: "authenticated" }, 200, { "set-cookie": session.cookie });
+    }
+    if (!(await controller(request, controllerKey))) return json({ error: "controller_required" }, 401);
+    if (pathname === "/_acceptance/runs" && request.method === "POST") {
+      return json(projection(await store.create(await body(request), request.headers.get("idempotency-key"))));
+    }
+    const route = /^\/_acceptance\/runs\/([a-f0-9-]+)(\/exchanges)?$/.exec(pathname);
+    if (!route) return json({ error: "not_found" }, 404);
+    if (!route[2] && request.method === "GET") return json(projection(await store.run(route[1])));
+    if (!route[2] && request.method === "DELETE") return json({ ...projection(await store.revoke(route[1])), cleanup_required: true });
+    if (route[2] && request.method === "POST") {
+      const value = await body(request);
+      if (Object.keys(value).length !== 1 || typeof value.actor_id !== "string") return json({ error: "invalid_request" }, 400);
+      return json(await store.mintExchange(route[1], value.actor_id));
+    }
+    return json({ error: "not_found" }, 404);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    const status = code === "exchange_denied" ? 401 : code === "run_not_found" ? 404
+      : ["run_capacity_reached", "idempotency_conflict"].includes(code) ? 409
+      : ["invalid_run", "invalid_actor", "invalid_run_request", "invalid_idempotency_key", "invalid_request"].includes(code) ? 400 : 503;
+    return json({ error: status === 503 ? "acceptance_unavailable" : code }, status);
+  }
+}

@@ -75,6 +75,26 @@ Bearer не передаётся на другой origin, в query, Git, лог
 
 ## Данные и восстановление
 
+Wire contract тестового control plane: `POST /_acceptance/runs` принимает
+только `actor_count` (4–8), `ttl_seconds` (60–3600) и preset `profile`
+(`collaboration | operator`) с обязательным idempotency key. Сервер выбирает
+случайные IDs/subjects. Повтор того же ключа с другим payload — conflict.
+Operator preset назначает только первый созданный actor кандидатом на
+constructor-owned operator allowlist после normal bootstrap. Он требует
+эксклюзивного run: пока существует любой другой неочищенный run, такой preset
+не создаётся; пока существует operator run, другие runs не создаются. Это
+сохраняет настоящую глобальную directory semantics без раскрытия другого run.
+
+`POST /_acceptance/runs/{run_id}/exchanges` получает exact actor ID из этого run
+и выдаёт одноразовый код. `POST /_acceptance/session` обменивает этот код при
+same-origin Origin; новый session token отзывает прежние web sessions actor.
+`DELETE /_acceptance/runs/{run_id}` отзывает run, но не объявляет cleanup
+product data. Чтение run и его ограниченного списка actors доступно только
+controller capability. Внешний запрос не устанавливает principal binding.
+MCP test carrier дополнительно передаёт `X-MD-Acceptance-Run`; проверенный
+обычным authenticator principal должен принадлежать указанному активному run.
+Это тестовая транспортная привязка, не изменение ordinary MCP contract.
+
 Контроллер пишет закрытый recovery journal до первого изменения. Сервер хранит
 bounded run/actor/session/exchange metadata отдельно от product tables. Журнал
 позволяет повторить exact unknown operation, перечислить свои токены по

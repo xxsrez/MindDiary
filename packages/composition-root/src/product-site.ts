@@ -198,6 +198,8 @@ export interface ProductSiteRuntimeOptions {
   readonly webActivityEnabled?: boolean;
   /** Constructor-only service authority. Missing/empty configuration fails closed. */
   readonly serviceOperatorPrincipalIds?: readonly string[];
+  /** Optional trusted admission policy; may only deny an already authenticated principal. */
+  readonly mcpPrincipalAdmission?: (principalId: string, request: Request) => Promise<boolean>;
   /**
    * Constructor-only test seam. The deployed Worker supplies it only for the
    * exact restricted-UAT posture; ordinary product compositions omit it.
@@ -1420,6 +1422,10 @@ export async function createProductSiteRuntime(
         let stageOutcome: "success" | "failure" = "failure";
         try {
           const result = await authenticator.authenticate(candidate, currentRequestId);
+          if (result.kind === "authenticated" && options.mcpPrincipalAdmission !== undefined &&
+              !await options.mcpPrincipalAdmission(String(result.actor.principalId), request)) {
+            return Object.freeze({ kind: "invalid" as const });
+          }
           stageOutcome = result.kind === "authenticated" ? "success" : "failure";
           return result;
         } finally {

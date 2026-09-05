@@ -317,3 +317,22 @@ D1/R2 marker пережил redeploy; cleanup и повторный cleanup по
 CI browser run `33991356905` succeeded на том же candidate, два independent
 contexts. MD-402 готова; следующий этап — MD-403. Продуктовые users/runs и
 enforcement run/session limits ещё не реализованы и не объявлены готовыми.
+
+## MD-403: краткоживущие тестовые сессии
+
+MD-401 и MD-402 завершены с live read-back. MD-403 остаётся In Progress:
+реализован отдельный controller API создания ограниченного run, случайных
+actors и одноразового обмена на host-only HttpOnly cookie. D1 хранит только
+хеши секретов; атомарный exchange защищён от конкурентного replay, ротация
+отзывает предыдущую сессию. Run ограничивает web identity и дополнительно
+сужает результат штатной MCP bearer-аутентификации; роли/scopes не выдаются
+тестовым header. Operator profile эксклюзивен до очистки остальных runs.
+
+Восемь новых локальных тестов прошли на SQLite с реальным product runtime:
+четыре штатных bootstrap создали независимые principals/Personal Minds,
+обычный MCP token работает только со своим активным run и отклоняется после
+отзыва. Проверены replay/rotation, TTL, чужой audience/run, подмена identity,
+controller/Origin и ограничение тела запроса. Полный repository gate прошёл.
+Это пока локальная проверка: новый issuer ещё не опубликован в hosted target.
+Очистка/recovery (MD-404), полная матрица агента (MD-405), отчёты/замеры
+(MD-406) и два итоговых запуска с прерыванием (MD-407) остаются впереди.
