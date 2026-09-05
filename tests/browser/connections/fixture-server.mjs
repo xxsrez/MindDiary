@@ -319,9 +319,11 @@ const server = createServer(async (request, response) => {
         personalTokenRef: presentationRef("ptok_v1_", 999),
         name: typeof command?.name === "string" ? command.name : "Browser-created token",
         displayPrefix: "mdp_v1_Browser…",
-        scopes: Object.freeze(command?.scopes?.includes("content:write")
-          ? ["content:read", "content:write"]
-          : ["content:read"]),
+        scopes: Object.freeze([
+          ...(command?.scopes?.includes("content:write")
+            ? ["content:read", "content:write"] : ["content:read"]),
+          ...(command?.scopes?.includes("personal:configure") ? ["personal:configure"] : []),
+        ]),
         state: "active",
         createdAt: "2026-08-24T12:00:00.000Z",
         expiresAt: "2026-11-22T12:00:00.000Z",

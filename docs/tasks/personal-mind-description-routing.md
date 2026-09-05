@@ -96,3 +96,15 @@ package `0.1.0+codex.20260905180700`. Пункт 5 остаётся In Progress:
 применимые canary ещё требуют доказательств. Полный перечень результатов и
 ограничений — [отчёт](../reports/2026-09-05-personal-description-routing.md).
 Goal остаётся активным; завершённой поставкой всей MD-394 это не объявляется.
+
+## Возобновление после разрешения UAT-токенов
+
+Пользователь явно разрешил создавать временные UAT credentials и выполнять
+синтетику. Goal снова active. Три тестовых токена имеют срок один час и
+подлежат отзыву после проверки. Positive config-only MCP update/read/replay/CAS
+на UAT 123 прошёл; исходные Personal mode и description восстановлены.
+Проверка combined scopes выявила закрытые старые validators и пропущенный
+checkbox scope в browser payload. MD-396/397 переоткрыты In Progress.
+Regression воспроизводит empty discovery до исправления и проходит после;
+browser checkbox regression также проходит. Следующий frontier — новый exact
+candidate/full gate/UAT cut, затем повторение всей hosted matrix и cleanup.

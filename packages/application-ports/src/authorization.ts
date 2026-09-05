@@ -493,13 +493,12 @@ function isValidVersion(value: unknown): value is Version {
 }
 
 function isValidTokenScopes(value: unknown): value is EffectiveTokenScopes {
-  if (!Array.isArray(value)) return false;
-  return (
-    (value.length === 1 && value[0] === "content:read") ||
-    (value.length === 2 &&
-      value[0] === "content:read" &&
-      value[1] === "content:write")
-  );
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const canonical = ["content:read", "content:write", "personal:configure"]
+    .filter((scope) => value.includes(scope));
+  return canonical.length === value.length &&
+    canonical.every((scope, index) => value[index] === scope) &&
+    (!value.includes("content:write") || value.includes("content:read"));
 }
 
 function isValidMembership(

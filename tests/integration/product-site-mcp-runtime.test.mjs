@@ -4395,4 +4395,23 @@ test("Personal configuration MCP is scoped, metadata-only, CAS protected and sha
   const metadata = await createSitesMetadataStore(database);
   const account = await metadata.readAccountByExternalBinding({ provider: "openai-sites", normalizedBinding: "configuration@example.com" });
   assert.equal(await metadata.readPrincipalMindUsage(account.principal.principalId), null);
+  const combinedRead = await issue(["content:read", "personal:configure"], "configuration-combined-read");
+  const combinedWrite = await issue(["content:write", "personal:configure"], "configuration-combined-write");
+  const mode = await mutateMindUsage(runtime, csrf, "/me", "read_write", 0, "configuration-enable");
+  assert.equal(mode.status, 200);
+  for (const compat of [false, true]) {
+    for (const [credential, canWrite] of [[combinedRead, false], [combinedWrite, true]]) {
+      const listed = await call(credential, "list_minds", {}, compat);
+      assert.equal(listed.isError, false);
+      const minds = listed.structuredContent.data.minds;
+      assert.equal(minds.length, 1, "adding configuration scope must preserve content discovery");
+      assert.equal(minds[0].route, "/me");
+      assert.equal(minds[0].effective.can_read, true);
+      assert.equal(minds[0].effective.can_write, canWrite);
+      const info = await call(credential, "get_mind_info", { mind: "/me" }, compat);
+      assert.equal(info.isError, false, "combined scopes must preserve exact Mind authorization");
+    }
+    const configOnlyList = await call(token, "list_minds", {}, compat);
+    assert.deepEqual(configOnlyList.structuredContent.data.minds, []);
+  }
 });

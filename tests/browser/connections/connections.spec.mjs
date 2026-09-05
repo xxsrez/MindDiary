@@ -442,6 +442,7 @@ test("Advanced MCP dialog receives and restores focus without exposing raw ident
   await tabUntil(page, "#token-name");
   await page.keyboard.type("Keyboard-created fixture token");
   await page.locator("#token-access").selectOption("content:write");
+  await page.locator('[name="personal_configure"]').check();
   await tabUntil(page, "[data-token-submit]");
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Copy your token now" });
@@ -458,6 +459,7 @@ test("Advanced MCP dialog receives and restores focus without exposing raw ident
     "Keyboard-created fixture token",
   );
   await expect(page.locator("[data-personal-token]").first()).toContainText("Account-wide Mind modes");
+  await expect(page.locator("[data-personal-token]").first()).toContainText("personal:configure");
   await expect(page.locator("[data-personal-token]").first()).not.toContainText(/writable target|Not selected|bind|unbind/iu);
   await expect(page.locator("body")).not.toContainText("[deterministic one-time fixture value]");
   await expect(page.locator("body")).not.toContainText(/(?:token|grant|binding)_[A-Za-z0-9._:-]{8,}/u);
