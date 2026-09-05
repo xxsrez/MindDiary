@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 import { createCollaborationFixture } from "./lib/acceptance-fixture.mjs";
+import { verifyProductMatrix } from "./lib/acceptance-product-matrix.mjs";
 
 const privateRoot = join(homedir(), ".codex/private/mind-diary-acceptance");
 const tag = process.argv[2] ?? crypto.randomUUID();
@@ -48,6 +49,10 @@ if (client.state.phase === "cleaned") {
       }
       for (const mind of ["/me", `/${fixture.handle}`]) {
         const history = await client.mcp(token, "list_revisions", { mind }); assert.equal(history.revisions.length, 3);
+      }
+      if (process.env.MD_ACCEPTANCE_PRODUCT_MATRIX === "1") {
+        client.state.productMatrix = await verifyProductMatrix(client, fixture); await client.save();
+        console.log(JSON.stringify(client.state.productMatrix));
       }
       client.state.populated = await client.control("/_acceptance/inventory"); await client.save();
       assert.equal(client.state.populated.complete, true);

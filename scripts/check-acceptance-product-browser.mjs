@@ -19,6 +19,10 @@ const clientId = process.env.MD_ACCEPTANCE_OAUTH_CLIENT_ID;
 const expected = process.env.MD_ACCEPTANCE_EXPECTED_SHA;
 if (!platformToken || !controllerKey || !clientId || !/^[a-f0-9]{40}$/.test(expected ?? "")) throw new Error("acceptance_configuration_missing");
 const client = await new AcceptanceClient({ directory: await mkdtemp(join(tmpdir(), "md-browser-")), platformToken, controllerKey }).open();
+if (/^\d+$/.test(process.env.GITHUB_RUN_ID ?? "") && /^\d+$/.test(process.env.GITHUB_RUN_ATTEMPT ?? "")) {
+  client.state.runKey = `github:acceptance-browser:${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}`;
+  await client.save();
+}
 const build = await (await client.request("/_acceptance/build")).json();
 assert.equal(build.candidate_sha, expected);
 const baseline = await client.control("/_acceptance/inventory");
@@ -32,6 +36,7 @@ const formRequest = async (path, fields) => fetch(origin + path, { method: "POST
 let verified = false;
 try {
   const run = await client.setup();
+  console.log(JSON.stringify({ phase: "run_created", run_id: run.run_id, candidate: expected }));
   phase = "bootstrap_forms";
   for (const actor of run.actors) {
     const context = await browser.newContext({ serviceWorkers: "block" }); contexts.push(context);
