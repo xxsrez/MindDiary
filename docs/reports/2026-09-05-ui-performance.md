@@ -276,3 +276,33 @@ Live in-app Browser после reload: три последовательных �
 строки над границей списка. Пользовательская вкладка оставлена без открытых
 подсказок. Изменений данных и режимов Minds нет. Этот отчёт обновлён после
 публикации и не меняет deployed artifact.
+
+
+## Наведение мышью и касание, UAT 122
+
+По уточнению пользователя обработка mouse hover и touch разделена по
+`pointerType`: touch pointerover/out не закрывают подсказку после отпускания
+пальца. Для мыши pointerover/move показывают её без клика, pointerout закрывает.
+Повторные focus/click/move на той же открытой иконке теперь idempotent и не
+вызывают hide/show. Escape подавляет повторное hover-открытие до ухода с иконки.
+Чистое наведение отдельно срабатывало и на UAT 121; воспроизведённый конфликт
+состоял в повторном закрытии/открытии при последовательности hover/focus/click.
+
+Локально: 1118 tests и 68 browser tests passed. Новые сценарии проверяют
+mouse hover без клика, ноль closing events при следующем клике на той же
+иконке, переход между иконками и мобильный browser context с touch taps.
+Последнее — сенсорная эмуляция Chromium, не проверка физического телефона.
+GitHub run `33967021039` success для candidate
+`a6312ee04bf0f70c8e022faaaa234ae80e180ecb`; build и artifact gate passed.
+Source mirror `a1a10be115129fd5f8790f10cc9efc92fd09b46b`.
+Upload SHA-256 `cfae7e3ecb7fde153fd9ded4d247a1def2c360e4c992a824cd8199a3817ba31f`;
+provider hash `sha256:d33318a7f13612a5a82652436160a6e9badd4fbe5aae0d3e0ebce53b19137885`
+совпал между save и read-back. Sites version 122:
+`appgprj_example1428fe59b5d8381c~appgver_example9a0ea6bebdfce0f1`.
+Deployment `appgdep_example8a4546738d62bc70` succeeded
+2026-09-05 12:51:06 UTC, environment revision 4.
+
+Live in-app Browser после reload: реальное mouseMoved без клика — одна
+подсказка; следующий click — одна; наведение на соседнюю иконку заменило
+пояснение; уход указателя — ноль. Данные и режимы не изменялись. Запись отчёта
+добавлена после deployment и не меняет опубликованный artifact.
