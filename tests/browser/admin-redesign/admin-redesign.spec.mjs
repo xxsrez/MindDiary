@@ -113,6 +113,47 @@ test('status tooltips are exclusive, dismissible and escape list clipping', asyn
   await expect(tooltip).toBeHidden();
 });
 
+test('mouse hover shows status without a click and stays stable through clicking', async ({ page }) => {
+  await page.goto(`${origin}/minds`);
+  const icons = page.locator('[data-minds-list] .md-mind-status');
+  const tooltip = page.locator('#mind-status-tooltip');
+  await tooltip.evaluate(el => {
+    el.dataset.closes = '0';
+    el.addEventListener('beforetoggle', event => {
+      if (event.newState === 'closed') el.dataset.closes = String(Number(el.dataset.closes) + 1);
+    });
+  });
+  await icons.first().hover();
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toHaveText('Access: Sole Owner');
+  await icons.first().click();
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toHaveAttribute('data-closes', '0');
+  await icons.nth(1).hover();
+  await expect(tooltip).toHaveText('Visibility: Private, always');
+  await expect(tooltip).toBeVisible();
+  await page.mouse.move(0, 0);
+  await expect(tooltip).toBeHidden();
+});
+
+test('touch taps show a single persistent hint until an outside tap', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  await page.goto(`${origin}/minds`);
+  const icons = page.locator('[data-minds-list] .md-mind-status');
+  const tooltip = page.locator('#mind-status-tooltip');
+  await icons.first().tap();
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toHaveText('Access: Sole Owner');
+  await icons.nth(1).tap();
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toHaveText('Visibility: Private, always');
+  await expect(page.locator('.md-mind-status__tooltip:popover-open')).toHaveCount(1);
+  await page.getByRole('heading', { name: 'Minds', exact: true }).tap();
+  await expect(tooltip).toBeHidden();
+  await context.close();
+});
+
 test('direct agent-settings links open the disclosure and fetch current settings', async ({ page }) => {
   await page.goto(`${origin}/minds#mind-usage-heading`);
   await expect(page.locator('[data-agent-settings-disclosure]')).toHaveAttribute('open', '');

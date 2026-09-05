@@ -10,6 +10,8 @@
     statusTooltip.setAttribute("popover", "manual");
     document.body.append(statusTooltip);
     let statusTrigger = null;
+    let hoveredStatus = null;
+    let suppressedHover = null;
     const hideStatusTooltip = () => {
       statusTrigger?.removeAttribute("aria-describedby");
       statusTrigger = null;
@@ -19,6 +21,7 @@
       ? target.closest("button.md-mind-status") : null;
     const showStatusTooltip = button => {
       if (!button || !shell.contains(button)) return;
+      if (statusTrigger === button && statusTooltip.matches(":popover-open")) return;
       hideStatusTooltip();
       statusTrigger = button;
       statusTooltip.textContent = button.getAttribute("aria-label");
@@ -32,25 +35,45 @@
       statusTooltip.style.left = `${left}px`;
       statusTooltip.style.top = `${Math.max(8, Math.min(innerHeight - tip.height - 8, top))}px`;
     };
-    shell.addEventListener("pointerover", event => {
+    const hoverStatus = event => {
+      if (event.pointerType === "touch") return;
       const button = statusButton(event.target);
-      if (button && !button.contains(event.relatedTarget)) showStatusTooltip(button);
-    });
+      if (!button) return;
+      if (hoveredStatus !== button) suppressedHover = null;
+      hoveredStatus = button;
+      if (suppressedHover !== button) showStatusTooltip(button);
+    };
+    shell.addEventListener("pointerover", hoverStatus);
+    shell.addEventListener("pointermove", hoverStatus);
     shell.addEventListener("pointerout", event => {
+      if (event.pointerType === "touch") return;
       const button = statusButton(event.target);
-      if (button === statusTrigger && !button?.contains(event.relatedTarget)) hideStatusTooltip();
+      if (button && !button.contains(event.relatedTarget)) {
+        if (hoveredStatus === button) hoveredStatus = null;
+        if (suppressedHover === button) suppressedHover = null;
+        if (statusTrigger === button) hideStatusTooltip();
+      }
     });
-    shell.addEventListener("focusin", event => showStatusTooltip(statusButton(event.target)));
+    shell.addEventListener("focusin", event => {
+      const button = statusButton(event.target);
+      showStatusTooltip(button);
+    });
     shell.addEventListener("focusout", event => {
-      if (statusButton(event.target) === statusTrigger) hideStatusTooltip();
+      const button = statusButton(event.target);
+      if (button === statusTrigger && button !== hoveredStatus) hideStatusTooltip();
     });
     document.addEventListener("click", event => {
       const button = statusButton(event.target);
-      if (button) showStatusTooltip(button);
-      else hideStatusTooltip();
+      if (button) {
+        suppressedHover = null;
+        showStatusTooltip(button);
+      } else hideStatusTooltip();
     });
     document.addEventListener("keydown", event => {
-      if (event.key === "Escape") hideStatusTooltip();
+      if (event.key === "Escape") {
+        suppressedHover = hoveredStatus;
+        hideStatusTooltip();
+      }
     });
     document.addEventListener("scroll", hideStatusTooltip, true);
     window.addEventListener("resize", hideStatusTooltip);
