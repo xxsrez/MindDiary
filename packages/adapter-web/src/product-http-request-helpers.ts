@@ -1,3 +1,5 @@
+import { PRODUCT_UI_ASSET_VERSION } from "./product-ui-assets.generated.js";
+
 import {
   type MindDiaryRoutePageModel,
   type UiMindCard,
@@ -213,7 +215,13 @@ export function snakeOutput(value: unknown): unknown {
 }
 
 export function html(document: string): Response {
-  return new Response(document, {
+  // Stable paths remain supported, but each HTML response pins its own asset set.
+  // This prevents a warm browser cache from mixing a new page with old clients.
+  const versioned = document.replace(
+    /((?:src|href)=")((?:\/ui\/|\/brand\/)[^"?]+\.(?:css|js))(")/gu,
+    `$1$2?v=${PRODUCT_UI_ASSET_VERSION}$3`,
+  );
+  return new Response(versioned, {
     status: 200,
     headers: { ...SAFE_HEADERS, "content-type": "text/html; charset=utf-8" },
   });

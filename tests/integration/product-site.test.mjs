@@ -42,6 +42,25 @@ test("product web origin accepts exact loopback dev without weakening hosted HTT
   }), /canonical HTTPS or loopback HTTP origin/u);
 });
 
+test("HTML pins matching styles and clients to a content-derived version", async () => {
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "denied" }),
+    csrf: { issue: () => "unused", verify: () => false },
+    control: { execute: () => { throw new Error("must not execute"); } },
+  });
+  const body = await (await handler(new Request(`${origin}/minds`))).text();
+  const assets = [...body.matchAll(/(?:src|href)="([^" ]+\.(?:css|js)\?v=([a-f0-9]{16}))"/gu)];
+  assert.ok(assets.length >= 3);
+  assert.equal(new Set(assets.map(match => match[2])).size, 1);
+  for (const [, path] of assets) {
+    const response = await handler(new Request(`${origin}${path}`));
+    assert.equal(response.status, 200);
+    assert.ok((await response.text()).length > 100);
+  }
+  assert.doesNotMatch(body, /(?:src|href)="\/(?:ui|brand)\/[^"?]+\.(?:css|js)"/u);
+});
+
 test("signed-out UI gets one safe Sites entry while REST and identity outages remain machine errors", async () => {
   let csrfIssues = 0;
   let controlCalls = 0;
