@@ -237,3 +237,42 @@ Live in-app Browser: четыре строки, режимы совпали с �
 `list_minds` после публикации вернул `ok: true`. Эти наблюдения не являются
 новым измерением ускорения или полной повторной conformance-проверкой MCP.
 Эта запись evidence добавлена после публикации и не меняет deployed artifact.
+
+
+## Исправление подсказок статусов, UAT 121
+
+Пользователь обнаружил дефект UAT 120: несколько `details` оставались `open`
+после кликов, а CSS одновременно показывал hover/focus подсказки. `overflow:
+hidden` контейнера списка обрезал верхнюю подсказку. Первоначальная проверка
+проверяла отдельное раскрытие, но не совместный lifecycle нескольких иконок.
+
+Иконки теперь кнопки; один общий `popover="manual"` с `role="tooltip"`
+находится в верхнем слое браузера. Единственный controller заменяет текст и
+`aria-describedby`, ограничивает позицию viewport и закрывает подсказку при
+pointerout, focusout, внешнем клике, Escape, scroll и resize. Независимых
+закреплённых раскрытий и дублирующего native title больше нет.
+
+Проверены последовательные клики, наведение, клавиатура, выход за границу
+списка, узкий viewport и закрытие. Полный gate: 1118 tests + 66 browser tests
+passed. Два старых browser assertions заменены проверкой accessible name
+кнопки вместо текста внутри карточки; тот же assertion обновлён в отдельном
+Mind admin journey. Exact candidate
+`32d4e673663504edc1c5d67633e8a407013b7891`; GitHub run `33966462759` success;
+vinext build и artifact/diff checks passed.
+
+- Source mirror: `821b9e46494e4b515f43bdb1d5bb3f6560202df4`.
+- Upload archive SHA-256:
+  `32fcaa3177f66cc39211e47e9a51695a004396493370398b295bd27539a7da55`.
+- Provider archive hash, одинаковый save/read-back:
+  `sha256:af7856626126cd03105a4c937e012328aabd354d02f01546166df8d911e88796`.
+- Sites version 121:
+  `appgprj_example1428fe59b5d8381c~appgver_example6931ade90436d3a6`.
+- Deployment: `appgdep_example7179a9806ac7e527`, succeeded,
+  2026-09-05 12:39:42 UTC, environment revision 4.
+
+Live in-app Browser после reload: три последовательных клика дали число
+открытых подсказок `[1, 1, 1]`, Escape — `0`, клик по заголовку снаружи — `0`.
+Локальная визуальная проверка показала полностью видимую подсказку первой
+строки над границей списка. Пользовательская вкладка оставлена без открытых
+подсказок. Изменений данных и режимов Minds нет. Этот отчёт обновлён после
+публикации и не меняет deployed artifact.
