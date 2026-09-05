@@ -22,6 +22,8 @@ test.afterAll(async () => {
 });
 
 test('real hydrated Mind list keeps six Minds ahead of optional agent settings', async ({ page }) => {
+  const requests = [];
+  page.on('request', request => requests.push(new URL(request.url()).pathname));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${origin}/minds`);
   await expect(page.locator('[data-minds-list] [data-mind-card]')).toHaveCount(6);
@@ -33,8 +35,20 @@ test('real hydrated Mind list keeps six Minds ahead of optional agent settings',
   expect(metrics.bottom).toBeLessThan(800);
   expect(Math.max(...metrics.heights)).toBeLessThanOrEqual(100);
   await expect(page.locator('[data-agent-settings-disclosure]')).not.toHaveAttribute('open', '');
+  expect(requests.filter(path => path === '/api/v1/mind-usage')).toHaveLength(0);
+  expect(requests.filter(path => path === '/brand/mind-diary-tokens.css')).toHaveLength(1);
   await page.getByText('Codex access across your Minds', { exact: true }).click();
   await expect(page.locator('[data-mind-usage-card]')).toHaveCount(6);
+  await expect(page.locator('[data-mind-usage-card="/me"]')).toBeVisible();
+  await page.getByText('Codex access across your Minds', { exact: true }).click();
+  await page.getByText('Codex access across your Minds', { exact: true }).click();
+  await expect(page.locator('[data-mind-usage-card="/me"]')).toBeVisible();
+  expect(requests.filter(path => path === '/api/v1/mind-usage')).toHaveLength(1);
+});
+
+test('direct agent-settings links open the disclosure and fetch current settings', async ({ page }) => {
+  await page.goto(`${origin}/minds#mind-usage-heading`);
+  await expect(page.locator('[data-agent-settings-disclosure]')).toHaveAttribute('open', '');
   await expect(page.locator('[data-mind-usage-card="/me"]')).toBeVisible();
 });
 

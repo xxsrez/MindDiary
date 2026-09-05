@@ -275,5 +275,16 @@
       renderError(root, "Nothing was changed. Reload to check the current account-wide modes.");
     }
   };
-  for (const root of roots) void load(root);
+  for (const root of roots) {
+    const disclosure = root.closest("details[data-agent-settings-disclosure]");
+    let started = false;
+    const loadWhenVisible = () => {
+      if (started || (disclosure && !disclosure.open)) return;
+      started = true;
+      disclosure?.removeEventListener("toggle", loadWhenVisible);
+      void load(root);
+    };
+    disclosure?.addEventListener("toggle", loadWhenVisible);
+    loadWhenVisible();
+  }
 })();

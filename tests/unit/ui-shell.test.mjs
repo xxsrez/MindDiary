@@ -74,7 +74,7 @@ test("shell uses canonical brand assets and an honest no-network font fallback",
     displayStack: '"Fraunces", Georgia, serif',
     uiStack: '"Inter", system-ui, sans-serif',
   });
-  assert.match(shellCss, /^@import url\("\/brand\/mind-diary-tokens\.css"\);/);
+  assert.doesNotMatch(shellCss, /@import/u);
   assert.doesNotMatch(shellCss, /@font-face|https?:\/\/|fonts\.(?:googleapis|gstatic)/i);
 });
 

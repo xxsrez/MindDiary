@@ -545,6 +545,14 @@ collection/panel и сохраняет retry/error state без чтения con
 endpoint-ов ограничены server-side allowlist UI-полями; browser-side validation
 остаётся второй fail-closed границей, а не единственным redaction layer.
 
+Закрытый раздел «Codex access across your Minds» на `/minds` не запрашивает
+`GET /api/v1/mind-usage` до первого раскрытия. Раскрытие, включая переход по
+`#mind-usage-heading`, загружает актуальную server projection один раз; быстрые
+повторные переключения не дублируют запрос. Ошибка сохраняет явный retry,
+а видимые панели отдельного Mind по-прежнему загружаются сразу. Базовые CSS
+tokens подключаются единственной versioned ссылкой из HTML, без повторного
+неверсионированного `@import` внутри таблицы стилей.
+
 Public Sites audience означает только достижимость Site до входа и не меняет
 authenticated-only product boundary. Для распознанных Product Site UI routes
 signed-out `GET` и `HEAD` возвращают один и тот же безопасный HTML sign-in

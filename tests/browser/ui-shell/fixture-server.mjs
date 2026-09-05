@@ -321,10 +321,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, async () => {
-  const css = await readFile(resolve(root, "packages/adapter-web/src/ui-shell.css"), "utf8");
-  if (!css.includes("/brand/mind-diary-tokens.css")) {
-    throw new Error("UI fixture did not load the canonical token path");
-  }
+  await access(resolve(root, "docs/assets/brand/mind-diary-tokens.css"));
   const address = server.address();
   if (typeof address !== "object" || address === null) {
     throw new Error("UI fixture did not acquire a loopback port");
