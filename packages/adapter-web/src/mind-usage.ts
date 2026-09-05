@@ -75,8 +75,7 @@ function safeMindDescriptor(value: unknown): SafeMindDescriptor | null {
     (!isPersonal && route === "/me") ||
     !(visibility === "private" || visibility === "unlisted" || visibility === "public") ||
     !(role === "reader" || role === "editor" || role === "admin" || role === "owner") ||
-    (isPersonal && Object.prototype.hasOwnProperty.call(source, "description")) ||
-    (!isPersonal && description === undefined)
+    description === undefined
   ) return null;
   return Object.freeze({
     mindId,
@@ -134,7 +133,7 @@ function projectionItem(
   return Object.freeze({
     mindRef: mind.mindRef,
     name: mind.name,
-    ...(mind.isPersonal ? {} : { description: mind.description }),
+    description: mind.description,
     isPersonal: mind.isPersonal,
     routingProfile: mind.isPersonal ? "personal_default" : "description_based",
     visibility: mind.visibility,
@@ -320,7 +319,7 @@ export function renderMindUsageCollection(): string {
         <h2 id="mind-usage-heading">How Codex uses your Minds</h2>
       </div>
     </div>
-    <p>Choose one mode for every available Mind. My Mind accepts writes only when you directly ask Codex to save, update, or delete specific knowledge. That permission is independent of the single ordinary Mind that may use description-based automatic saving, so both can be enabled at once.</p>
+    <p>Choose what Codex may do with each Mind. Descriptions define when to use it. My Mind without a description is used only when you ask; with one, it can use matching topics automatically. If both Minds match, Codex can use both independently.</p>
     <p class="md-caveat"><strong>Credentials can only narrow access.</strong> A Connection or token still needs its own read or write scope, and current Mind rights are checked on every call.</p>
     <section class="md-state md-state--loading" aria-busy="true" data-mind-usage-state>
       <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -335,7 +334,7 @@ export function renderMindUsagePanel(mindRef: string): string {
     ? mindRef
     : "";
   const policyCopy = safeRef === "/me"
-    ? "For My Mind, Read and write permits only the specific writes you directly request; it does not enable automatic saving or replace the ordinary automatic-save Mind."
+    ? "My Mind without a description is used only when you ask. With a description, Codex reads matching topics and, when writing is allowed, saves discussed lasting knowledge. Ask Codex to configure your topics and exclusions."
     : "For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description; My Mind is controlled independently.";
   return `<section class="md-usage-section" aria-labelledby="mind-usage-heading" data-mind-usage-panel data-mind-ref="${safeRef}">
     <div>

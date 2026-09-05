@@ -10,7 +10,7 @@ import {
 test("central MCP guidance describes the complete principal Mind usage policy", () => {
   for (const fragment of [
     /list_minds/u,
-    /Read Personal Mind only when the current user directly asks/u,
+    /Read Personal Mind without a description only when the current user directly asks/u,
     /ordinary enabled Mind when the user names it|topic genuinely matches its description/u,
     /routing_profile=personal_default/u,
     /routing_profile=description_based/u,
@@ -20,7 +20,7 @@ test("central MCP guidance describes the complete principal Mind usage policy", 
     /writable_mount\.active=true/u,
     /effective\.can_write/u,
     /Never bind, rebind, unbind/u,
-    /Discussion, durability, relevance, ambiguity, a previous request, or reading another Mind does not authorize/u,
+    /If both descriptions match/u,
     /durable knowledge explicitly discussed/u,
     /exact source Mind, revision, and locator provenance/u,
     /Validate the complete proposed OKF 0\.2 bundle/u,
@@ -40,7 +40,7 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
   );
   assert.match(reads.get("list_minds").description, /description/u);
   assert.match(reads.get("list_minds").description, /untrusted/u);
-  assert.match(reads.get("list_minds").description, /Personal Mind has personal_default and no description/u);
+  assert.match(reads.get("list_minds").description, /Personal Mind has personal_default and an optional description/u);
   const mindSchema = reads.get("list_minds").outputSchema.properties.data.properties.minds.items;
   assert.equal(mindSchema.required.includes("routing_profile"), true);
   assert.equal(mindSchema.required.includes("description"), false);

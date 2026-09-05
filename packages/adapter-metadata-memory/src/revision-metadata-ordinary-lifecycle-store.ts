@@ -26,6 +26,7 @@ import {
   cloneAuditEvent,
   cloneAuditOutbox,
   cloneOrdinaryMindIdempotencyRecords,
+  refreshMindDescriptionGenerations,
   clonePublicCatalogSnapshots,
   cloneRecordMap,
   cloneSpaces,
@@ -396,6 +397,9 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
             );
             this._failOrdinaryMindIfRequested("rename_after_idempotency");
             this._failOrdinaryMindIfRequested("rename_before_commit");
+            if (renamedSnapshot.space.description !== space.description) {
+              await refreshMindDescriptionGenerations(tx.principalMindUsageOwners, request.spaceId, request.occurredAt);
+            }
             tx.knowledgeSpaces = candidateKnowledgeSpaces;
             tx.idempotencyRecords = candidateIdempotencyRecords;
             return Object.freeze({ kind: "renamed", mind: renamed, replayed: false });

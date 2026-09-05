@@ -13,7 +13,8 @@ evidence, предлагаемый дизайн и ещё не проверен�
 [архитектуре](architecture.md#целевая-authority-boundary-release-03). Historical
 Release 0.1/0.2 API, Connections и Mind bindings, а также ранний
 credential-scoped target Release 0.3 сохраняются как historical as-built;
-principal-owned replacement принят MD-373 в ADR-0024.
+principal-owned replacement принят MD-373 в ADR-0024; Personal description
+и двойное тематическое использование приняты ADR-0025 (2026-09-05), ещё не реализованы.
 
 ## Начать отсюда
 
@@ -423,3 +424,6 @@ deployment guide и changelog пока не созданы. Текущий UAT d
 live evidence зафиксированы в capability report; operations runbook описывает
 delivery contract. До anonymous publication потребуется новая
 спецификация и отдельный threat model.
+
+- [ADR-0025: описание Personal Mind и тематическое использование двух Minds](decisions/0025-personal-mind-description-routing.md)
+- [План Personal description и маршрутизации](tasks/personal-mind-description-routing.md)

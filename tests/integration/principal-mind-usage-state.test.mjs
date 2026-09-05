@@ -512,7 +512,7 @@ test("descriptionless Personal Mind is writable, idempotent, and survives restar
   const initial = await env.api.personal.resolveMyMind(
     actor(env.account.principalId, "personal-descriptionless", T1),
   );
-  assert.equal(Object.hasOwn(initial.personalMind, "description"), false);
+  assert.equal(initial.personalMind.description, null);
   const writable = await setMode(
     env,
     initial.personalMind.mindId,
@@ -749,7 +749,7 @@ test("Sites persistence restores a descriptionless Personal writable pin and exa
   const personal = await env.api.personal.resolveMyMind(
     actor(env.account.principalId, "sites-personal", T1),
   );
-  assert.equal(Object.hasOwn(personal.personalMind, "description"), false);
+  assert.equal(personal.personalMind.description, null);
   const writable = await setMode(
     env,
     personal.personalMind.mindId,
@@ -778,4 +778,49 @@ test("Sites persistence restores a descriptionless Personal writable pin and exa
     spaceId: personal.personalMind.mindId,
     generationId: writable.state.personalWriteGeneration.generationId,
   }), true);
+});
+
+for (const storage of ["memory", "sites"]) test(`${storage}: description changes fence only the affected write lane; no-op and replay preserve pins`, async () => {
+  const database = new FakeD1Database();
+  const env = await setup(storage === "sites" ? await createSitesMetadataStore(database) : undefined);
+  const principalId = env.account.principalId;
+  const personalId = env.account.personalMind.mindId;
+  await setMode(env, env.first.mindId, "read_write", 0, "description-ordinary");
+  const both = await setMode(env, personalId, "read_write", 1, "description-personal");
+  const oldPin = { principalId, spaceId: personalId,
+    generationId: both.state.personalWriteGeneration.generationId };
+  const ordinaryPin = { principalId, spaceId: env.first.mindId,
+    generationId: both.state.ordinaryWriteGeneration.generationId };
+  const before = await env.metadata.readAccount(principalId);
+  const command = { description: "Engineering decisions; exclude daily logs",
+    expectedMetadataVersion: before.personalMind.space.metadataVersion,
+    idempotencyKey: "configure-personal-topics" };
+  await env.api.personal.updateMyMindDescription(actor(principalId, "description-update"), command);
+  assert.equal(await env.metadata.validatePrincipalMindUsageWritePin(oldPin), false);
+  assert.equal(await env.metadata.validatePrincipalMindUsageWritePin(ordinaryPin), true);
+  const configured = await env.metadata.readPrincipalMindUsage(principalId);
+  const after = await env.metadata.readAccount(principalId);
+  assert.equal(after.personalMind.space.description, command.description);
+  assert.equal(after.personalMind.space.headRevisionId, before.personalMind.space.headRevisionId);
+  assert.equal(configured.personalWriteGeneration.spaceId, personalId);
+  const replay = await env.api.personal.updateMyMindDescription(actor(principalId, "description-replay"), command);
+  assert.equal(replay.replayed, true);
+  await env.api.personal.updateMyMindDescription(actor(principalId, "description-noop"), {
+    ...command, expectedMetadataVersion: after.personalMind.space.metadataVersion,
+    idempotencyKey: "configure-personal-noop" });
+  assert.deepEqual(await env.metadata.readPrincipalMindUsage(principalId), configured);
+  await assert.rejects(env.api.personal.updateMyMindDescription(actor(principalId, "description-stale"), {
+    ...command, description: "Other topics", idempotencyKey: "stale-description" }),
+  (error) => error.code === "metadata_conflict");
+  await env.api.personal.updateMyMindDescription(actor(principalId, "description-clear"), {
+    description: null, expectedMetadataVersion: after.personalMind.space.metadataVersion,
+    idempotencyKey: "clear-personal-topics" });
+  const restored = storage === "sites" ? await createSitesMetadataStore(database) :
+    InMemoryRevisionMetadataStore.fromDurableSnapshot(env.metadata.exportDurableSnapshot());
+  assert.equal((await restored.readAccount(principalId)).personalMind.space.description, null);
+  assert.equal(await restored.validatePrincipalMindUsageWritePin(oldPin), false);
+  assert.equal(await restored.validatePrincipalMindUsageWritePin(ordinaryPin), true);
+  const current = await restored.readPrincipalMindUsage(principalId);
+  assert.equal(await restored.validatePrincipalMindUsageWritePin({ ...oldPin,
+    generationId: current.personalWriteGeneration.generationId }), true);
 });

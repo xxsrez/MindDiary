@@ -20,6 +20,7 @@ const personal = Object.freeze({
   mindId: "space_personal_browser",
   route: "/me",
   name: "Personal strategy",
+  description: null,
   isPersonal: true,
   visibility: "private",
   discovery: "personal",
@@ -53,7 +54,7 @@ const archive = Object.freeze({
   metadataVersion: 1,
   headRevisionId: "revision_archive_browser",
 });
-const minds = Object.freeze([personal, research, archive]);
+let minds = Object.freeze([personal, research, archive]);
 let usage = null;
 
 const control = {
@@ -142,6 +143,12 @@ async function requestBody(request) {
 const server = createServer(async (incoming, outgoing) => {
   const url = new URL(incoming.url ?? "/", origin);
   if (url.pathname === "/_fixture/health") {
+    outgoing.writeHead(200, { "content-type": "application/json" });
+    outgoing.end('{"ok":true}');
+    return;
+  }
+  if (url.pathname === "/_fixture/topics" && incoming.method === "POST") {
+    minds = Object.freeze([{ ...personal, description: "Research decisions; exclude daily logs." }, research, archive]);
     outgoing.writeHead(200, { "content-type": "application/json" });
     outgoing.end('{"ok":true}');
     return;

@@ -1,17 +1,16 @@
 # Обзор Mind Diary
 
-> **Целевое уточнение Release 0.3 (MD-373/MD-383, 2026-09-03).** Настройка работы
-> агента теперь принадлежит principal и Mind: `disabled | read | read_write`,
-> одинакова для всех credentials и допускает один ordinary `read_write` Mind
-> плюс независимый Personal `/me = read_write`.
-> Description ordinary Mind маршрутизирует чтение и discussed-only automatic
-> save через `commit_changeset`. Personal `/me` не имеет description, использует
-> `personal_default` и принимает запись только по прямой просьбе пользователя;
-> его `read_write` — capability, а не автоматическое согласие. Binding,
-> per-credential target и отдельный capture toggle остаются только историей.
-> Нормативный контракт —
-> [режимы использования Mind](specs/mind-usage-modes.md). Прежние разделы ниже
-> сохраняют as-built evidence и не переопределяют ADR-0024.
+> **Принятая целевая поправка ADR-0025, 2026-09-05; ещё не реализована.**
+> `usage_mode` определяет разрешённые действия, description — темы.
+> Personal `/me` получает опциональное description, настраиваемое через узкую
+> MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
+> Без description Personal читается/изменяется только по прямой просьбе;
+> с description используется автоматически по теме в пределах `read | read_write`.
+> Один ordinary writable Mind и Personal независимы; при совпадении обоих
+> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> и неявного раскрытия Personal в shared Mind. Полный контракт —
+> [режимы использования Mind](specs/mind-usage-modes.md). Historical sections ниже не
+> переопределяют этот target и не доказывают его реализацию.
 
 Статус: proposal, обновлено 2026-08-27. Product behavior первого прототипа
 принято; Product Site реализован, развёрнут как single-principal UAT в OpenAI

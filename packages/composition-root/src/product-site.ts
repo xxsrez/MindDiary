@@ -1204,7 +1204,17 @@ export async function createProductSiteRuntime(
     secrets: downloadCrypto,
     downloadUrlBase: `${options.publicOrigin}/api/bundle-download`,
   });
+  const personalConfiguration = new PersonalMindControlService({ personalMinds: metadata, digest: objects,
+    authorizeConfiguration: async (actor) => {
+      if (actor.kind !== "registered_principal" || actor.authentication.kind !== "mcp_token") return false;
+      const token = await metadata.readMcpTokenForAuthorization(actor.authentication.tokenId);
+      return token !== null && token.principalId === actor.principalId && token.state === "active"
+        && Date.parse(token.expiresAt) > Date.parse(clock.now())
+        && token.scopes.some((scope) => scope === "personal:configure")
+        && (await contentAuthorizer.authorizeCredentialContentAccess(actor)).kind === "allowed";
+    } });
   const mcpApplicationDependencies = {
+    personalConfiguration,
     discovery,
     browse,
     search: observedSearch,

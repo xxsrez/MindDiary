@@ -2,10 +2,14 @@
   "$schema": "mind-diary/principal-mind-usage/v2",
   "version": 2,
   "source": "docs/specs/mind-usage-modes.md",
-  "decision": "docs/decisions/0024-principal-mind-usage-modes-and-automatic-save.md",
+  "decision": "docs/decisions/0025-personal-mind-description-routing.md",
   "ownership": "principal",
   "defaultMode": "disabled",
-  "modes": ["disabled", "read", "read_write"],
+  "modes": [
+    "disabled",
+    "read",
+    "read_write"
+  ],
   "cardinality": {
     "read": "0..N",
     "ordinary_read_write": "0..1",
@@ -16,9 +20,12 @@
   "writeLanes": {
     "independent": true,
     "ordinary": "automatic_save",
-    "personal": "direct_request_only"
+    "personal": "description_or_direct_request"
   },
-  "sharedAcrossCredentials": ["oauth_grant", "personal_token"],
+  "sharedAcrossCredentials": [
+    "oauth_grant",
+    "personal_token"
+  ],
   "effectiveCapabilityChecks": [
     "active_credential",
     "credential_scope",
@@ -26,64 +33,155 @@
     "current_writer_role"
   ],
   "description": {
-    "appliesTo": ["ordinary_mind"],
-    "absentFrom": ["personal_mind"],
+    "appliesTo": [
+      "ordinary_mind",
+      "personal_mind"
+    ],
+    "absentFrom": [],
     "modelVisible": true,
     "trustedInstruction": false,
-    "requiredFor": ["ordinary_read_write"],
-    "routes": ["read", "write"]
+    "requiredFor": [
+      "ordinary_read_write"
+    ],
+    "routes": [
+      "read",
+      "write"
+    ]
   },
   "agentRouting": {
     "profiles": {
       "description_based": {
         "appliesTo": "ordinary_mind",
-        "readTriggers": ["explicit_user_request", "description_match"],
-        "writeTriggers": ["description_match_after_explicit_discussion"],
+        "readTriggers": [
+          "explicit_user_request",
+          "description_match"
+        ],
+        "writeTriggers": [
+          "description_match_after_explicit_discussion"
+        ],
         "automaticSave": true
       },
       "personal_default": {
         "appliesTo": "personal_mind",
-        "readTriggers": ["explicit_user_request"],
-        "writeTriggers": ["explicit_personal_write_request"],
-        "automaticSave": false
+        "readTriggers": [
+          "explicit_user_request",
+          "nonempty_description_match"
+        ],
+        "writeTriggers": [
+          "explicit_personal_write_request",
+          "nonempty_description_match_after_explicit_discussion"
+        ],
+        "automaticSave": true
       }
     },
-    "explicitRequestBypasses": ["description_match"],
-    "explicitRequestDoesNotBypass": ["usage_mode", "credential_scope", "current_access"],
-    "personalWriteRequestExamples": ["save", "remember", "add", "update", "delete"],
-    "personalWriteNonTriggers": ["topic_match", "discussion_only", "read_request", "prior_request"],
+    "explicitRequestBypasses": [
+      "description_match"
+    ],
+    "explicitRequestDoesNotBypass": [
+      "usage_mode",
+      "credential_scope",
+      "current_access"
+    ],
+    "personalWriteRequestExamples": [
+      "save",
+      "remember",
+      "add",
+      "update",
+      "delete"
+    ],
+    "personalWriteNonTriggers": [
+      "topic_match",
+      "discussion_only",
+      "read_request",
+      "prior_request"
+    ],
     "trustedClientIntentFlag": false,
     "crossMindSearch": false,
     "implicitPersonalMindFallback": false
   },
   "automaticSave": {
-    "enabledBy": "ordinary_mind_read_write",
-    "routingProfile": "description_based",
-    "excludedRoutingProfiles": ["personal_default"],
+    "enabledBy": "effective_read_write_and_nonempty_description",
+    "routingProfile": "either_profile",
+    "excludedRoutingProfiles": [],
     "separateToggle": false,
     "perWriteConfirmation": false,
     "requiresUserNotification": true,
     "requiresExplicitDiscussion": true,
     "backgroundVacuum": false,
     "privateKnowledgeAllowedAfterExplicitDiscussion": true,
-    "operations": ["create_file", "replace_file", "delete_file", "no_op"],
+    "operations": [
+      "create_file",
+      "replace_file",
+      "delete_file",
+      "no_op"
+    ],
     "canonicalTool": "commit_changeset",
     "retiredTargetTool": "capture_knowledge",
-    "crossMindProvenance": ["source_mind", "source_revision", "source_locator"]
+    "crossMindProvenance": [
+      "source_mind",
+      "source_revision",
+      "source_locator"
+    ]
   },
   "evaluationCases": [
-    {"id":"personal-read-write-null-description","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"mode_change","outcome":"allow"},
-    {"id":"personal-discussion-only-write","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"discussion_only","outcome":"no_write"},
-    {"id":"personal-explicit-requested-write","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"explicit_personal_write_request","outcome":"allow_write"},
-    {"id":"personal-and-ordinary-concurrent-write","mindType":"personal_mind","mode":"read_write","description":null,"trigger":"ordinary_read_write_already_enabled","outcome":"allow_both"},
-    {"id":"ordinary-read-write-null-description","mindType":"ordinary_mind","mode":"read_write","description":null,"trigger":"mode_change","outcome":"description_required"},
-    {"id":"ordinary-discussed-description-match-write","mindType":"ordinary_mind","mode":"read_write","description":"matching category","trigger":"description_match_after_explicit_discussion","outcome":"allow_write"}
+    {
+      "id": "personal-read-write-null-description",
+      "mindType": "personal_mind",
+      "mode": "read_write",
+      "description": null,
+      "trigger": "mode_change",
+      "outcome": "allow"
+    },
+    {
+      "id": "personal-discussion-only-write",
+      "mindType": "personal_mind",
+      "mode": "read_write",
+      "description": null,
+      "trigger": "discussion_only",
+      "outcome": "no_write"
+    },
+    {
+      "id": "personal-explicit-requested-write",
+      "mindType": "personal_mind",
+      "mode": "read_write",
+      "description": null,
+      "trigger": "explicit_personal_write_request",
+      "outcome": "allow_write"
+    },
+    {
+      "id": "personal-and-ordinary-concurrent-write",
+      "mindType": "personal_mind",
+      "mode": "read_write",
+      "description": null,
+      "trigger": "ordinary_read_write_already_enabled",
+      "outcome": "allow_both"
+    },
+    {
+      "id": "ordinary-read-write-null-description",
+      "mindType": "ordinary_mind",
+      "mode": "read_write",
+      "description": null,
+      "trigger": "mode_change",
+      "outcome": "description_required"
+    },
+    {
+      "id": "ordinary-discussed-description-match-write",
+      "mindType": "ordinary_mind",
+      "mode": "read_write",
+      "description": "matching category",
+      "trigger": "description_match_after_explicit_discussion",
+      "outcome": "allow_write"
+    }
   ],
   "okf": {
     "version": "0.2",
     "validateBeforeCommit": "full_bundle",
     "validateAfterCommit": "full_exact_revision",
-    "atomicFiles": ["concepts", "index", "log"],
+    "atomicFiles": [
+      "concepts",
+      "index",
+      "log"
+    ],
     "preserveUnknownTypesAndFields": true
   },
   "retiredControls": [

@@ -111,7 +111,7 @@ required = true
 OAI-Sites-Authorization = "${MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE}"` as const;
 
 export type McpTokenUiState = "active" | "expired" | "revoked";
-export type McpTokenUiScope = "content:read" | "content:write";
+export type McpTokenUiScope = "content:read" | "content:write" | "personal:configure";
 
 /** Metadata safe to list or render. Secret and verifier fields are absent by design. */
 export interface McpTokenUiToken {
@@ -155,7 +155,7 @@ export interface McpTokenManagementModel {
 
 export interface McpTokenIssueCommand {
   readonly name: string;
-  readonly scopes: readonly ["content:read"] | readonly ["content:write"];
+  readonly scopes: readonly McpTokenUiScope[];
   readonly expiresAt: string;
 }
 
@@ -769,7 +769,7 @@ export function installMcpTokenManagement(
       try {
         const result = await adapter.issueToken({
           name,
-          scopes: access === "content:write" ? ["content:write"] : ["content:read"],
+          scopes: [access, ...(formData.has("personal_configure") ? ["personal:configure" as const] : [])],
           expiresAt,
         });
         const secret = result.secret.consumeSecret();

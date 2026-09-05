@@ -125,9 +125,9 @@ export function verifySettingsConnectionsCatalogProfiles() {
     fail("settings_connections_catalog_profile_mismatch");
   }
   return Object.freeze({
-    default_product_site_write: 17,
-    read_only: 16,
-    verified_native: 18,
+    default_product_site_write: defaultWrite.length,
+    read_only: readOnly.length,
+    verified_native: verifiedNative.length,
   });
 }
 

@@ -1,14 +1,16 @@
 # Доменная модель и доступ
 
-> **Target amendment MD-373/MD-383, 2026-09-03.** К service metadata добавлен
-> principal-owned `usage_mode: disabled | read | read_write`; у principal не
-> более одного ordinary `read_write` Mind; Personal `/me` имеет независимый
-> requested-write lane, поэтому оба могут быть включены одновременно. Description ordinary Mind model-visible как
-> недоверенная routing category, но не входит в OKF/revision. У Personal Mind
-> description отсутствует, `/me` использует встроенный `personal_default`, а
-> запись разрешена только по прямой просьбе пользователя. Полный контракт —
-> [режимы использования Mind](mind-usage-modes.md); противоречащие historical
-> binding/credential-target формулировки ниже не являются target authority.
+> **Принятая целевая поправка ADR-0025, 2026-09-05; ещё не реализована.**
+> `usage_mode` определяет разрешённые действия, description — темы.
+> Personal `/me` получает опциональное description, настраиваемое через узкую
+> MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
+> Без description Personal читается/изменяется только по прямой просьбе;
+> с description используется автоматически по теме в пределах `read | read_write`.
+> Один ordinary writable Mind и Personal независимы; при совпадении обоих
+> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> и неявного раскрытия Personal в shared Mind. Полный контракт —
+> [режимы использования Mind](mind-usage-modes.md). Historical sections ниже не
+> переопределяют этот target и не доказывают его реализацию.
 
 Статус: proposal, обновлено 2026-08-27. Product decisions первого прототипа
 приняты для первого прототипа; format-neutral BundleFile amendment принят

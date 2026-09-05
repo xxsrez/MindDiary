@@ -27,6 +27,7 @@ export const OAUTH_ACCESS_RECORD_PREFIX = "md_oauth_access_record_" as const;
 export const OAUTH_SCOPES = Object.freeze([
   "content:read",
   "content:write",
+  "personal:configure",
 ] as const);
 
 export type OAuthScope = (typeof OAUTH_SCOPES)[number];
@@ -520,10 +521,13 @@ function consentPage(input: {
   readonly scopes: readonly OAuthScope[];
   readonly redirectOrigin: string;
 }): Response {
-  const access = input.scopes.includes("content:write")
+  const contentAccess = input.scopes.includes("content:write")
     ? "Read and write Memory content in the Minds you can currently access. Writes commit a new immutable revision immediately."
-    : "Read Memory content in the Minds you can currently access. This connection cannot write.";
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${MIND_DIARY_FAVICON_LINKS}<title>Connect Mind Diary</title><style>body{margin:0;background:#fffaf2;color:#182642;font:16px/1.5 system-ui,sans-serif}main{width:min(38rem,calc(100% - 2rem));margin:8vh auto;padding:2rem;border:1px solid #c9c0b6;border-radius:1rem;background:white}h1{font:700 2rem/1.1 Georgia,serif}p{margin:1rem 0}.scope{padding:1rem;border-radius:.75rem;background:#f3edf9}.actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:2rem}button{min-height:2.75rem;padding:.6rem 1rem;border:2px solid #182642;border-radius:.65rem;font:inherit;font-weight:700;background:white;cursor:pointer}.approve{color:white;background:#6e3b8f;border-color:#6e3b8f}</style></head><body><main><p>Mind Diary connector</p><h1>Connect ${escapeHtml(input.clientName)}?</h1><p class="scope">${escapeHtml(access)}</p><p>You can revoke this connection later from <strong>Connections</strong>. Membership and account settings are never granted.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="${escapeHtml(input.requestId)}"><div class="actions"><button name="decision" value="deny">Cancel</button><button class="approve" name="decision" value="approve">Connect</button></div></form></main></body></html>`;
+    : input.scopes.includes("content:read")
+      ? "Read Memory content in your enabled Minds." : "No Memory content access.";
+  const access = contentAccess + (input.scopes.includes("personal:configure")
+    ? " Configure the topics for automatic use of your Personal Mind when you ask. This does not change content access modes." : "");
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${MIND_DIARY_FAVICON_LINKS}<title>Connect Mind Diary</title><style>body{margin:0;background:#fffaf2;color:#182642;font:16px/1.5 system-ui,sans-serif}main{width:min(38rem,calc(100% - 2rem));margin:8vh auto;padding:2rem;border:1px solid #c9c0b6;border-radius:1rem;background:white}h1{font:700 2rem/1.1 Georgia,serif}p{margin:1rem 0}.scope{padding:1rem;border-radius:.75rem;background:#f3edf9}.actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:2rem}button{min-height:2.75rem;padding:.6rem 1rem;border:2px solid #182642;border-radius:.65rem;font:inherit;font-weight:700;background:white;cursor:pointer}.approve{color:white;background:#6e3b8f;border-color:#6e3b8f}</style></head><body><main><p>Mind Diary connector</p><h1>Connect ${escapeHtml(input.clientName)}?</h1><p class="scope">${escapeHtml(access)}</p><p>You can revoke this connection later from <strong>Connections</strong>. Membership and general account settings are never granted.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="${escapeHtml(input.requestId)}"><div class="actions"><button name="decision" value="deny">Cancel</button><button class="approve" name="decision" value="approve">Connect</button></div></form></main></body></html>`;
   return new Response(body, {
     status: 200,
     headers: {
@@ -1391,7 +1395,7 @@ export async function createSitesOAuthConnector(
       return Object.freeze({ kind: "invalid" });
     }
     const scopes = storedScopes(row.scopes_json);
-    if (!scopes.includes("content:read")) return Object.freeze({ kind: "invalid" });
+    if (scopes.length === 0) return Object.freeze({ kind: "invalid" });
     await options.database.batch([
       options.database
         .prepare(`/*md-oauth-access-touch*/ UPDATE md_oauth_access_tokens SET last_used_at = ? WHERE id = ?`)
@@ -1400,11 +1404,7 @@ export async function createSitesOAuthConnector(
         .prepare(`/*md-oauth-grant-touch*/ UPDATE md_oauth_grants SET last_used_at = ?, updated_at = ? WHERE id = ?`)
         .bind(timestamp.toISOString(), timestamp.toISOString(), row.grant_id),
     ]);
-    const effectiveScopes = Object.freeze(
-      scopes.includes("content:write")
-        ? ["content:read", "content:write"]
-        : ["content:read"],
-    ) as EffectiveTokenScopes;
+    const effectiveScopes = Object.freeze([...scopes]) as EffectiveTokenScopes;
     return Object.freeze({
       kind: "authenticated",
       actor: Object.freeze({

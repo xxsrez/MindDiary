@@ -47,7 +47,7 @@ test("Personal and ordinary write modes stay independent and reload server state
   await page.locator("[data-agent-settings-disclosure] > summary").click();
   await expect(page.locator("[data-mind-usage-card]").first()).toBeVisible();
   await expect(page.locator("[data-mind-usage-card]")).toHaveCount(3);
-  await expect(page.getByText("My Mind accepts writes only when you directly ask Codex", { exact: false })).toBeVisible();
+  await expect(page.getByText("My Mind without a description is used only when you ask", { exact: false })).toBeVisible();
   await expect(card(page, "/archive").locator('input[value="read_write"]')).toBeDisabled();
   await expect(card(page, "/archive")).toContainText("Add a routing description");
   await expect(card(page, "/archive")).toContainText("Read only still works when you name this Mind directly");
@@ -76,6 +76,12 @@ test("Personal and ordinary write modes stay independent and reload server state
   await expect(page.getByText("After an automatic write, Codex should report what changed", {
     exact: false,
   }).first()).toBeVisible();
+  expect((await context.request.post(`${origin}/_fixture/topics`)).ok()).toBe(true);
+  await page.reload();
+  await page.locator("[data-agent-settings-disclosure] > summary").click();
+  await expect(card(page, "/me")).toContainText("Research decisions; exclude daily logs.");
+  await expect(card(page, "/me")).toContainText("Also save discussed durable knowledge that matches this description.");
+  await expect(card(page, "/me").locator('input[value="read_write"]')).toBeChecked();
   expect(errors).toEqual([]);
   await context.close();
 });

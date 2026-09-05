@@ -71,6 +71,41 @@ export function clonePrincipalMindUsageOwners(
   );
 }
 
+/** Rotate only the affected Mind's pins, in the same transaction as its description. */
+export async function refreshMindDescriptionGenerations(
+  owners: Map<PrincipalId, MutablePrincipalMindUsageOwnerState>,
+  spaceId: SpaceId,
+  occurredAt: UtcInstant,
+): Promise<void> {
+  for (const owner of owners.values()) {
+    const current = owner.state;
+    const entry = current.entries.find((item) => item.spaceId === spaceId);
+    if (entry === undefined) continue;
+    const usageVersion = mindUsageVersion(current.usageVersion + 1);
+    let writeGeneration = entry.writeGeneration;
+    if (writeGeneration !== null) {
+      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
+        JSON.stringify(["mind-description-generation/v1", current.principalId,
+          spaceId, writeGeneration.generationId, usageVersion]),
+      ));
+      const generationId = `description_${Array.from(new Uint8Array(bytes),
+        (byte) => byte.toString(16).padStart(2, "0")).join("")}` as PrincipalMindUsageGenerationId;
+      owner.retiredGenerationIds.add(writeGeneration.generationId);
+      writeGeneration = Object.freeze({ ...writeGeneration, generationId,
+        generation: usageVersion, selectedAt: occurredAt });
+    }
+    const entries = current.entries.map((item) => item.spaceId !== spaceId ? item :
+      Object.freeze({ ...item, writeGeneration,
+        entryVersion: version(item.entryVersion + 1), updatedAt: occurredAt }));
+    owner.state = freezePrincipalMindUsageState({ ...current, entries, usageVersion,
+      ordinaryWriteGeneration: entry.routingProfile === "description_based"
+        && entry.usageMode === "read_write" ? writeGeneration : current.ordinaryWriteGeneration,
+      personalWriteGeneration: entry.routingProfile === "personal_default"
+        && entry.usageMode === "read_write" ? writeGeneration : current.personalWriteGeneration,
+      updatedAt: occurredAt });
+  }
+}
+
 function validInstant(value: unknown): value is UtcInstant {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }

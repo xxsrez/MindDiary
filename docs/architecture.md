@@ -1,16 +1,16 @@
 # Архитектура Mind Diary
 
-> **Целевая архитектурная поправка Release 0.3 (MD-373/MD-383, 2026-09-03).**
-> Read/write intent хранится в principal-owned `PrincipalMindUsageState`, а не
-> в credential-owned binding/target/capture aggregate. Все credentials видят
-> одну configured projection, сохраняя собственные effective scopes. Agent
-> routing и automatic save определены в
-> [режимах использования Mind](specs/mind-usage-modes.md); исторические
-> sequence/storage sections ниже остаются evidence до реализации. Personal
-> `/me` определяется server-side без description; его requested-write lane
-> независим от единственного ordinary automatic-write lane. Connector разрешает
-> Personal write только по прямой просьбе пользователя и не передаёт intent как
-> authority.
+> **Принятая целевая поправка ADR-0025, 2026-09-05; ещё не реализована.**
+> `usage_mode` определяет разрешённые действия, description — темы.
+> Personal `/me` получает опциональное description, настраиваемое через узкую
+> MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
+> Без description Personal читается/изменяется только по прямой просьбе;
+> с description используется автоматически по теме в пределах `read | read_write`.
+> Один ordinary writable Mind и Personal независимы; при совпадении обоих
+> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> и неявного раскрытия Personal в shared Mind. Полный контракт —
+> [режимы использования Mind](specs/mind-usage-modes.md). Historical sections ниже не
+> переопределяют этот target и не доказывают его реализацию.
 
 Статус: proposal, обновлено 2026-08-27. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как

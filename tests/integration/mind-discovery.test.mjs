@@ -636,7 +636,7 @@ test("MCP discovery omits Personal description and projects both independent wri
   const readActor = mcpActor(owner.principalId, "token_usage_read");
   const listed = await discovery.listMinds(readActor, { limit: 10 });
   assert.deepEqual(listed.minds.map(({ route }) => route), ["/me", "/enabled-notes"]);
-  assert.equal(Object.hasOwn(listed.minds[0], "description"), false);
+  assert.equal(listed.minds[0].description, null);
   assert.equal(listed.minds[0].routingProfile, "personal_default");
   assert.equal(listed.minds[0].usageMode, "read_write");
   assert.deepEqual(listed.minds[0].effective, { canRead: true, canWrite: false });

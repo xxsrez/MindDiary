@@ -74,8 +74,8 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "package.mcp-resolution",
   "package.task-manager-separate",
   "oauth.codex-compatible-default-write-schema",
-  "oauth.catalog-modern-default-exact-16",
-  "oauth.catalog-compat-default-exact-16",
+  "oauth.catalog-modern-default-exact-18",
+  "oauth.catalog-compat-default-exact-18",
   "oauth.protected-resource-discovery",
   "oauth.authorization-server-discovery",
   "oauth.public-dcr-no-secret",
@@ -273,13 +273,13 @@ export function assertMindUsageSkillPolicy(skill) {
   const normalized = skill.replace(/\s+/gu, " ");
   const required = [
     "Start each relevant workflow with fresh `list_minds`",
-    "Personal Mind has `routing_profile=personal_default` and no description",
+    "Personal Mind has `routing_profile=personal_default` and an optional description",
     "When the current user names Personal Mind or asks to read or use My Mind",
     "Otherwise select only the readable Mind or Minds whose descriptions genuinely fit",
-    "For Personal Mind, write only when the current user directly asks in this conversation",
-    "Discussion, durability, relevance, ambiguity, a previous request or reading another Mind does not authorize a Personal write",
+    "For Personal Mind without a description, write only when the current user directly asks in this conversation",
+    "If both descriptions match, save in both Minds independently",
     "consider every newly discussed piece of durable knowledge for automatic preservation",
-    "Do not ask for a separate write instruction, toggle or confirmation for a qualifying ordinary-Mind save",
+    "No extra confirmation is needed for a qualifying save",
     "pass optional `source_references` with the exact enabled source Mind",
     "Fetch a targeted existing Memory before deciding whether the result is a create, update, explicit delete or semantic no-op",
     "Validate the complete proposed OKF 0.2 bundle before commit",
@@ -944,7 +944,7 @@ export async function runOAuthScenario({ assertions, nowState }) {
   if (
     !Number.isSafeInteger(ownerSession.personal_mind?.metadata_version) ||
     ownerSession.personal_mind.metadata_version < 1 ||
-    Object.hasOwn(ownerSession.personal_mind, "description")
+    ownerSession.personal_mind.description !== null
   ) fail("oauth_personal_mind_projection_invalid");
   const removedDescriptionRoute = await owner.api("/api/v1/minds/me/description", {
     method: "PATCH",
@@ -984,7 +984,7 @@ export async function runOAuthScenario({ assertions, nowState }) {
     initialUsage.body?.data?.usage_version !== 0 ||
     initialPersonalUsage?.usage_mode !== "disabled" ||
     initialPersonalUsage?.routing_profile !== "personal_default" ||
-    Object.hasOwn(initialPersonalUsage ?? {}, "description") ||
+    initialPersonalUsage?.description !== null ||
     /principal_id|space_id|mind_id|generation/iu.test(
       JSON.stringify(initialUsage.body),
     )
@@ -1000,7 +1000,7 @@ export async function runOAuthScenario({ assertions, nowState }) {
     enabledReadProjection?.usage_version !== 1 ||
     enabledReadPersonal?.usage_mode !== "read" ||
     enabledReadPersonal?.routing_profile !== "personal_default" ||
-    Object.hasOwn(enabledReadPersonal ?? {}, "description") ||
+    enabledReadPersonal?.description !== null ||
     enabledReadPersonal?.effective?.can_read !== true ||
     enabledReadPersonal?.effective?.can_write !== false
   ) fail("oauth_principal_usage_read_mode_mismatch");
@@ -1245,11 +1245,11 @@ export async function runOAuthScenario({ assertions, nowState }) {
   });
   if (advertisedWriteTools.status !== 200) fail("oauth_write_tools_list_failed");
   assertCodexCompatibleDefaultWriteCatalog(advertisedWriteTools.body?.result?.tools);
-  assertions.add("oauth.catalog-modern-default-exact-16");
+  assertions.add("oauth.catalog-modern-default-exact-18");
   await assertCompatibilityRead(owner, writeGrant.tokens.access_token, {
     defaultWriteCatalog: true,
   });
-  assertions.add("oauth.catalog-compat-default-exact-16");
+  assertions.add("oauth.catalog-compat-default-exact-18");
   assertions.add("oauth.codex-compatible-default-write-schema");
   const writeAccessRecord = latestAccessRecord(database);
   const metadata = await createSitesMetadataStore(database);
@@ -1282,7 +1282,7 @@ export async function runOAuthScenario({ assertions, nowState }) {
     selectedProjection?.usage_version !== 2 ||
     selectedPersonal?.usage_mode !== "read_write" ||
     selectedPersonal?.routing_profile !== "personal_default" ||
-    Object.hasOwn(selectedPersonal ?? {}, "description") ||
+    selectedPersonal?.description !== null ||
     selectedPersonal?.effective?.can_write !== true ||
     /principal_id|space_id|mind_id|generation/iu.test(JSON.stringify(selected.body))
   ) fail("oauth_principal_usage_write_readback_mismatch");
@@ -1315,7 +1315,7 @@ export async function runOAuthScenario({ assertions, nowState }) {
   if (
     refreshedPersonal?.usage_mode !== "read_write" ||
     refreshedPersonal?.routing_profile !== "personal_default" ||
-    Object.hasOwn(refreshedPersonal ?? {}, "description") ||
+    refreshedPersonal?.description !== null ||
     refreshedPersonal?.effective?.can_write !== true ||
     refreshedPersonal?.writable_mount?.active !== true
   ) fail("oauth_refresh_changed_principal_usage");
@@ -1441,7 +1441,7 @@ export async function runOAuthScenario({ assertions, nowState }) {
   if (
     personalTokenMind?.usage_mode !== "read_write" ||
     personalTokenMind?.routing_profile !== "personal_default" ||
-    Object.hasOwn(personalTokenMind ?? {}, "description") ||
+    personalTokenMind?.description !== null ||
     personalTokenMind?.effective?.can_write !== true ||
     personalTokenMind?.writable_mount?.active !== true
   ) fail("personal_token_principal_usage_mismatch");
@@ -1455,7 +1455,7 @@ export async function runOAuthScenario({ assertions, nowState }) {
   if (
     personalTokenCompatMind?.usage_mode !== "read_write" ||
     personalTokenCompatMind?.routing_profile !== "personal_default" ||
-    Object.hasOwn(personalTokenCompatMind ?? {}, "description") ||
+    personalTokenCompatMind?.description !== null ||
     personalTokenCompatMind?.effective?.can_write !== true
   ) fail("personal_token_compat_principal_usage_mismatch");
   assertions.add("personal-token.compat-regression");

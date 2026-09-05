@@ -165,7 +165,7 @@ export interface ProductWebOAuthConnections {
     readonly items: readonly {
       readonly connectionRef: string;
       readonly clientName: string;
-      readonly scopes: readonly ("content:read" | "content:write")[];
+      readonly scopes: readonly ("content:read" | "content:write" | "personal:configure")[];
       readonly createdAt: string;
       readonly lastUsedAt: string | null;
     }[];
@@ -174,7 +174,7 @@ export interface ProductWebOAuthConnections {
   read(principalId: string, connectionRef: string): Promise<Readonly<{
     readonly connectionRef: string;
     readonly clientName: string;
-    readonly scopes: readonly ("content:read" | "content:write")[];
+    readonly scopes: readonly ("content:read" | "content:write" | "personal:configure")[];
     readonly createdAt: string;
     readonly lastUsedAt: string | null;
   }> | null>;

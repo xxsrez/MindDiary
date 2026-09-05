@@ -178,7 +178,7 @@ const ordinaryOwnerRoute = Object.freeze({
 });
 
 test("ordinary web projections require description while Personal intentionally omits it", () => {
-  assert.equal("description" in personalRoute, false);
+  assert.equal(personalRoute.description, null);
   assert.notEqual(uiMind(personalRoute), null);
 
   const { description: _description, ...ordinaryWithoutDescription } = ordinaryOwnerRoute;
@@ -1139,7 +1139,7 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
   assert.deepEqual(initialBody.data.items.map((item) => item.usage_mode), [
     "disabled", "disabled", "disabled",
   ]);
-  assert.equal(Object.hasOwn(initialBody.data.items[0], "description"), false);
+  assert.equal(initialBody.data.items[0].description, null);
   assert.equal(initialBody.data.items[0].routing_profile, "personal_default");
   assert.equal(initialBody.data.items[0].eligibility.can_write, true);
   assert.equal(initialBody.data.items[0].eligibility.description_required, false);

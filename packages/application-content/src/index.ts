@@ -99,6 +99,8 @@ export type McpPerformanceStage =
   | "stage_application"
   | "stage_total";
 export type McpPerformanceTool =
+  | "get_personal_mind_configuration"
+  | "set_personal_mind_description"
   | "list_minds"
   | "resolve_mind"
   | "get_mind_info"
@@ -401,13 +403,10 @@ function normalizeMcpDeploymentCapabilities(
 }
 
 function validEffectiveScopes(value: unknown): value is EffectiveTokenScopes {
-  return (
-    Array.isArray(value) &&
-    ((value.length === 1 && value[0] === "content:read") ||
-      (value.length === 2 &&
-        value[0] === "content:read" &&
-        value[1] === "content:write"))
-  );
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const canonical = ["content:read", "content:write", "personal:configure"].filter((scope) => value.includes(scope));
+  return canonical.length === value.length && canonical.every((scope, index) => value[index] === scope)
+    && (!value.includes("content:write") || value.includes("content:read"));
 }
 
 function validAuthenticatedToken(

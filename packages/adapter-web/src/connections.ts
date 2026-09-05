@@ -43,7 +43,7 @@ export interface PersonalTokenItem {
   readonly personalTokenRef: string;
   readonly name: string;
   readonly displayPrefix: string;
-  readonly scopes: readonly ("content:read" | "content:write")[];
+  readonly scopes: readonly ("content:read" | "content:write" | "personal:configure")[];
   readonly state: "active" | "revoked" | "expired";
   readonly createdAt: string;
   readonly expiresAt: string;
@@ -194,14 +194,14 @@ function renderPersonalToken(token: PersonalTokenItem, index: number): string {
   const canWrite = token.scopes.includes("content:write");
   return `<article class="md-token-card" data-personal-token>
     <div class="md-token-card__heading"><div><h3>${escapeUntrustedText(token.name)}</h3><p><code>${escapeUntrustedText(token.displayPrefix)}</code></p></div><span class="md-token-state md-token-state--${token.state}">${escapeUntrustedText(token.state)}</span></div>
-    <dl class="md-token-card__metadata"><div><dt>Scopes</dt><dd>${canWrite ? "content:read, content:write" : "content:read"}</dd></div><div><dt>Expires</dt><dd>${escapeUntrustedText(dateLabel(token.expiresAt))}</dd></div><div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(token.lastUsedAt))}</dd></div></dl>
+    <dl class="md-token-card__metadata"><div><dt>Scopes</dt><dd>${escapeUntrustedText(token.scopes.join(", "))}</dd></div><div><dt>Expires</dt><dd>${escapeUntrustedText(dateLabel(token.expiresAt))}</dd></div><div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(token.lastUsedAt))}</dd></div></dl>
     ${token.state === "active" ? renderAdvancedTokenAccess({ personalTokenRef: token.personalTokenRef, canWrite, headingSuffix: `item-${index + 1}` }) : ""}
     ${token.state === "active" ? `<button class="md-button md-button--danger" type="button" data-revoke-personal-token data-revoke-endpoint="/api/v1/mcp-tokens/${token.personalTokenRef}">Revoke token</button><p class="md-form__status" role="status" aria-live="polite" data-revoke-status></p>` : ""}
   </article>`;
 }
 
 function renderPersonalTokenCreation(): string {
-  return `<section class="md-setup-card" id="create-token" aria-labelledby="create-token-heading"><div><p class="md-eyebrow">Personal access</p><h2 id="create-token-heading">Create a personal token</h2><p>Name the device or client so you can revoke it later. The secret is shown once and cannot be recovered.</p></div><form class="md-token-form" data-token-form><div class="md-field"><label for="token-name">Token name</label><input id="token-name" name="name" type="text" required maxlength="80" autocomplete="off" placeholder="Codex on Mac"></div><div class="md-field"><label for="token-access">Access</label><select id="token-access" name="access" required><option value="content:read">Read only</option><option value="content:write">Read and write</option></select><p>Read and write always includes read access. A write-only token is not available.</p></div><div class="md-field"><label for="token-expiry">Expires after</label><select id="token-expiry" name="expiry_days" required><option value="7">7 days</option><option value="30">30 days</option><option value="90" selected>90 days</option></select></div><p class="md-form__status" role="status" aria-live="polite" data-token-form-status></p><button class="md-button md-button--primary" type="submit" data-token-submit>Create token</button></form></section>`;
+  return `<section class="md-setup-card" id="create-token" aria-labelledby="create-token-heading"><div><p class="md-eyebrow">Personal access</p><h2 id="create-token-heading">Create a personal token</h2><p>Name the device or client so you can revoke it later. The secret is shown once and cannot be recovered.</p></div><form class="md-token-form" data-token-form><div class="md-field"><label for="token-name">Token name</label><input id="token-name" name="name" type="text" required maxlength="80" autocomplete="off" placeholder="Codex on Mac"></div><div class="md-field"><label for="token-access">Access</label><select id="token-access" name="access" required><option value="content:read">Read only</option><option value="content:write">Read and write</option></select><p>Read and write always includes read access. A write-only token is not available.</p></div><div class="md-field"><label><input type="checkbox" name="personal_configure"> Allow Codex to configure My Mind topics when I ask</label></div><div class="md-field"><label for="token-expiry">Expires after</label><select id="token-expiry" name="expiry_days" required><option value="7">7 days</option><option value="30">30 days</option><option value="90" selected>90 days</option></select></div><p class="md-form__status" role="status" aria-live="polite" data-token-form-status></p><button class="md-button md-button--primary" type="submit" data-token-submit>Create token</button></form></section>`;
 }
 
 function renderPersonalTokenSecretDialog(): string {

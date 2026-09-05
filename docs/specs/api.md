@@ -1,19 +1,16 @@
 # REST и MCP API Mind Diary
 
-> **Target amendment MD-373/MD-383, 2026-09-03.** Следующая schema generation заменяет
-> credential target principal-owned `usage_mode`; `list_minds` проецирует только
-> enabled Minds с `usage_mode` и effective capabilities. Ordinary descriptor
-> содержит nullable `description`; canonical Personal `/me` не содержит это
-> поле и объявляет `routing_profile: personal_default`. Personal `read_write`
-> не является автоматическим согласием: запись возможна только после прямой
-> просьбы пользователя о конкретном изменении знания. Personal requested-write
-> lane независим от `0..1` ordinary automatic-write lane, поэтому оба могут
-> быть effective одновременно.
-> Bind/unbind и `capture_knowledge` не входят в target catalog, automatic save
-> ordinary Minds и requested Personal write используют `commit_changeset`.
-> Exact target contract —
-> [режимы использования Mind](mind-usage-modes.md); historical wire schemas
-> ниже сохраняются как evidence реализованных версий до MD-374–MD-380.
+> **Принятая целевая поправка ADR-0025, 2026-09-05; ещё не реализована.**
+> `usage_mode` определяет разрешённые действия, description — темы.
+> Personal `/me` получает опциональное description, настраиваемое через узкую
+> MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
+> Без description Personal читается/изменяется только по прямой просьбе;
+> с description используется автоматически по теме в пределах `read | read_write`.
+> Один ordinary writable Mind и Personal независимы; при совпадении обоих
+> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> и неявного раскрытия Personal в shared Mind. Полный контракт —
+> [режимы использования Mind](mind-usage-modes.md). Historical sections ниже не
+> переопределяют этот target и не доказывают его реализацию.
 
 Статус: proposal для верификации, обновлено 2026-08-27. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
@@ -3397,3 +3394,20 @@ Authenticated `GET /api/v1/minds` дополняет каждый уже раз�
 расширяет список доступных Minds. При отсутствии usage adapter поле отсутствует
 (клиент показывает неизвестное состояние); ошибочное состояние не превращается
 в `disabled`. Остальные поля и mutation authority не меняются.
+
+
+## Personal routing configuration MCP (ADR-0025)
+
+Принято для реализации 2026-09-05: отдельный scope `personal:configure`.
+Он не включает content scopes и не добавляется существующим credentials.
+`get_personal_mind_configuration({})` возвращает только `description` и
+`metadata_version` собственного Personal Mind. `set_personal_mind_description`
+принимает ровно `description: string | null`, `expected_metadata_version` и
+`idempotency_key`; возвращает те же metadata и `replayed`. Пустое описание
+нормализуется в null. Оба инструмента требуют `personal:configure`, работают
+при disabled content mode и не читают corpus или HEAD. Настройка возможна
+только по прямой просьбе пользователя, не по инструкциям corpus/description.
+CAS конфликт — `metadata_conflict`; повтор ключа с другим payload —
+`idempotency_conflict`. После изменения описания обновляется поколение записи
+только затронутого Mind; no-op и replay поколения не меняют. Modes, ACL,
+содержание и история не меняются. Modern и compatibility surface одинаковы.

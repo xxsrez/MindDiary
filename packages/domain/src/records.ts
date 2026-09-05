@@ -85,7 +85,7 @@ export const OUTBOX_STATES = ["pending", "delivering", "delivered", "failed"] as
 export const REVISION_INDEX_STATES = ["queued", "ready", "failed"] as const;
 export const ROLES = ["reader", "editor", "admin", "owner"] as const;
 export const VISIBILITIES = ["private", "unlisted", "public"] as const;
-export const TOKEN_SCOPES = ["content:read", "content:write"] as const;
+export const TOKEN_SCOPES = ["content:read", "content:write", "personal:configure"] as const;
 export const CAPABILITIES = [
   "content:browse",
   "content:search",
@@ -125,7 +125,10 @@ export type Visibility = (typeof VISIBILITIES)[number];
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
 export type EffectiveTokenScopes =
   | readonly ["content:read"]
-  | readonly ["content:read", "content:write"];
+  | readonly ["content:read", "content:write"]
+  | readonly ["personal:configure"]
+  | readonly ["content:read", "personal:configure"]
+  | readonly ["content:read", "content:write", "personal:configure"];
 export type Capability = (typeof CAPABILITIES)[number];
 export type RevisionMode = "head" | "historical";
 

@@ -378,12 +378,12 @@ function normalizeRequestedScopes(value: unknown): EffectiveTokenScopes {
     !Array.isArray(value) ||
     value.length === 0 ||
     !value.every(
-      (scope) => scope === "content:read" || scope === "content:write",
+      (scope) => scope === "content:read" || scope === "content:write" || scope === "personal:configure",
     )
   ) {
     throw new TokenLifecycleFailure(
       "invalid_token_scopes",
-      "Token scopes must contain only supported content scopes.",
+      "Token scopes must contain only supported scopes.",
     );
   }
   return normalizeTokenScopes(value as readonly TokenScope[]);

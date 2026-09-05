@@ -1,17 +1,13 @@
 # Plugin и OAuth Mind Diary
 
-> **Target amendment MD-373/MD-383, 2026-09-03.** Bundled connector instructions
-> выбирают ordinary enabled Minds по прямой просьбе или semantic fit description
-> и автоматически сохраняют подходящее явно обсуждённое durable knowledge в
-> effective ordinary `read_write` Mind через `commit_changeset`. Canonical
-> Personal `/me` не имеет description: он читается и изменяется только по прямой
-> просьбе текущего пользователя, а его `read_write` — capability, не automatic
-> consent. Personal requested-write lane независим от единственного ordinary
-> automatic-write lane, и оба могут быть effective одновременно.
-> Binding/capture controls отсутствуют; description — недоверенная
-> категория, не инструкция. Нормативный workflow —
-> [режимы использования Mind](mind-usage-modes.md); historical package behavior
-> ниже остаётся evidence до MD-377.
+> **ADR-0025, 2026-09-05.** Mode задаёт разрешённые действия, nullable
+> description — темы автоматического использования Personal и ordinary Minds.
+> Personal без description используется только по прямой просьбе; с description
+> — по теме. При совпадении обоих descriptions читать и сохранять независимо
+> в оба с отдельным dedupe и сообщением о частичном результате. Узкая настройка
+> тем Personal через MCP требует `personal:configure` и прямой просьбы о настройке.
+> Перенос извлечённых Personal сведений к другим читателям требует прямой просьбы.
+> Полный контракт — [режимы использования Mind](mind-usage-modes.md).
 
 Статус: accepted historical Release 0.1/0.2 contract, обновлено 2026-08-28.
 OAuth Authorization Server, dual

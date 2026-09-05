@@ -37,6 +37,10 @@ type AuthenticatedActor = Parameters<
 type MindInfo = Awaited<ReturnType<MindDiscoveryService["getMindInfo"]>>;
 
 export interface ProductMcpApplicationDependencies {
+  readonly personalConfiguration?: {
+    getMyMindConfiguration(actor: AuthenticatedActor): Promise<unknown>;
+    configureMyMindDescription(actor: AuthenticatedActor, command: { description: string | null; expectedMetadataVersion: number; idempotencyKey: string }): Promise<unknown>;
+  };
   readonly discovery: Pick<MindDiscoveryService, "listMinds" | "resolveMind" | "getMindInfo">;
   readonly browse: Pick<MindBrowseService, "browseEntries" | "listBundleFiles" | "fetch" | "readResource">;
   readonly search: Pick<MindSearchService, "searchEntries">;
@@ -515,6 +519,8 @@ export class ProductMcpContentApplication implements McpContentApplication {
       return Object.freeze({ kind: "allowed" as const });
     }
     if (
+      request.name === "get_personal_mind_configuration" ||
+      request.name === "set_personal_mind_description" ||
       request.name === "start_export" ||
       request.name === "get_export_status" ||
       request.name === "list_minds" ||
@@ -567,6 +573,25 @@ export class ProductMcpContentApplication implements McpContentApplication {
   async executeToolCall(request: Parameters<McpContentApplication["executeToolCall"]>[0]): Promise<unknown> {
     const input = camelInput(request.arguments);
     switch (request.name) {
+      case "get_personal_mind_configuration":
+      case "set_personal_mind_description": {
+        if (!request.actor.authentication.effectiveScopes.some((scope) => scope === "personal:configure")) {
+          return createMcpToolErrorResult(request.actor.requestId, "insufficient_scope", "Personal configuration permission is required.", false);
+        }
+        const service = this.#dependencies.personalConfiguration;
+        const read = request.name === "get_personal_mind_configuration";
+        if (service === undefined || !hasExactKeys(input, read ? [] : ["description", "expectedMetadataVersion", "idempotencyKey"])) {
+          return createMcpToolErrorResult(request.actor.requestId, "invalid_request", "Invalid Personal configuration request.", false);
+        }
+        try {
+          return createMcpToolSuccessResult(snakeOutput(read ? await service.getMyMindConfiguration(request.actor) :
+            await service.configureMyMindDescription(request.actor, input as unknown as { description: string | null; expectedMetadataVersion: number; idempotencyKey: string })), "Personal Mind configuration.");
+        } catch (error) {
+          const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "configuration_unavailable";
+          return createMcpToolErrorResult(request.actor.requestId, code, "Personal configuration could not be completed. Re-read current configuration before rebuilding a conflicting request.", false);
+        }
+      }
+
       case "start_export":
       case "get_export_status":
         return movedExportOperationResult(request.name);

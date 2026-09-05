@@ -73,6 +73,7 @@ export interface PersonalMindProfileDescriptor {
     readonly mindId: SpaceId;
     readonly route: "/me";
     readonly name: string;
+    readonly description: string | null;
     readonly visibility: "private";
     readonly metadataVersion: number;
     readonly headRevisionId: PersonalMindProfileSnapshot["personalMind"]["headRevisionId"];
@@ -118,6 +119,7 @@ export interface PersonalMindControlDependencies {
   readonly personalMinds: PersonalMindStore;
   readonly digest: Pick<ObjectStore, "calculateSha256">;
   readonly logger?: PersonalMindControlSafeLogger;
+  readonly authorizeConfiguration?: (actor: ActorContext) => Promise<boolean>;
 }
 
 const PERSONAL_PROFILE_IDEMPOTENCY_MAX_BYTES = 256;
@@ -173,6 +175,7 @@ function personalProfileDescriptor(
       mindId: profile.personalMind.spaceId,
       route: "/me",
       name: profile.personalMind.name,
+      description: profile.personalMind.description,
       visibility: "private",
       metadataVersion: profile.personalMind.metadataVersion,
       headRevisionId: profile.personalMind.headRevisionId,
@@ -206,11 +209,13 @@ export class PersonalMindControlService {
   readonly #personalMinds: PersonalMindStore;
   readonly #digest: Pick<ObjectStore, "calculateSha256">;
   readonly #logger: PersonalMindControlSafeLogger | undefined;
+  readonly #authorizeConfiguration: PersonalMindControlDependencies["authorizeConfiguration"];
 
   constructor(dependencies: PersonalMindControlDependencies) {
     this.#personalMinds = dependencies.personalMinds;
     this.#digest = dependencies.digest;
     this.#logger = dependencies.logger;
+    this.#authorizeConfiguration = dependencies.authorizeConfiguration;
   }
 
   async resolveMyMind(
@@ -350,17 +355,36 @@ export class PersonalMindControlService {
     }
   }
 
+  async #configurationPrincipal(actor: ActorContext): Promise<PrincipalId> {
+    const sites = registeredSitesPrincipal(actor);
+    if (sites !== null) return sites;
+    if (actor.kind === "registered_principal" && actor.authentication.kind === "mcp_token"
+      && actor.authentication.effectiveScopes.some((scope) => scope === "personal:configure")
+      && await this.#authorizeConfiguration?.(actor) === true) return actor.principalId;
+    throw new PersonalMindControlFailure("authentication_required", "Personal configuration permission is required.");
+  }
+
+  async getMyMindConfiguration(actor: ActorContext) {
+    const principalId = await this.#configurationPrincipal(actor);
+    const profile = await this.#personalMinds.readPersonalMindProfile(principalId);
+    if (profile === null || profile.principalId !== principalId) {
+      throw new PersonalMindControlFailure("personal_mind_not_found", "Personal Mind is unavailable.");
+    }
+    return Object.freeze({ description: profile.personalMind.description,
+      metadataVersion: profile.personalMind.metadataVersion });
+  }
+
+  async configureMyMindDescription(actor: ActorContext, command: UpdatePersonalMindDescriptionCommand) {
+    const result = await this.updateMyMindDescription(actor, command);
+    return Object.freeze({ description: result.personalMind.description,
+      metadataVersion: result.personalMind.metadataVersion, replayed: result.replayed });
+  }
+
   async updateMyMindDescription(
     actor: ActorContext,
     command: UpdatePersonalMindDescriptionCommand,
   ): Promise<Readonly<UpdatePersonalMindDescriptionResult>> {
-    const principalId = registeredSitesPrincipal(actor);
-    if (principalId === null) {
-      throw new PersonalMindControlFailure(
-        "authentication_required",
-        "A registered Sites principal is required.",
-      );
-    }
+    const principalId = await this.#configurationPrincipal(actor);
     const normalized = typeof command?.description === "string"
       ? normalizeOrdinaryMindDescription(command.description)
       : command?.description === null
@@ -388,6 +412,8 @@ export class PersonalMindControlService {
     const updated = await this.#personalMinds.runPersonalMindTransaction(
       (transaction) => transaction.updatePersonalMindDescription({
         principalId,
+        ...(actor.kind === "registered_principal" && actor.authentication.kind === "mcp_token"
+          ? { configurationCredential: { tokenId: actor.authentication.tokenId, bindingOwnerId: actor.authentication.bindingOwnerId } } : {}),
         description: normalized.value,
         expectedPersonalMetadataVersion: expectedMetadataVersion,
         idempotencyKey: checkedIdempotencyKey,

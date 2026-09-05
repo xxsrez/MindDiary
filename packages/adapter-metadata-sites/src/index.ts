@@ -1121,6 +1121,18 @@ export class SitesMetadataStore {
       }
       wrapper[property] = async (...args: unknown[]) => {
         let callResult: unknown;
+        if (property === "updatePersonalMindDescription") {
+          const request = args[0] as { principalId: string; occurredAt: string; configurationCredential?: { tokenId: Parameters<InMemoryMcpTokenStore["readMcpTokenForAuthorization"]>[0] } };
+          if (request.configurationCredential !== undefined) {
+            const token = await tokens.readMcpTokenForAuthorization(request.configurationCredential.tokenId);
+            if (token === null || token.principalId !== request.principalId || token.state !== "active"
+              || Date.parse(token.expiresAt) <= Date.parse(request.occurredAt)
+              || !token.scopes.some((scope) => scope === "personal:configure")) {
+              // A rejected call is never journalled as an executable mutation.
+              return Object.freeze({ kind: "configuration_forbidden" });
+            }
+          }
+        }
         if (property === "readCurrentAuthorizationState") {
           const query = args[0] as AuthorizationStateQuery;
           callResult = await currentAuthorizationStateWithToken(

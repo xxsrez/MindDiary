@@ -376,7 +376,7 @@ export function uiMind(value: unknown): UiMindCard | null {
     name,
     route,
     description: isPersonal
-      ? "Your private place for personal Memories."
+      ? descriptionExcerpt(description ?? null, "No topics configured. Used only when you ask.")
       : descriptionExcerpt(
           description ?? null,
           "A versioned Mind available through your current access.",

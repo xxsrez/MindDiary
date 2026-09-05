@@ -1,15 +1,16 @@
 # Спецификация первого прототипа
 
-> **Target amendment Release 0.3 (MD-373/MD-383, 2026-09-03).** Product intent на
-> уровне principal/Mind задаётся `disabled | read | read_write`; все credentials
-> используют одну настройку, а credential scope только сужает effective
-> capability. Ordinary `read_write` Mind разрешает automatic discussed-only OKF
-> save через `commit_changeset`. Personal `/me` не имеет description и при
-> `read_write` принимает только прямо запрошенные пользователем изменения через
-> тот же canonical write path; его write capability независимо от `0..1`
-> ordinary automatic-write Mind. Нормативная replacement specification —
-> [режимы использования Mind](mind-usage-modes.md). Historical acceptance и
-> as-built catalogs ниже не переписываются задним числом.
+> **Принятая целевая поправка ADR-0025, 2026-09-05; ещё не реализована.**
+> `usage_mode` определяет разрешённые действия, description — темы.
+> Personal `/me` получает опциональное description, настраиваемое через узкую
+> MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
+> Без description Personal читается/изменяется только по прямой просьбе;
+> с description используется автоматически по теме в пределах `read | read_write`.
+> Один ordinary writable Mind и Personal независимы; при совпадении обоих
+> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> и неявного раскрытия Personal в shared Mind. Полный контракт —
+> [режимы использования Mind](mind-usage-modes.md). Historical sections ниже не
+> переопределяют этот target и не доказывают его реализацию.
 
 Статус: proposal, обновлено 2026-08-27. Product requirements ниже приняты;
 Product Site и direct route/compatibility repair реализованы и развёрнуты как

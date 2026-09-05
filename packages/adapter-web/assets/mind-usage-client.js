@@ -35,9 +35,7 @@
   };
   const safeItem = (value) => {
     const personal = value?.is_personal === true;
-    const descriptionShape = personal
-      ? !Object.hasOwn(value, "description")
-      : value?.description === null || (typeof value?.description === "string" && [...value.description].length <= 500);
+    const descriptionShape = value?.description === null || (typeof value?.description === "string" && [...value.description].length <= 500);
     if (
       !value || typeof value !== "object" || !safeRef(value.mind_ref) ||
       typeof value.name !== "string" || value.name.length === 0 || value.name.length > 80 ||
@@ -87,7 +85,7 @@
       : "Public — listed for signed-in readers";
   const effectiveCopy = (item) => item.effective.can_write
     ? item.is_personal
-      ? "Reading and specifically requested writes are effective for a write-scoped credential."
+      ? item.description ? "Reading and saving matching discussed knowledge are enabled for a write-scoped credential." : "Reading and specifically requested writes are effective for a write-scoped credential."
       : "Read and automatic writes are effective for a write-scoped credential."
     : item.effective.can_read
       ? "Reading is effective for a read-scoped credential; writing is not."
@@ -125,9 +123,9 @@
     const link = node("a", "", item.name);
     link.href = item.mind_ref;
     title.append(link);
-    const description = node("p", "md-usage-copy", item.is_personal
-      ? "My Mind is independent of the ordinary automatic-save destination. Codex uses it only when you name it, and writes only when you directly request a specific change."
-      : item.description ?? "No routing description. Semantic matching is unavailable.");
+    const description = node("p", "md-usage-copy", item.description ?? (item.is_personal
+      ? "No topics configured. Codex uses My Mind only when you ask. Ask Codex to configure your topics and exclusions."
+      : "No routing description. Semantic matching is unavailable."));
     const metadata = node("dl", "md-card__metadata");
     const definition = (term, value) => {
       const group = node("div");
@@ -149,10 +147,10 @@
     fieldset.append(
       node("legend", "", "Agent mode"),
       modeOption(item, "disabled", "Off", "Do not expose this Mind to Codex."),
-      modeOption(item, "read", "Read only", item.is_personal
+      modeOption(item, "read", "Read only", item.is_personal && !item.description
         ? "Use it when you name My Mind directly."
         : "Use it when you name it or its description matches the topic."),
-      modeOption(item, "read_write", "Read and write", item.is_personal
+      modeOption(item, "read_write", "Read and write", item.is_personal && !item.description
         ? "Allow only the specific saves, updates, or deletions you directly ask Codex to make."
         : "Also save discussed durable knowledge that matches this description."),
     );
@@ -165,7 +163,7 @@
       warningList.append(list);
     }
     const receipt = node("p", "md-usage-copy", item.is_personal
-      ? "After a requested write, Codex should report what changed in My Mind after server read-back."
+      ? "After a write, Codex should report what changed in My Mind after server read-back."
       : "After an automatic write, Codex should report what changed and which Mind received it, after server read-back.");
     const actions = node("div", "md-usage-actions");
     const submit = node("button", "md-button md-button--primary", "Save agent mode");

@@ -1539,7 +1539,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   );
   const personal = enabledMinds.minds.find(({ route }) => route === "/me");
   assert.ok(personal);
-  assert.equal(Object.hasOwn(personal, "description"), false);
+  assert.equal(personal.description, null);
   assert.equal(personal.routing_profile, "personal_default");
   assert.equal(personal.usage_mode, "read_write");
 
@@ -2383,7 +2383,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     reconstructedMindsBody.data.map(({ route }) => route),
     ["/me", "/runtime-shared"],
   );
-  assert.equal(Object.hasOwn(reconstructedMindsBody.data[0], "description"), false);
+  assert.equal(reconstructedMindsBody.data[0].description, null);
   assert.equal(
     reconstructedMindsBody.data[1].description,
     "Runtime Mind\ndescription",
@@ -2639,7 +2639,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.ok(personalMind);
   assert.equal(personalMind.route, "/me");
   assert.equal(personalMind.discovery, "personal");
-  assert.equal(Object.hasOwn(personalMind, "description"), false);
+  assert.equal(personalMind.description, null);
   assert.equal(personalMind.routing_profile, "personal_default");
   assert.equal(personalMind.usage_mode, "read_write");
   assert.equal(
@@ -4331,4 +4331,68 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     assert.equal(line.includes(recoveryMarker), false);
     assert.equal(line.includes("recovery.owner@example.com"), false);
   }
+});
+
+test("Personal configuration MCP is scoped, metadata-only, CAS protected and shared by both profiles", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const options = { database, bucket, publicOrigin: ORIGIN, schedule() {}, observabilityWriter: { write() {} },
+    identity: { readVerifiedIdentity: () => ({ kind: "authenticated",
+      verifiedEmail: "configuration@example.com", verifiedFullName: "Configuration Owner" }) },
+    tokenVerifierKey: key(1), locatorKey: key(41), exportDownloadVerifierKey: key(81), csrfKey: key(121) };
+  let runtime = await createProductSiteRuntime(options);
+  let csrf = csrfFromHtml(await (await responseFrom(runtime, new Request(`${ORIGIN}/`))).text());
+  const mutate = (path, body, id) => responseFrom(runtime, new Request(`${ORIGIN}${path}`, {
+    method: "POST", headers: { origin: ORIGIN, "content-type": "application/json",
+      "x-csrf-token": csrf, "idempotency-key": id }, body: JSON.stringify(body) }));
+  const bootstrapResponse = await mutate("/api/v1/account", { action: "create_isolated_account" }, "configuration-bootstrap");
+  assert.equal(bootstrapResponse.status, 200, await bootstrapResponse.text());
+  csrf = csrfFromHtml(await (await responseFrom(runtime, new Request(`${ORIGIN}/me`))).text());
+  const issue = async (scopes, id) => {
+    const response = await mutate("/api/v1/mcp-tokens", { name: id, scopes }, id);
+    assert.equal(response.status, 200);
+    return (await response.json()).data.secret;
+  };
+  const oldToken = await issue(["content:write"], "configuration-old");
+  const token = await issue(["personal:configure"], "configuration-only");
+  const call = async (secret, name, args, compat = false) => {
+    const response = await (compat ? legacyMcp : modernMcp)(runtime, secret, {
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args,
+        _meta: { "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+          "io.modelcontextprotocol/clientInfo": { name: "configuration-test", version: "1" },
+          "io.modelcontextprotocol/clientCapabilities": {} } } });
+    assert.equal(response.status, 200);
+    return (await response.json()).result;
+  };
+  const denied = await call(oldToken, "get_personal_mind_configuration", {});
+  assert.equal(denied.isError, true);
+  assert.equal(denied.structuredContent.error.code, "insufficient_scope");
+  const initial = await call(token, "get_personal_mind_configuration", {});
+  assert.equal(initial.isError, false, JSON.stringify(initial));
+  assert.deepEqual(Object.keys(initial.structuredContent.data).sort(), ["description", "metadata_version"]);
+  assert.equal(initial.structuredContent.data.description, null);
+  const request = { description: "Engineering decisions; exclude daily logs",
+    expected_metadata_version: initial.structuredContent.data.metadata_version,
+    idempotency_key: "configuration-set" };
+  const updated = await call(token, "set_personal_mind_description", request);
+  assert.equal(updated.isError, false, JSON.stringify(updated));
+  assert.equal(updated.structuredContent.data.description, request.description);
+  assert.equal((await call(token, "set_personal_mind_description", { ...request, mind: "foreign" })).isError, true);
+  const stale = await call(token, "set_personal_mind_description", { ...request, description: "Other", idempotency_key: "configuration-stale" });
+  assert.equal(stale.structuredContent.error.code, "metadata_conflict");
+  runtime = await createProductSiteRuntime(options);
+  const replay = await call(token, "set_personal_mind_description", request, true);
+  assert.equal(replay.isError, false, JSON.stringify(replay));
+  assert.equal(replay.structuredContent.data.replayed, true);
+  const readBack = await call(token, "get_personal_mind_configuration", {}, true);
+  assert.equal(readBack.structuredContent.data.description, request.description);
+  const cleared = await call(token, "set_personal_mind_description", {
+    description: "   ", expected_metadata_version: readBack.structuredContent.data.metadata_version,
+    idempotency_key: "configuration-clear" });
+  assert.equal(cleared.structuredContent.data.description, null);
+  const content = await call(token, "commit_changeset", {});
+  assert.equal(content.isError, true);
+  const metadata = await createSitesMetadataStore(database);
+  const account = await metadata.readAccountByExternalBinding({ provider: "openai-sites", normalizedBinding: "configuration@example.com" });
+  assert.equal(await metadata.readPrincipalMindUsage(account.principal.principalId), null);
 });

@@ -21,6 +21,8 @@ import {
   type Principal,
   type PrincipalAccountSnapshot,
   type PrincipalId,
+  type TokenId,
+  type MindBindingOwnerId,
   type JobId,
   type OutboxMessageId,
   type PrincipalState,
@@ -193,6 +195,7 @@ export type RenamePersonalProfileResult =
   | { readonly kind: "not_found" | "invalid_record" };
 
 export interface UpdatePersonalMindDescriptionRequest {
+  readonly configurationCredential?: { readonly tokenId: TokenId; readonly bindingOwnerId: MindBindingOwnerId };
   readonly principalId: PrincipalId;
   readonly description: string | null;
   readonly expectedPersonalMetadataVersion: Version;
@@ -213,6 +216,7 @@ export type UpdatePersonalMindDescriptionResult =
     }
   | {
       readonly kind:
+        | "configuration_forbidden"
         | "description_required_for_write"
         | "idempotency_conflict"
         | "not_found"

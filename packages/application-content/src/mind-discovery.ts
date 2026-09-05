@@ -119,7 +119,7 @@ export interface MindDiscoveryDescriptor {
   readonly route: string;
   readonly handle: string | null;
   readonly name: string;
-  /** Authorized untrusted routing category. Personal Mind intentionally omits it. */
+  /** Authorized untrusted routing category. Personal Mind may leave it null. */
   readonly description?: string | null;
   /** Model-visible selection/write policy derived only from the server-owned Mind kind. */
   readonly routingProfile: "personal_default" | "description_based";
@@ -1196,6 +1196,7 @@ export class MindDiscoveryService {
         handle: null,
         name: profile.personalMind.name,
         routingProfile: "personal_default",
+        description: profile.personalMind.description,
         isPersonal: true,
         visibility: "private",
         discovery: "personal",

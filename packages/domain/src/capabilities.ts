@@ -80,11 +80,13 @@ export function revisionModeAllowsCapability(
 }
 
 export function normalizeTokenScopes(scopes: readonly TokenScope[]): EffectiveTokenScopes {
-  if (scopes.includes("content:write")) {
-    return Object.freeze(["content:read", "content:write"] as const);
+  if (scopes.some((scope) => !["content:read", "content:write", "personal:configure"].includes(scope))) {
+    throw new TypeError("Unsupported token scope");
   }
-  if (scopes.includes("content:read")) {
-    return Object.freeze(["content:read"] as const);
-  }
-  throw new TypeError("token scopes must include content:read or content:write");
+  const normalized: TokenScope[] = [];
+  if (scopes.includes("content:read") || scopes.includes("content:write")) normalized.push("content:read");
+  if (scopes.includes("content:write")) normalized.push("content:write");
+  if (scopes.includes("personal:configure")) normalized.push("personal:configure");
+  if (normalized.length === 0) throw new TypeError("At least one supported token scope is required");
+  return Object.freeze(normalized) as EffectiveTokenScopes;
 }

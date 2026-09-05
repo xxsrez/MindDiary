@@ -60,7 +60,7 @@ test("principal Mind usage fixture is a closed versioned contract", () => {
   assert.deepEqual(fixture.writeLanes, {
     independent: true,
     ordinary: "automatic_save",
-    personal: "direct_request_only",
+    personal: "description_or_direct_request",
   });
   assert.equal(
     fixture.switchBehavior,
@@ -75,8 +75,8 @@ test("principal Mind usage fixture is a closed versioned contract", () => {
 test("routing separates user intent, model policy and server authority", () => {
   assert.equal(fixture.description.modelVisible, true);
   assert.equal(fixture.description.trustedInstruction, false);
-  assert.deepEqual(fixture.description.appliesTo, ["ordinary_mind"]);
-  assert.deepEqual(fixture.description.absentFrom, ["personal_mind"]);
+  assert.deepEqual(fixture.description.appliesTo, ["ordinary_mind", "personal_mind"]);
+  assert.deepEqual(fixture.description.absentFrom, []);
   assert.deepEqual(fixture.description.requiredFor, ["ordinary_read_write"]);
   assert.deepEqual(fixture.description.routes, ["read", "write"]);
   assert.deepEqual(
@@ -99,9 +99,9 @@ test("routing separates user intent, model policy and server authority", () => {
 test("canonical Personal Mind is requested-write-only without description", () => {
   const personal = fixture.agentRouting.profiles.personal_default;
   assert.equal(personal.appliesTo, "personal_mind");
-  assert.deepEqual(personal.readTriggers, ["explicit_user_request"]);
-  assert.deepEqual(personal.writeTriggers, ["explicit_personal_write_request"]);
-  assert.equal(personal.automaticSave, false);
+  assert.deepEqual(personal.readTriggers, ["explicit_user_request", "nonempty_description_match"]);
+  assert.deepEqual(personal.writeTriggers, ["explicit_personal_write_request", "nonempty_description_match_after_explicit_discussion"]);
+  assert.equal(personal.automaticSave, true);
   assert.deepEqual(fixture.agentRouting.personalWriteNonTriggers, [
     "topic_match",
     "discussion_only",
@@ -110,16 +110,16 @@ test("canonical Personal Mind is requested-write-only without description", () =
   ]);
   assert.equal(fixture.agentRouting.trustedClientIntentFlag, false);
   assert.match(specification, /Personal `\/me`.*без description/s);
-  assert.match(specification, /текущий пользователь прямо\s+просит/u);
-  assert.match(pluginConnector, /ни совпадение темы, ни[\s\S]*не запускают write/u);
+  assert.match(specification, /прямой просьбе/u);
+  assert.match(pluginConnector, /ADR-0025/u);
   assert.match(pluginConnector, /только после прямой просьбы текущего[\s\S]*пользователя/u);
   assert.match(pluginConnector, /клиентского intent[\s\S]*flag нет/u);
 });
 
 test("ordinary automatic save is discussed-only canonical OKF work", () => {
-  assert.equal(fixture.automaticSave.enabledBy, "ordinary_mind_read_write");
-  assert.equal(fixture.automaticSave.routingProfile, "description_based");
-  assert.deepEqual(fixture.automaticSave.excludedRoutingProfiles, ["personal_default"]);
+  assert.equal(fixture.automaticSave.enabledBy, "effective_read_write_and_nonempty_description");
+  assert.equal(fixture.automaticSave.routingProfile, "either_profile");
+  assert.deepEqual(fixture.automaticSave.excludedRoutingProfiles, []);
   assert.equal(fixture.automaticSave.separateToggle, false);
   assert.equal(fixture.automaticSave.perWriteConfirmation, false);
   assert.equal(fixture.automaticSave.requiresUserNotification, true);

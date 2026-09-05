@@ -96,7 +96,7 @@ test("full schema inventory stays closed while the deployed default catalog omit
     inputSchema,
     outputSchema,
   }));
-  assert.equal(current.length, 18);
+  assert.equal(current.length, 20);
   const nativeIngress = current.find(({ name }) => name === "get_file_ingress_capabilities");
   assert.deepEqual(
     nativeIngress?.outputSchema?.properties?.data?.properties?.native_file_parameter?.required,
@@ -113,11 +113,11 @@ test("full schema inventory stays closed while the deployed default catalog omit
   const verifiedNativeCatalog = current.filter(
     ({ name }) => name !== "open_bundle_file_picker",
   );
-  assert.equal(verifiedNativeCatalog.length, 17);
+  assert.equal(verifiedNativeCatalog.length, 19);
   assert.equal(assertCodexCompatibleVerifiedNativeCatalog(verifiedNativeCatalog), true);
   const defaultWriteCatalog = current.filter(({ name }) =>
     name !== "open_bundle_file_picker" && name !== "stage_bundle_file");
-  assert.equal(defaultWriteCatalog.length, 16);
+  assert.equal(defaultWriteCatalog.length, 18);
   assert.equal(assertCodexCompatibleDefaultWriteCatalog(defaultWriteCatalog), true);
   assert.equal(assertCodexCompatibleReadCatalog(current.filter(
     ({ name }) => name !== "open_bundle_file_picker" &&
@@ -246,13 +246,13 @@ test("Codex prompt-input parser proves the installed skill is model-visible", ()
 test("installed skill principal-owned Mind usage policy is complete and fail-closed", () => {
   const policy = [
     "Start each relevant workflow with fresh `list_minds`",
-    "Personal Mind has `routing_profile=personal_default` and no description",
+    "Personal Mind has `routing_profile=personal_default` and an optional description",
     "When the current user names Personal Mind or asks to read or use My Mind",
     "Otherwise select only the readable Mind or Minds whose descriptions genuinely fit",
-    "For Personal Mind, write only when the current user directly asks in this conversation",
-    "Discussion, durability, relevance, ambiguity, a previous request or reading another Mind does not authorize a Personal write",
+    "For Personal Mind without a description, write only when the current user directly asks in this conversation",
+    "If both descriptions match, save in both Minds independently",
     "consider every newly discussed piece of durable knowledge for automatic preservation",
-    "Do not ask for a separate write instruction, toggle or confirmation for a qualifying ordinary-Mind save",
+    "No extra confirmation is needed for a qualifying save",
     "pass optional `source_references` with the exact enabled source Mind",
     "Fetch a targeted existing Memory before deciding whether the result is a create, update, explicit delete or semantic no-op",
     "Validate the complete proposed OKF 0.2 bundle before commit",

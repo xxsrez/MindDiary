@@ -194,7 +194,7 @@ export function jsonResponse(
 
 function oauthChallenge(
   oauth: McpHttpHandlerDependencies["oauth"],
-  scope: "content:read" | "content:write" = "content:read",
+  scope: "content:read" | "content:write" | "personal:configure" = "content:read",
 ): string {
   return oauth === undefined
     ? MCP_WWW_AUTHENTICATE
@@ -1475,6 +1475,12 @@ export function createMcpHttpHandlerAtEndpoint(
         "tool_denied",
       );
       return response;
+    }
+
+    if ((name === "get_personal_mind_configuration" || name === "set_personal_mind_description")
+      && !actor.authentication.effectiveScopes.some((scope) => scope === "personal:configure")) {
+      return toolError(rpc.id, requestId, "insufficient_scope", "Personal configuration permission is required.", responseFormat, false,
+        Object.freeze({ "mcp/www_authenticate": Object.freeze([oauthChallenge(dependencies.oauth, "personal:configure")]) }));
     }
 
     if (

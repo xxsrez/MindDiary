@@ -384,7 +384,7 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
   assert.deepEqual(await protectedMetadata.json(), {
     resource: `${ORIGIN}/api/mcp`,
     authorization_servers: [ORIGIN],
-    scopes_supported: ["content:read", "content:write"],
+    scopes_supported: ["content:read", "content:write", "personal:configure"],
     resource_name: "Mind Diary",
     resource_documentation: `${ORIGIN}/settings/developer/mcp`,
   });
@@ -643,4 +643,28 @@ test("OAuth rejects redirect/resource confusion and expires access tokens", asyn
     await connector.authenticator.authenticate(tokens.access_token, "request_expired"),
     { kind: "invalid" },
   );
+});
+
+
+test("Personal configuration scope is explicit, independent and preserved by refresh", async () => {
+  const { connector } = await environment();
+  const client = await register(connector);
+  const old = await authorize(connector, client.client_id);
+  assert.equal(old.scope, "content:read");
+  const configured = await authorize(connector, client.client_id, "personal:configure");
+  const authentication = await connector.authenticator.authenticate(configured.access_token, "request_configuration_scope");
+  assert.equal(authentication.kind, "authenticated");
+  assert.ok(authentication.actor.authentication.effectiveScopes.includes("personal:configure"));
+  const oldAuthentication = await connector.authenticator.authenticate(old.access_token, "request_old_scope");
+  assert.equal(oldAuthentication.kind, "authenticated");
+  assert.deepEqual(oldAuthentication.actor.authentication.effectiveScopes, ["content:read"]);
+  const response = await connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: configured.refresh_token,
+      client_id: client.client_id, resource: `${ORIGIN}/api/mcp` }) }));
+  assert.equal(response.status, 200);
+  const refreshed = await response.json();
+  const freshAuthentication = await connector.authenticator.authenticate(refreshed.access_token, "request_refreshed_configuration");
+  assert.equal(freshAuthentication.kind, "authenticated");
+  assert.deepEqual(freshAuthentication.actor.authentication.effectiveScopes, authentication.actor.authentication.effectiveScopes);
 });

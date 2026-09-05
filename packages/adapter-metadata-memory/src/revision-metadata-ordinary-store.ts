@@ -19,6 +19,8 @@ import {
   cloneBackgroundJob,
   cloneIndexState,
   clonePersonalProfileIdempotencyRecords,
+  clonePrincipalMindUsageOwners,
+  refreshMindDescriptionGenerations,
   cloneRecordMap,
   cloneSpaces,
   externalBindingKey,
@@ -43,6 +45,7 @@ async runPersonalMindTransaction<Result>(
     ): Promise<Result> {
       return this._runExclusive(async () => {
         const principals = cloneRecordMap(this._principals, freezePrincipal);
+        const usageOwners = clonePrincipalMindUsageOwners(this._principalMindUsageOwners);
         const knowledgeSpaces = cloneRecordMap(
           this._knowledgeSpaces,
           freezeKnowledgeSpace,
@@ -154,6 +157,12 @@ async runPersonalMindTransaction<Result>(
           updatePersonalMindDescription: async (
             request: UpdatePersonalMindDescriptionRequest,
           ): Promise<UpdatePersonalMindDescriptionResult> => {
+            if (request.configurationCredential !== undefined) {
+              const owner = this._credentialWriteTargetOwners.get(request.configurationCredential.bindingOwnerId);
+              if (owner?.state.principalId !== request.principalId || owner.state.lifecycleState !== "active") {
+                return Object.freeze({ kind: "configuration_forbidden" });
+              }
+            }
             const idempotencyRecordKey = personalDescriptionIdempotencyKey(
               request.principalId,
               request.idempotencyKey,
@@ -216,6 +225,9 @@ async runPersonalMindTransaction<Result>(
             if (updatedAccount === null) return Object.freeze({ kind: "invalid_record" });
             const profile = personalMindProfileFromAccount(updatedAccount);
             knowledgeSpaces.set(personalSpace.spaceId, updatedSpace);
+            if (updatedSpace.description !== personalSpace.description) {
+              await refreshMindDescriptionGenerations(usageOwners, personalSpace.spaceId, request.occurredAt);
+            }
             idempotencyRecords.set(idempotencyRecordKey, Object.freeze({
               principalId: request.principalId,
               key: request.idempotencyKey,
@@ -230,6 +242,7 @@ async runPersonalMindTransaction<Result>(
         this._principals = principals;
         this._knowledgeSpaces = knowledgeSpaces;
         this._personalProfileIdempotencyRecords = idempotencyRecords;
+        this._principalMindUsageOwners = usageOwners;
         return result;
       });
     }

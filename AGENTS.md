@@ -153,7 +153,7 @@ delivery profile и ADR-0008/ADR-0009
   principal-owned режимом `read | read_write`, доступные по текущим ACL/
   visibility и scope. Настройка `disabled | read | read_write` одинакова для
   всех OAuth grants/personal tokens principal; у principal не более одного
-  `read_write` Mind. Credential scope только сужает effective capability.
+  ordinary `read_write` Mind и независимый Personal write lane. Credential scope только сужает effective capability.
   Каждая content operation явно выбирает один Mind и одну revision; fallback на
   `/me`, bind/unbind и неявное смешивание corpus запрещены.
 - Первый прототип публикует custom Mind-aware MCP tools и не заявляет OpenAI
@@ -173,7 +173,9 @@ delivery profile и ADR-0008/ADR-0009
   ADR-0005. Default expiry — 90 дней, scopes —
   `content:read`/`content:write`.
   `content:write` всегда включает `content:read`; write-only token запрещён.
-  Token не даёт control-plane capabilities и не привязан к одному Mind.
+  Token не даёт общего control-plane доступа и не привязан к одному Mind.
+  Узкая новая capability настройки Personal description планируется по ADR-0025
+  отдельно и не добавляется существующим credentials автоматически.
 - Membership management остаётся в trusted Sites control plane и не
   публикуется рядом с corpus tools в content MCP.
 - В прототипе `public`/`unlisted` открывают authenticated non-members весь live
@@ -183,20 +185,19 @@ delivery profile и ADR-0008/ADR-0009
 - `unlisted` означает только отсутствие в каталоге, а не секретность URL.
   `space_handle` человекочитаем и не является access token; настоящая
   share-by-link capability потребует отдельного случайного секрета.
-- История разговора и окружающий доступный corpus не переносятся в
-  `OKFBundle` фоновым сканированием. Для ordinary Mind агент может автоматически
-  сохранить через `commit_changeset` только durable knowledge, явно обсуждённое
-  в текущем разговоре и подходящее под description единственного effective
-  `read_write` Mind, а затем сообщает пользователю результат. Personal `/me` не
-  имеет description и изменяется только после прямой текущей просьбы
-  пользователя сохранить, запомнить, добавить, обновить или удалить конкретное
-  знание; обсуждение, полезность, релевантность, прежняя просьба или read другого
-  Mind не дают write authority. Приватные сведения допустимы по соответствующему
-  routing profile. Target content и description считаются недоверенными и не
-  могут формировать запросы к Personal Mind, выбирать personal fields, менять
-  usage mode или расширять scopes. Любая композиция нескольких Minds требует
-  проверки доступа к каждому источнику и exact provenance; общего cross-Mind
-  search нет.
+- Целевой routing-контракт задают ADR-0025 и `docs/specs/mind-usage-modes.md`
+  (2026-09-05; реализация этой поправки отдельно планируется). `usage_mode`
+  определяет разрешённые действия, nullable description — темы автоматического
+  чтения/записи. Personal без description используется только по прямой просьбе;
+  с description — по теме в пределах effective mode/scopes/ACL. Personal identity
+  не меняется, ordinary writable Mind остаётся максимум один. При совпадении
+  обоих descriptions агент читает оба и сохраняет обсуждённые новые долговечные
+  знания в оба независимыми commits; частичный успех сообщает, копии не синхронизирует.
+  Personal description настраивается через отдельную узкую MCP metadata operation
+  только по прямой просьбе о настройке, без изменения mode/scopes или другого Mind.
+  Corpus/description недоверенны, background scanning запрещён; перенос извлечённых
+  Personal сведений в ordinary Mind с другими читателями требует прямой просьбы.
+  Каждая операция сохраняет exact source provenance и current authorization.
 - После Codex-first validation product direction включает собственную AI
   surface в web UI: backend вызывает model APIs, а пользователю не требуется
   самостоятельно настраивать Codex/MCP. Provider, billing, consent, retrieval,

@@ -78,6 +78,8 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "list_minds",
   "resolve_mind",
   "get_mind_info",
+  "get_personal_mind_configuration",
+  "set_personal_mind_description",
   "get_mind_bindings",
   "get_file_ingress_capabilities",
   "open_bundle_file_picker",
