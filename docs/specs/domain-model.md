@@ -134,6 +134,12 @@ provisioning не используется: первый пользовател�
 
 ### Test-only identity boundary
 
+[ADR-0026](../decisions/0026-autonomous-acceptance-environment.md) разрешает
+также отдельную hosted test composition с краткоживущими проверенными сессиями.
+Она имеет собственные origin/storage/build entrypoint. Ограничения ниже на
+обычный Product Worker сохраняются; тестовый вход не включается в нём cookie
+или runtime flag. После входа все product commands и проверки остаются обычными.
+
 `SyntheticPrincipal` не является сущностью этой модели, subtype `Principal`,
 login account, persisted actor kind или service principal. Это только actor
 class автоматического release probe из

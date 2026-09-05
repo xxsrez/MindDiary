@@ -221,20 +221,20 @@ Replay exchange, wrong audience, expired/revoked run и actor из другог�
 должны завершаться отказом до product bootstrap. Перезапуск Worker не должен
 восстанавливать использованный exchange или отозванную сессию.
 
-Это уточнение проектного предложения, ещё не accepted ADR и не реализованная
-capability. До принятия ADR нужно проверить private Sites transport и
-поддерживаемый browser execution для нового target. Прежний отказ browser tool
+Архитектура принята в [ADR-0026](../decisions/0026-autonomous-acceptance-environment.md)
+после проверки private transport и browser capability. Полная реализация
+test identity/runtime и приёмка продукта остаются следующими задачами. Прежний отказ browser tool
 из-за невозможности проверить admin policy не разрешает обходить его другим
 клиентом. REST smoke без browser не может закрыть UI acceptance.
 
 ## Текущее состояние и следующий шаг
 
-План и семь задач созданы; scope восстановлен. MD-401 выполняется:
+План и семь задач созданы; scope восстановлен. Работа MD-401 завершена:
 исторический пул и доступный identity seam проверены, противоречие профиля
-исправлено. Platform transport и browser capability ещё не проверены; ADR
-не принят, MD-402–MD-407 не начаты. Прямое разрешение на bypass token получено.
-Следующий шаг — опубликовать ограниченный capability probe и проверить
-возможности, затем завершить контракт MD-401.
+исправлено. Platform transport, persistence/redeploy/cleanup и browser
+capability проверены; принят ADR-0026. Прямое разрешение на bypass token получено.
+Следующий шаг — MD-402, общие product modules в отдельной сборке; затем MD-403,
+краткоживущие test sessions. MD-402–MD-407 ещё не завершены.
 
 Создан новый Site `appgprj_example8ca2ca9e5243cfd6`, ожидаемый origin
 `https://mind-diary-acceptance.example.invalid`; это отдельная тестовая
@@ -253,5 +253,24 @@ product identity adapter. `reserve` выдаёт случайный recovery ID 
 контроллер обязан сохранить его до setup. Setup повторяем, verify сравнивает
 синтетический marker в D1/R2, cleanup удаляет только этот ID и подтверждает
 отсутствие. Каждый API request требует controller key; чужой Origin запрещён.
-Целевые negative tests: 3/3 passed. Полный repository gate и hosted probe ещё
-не завершены; эти результаты не являются продуктовой приёмкой.
+Целевые negative tests: 3/3 passed. Полный repository gate: 1125 tests и 68
+browser tests passed; CI `33990033364` passed на candidate
+`0d273aeec4fda1435270c1e8fda02bdbbfd12c21`. Source mirror
+`a7edb416ada7ff9dafc9cf5b6374ccf3c4df3d32` имеет exact subtree
+`d36afb2dbe4b2e3f739cd74e57bd83227005cfab`. Версия тестового Site — 1;
+deployment `appgdep_examplea127b98954bb14ff` и controlled redeploy
+`appgdep_example8ef0c54b1da85c8c` succeeded, env revision 1.
+Provider archive hash — `05b29b55d30a801cb05ae9bd6cb08669fc4004a2b465f871952ac8d210a874ca`.
+Без platform token запрос вернул 401, без controller key — 401, с чужим
+Origin — 403. D1/R2 marker совпал до и после redeploy. Cleanup и повторный
+cleanup вернули `cleaned`; journal сохранён закрыто. Live D1 overview нового
+Site показал только `md_acceptance_probe`, без product tables другого target.
+
+Встроенный Codex Browser прошёл штатный owner login и показал страницу стенда.
+`Target.createBrowserContext` через его CDP не поддержан. Отдельный CI workflow
+`Acceptance platform capability`, run `33990514407`, успешно проверил два
+изолированных headless browser contexts, отсутствие общей cookie и открытие
+private Site с platform token. Runner SHA
+`40e3596c0dd95e92ea1986d60a4d865932bde5f7`; это отдельный carrier от deployment
+candidate. Ни эти результаты, ни принятый ADR не являются полной продуктовой
+приёмкой или основанием закрыть MD-399.
