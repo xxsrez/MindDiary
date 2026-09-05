@@ -115,3 +115,18 @@ approval policy `never` до запуска команды; обходов не 
 Все временные UAT tokens отозваны, настройки восстановлены. Пользовательское
 разрешение на UAT тесты больше не является blocker; нужен доступ инструмента
 к отправке подготовленного source. Goal остаётся active до blocked audit.
+
+## Актуальный результат после включения Custom
+
+Source push завершён, исправленный candidate `d54718de` опубликован в UAT 124;
+deployment `appgdep_example4e0213a4ab443261` succeeded. Этап нового
+выпуска завершён. Локальные проверки и CI подтверждены отдельно в отчёте.
+Настройка Custom устранила прежний отказ shell; его больше не считать blocker.
+
+Остаются незавершёнными положительные hosted проверки исправленных combined
+scopes и browser checkbox, performance/canary и поведенческие сценарии
+MD-398. In-app Browser сейчас не допускает открытие UAT: невозможно проверить
+admin-enforced policy. Старый native MCP credential корректно не имеет нового
+scope. Новые credentials не созданы; ни обхода браузерного отказа, ни изменений
+пользовательского corpus не выполнялось. MD-396/397/399 и Epic In Progress,
+MD-398 In Review, MD-395 Done. Полная приёмка остаётся открытой.
