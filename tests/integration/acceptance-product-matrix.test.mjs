@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { AcceptanceClient } from "../../scripts/lib/acceptance-client.mjs";
 import { createCollaborationFixture } from "../../scripts/lib/acceptance-fixture.mjs";
 import { verifyProductMatrix } from "../../scripts/lib/acceptance-product-matrix.mjs";
+import { verifyAclMatrix } from "../../scripts/lib/acceptance-acl-matrix.mjs";
 import { acceptanceRuntime } from "../helpers/acceptance-runtime.mjs";
 
 test("real composition verifies nine Personal description/mode cells and stale commits", async t => {
@@ -13,5 +14,6 @@ test("real composition verifies nine Personal description/mode cells and stale c
     const fixture = await createCollaborationFixture(client);
     const result = await verifyProductMatrix(client, fixture);
     assert.equal(result.personal_mode_description_cells.length, 9);
+    assert.deepEqual((await verifyAclMatrix(client, fixture)).roles, ["editor", "reader", "outsider"]);
   } finally { assert.equal((await client.cleanup()).state, "cleaned"); }
 });
