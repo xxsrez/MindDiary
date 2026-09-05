@@ -10,7 +10,10 @@ import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 // Publish the bounded phase only; never serialize assertion inputs or raw errors.
 let phase = "configuration";
 const diagnostics = [];
-process.once("uncaughtException", () => { console.error(JSON.stringify({ status: "failed", phase, diagnostics: diagnostics.slice(-12) })); process.exit(1); });
+process.once("uncaughtException", error => {
+  const kind = error.message?.includes("strict mode violation") ? "ambiguous_locator" : error.name === "TimeoutError" ? "timeout" : error.name === "AssertionError" ? "assertion" : "runtime";
+  console.error(JSON.stringify({ status: "failed", phase, kind, diagnostics: diagnostics.slice(-12) })); process.exit(1);
+});
 
 const origin = "https://mind-diary-acceptance.example.invalid";
 const platformToken = process.env.MD_ACCEPTANCE_PLATFORM_TOKEN;
@@ -76,7 +79,7 @@ try {
   phase = "token_forms";
   for (const configure of [false, true]) {
     await page.goto(origin + "/settings/connections", { waitUntil: "domcontentloaded" });
-    await page.getByRole("link", { name: "Advanced MCP", exact: true }).click();
+    await page.getByRole("main").getByRole("link", { name: "Advanced MCP", exact: true }).click();
     const form = page.locator("[data-token-form]");
     await form.waitFor();
     assert.equal(await form.locator('[name="personal_configure"]').isChecked(), false);
