@@ -21,10 +21,8 @@ const iconNode=(kind)=>{
   const use=document.createElementNS("http://www.w3.org/2000/svg","use");use.setAttribute("href","#md-mind-icon-"+kind);svg.append(use);return svg;
 };
 const statusIcon=(kind,label)=>{
-  const disclosure=element("details","md-mind-status");
-  const summary=element("summary");summary.setAttribute("aria-label",label);summary.title=label;
-  const icon=iconNode(kind);
-  summary.append(icon,element("span","md-mind-status__tooltip",label));disclosure.append(summary);return disclosure;
+  const button=element("button","md-mind-status");button.type="button";button.setAttribute("aria-label",label);
+  button.append(iconNode(kind));return button;
 };
 const agentMode=(route,usage)=>{
   const known=["disabled","read","read_write"].includes(usage?.mode)&&typeof usage?.can_read==="boolean"&&typeof usage?.can_write==="boolean";

@@ -1,6 +1,60 @@
 (() => {
   const shell = document.querySelector("[data-mind-diary-shell]");
   if (!shell) return;
+  if (shell.matches('[data-management-view="list"]')) {
+    // One top-layer tooltip: no sticky per-icon disclosure or ancestor clipping.
+    const statusTooltip = document.createElement("div");
+    statusTooltip.id = "mind-status-tooltip";
+    statusTooltip.className = "md-mind-status__tooltip";
+    statusTooltip.setAttribute("role", "tooltip");
+    statusTooltip.setAttribute("popover", "manual");
+    document.body.append(statusTooltip);
+    let statusTrigger = null;
+    const hideStatusTooltip = () => {
+      statusTrigger?.removeAttribute("aria-describedby");
+      statusTrigger = null;
+      if (statusTooltip.matches(":popover-open")) statusTooltip.hidePopover();
+    };
+    const statusButton = target => target instanceof Element
+      ? target.closest("button.md-mind-status") : null;
+    const showStatusTooltip = button => {
+      if (!button || !shell.contains(button)) return;
+      hideStatusTooltip();
+      statusTrigger = button;
+      statusTooltip.textContent = button.getAttribute("aria-label");
+      button.setAttribute("aria-describedby", statusTooltip.id);
+      statusTooltip.showPopover();
+      const anchor = button.getBoundingClientRect();
+      const tip = statusTooltip.getBoundingClientRect();
+      const left = Math.max(8, Math.min(innerWidth - tip.width - 8, anchor.left + (anchor.width - tip.width) / 2));
+      const preferredTop = anchor.top - tip.height - 6;
+      const top = preferredTop >= 8 ? preferredTop : anchor.bottom + 6;
+      statusTooltip.style.left = `${left}px`;
+      statusTooltip.style.top = `${Math.max(8, Math.min(innerHeight - tip.height - 8, top))}px`;
+    };
+    shell.addEventListener("pointerover", event => {
+      const button = statusButton(event.target);
+      if (button && !button.contains(event.relatedTarget)) showStatusTooltip(button);
+    });
+    shell.addEventListener("pointerout", event => {
+      const button = statusButton(event.target);
+      if (button === statusTrigger && !button?.contains(event.relatedTarget)) hideStatusTooltip();
+    });
+    shell.addEventListener("focusin", event => showStatusTooltip(statusButton(event.target)));
+    shell.addEventListener("focusout", event => {
+      if (statusButton(event.target) === statusTrigger) hideStatusTooltip();
+    });
+    document.addEventListener("click", event => {
+      const button = statusButton(event.target);
+      if (button) showStatusTooltip(button);
+      else hideStatusTooltip();
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") hideStatusTooltip();
+    });
+    document.addEventListener("scroll", hideStatusTooltip, true);
+    window.addEventListener("resize", hideStatusTooltip);
+  }
   const menu = shell.querySelector("[data-menu-button]");
   const navigation = shell.querySelector("[data-navigation]");
   const backdrop = shell.querySelector("[data-navigation-backdrop]");

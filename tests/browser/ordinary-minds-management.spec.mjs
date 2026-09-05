@@ -112,7 +112,7 @@ test("shipped client keeps Personal first and creates private metadata", async (
     "data-mind-card",
     "me",
   );
-  await expect(page.locator("[data-personal-mind]")).toContainText("Private, always");
+  await expect(page.locator("[data-personal-mind]").getByRole("button", { name: "Visibility: Private, always" })).toBeVisible();
   await expect(page.locator("[data-personal-mind]")).toContainText("no separate rename");
 
   await page.getByRole("button", { name: "Create a Mind" }).first().click();

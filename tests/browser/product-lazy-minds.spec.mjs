@@ -60,7 +60,7 @@ test("heavy navigation pages render their shell before deferred collection reads
     "data-mind-card",
     "me",
   );
-  await expect(page.locator("[data-personal-mind]")).toContainText("Private, always");
+  await expect(page.locator("[data-personal-mind]").getByRole("button", { name: "Visibility: Private, always" })).toBeVisible();
 
   await page.unroute("**/api/v1/minds");
   await page.route("**/api/v1/minds", async (route) => {

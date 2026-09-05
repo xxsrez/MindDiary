@@ -52,11 +52,11 @@ test('compact status shows configured modes, accessible icons and live mode chan
   await expect(list.locator('[data-mind-card="research"] [data-agent-mode]')).toHaveText('Read');
   await expect(list.locator('[data-mind-card="product"] [data-agent-mode]')).toHaveText('Read + write');
   await expect(list.locator('[data-mind-card="travel"] [data-agent-mode]')).toHaveText('None');
-  const privacy = list.locator('[data-mind-card="research"]').locator('summary[aria-label="Visibility: Private"]');
+  const privacy = list.locator('[data-mind-card="research"]').locator('button[aria-label="Visibility: Private"]');
   await privacy.focus();
-  await expect(privacy.locator('..').locator('.md-mind-status__tooltip')).toBeVisible();
+  await expect(page.getByRole('tooltip')).toHaveText('Visibility: Private');
   await privacy.click();
-  await expect(privacy.locator('..')).toHaveAttribute('open', '');
+  await expect(page.getByRole('tooltip')).toBeVisible();
   await page.getByText('Codex access across your Minds', { exact: true }).click();
   const form = page.locator('[data-mind-usage-card="/travel"] form');
   await form.locator('input[value="read"]').check();
@@ -69,6 +69,48 @@ test('compact status shows configured modes, accessible icons and live mode chan
   await expect(list.locator('[data-mind-card="me"] [data-agent-mode]')).toHaveText('Read + write');
   await list.locator('[data-mind-card="research"] [data-agent-mode]').click();
   await expect(page).toHaveURL(`${origin}/research#mind-usage-heading`);
+});
+
+test('status tooltips are exclusive, dismissible and escape list clipping', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${origin}/minds`);
+  const icons = page.locator('[data-minds-list] .md-mind-status');
+  const tooltip = page.locator('#mind-status-tooltip');
+  await icons.first().click();
+  await expect(tooltip).toBeVisible();
+  const geometry = await tooltip.evaluate(tip => {
+    const rect = tip.getBoundingClientRect();
+    const list = document.querySelector('[data-minds-list]').getBoundingClientRect();
+    return { top: rect.top, left: rect.left, right: rect.right, aboveList: rect.top < list.top, topLayer: tip.matches(':popover-open') };
+  });
+  expect(geometry.aboveList).toBe(true);
+  expect(geometry.topLayer).toBe(true);
+  expect(geometry.top).toBeGreaterThanOrEqual(8);
+  for (const index of [1, 4, 7]) {
+    await icons.nth(index).click();
+    await expect(page.locator('.md-mind-status__tooltip:popover-open')).toHaveCount(1);
+    await expect(page.locator('.md-mind-status[aria-describedby]')).toHaveCount(1);
+  }
+  await page.mouse.move(0, 0);
+  await expect(tooltip).toBeHidden();
+  await icons.first().focus();
+  await expect(tooltip).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(tooltip).toBeHidden();
+  await icons.nth(1).click();
+  await page.getByRole('heading', { name: 'Minds', exact: true }).click();
+  await expect(tooltip).toBeHidden();
+  await icons.first().focus();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.md-mind-status__tooltip:popover-open')).toHaveCount(1);
+  await page.setViewportSize({ width: 320, height: 640 });
+  await expect(tooltip).toBeHidden();
+  await icons.nth(1).click();
+  const narrow = await tooltip.boundingBox();
+  expect(narrow.x).toBeGreaterThanOrEqual(8);
+  expect(narrow.x + narrow.width).toBeLessThanOrEqual(312);
+  await page.mouse.wheel(0, 100);
+  await expect(tooltip).toBeHidden();
 });
 
 test('direct agent-settings links open the disclosure and fetch current settings', async ({ page }) => {
@@ -85,7 +127,7 @@ test('narrow real list preserves actions and avoids clipped fields', async ({ pa
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
     const row = page.locator('[data-mind-card="research"]');
     await expect(row.getByRole('link', { name: 'Manage', exact: true })).toBeVisible();
-    await expect(row.locator('summary[aria-label="Visibility: Private"]')).toBeVisible();
+    await expect(row.locator('button[aria-label="Visibility: Private"]')).toBeVisible();
     const first = await page.locator('[data-mind-card="me"]').boundingBox();
     expect(first.y).toBeLessThan(400);
   }

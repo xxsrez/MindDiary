@@ -270,7 +270,7 @@ const MIND_STATUS_SPRITE = `<svg class="md-mind-icon-sprite" aria-hidden="true" 
 
 function renderStatusIcon(icon: string, label: string): string {
   const safeLabel = escapeUntrustedText(label);
-  return `<details class="md-mind-status"><summary aria-label="${safeLabel}" title="${safeLabel}"><svg class="md-mind-status__icon" aria-hidden="true"><use href="#md-mind-icon-${icon}" /></svg><span class="md-mind-status__tooltip">${safeLabel}</span></summary></details>`;
+  return `<button type="button" class="md-mind-status" aria-label="${safeLabel}"><svg class="md-mind-status__icon" aria-hidden="true"><use href="#md-mind-icon-${icon}" /></svg></button>`;
 }
 
 function renderMindStatuses(mind: MindListUiMind): string {

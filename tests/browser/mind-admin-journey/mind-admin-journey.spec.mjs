@@ -136,7 +136,7 @@ test("complete ordinary and Personal Mind admin journey", async ({ browser }) =>
       await register(ownerPage, ownerOrigin, "MD 351 Owner");
       await ownerPage.goto(`${ownerOrigin}/minds`);
       await expect(ownerPage.locator("[data-minds-list] [data-mind-card]").first()).toHaveAttribute("data-mind-card", "me");
-      await expect(ownerPage.locator("[data-personal-mind]")).toContainText("Private, always");
+      await expect(ownerPage.locator("[data-personal-mind]").getByRole("button", { name: "Visibility: Private, always" })).toBeVisible();
       await expect(ownerPage.locator("[data-personal-mind]")).toContainText("no separate rename");
       await ownerPage.goto(`${ownerOrigin}/me`);
       await expect(ownerPage.locator("[data-rename-mind-form], [data-owner-visibility-controls], [data-owner-delete-controls]")).toHaveCount(0);
