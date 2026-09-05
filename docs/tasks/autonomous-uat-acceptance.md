@@ -438,3 +438,20 @@ owned Minds, R2 objects/bytes, search, OAuth, actors/sessions/cleanup journal.
 результат. Сквозной тест последовательно теряет ответы bootstrap и MCP commit,
 пересоздаёт SDK после каждого и подтверждает отсутствие дублей и полный cleanup.
 Это изменение клиента не меняет опубликованный Worker.
+
+### Следующий этап: браузер и модель (MD-405, в работе)
+
+Отдельный headless Chromium в существующем CI получает четыре изолированных
+contexts. Platform bypass добавляется только к точному test origin; callback
+OAuth перехватывается внутри context и не отправляется в сеть. Bootstrap,
+создание personal token и consent выполняются настоящими формами. Один DCR
+client служит постоянной тестовой настройкой; grants/tokens принадлежат run и
+удаляются вместе с actors. Его registration не считается пользовательским login.
+
+Модель под испытанием запускается через установленный Codex App Server в свежем
+ephemeral thread с точным установленным skill и ограниченным набором proxy tools.
+Это предмет испытания, не дополнительный исполнитель Issue Grinder. Глобальные
+настройки Codex не меняются. Встроенные внешние инструменты, hooks и discovery
+других skills отключаются только в этом процессе. Бюджет, реальные traces и
+завершённое событие contextCompaction обязательны; текстовая имитация сжатия
+не принимается. Пока подтверждён только запуск App Server и model/list.

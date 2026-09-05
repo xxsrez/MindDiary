@@ -1,0 +1,33 @@
+name: Acceptance product browser
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Exact deployed acceptance candidate SHA
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: acceptance-product-browser
+  cancel-in-progress: false
+jobs:
+  browser:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install-deps chromium
+      - name: Verify real product forms and OAuth on the private test Site
+        env:
+          MD_ACCEPTANCE_PLATFORM_TOKEN: ${{ secrets.MD_ACCEPTANCE_PLATFORM_TOKEN }}
+          MD_ACCEPTANCE_CONTROLLER_KEY: ${{ secrets.MD_ACCEPTANCE_CONTROLLER_KEY }}
+          MD_ACCEPTANCE_OAUTH_CLIENT_ID: ${{ vars.MD_ACCEPTANCE_OAUTH_CLIENT_ID }}
+          MD_ACCEPTANCE_EXPECTED_SHA: ${{ inputs.candidate }}
+        run: node scripts/check-acceptance-product-browser.mjs
