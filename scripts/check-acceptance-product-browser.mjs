@@ -71,6 +71,7 @@ try {
   phase = "token_forms";
   for (const configure of [false, true]) {
     await page.goto(origin + "/settings/connections", { waitUntil: "domcontentloaded" });
+    await page.getByRole("link", { name: "Advanced MCP", exact: true }).click();
     const form = page.locator("[data-token-form]");
     await form.waitFor();
     assert.equal(await form.locator('[name="personal_configure"]').isChecked(), false);
