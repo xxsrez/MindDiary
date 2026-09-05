@@ -37,6 +37,7 @@ export interface OrdinaryMindUiMind {
 
 export interface PersonalMindUiMind {
   readonly isPersonal: true;
+  readonly description?: string | null;
   readonly mindId: string;
   readonly route: "/me";
   readonly name: string;
@@ -283,7 +284,7 @@ function renderMindStatuses(mind: MindListUiMind): string {
   const mode = candidate === "disabled" || candidate === "read" || candidate === "read_write" ? candidate : "unknown";
   const label = { disabled: "None", read: "Read", read_write: "Read + write", unknown: "Unknown" }[mode];
   const limited = mode === "read_write" && !mind.agentUsage?.canWrite;
-  const explanation = `Codex: ${label}${limited ? ". Writing is currently unavailable; check access and description." : personal && mode !== "disabled" && mode !== "unknown" ? ". Personal Mind is used only on your direct request." : "."} Open Mind settings.`;
+  const explanation = `Codex: ${label}${limited ? ". Writing is currently unavailable; check access and description." : personal && mode !== "disabled" && mode !== "unknown" ? (mind.description?.trim() ? ". Personal Mind follows its configured topics." : ". Personal Mind is used only on your direct request.") : "."} Open Mind settings.`;
   return `<div class="md-mind-statuses" role="group" aria-label="Mind status">${renderStatusIcon(role, `Access: ${access}`)}${renderStatusIcon(visibility, `Visibility: ${personal ? "Private, always" : visibilityLabel(visibility)}`)}${personal ? "" : renderStatusIcon("ready", mind.updatedLabel)}<a class="md-mind-mode" href="${route}#mind-usage-heading" data-agent-mode="${mode}" aria-label="${escapeUntrustedText(explanation)}" title="${escapeUntrustedText(explanation)}"><svg class="md-mind-status__icon" aria-hidden="true"><use href="#md-mind-icon-${limited ? "warning" : mode}" /></svg><span>${label}</span></a></div>`;
 }
 
@@ -316,7 +317,7 @@ function renderPersonalMindCard(mind: PersonalMindUiMind): string {
       <div><h3><a href="/me">My Mind</a></h3><code>/me</code></div>
       <span class="md-token-state md-token-state--active"><span aria-hidden="true">●</span> Personal</span>
     </div>
-    <p class="md-card__description">Private to you. Follows ${escapeUntrustedText(mind.name)}’s profile; no separate rename, description, publication, transfer, or deletion.</p>
+    <p class="md-card__description">Private to you. Follows ${escapeUntrustedText(mind.name)}’s profile; no separate rename, publication, transfer, or deletion. Topics can be configured through Codex.</p>
     ${renderMindStatuses(mind)}
     <div class="md-token-card__action"><a class="md-button md-button--secondary" href="/me">Open My Mind</a></div>
   </article>`;

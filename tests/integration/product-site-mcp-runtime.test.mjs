@@ -2326,7 +2326,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(codexHelpHtml, /Choose readable Minds and start/u);
   assert.match(codexHelpHtml, /only enabled Minds that still pass current rights and credential scope checks/u);
   assert.match(codexHelpHtml, /Writing is optional/u);
-  assert.match(codexHelpHtml, /choose Read and write for exactly one Mind/u);
+  assert.match(codexHelpHtml, /choose Read and write for at most one ordinary Mind/u);
   assert.match(codexHelpHtml, /one account-wide choice is shared by every Connection and personal token/u);
   assert.doesNotMatch(codexHelpHtml, /\b(?:bind|unbind)\b|writable target|attach at least one Mind/iu);
   assert.match(codexHelpHtml, /Create the first useful Memory/u);

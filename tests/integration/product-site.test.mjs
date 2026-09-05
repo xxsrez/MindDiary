@@ -988,8 +988,8 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /Choose readable Minds and start/u);
   assert.match(codexHelpHtml, /current rights and credential scope checks/u);
   assert.match(codexHelpHtml, /Writing is optional/u);
-  assert.match(codexHelpHtml, /choose Read and write for exactly one Mind/u);
-  assert.match(codexHelpHtml, /Personal Mind needs your direct request for each specific write/u);
+  assert.match(codexHelpHtml, /choose Read and write for at most one ordinary Mind/u);
+  assert.match(codexHelpHtml, /Personal Mind without a description needs your direct request for each specific write/u);
   assert.match(codexHelpHtml, /one account-wide choice is shared by every Connection and personal token/u);
   assert.match(codexHelpHtml, /Create the first useful Memory/);
   assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/);

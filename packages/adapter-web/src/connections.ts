@@ -145,13 +145,14 @@ export function renderConnectionsPageDocument(model: ConnectionsPageModel): stri
 function renderOrdinaryConnectionAccess(
   connectionRef: string,
   canWrite: boolean,
+  canRead: boolean,
 ): string {
   if (!CONNECTION_REF.test(connectionRef)) {
     return `<section class="md-state md-state--error" role="alert"><h2>Mind access is unavailable</h2><p>Reload before changing this connection.</p></section>`;
   }
   return `<section class="md-credential-mode-panel" data-principal-mind-usage-notice>
-    <section aria-labelledby="connection-read-access-heading"><h2 id="connection-read-access-heading">Credential scopes</h2><p>Read scope is available. ${canWrite ? "Write scope is also available." : "Write scope is not available."} Scopes only narrow the account-wide Mind modes and never choose a destination.</p></section>
-    <section aria-labelledby="connection-mind-intent-heading"><h2 id="connection-mind-intent-heading">Mind modes belong to your account</h2><p>Every Connection and personal token sees the same configured “Off”, “Read only”, or “Read and write” intent. Current rights, routing profile, any ordinary-Mind description and this credential’s scopes are checked again on every call. Personal Mind writes still require your direct request for the specific knowledge.</p><p><a class="md-button md-button--secondary" href="/minds#mind-usage-heading">Manage Mind modes</a></p></section>
+    <section aria-labelledby="connection-read-access-heading"><h2 id="connection-read-access-heading">Credential scopes</h2><p>${canRead ? "Read scope is available." : "Read scope is not available."} ${canWrite ? "Write scope is also available." : "Write scope is not available."} Scopes only narrow the account-wide Mind modes and never choose a destination.</p></section>
+    <section aria-labelledby="connection-mind-intent-heading"><h2 id="connection-mind-intent-heading">Mind modes belong to your account</h2><p>Every Connection and personal token sees the same configured “Off”, “Read only”, or “Read and write” intent. Current rights, routing profile, each Mind’s description and this credential’s scopes are checked again on every call. Personal Mind without a description requires your direct request. With a description, it follows matching topics within its mode and current rights.</p><p><a class="md-button md-button--secondary" href="/minds#mind-usage-heading">Manage Mind modes</a></p></section>
   </section>`;
 }
 
@@ -159,6 +160,7 @@ function renderAdvancedTokenAccess(
   input: {
     readonly personalTokenRef: string;
     readonly canWrite: boolean;
+    readonly canRead: boolean;
     readonly headingSuffix: string;
   },
 ): string {
@@ -168,7 +170,7 @@ function renderAdvancedTokenAccess(
   const readHeading = `token-read-access-${input.headingSuffix}`;
   const writeHeading = `token-write-access-${input.headingSuffix}`;
   return `<section class="md-credential-mode-panel" data-principal-mind-usage-notice>
-    <section aria-labelledby="${readHeading}"><h4 id="${readHeading}">Credential scope</h4><p>This token can read. ${input.canWrite ? "It can also write when the account-wide Mind mode and current rights allow it." : "It cannot write."}</p></section>
+    <section aria-labelledby="${readHeading}"><h4 id="${readHeading}">Credential scope</h4><p>${input.canRead ? "This token can read." : "This token cannot read content."} ${input.canWrite ? "It can also write when the account-wide Mind mode and current rights allow it." : "It cannot write."}</p></section>
     <section aria-labelledby="${writeHeading}"><h4 id="${writeHeading}">Account-wide Mind modes</h4><p>This token does not own a separate Mind choice. Manage the one shared intent for all credentials on the Minds page.</p><p><a href="/minds#mind-usage-heading">Manage Mind modes</a></p></section>
   </section>`;
 }
@@ -182,7 +184,7 @@ export function renderConnectionDetailDocument(model: ConnectionDetailModel): st
     <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
       <p><a href="/settings/connections">← Connections</a></p>
       <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Connected app</p><h1>${escapeUntrustedText(connection.clientName)}</h1><p>Connected ${escapeUntrustedText(dateLabel(connection.createdAt))}; last used ${escapeUntrustedText(dateLabel(connection.lastUsedAt))}.</p></div><span class="md-token-state md-token-state--active">● Connected</span></div>
-      ${renderOrdinaryConnectionAccess(connection.connectionRef, connection.canWrite)}
+      ${renderOrdinaryConnectionAccess(connection.connectionRef, connection.canWrite, connection.canRead)}
       <section class="md-setup-card" aria-labelledby="disconnect-heading"><h2 id="disconnect-heading">Disconnect</h2><p>Revoking stops this app immediately and removes it from Connections.</p><button class="md-button md-button--danger" type="button" data-revoke-connection data-revoke-endpoint="/api/v1/connections/${connection.connectionRef}">Revoke connection</button><p class="md-form__status" role="status" aria-live="polite" data-revoke-status></p></section>
     </main>
     ${renderMindDiaryAuthenticatedFooter("connections")}
@@ -195,7 +197,7 @@ function renderPersonalToken(token: PersonalTokenItem, index: number): string {
   return `<article class="md-token-card" data-personal-token>
     <div class="md-token-card__heading"><div><h3>${escapeUntrustedText(token.name)}</h3><p><code>${escapeUntrustedText(token.displayPrefix)}</code></p></div><span class="md-token-state md-token-state--${token.state}">${escapeUntrustedText(token.state)}</span></div>
     <dl class="md-token-card__metadata"><div><dt>Scopes</dt><dd>${escapeUntrustedText(token.scopes.join(", "))}</dd></div><div><dt>Expires</dt><dd>${escapeUntrustedText(dateLabel(token.expiresAt))}</dd></div><div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(token.lastUsedAt))}</dd></div></dl>
-    ${token.state === "active" ? renderAdvancedTokenAccess({ personalTokenRef: token.personalTokenRef, canWrite, headingSuffix: `item-${index + 1}` }) : ""}
+    ${token.state === "active" ? renderAdvancedTokenAccess({ personalTokenRef: token.personalTokenRef, canWrite, canRead: token.scopes.includes("content:read"), headingSuffix: `item-${index + 1}` }) : ""}
     ${token.state === "active" ? `<button class="md-button md-button--danger" type="button" data-revoke-personal-token data-revoke-endpoint="/api/v1/mcp-tokens/${token.personalTokenRef}">Revoke token</button><p class="md-form__status" role="status" aria-live="polite" data-revoke-status></p>` : ""}
   </article>`;
 }
@@ -260,7 +262,7 @@ export function renderCodexHelpPageDocument(displayName: string): string {
         </ol>
       </section>
       <section class="md-setup-card md-setup-card--single" aria-labelledby="codex-help-troubleshooting"><div><p class="md-eyebrow">Checkpoint help</p><h2 id="codex-help-troubleshooting">If a step does not finish</h2><ul><li><strong>Marketplace:</strong> compare the repository exactly. Add it once, then reload Plugins once.</li><li><strong>Install:</strong> confirm the plugin says Installed and start a fresh Task. Installed does not mean connected.</li><li><strong>Authenticate:</strong> repeat the read-only check in a fresh Task and confirm the same account and workspace. Then check <a href="/settings/connections">Connections</a>.</li><li><strong>Readable Minds:</strong> check the account-wide mode on <a href="/minds#mind-usage-heading">Minds</a>, plus current membership or visibility and credential read scope.</li></ul><p>Revoke and reconnect only when the existing connection is no longer usable.</p></div></section>
-      <section class="md-setup-card md-setup-card--single" aria-labelledby="codex-help-first-memory"><p class="md-eyebrow">After the read-only check</p><h2 id="codex-help-first-memory">Create the first useful Memory</h2><p>Writing is optional. On <a href="/minds#mind-usage-heading">Minds</a>, choose Read and write for exactly one Mind. That one account-wide choice is shared by every Connection and personal token; each credential’s scope and current Mind rights can only narrow it. Personal Mind needs your direct request for each specific write, while an ordinary Mind keeps description-based automatic saving.</p><p>Open My Mind and use its existing starter card. It keeps the first content change separate from installation and connection checks.</p><p><a class="md-button md-button--primary" href="/me#first-result-title">Open the starter card</a></p></section>
+      <section class="md-setup-card md-setup-card--single" aria-labelledby="codex-help-first-memory"><p class="md-eyebrow">After the read-only check</p><h2 id="codex-help-first-memory">Create the first useful Memory</h2><p>Writing is optional. On <a href="/minds#mind-usage-heading">Minds</a>, choose Read and write for at most one ordinary Mind and independently for Personal Mind. That one account-wide choice is shared by every Connection and personal token; each credential’s scope and current Mind rights can only narrow it. Personal Mind without a description needs your direct request for each specific write. With a description, both Personal and ordinary Minds automatically preserve matching durable knowledge discussed with you. When both descriptions match, each Mind receives an independent commit.</p><p>Open My Mind and use its existing starter card. It keeps the first content change separate from installation and connection checks.</p><p><a class="md-button md-button--primary" href="/me#first-result-title">Open the starter card</a></p></section>
       <section class="md-setup-card md-setup-card--single"><h2>Advanced setup</h2><p><a href="/settings/developer/mcp">Advanced MCP</a> is the separate place for direct client setup and diagnostics. The ordinary plugin flow above does not require it.</p></section>
     </main>
     ${renderMindDiaryAuthenticatedFooter("help")}

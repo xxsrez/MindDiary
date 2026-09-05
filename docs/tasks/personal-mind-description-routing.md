@@ -61,7 +61,9 @@ Exact duplicate не найден; MD-382 остаётся завершённы�
 Пользовательских вложений нет. Authoritative статус реализации принадлежит трекеру.
 
 MD-395–398 In Review после локальной реализации и targeted tests. MD-399 In Progress.
-Полный gate и dev/UAT ещё впереди.
+Полный gate: 1122/1122 unit/integration/conformance; браузерное падение
+на старом Personal fixture исправлено (targeted 3/3). Финальный aggregate
+на обновлённом candidate, dev и UAT выполняются далее.
 
 ## Continuity Issue Grinder
 
@@ -74,7 +76,7 @@ MD-395–398 In Review после локальной реализации и tar
   принадлежат этому разговору. Startup inventory: 4 доступных checkout,
   прочие три clean и unrelated; 93 missing/prunable записи не изменялись;
   193 branches, matching MD-394–399 candidates отсутствуют.
-- Goal active в текущем thread; MD-394/395 In Progress, MD-396–399 Todo.
+- Goal active в текущем thread; MD-394/399 In Progress, MD-395–398 In Review.
 - Frontier: MD-399 integrated acceptance. MD-395–398 In Review.
 - Marketplace source: `../Srez Marketplace/plugins/mind-diary`, package
   `0.1.0+codex.20260905180700`. Canonical skill/plugin validators прошли;
@@ -83,5 +85,5 @@ MD-395–398 In Review после локальной реализации и tar
 - Реализация: description update атомарно меняет поколение только своего Mind;
   no-op/replay без изменения. Modern/compat config-only token, CAS/restart/clear
   проверены; OAuth suite 6/6, usage storage suite 14/14 (memory и Sites).
-- Checks на начале: только documentation validator и diff whitespace;
-  implementation/full/dev/UAT проверки ещё впереди.
+- Проверка реализации продолжается: local evidence отделяется от ещё
+  не подтверждённых CI/dev/UAT и установленного пакета.

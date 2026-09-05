@@ -92,7 +92,7 @@ test("common Minds collection keeps the service-managed Personal Mind first", ()
   assert.match(html, /Sole Owner/);
   assert.match(html, /Private, always/);
   assert.match(html, /Follows Andrey’s profile/);
-  assert.match(html, /no separate rename, description, publication, transfer, or deletion/i);
+  assert.match(html, /no separate rename, publication, transfer, or deletion/i);
   assert.match(html, /href="\/me">Open My Mind/);
 });
 

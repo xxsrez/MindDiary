@@ -213,7 +213,7 @@ for (const definition of fixtureDefinitions) {
       })).toBeVisible();
       await expect(page.getByText("A fresh Task receives only enabled Minds", { exact: false })).toBeVisible();
       await expect(page.getByText("Writing is optional.", { exact: false })).toBeVisible();
-      await expect(page.getByText("choose Read and write for exactly one Mind", { exact: false })).toBeVisible();
+      await expect(page.getByText("choose Read and write for at most one ordinary Mind", { exact: false })).toBeVisible();
       await expect(page.getByText("one account-wide choice is shared by every Connection and personal token", { exact: false })).toBeVisible();
       await expect(page.locator("main")).not.toContainText(/writable target|attach at least one Mind|bind|unbind/iu);
       const accessibilityTree = await page.locator("main").ariaSnapshot();
