@@ -489,11 +489,27 @@ export function createProductWebHttpHandler(
         }
         return json(200, { ok: true, data: snakeOutput(overview) });
       }
-      const data = await dependencies.control.execute({
+      let data = await dependencies.control.execute({
         operation: matched.operation,
         actor: identity.actor,
         input,
       });
+      if (matched.operation === "list_minds" && identity.kind === "authenticated" && dependencies.mindUsage !== undefined) {
+        const projection = await readMindUsageProjection({
+          actor: identity.actor,
+          control: dependencies.control,
+          mindUsage: dependencies.mindUsage,
+          listedMinds: data,
+        });
+        const usageByRoute = new Map(projection.items.map(item => [item.mindRef, item]));
+        if (!Array.isArray(data)) throw new TypeError("safe Mind list is unavailable");
+        data = data.map(value => {
+          const mind = record(value);
+          const usage = usageByRoute.get(String(mind?.route));
+          if (mind === null || usage === undefined) throw new TypeError("safe Mind usage is unavailable");
+          return { ...mind, agentUsage: { mode: usage.usageMode, ...usage.effective } };
+        });
+      }
       if (identity.kind === "authenticated") {
         await activity.record(
           deferActivity,

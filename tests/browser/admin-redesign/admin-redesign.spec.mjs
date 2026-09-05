@@ -46,6 +46,31 @@ test('real hydrated Mind list keeps six Minds ahead of optional agent settings',
   expect(requests.filter(path => path === '/api/v1/mind-usage')).toHaveLength(1);
 });
 
+test('compact status shows configured modes, accessible icons and live mode changes', async ({ page }) => {
+  await page.goto(`${origin}/minds`);
+  const list = page.locator('[data-minds-list]');
+  await expect(list.locator('[data-mind-card="research"] [data-agent-mode]')).toHaveText('Read');
+  await expect(list.locator('[data-mind-card="product"] [data-agent-mode]')).toHaveText('Read + write');
+  await expect(list.locator('[data-mind-card="travel"] [data-agent-mode]')).toHaveText('None');
+  const privacy = list.locator('[data-mind-card="research"]').locator('summary[aria-label="Visibility: Private"]');
+  await privacy.focus();
+  await expect(privacy.locator('..').locator('.md-mind-status__tooltip')).toBeVisible();
+  await privacy.click();
+  await expect(privacy.locator('..')).toHaveAttribute('open', '');
+  await page.getByText('Codex access across your Minds', { exact: true }).click();
+  const form = page.locator('[data-mind-usage-card="/travel"] form');
+  await form.locator('input[value="read"]').check();
+  await form.getByRole('button', { name: 'Save agent mode' }).click();
+  await expect(list.locator('[data-mind-card="travel"] [data-agent-mode]')).toHaveText('Read');
+  await form.locator('input[value="read_write"]').check();
+  await form.getByRole('button', { name: 'Save agent mode' }).click();
+  await expect(list.locator('[data-mind-card="travel"] [data-agent-mode]')).toHaveText('Read + write');
+  await expect(list.locator('[data-mind-card="product"] [data-agent-mode]')).toHaveText('Read');
+  await expect(list.locator('[data-mind-card="me"] [data-agent-mode]')).toHaveText('Read + write');
+  await list.locator('[data-mind-card="research"] [data-agent-mode]').click();
+  await expect(page).toHaveURL(`${origin}/research#mind-usage-heading`);
+});
+
 test('direct agent-settings links open the disclosure and fetch current settings', async ({ page }) => {
   await page.goto(`${origin}/minds#mind-usage-heading`);
   await expect(page.locator('[data-agent-settings-disclosure]')).toHaveAttribute('open', '');
@@ -60,7 +85,7 @@ test('narrow real list preserves actions and avoids clipped fields', async ({ pa
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
     const row = page.locator('[data-mind-card="research"]');
     await expect(row.getByRole('link', { name: 'Manage', exact: true })).toBeVisible();
-    await expect(row).toContainText('Private');
+    await expect(row.locator('summary[aria-label="Visibility: Private"]')).toBeVisible();
     const first = await page.locator('[data-mind-card="me"]').boundingBox();
     expect(first.y).toBeLessThan(400);
   }

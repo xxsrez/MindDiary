@@ -161,6 +161,10 @@ async function allSafeMinds(
     actor,
     input: Object.freeze({}),
   });
+  return safeMindList(listed);
+}
+
+function safeMindList(listed: unknown): readonly SafeMindDescriptor[] {
   if (!Array.isArray(listed)) throw new TypeError("safe Mind list is unavailable");
   const parsed = listed.map(safeMindDescriptor);
   if (parsed.some((mind) => mind === null)) {
@@ -194,9 +198,12 @@ export async function readMindUsageProjection(input: {
   readonly control: ProductWebControlApplication;
   readonly mindUsage: ProductWebMindUsageApplication;
   readonly mindRef?: string;
+  readonly listedMinds?: unknown;
 }): Promise<Readonly<MindUsageUiProjection>> {
   const minds = input.mindRef === undefined
-    ? await allSafeMinds(input.control, input.actor)
+    ? input.listedMinds === undefined
+      ? await allSafeMinds(input.control, input.actor)
+      : safeMindList(input.listedMinds)
     : Object.freeze([
         await exactSafeMind(input.control, input.actor, input.mindRef),
       ]);

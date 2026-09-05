@@ -3385,3 +3385,15 @@ transport без нового принятого решения.
 - [OpenAI: MCP authentication](https://developers.openai.com/plugins/build/auth)
 - [OpenAI Codex: MCP](https://developers.openai.com/codex/mcp)
 - [Open Knowledge Format 0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
+
+
+### Compact Minds list agent usage (2026-09-05)
+
+Authenticated `GET /api/v1/minds` дополняет каждый уже разрешённый descriptor
+полем `agent_usage: { mode, can_read, can_write }`. `mode` — principal-owned
+`disabled | read | read_write`; effective flags учитывают current role и
+требование description, но не scopes отдельного credential. Проекция использует
+тот же проверенный список и одно чтение usage state, не читает corpus и не
+расширяет список доступных Minds. При отсутствии usage adapter поле отсутствует
+(клиент показывает неизвестное состояние); ошибочное состояние не превращается
+в `disabled`. Остальные поля и mutation authority не меняются.

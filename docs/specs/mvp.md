@@ -545,6 +545,18 @@ collection/panel и сохраняет retry/error state без чтения con
 endpoint-ов ограничены server-side allowlist UI-полями; browser-side validation
 остаётся второй fail-closed границей, а не единственным redaction layer.
 
+В списке `/minds` каждая строка показывает компактную ссылку режима Codex:
+`None`, `Read` или `Read + write`. Это configured intent текущего principal,
+а не обещание прав любого credential. При недоступной effective записи
+сохраняется configured label и отдельное пояснение ограничения; неизвестное
+состояние не подменяется `None`. Ссылка открывает настройки выбранного Mind.
+Роль, visibility и готовность обозначаются различимыми иконками с accessible
+names и пояснениями, доступными по наведению, фокусу и нажатию. Цвет не является
+единственным носителем смысла. Длинные подписи Access/Visibility/Activity
+убраны из строки. Personal name следует profile и поясняется в описании.
+Режимы приходят в том же `GET /api/v1/minds`, без отдельных запросов на карточку;
+сохранение настроек обновляет метки списка по возвращённой server projection.
+
 Закрытый раздел «Codex access across your Minds» на `/minds` не запрашивает
 `GET /api/v1/mind-usage` до первого раскрытия. Раскрытие, включая переход по
 `#mind-usage-heading`, загружает актуальную server projection один раз; быстрые

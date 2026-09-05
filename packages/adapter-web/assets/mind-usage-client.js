@@ -232,6 +232,7 @@
   };
   const state = (root) => root.querySelector("[data-mind-usage-state]");
   const render = (root, projection, announcement = "") => {
+    document.dispatchEvent(new CustomEvent("mind-diary:usage-updated", { detail: projection }));
     const exactRef = root.dataset.mindRef;
     const items = exactRef ? projection.items.filter((item) => item.mind_ref === exactRef) : projection.items;
     const current = state(root);

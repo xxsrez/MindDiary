@@ -1070,9 +1070,12 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
     ["archive", archive],
   ]);
   let usage = null;
+  let usageReads = 0;
+  let listReads = 0;
   const commands = [];
   const mindUsage = {
     async read(actor) {
+      usageReads += 1;
       assert.equal(actor, registeredActor);
       return usage;
     },
@@ -1117,7 +1120,7 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
     resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
     csrf: { issue: () => "csrf-usage", verify: (_actor, token) => token === "csrf-usage" },
     control: { async execute(request) {
-      if (request.operation === "list_minds") return [personal, research, archive];
+      if (request.operation === "list_minds") { listReads += 1; return [personal, research, archive]; }
       if (request.operation === "get_mind_info") return byRef.get(request.input.mind_ref) ?? null;
       throw new Error(`unexpected operation: ${request.operation}`);
     } },
@@ -1180,6 +1183,17 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
   assert.equal(researchWrite.body.data.projection.usage_version, 2);
   assert.equal(researchWrite.body.data.projection.items.find((item) =>
     item.mind_ref === "/research-notes").effective.can_write, true);
+
+  const beforeList = { usageReads, listReads };
+  const compactList = await handler(new Request(`${origin}/api/v1/minds`));
+  assert.equal(compactList.status, 200);
+  assert.deepEqual((await compactList.json()).data.map(item => item.agent_usage), [
+    { mode: "disabled", can_read: false, can_write: false },
+    { mode: "read_write", can_read: true, can_write: true },
+    { mode: "read", can_read: true, can_write: false },
+  ]);
+  assert.equal(listReads - beforeList.listReads, 1, "reuse the authorized list");
+  assert.equal(usageReads - beforeList.usageReads, 1, "read principal settings once");
 
   const personalWrite = await set("me", "read_write", 2, "usage:personal-write");
   assert.equal(personalWrite.response.status, 200);

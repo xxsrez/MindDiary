@@ -29,6 +29,7 @@ export interface OrdinaryMindUiMind {
   readonly visibility: OrdinaryMindUiVisibility;
   readonly role: OrdinaryMindUiRole;
   readonly metadataVersion: number;
+  readonly agentUsage?: { readonly mode: "disabled" | "read" | "read_write"; readonly canRead: boolean; readonly canWrite: boolean };
   readonly updatedLabel: string;
   readonly accessKind?: "membership" | "visibility";
   readonly discovery?: "membership" | "exact_handle" | "public_catalog";
@@ -42,6 +43,7 @@ export interface PersonalMindUiMind {
   readonly headRevisionId: string;
   readonly visibility: "private";
   readonly role: "owner";
+  readonly agentUsage?: { readonly mode: "disabled" | "read" | "read_write"; readonly canRead: boolean; readonly canWrite: boolean };
   readonly updatedLabel: string;
 }
 
@@ -264,16 +266,31 @@ function visibilityLabel(value: OrdinaryMindUiVisibility): string {
   }
 }
 
+const MIND_STATUS_SPRITE = `<svg class="md-mind-icon-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><symbol id="md-mind-icon-owner" viewBox="0 0 24 24"><path d="m3 6 4 4 5-6 5 6 4-4-2 13H5Z"/></symbol><symbol id="md-mind-icon-admin" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6Z"/><path d="m8 12 3 3 5-6"/></symbol><symbol id="md-mind-icon-editor" viewBox="0 0 24 24"><path d="m15 4 5 5M4 20l5-1L20 8a3.5 3.5 0 0 0-5-5L4 14Z"/></symbol><symbol id="md-mind-icon-reader" viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol><symbol id="md-mind-icon-private" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol><symbol id="md-mind-icon-unlisted" viewBox="0 0 24 24"><path d="m10 13 4-4m-5 6-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 2 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></symbol><symbol id="md-mind-icon-public" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></symbol><symbol id="md-mind-icon-ready" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m7 12 3 3 7-7"/></symbol><symbol id="md-mind-icon-disabled" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m6 6 12 12"/></symbol><symbol id="md-mind-icon-read" viewBox="0 0 24 24"><path d="M12 6C9 3 5 3 2 4v15c4-1 7-1 10 2 3-3 6-3 10-2V4c-3-1-7-1-10 2Zm0 0v15"/></symbol><symbol id="md-mind-icon-read_write" viewBox="0 0 24 24"><path d="M10 6C7 3 4 3 2 4v15c3-1 5-1 8 1V6Zm4 0 3-2m-5 17 4-1 7-10-3-2-7 10Z"/></symbol><symbol id="md-mind-icon-unknown" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 1 1 5 2c-2 1-2 2-2 3m0 3h.01"/></symbol><symbol id="md-mind-icon-warning" viewBox="0 0 24 24"><path d="m12 3 10 18H2Zm0 6v5m0 3h.01"/></symbol></svg>`;
+
+function renderStatusIcon(icon: string, label: string): string {
+  const safeLabel = escapeUntrustedText(label);
+  return `<details class="md-mind-status"><summary aria-label="${safeLabel}" title="${safeLabel}"><svg class="md-mind-status__icon" aria-hidden="true"><use href="#md-mind-icon-${icon}" /></svg><span class="md-mind-status__tooltip">${safeLabel}</span></summary></details>`;
+}
+
+function renderMindStatuses(mind: MindListUiMind): string {
+  const personal = mind.isPersonal === true;
+  const role = safeRole(mind.role);
+  const visibility = safeVisibility(mind.visibility);
+  const route = personal ? "/me" : `/${safeHandle(mind.handle) ?? "unavailable"}`;
+  const access = personal ? "Sole Owner" : role === "owner" ? "Owned by you" : mind.accessKind === "visibility" ? "Reader by visibility" : `${titleCase(role)} member`;
+  const candidate = mind.agentUsage?.mode;
+  const mode = candidate === "disabled" || candidate === "read" || candidate === "read_write" ? candidate : "unknown";
+  const label = { disabled: "None", read: "Read", read_write: "Read + write", unknown: "Unknown" }[mode];
+  const limited = mode === "read_write" && !mind.agentUsage?.canWrite;
+  const explanation = `Codex: ${label}${limited ? ". Writing is currently unavailable; check access and description." : personal && mode !== "disabled" && mode !== "unknown" ? ". Personal Mind is used only on your direct request." : "."} Open Mind settings.`;
+  return `<div class="md-mind-statuses" role="group" aria-label="Mind status">${renderStatusIcon(role, `Access: ${access}`)}${renderStatusIcon(visibility, `Visibility: ${personal ? "Private, always" : visibilityLabel(visibility)}`)}${personal ? "" : renderStatusIcon("ready", mind.updatedLabel)}<a class="md-mind-mode" href="${route}#mind-usage-heading" data-agent-mode="${mode}" aria-label="${escapeUntrustedText(explanation)}" title="${escapeUntrustedText(explanation)}"><svg class="md-mind-status__icon" aria-hidden="true"><use href="#md-mind-icon-${limited ? "warning" : mode}" /></svg><span>${label}</span></a></div>`;
+}
+
 function renderMindCard(mind: OrdinaryMindUiMind): string {
   const handle = safeHandle(mind.handle);
   const role = safeRole(mind.role);
-  const visibility = safeVisibility(mind.visibility);
   const route = handle === null ? "#" : `/${handle}`;
-  const relationship = mind.accessKind === "visibility"
-    ? "Reader by visibility"
-    : role === "owner"
-      ? "Owned by you"
-      : `${titleCase(role)} member`;
   const action = handle === null
     ? '<span class="md-token-card__final-state">Unavailable</span>'
     : `<a class="md-button md-button--secondary" href="${route}" data-manage-mind>${mind.accessKind === "visibility" ? "Open read-only" : "Manage"}</a>`;
@@ -288,11 +305,7 @@ function renderMindCard(mind: OrdinaryMindUiMind): string {
     ${mind.description === null
       ? '<p class="md-card__description">No description yet.</p>'
       : `<p class="md-card__description">${escapeUntrustedText(mind.description)}</p>`}
-    <dl class="md-token-card__metadata">
-      <div><dt>Access</dt><dd>${relationship}</dd></div>
-      <div><dt>Visibility</dt><dd>${visibilityLabel(visibility)}</dd></div>
-      <div><dt>Activity</dt><dd>${escapeUntrustedText(mind.updatedLabel)}</dd></div>
-    </dl>
+    ${renderMindStatuses(mind)}
     <div class="md-token-card__action">${action}</div>
   </article>`;
 }
@@ -304,11 +317,7 @@ function renderPersonalMindCard(mind: PersonalMindUiMind): string {
       <span class="md-token-state md-token-state--active"><span aria-hidden="true">●</span> Personal</span>
     </div>
     <p class="md-card__description">Private to you. Follows ${escapeUntrustedText(mind.name)}’s profile; no separate rename, description, publication, transfer, or deletion.</p>
-    <dl class="md-token-card__metadata">
-      <div><dt>Access</dt><dd>Sole Owner</dd></div>
-      <div><dt>Visibility</dt><dd>Private, always</dd></div>
-      <div><dt>Name</dt><dd>Follows your profile</dd></div>
-    </dl>
+    ${renderMindStatuses(mind)}
     <div class="md-token-card__action"><a class="md-button md-button--secondary" href="/me">Open My Mind</a></div>
   </article>`;
 }
@@ -837,6 +846,7 @@ export function renderOrdinaryMindsManagement(model: OrdinaryMindsManagementMode
   return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-ordinary-minds-management data-nav-open="false" data-management-view="${model.view.kind}">
     <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "minds")}
+    ${model.view.kind === "list" ? MIND_STATUS_SPRITE : ""}
     ${body}
     ${renderMindDiaryAuthenticatedFooter("minds")}
   </div>`;
