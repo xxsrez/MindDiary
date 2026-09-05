@@ -20,7 +20,7 @@ export function verifyModelTrace(events, scenario) {
     }
     let mind = selectors.get(call.arguments.mind) ?? call.arguments.mind ?? null;
     if (call.tool === "fetch") mind = locators.get(call.arguments.id) ?? null;
-    if (["search", "browse_entries"].includes(call.tool) && !call.result.isError) registerEntries(data, mind);
+    if (["search", "browse_entries", "get_revision", "get_mind_info", "commit_changeset"].includes(call.tool) && mind && !call.result.isError) registerEntries(data, mind);
     if (call.tool === "fetch" && mind && !call.result.isError) registerEntries(data, mind);
     calls.push({ ...call, resolvedMind: mind });
   }
@@ -32,5 +32,13 @@ export function verifyModelTrace(events, scenario) {
   for (const mind of scenario.requiredReads) assert.equal(reads.some(c => c.resolvedMind === mind && !c.result.isError), true, "required_read_missing");
   for (const write of commits) assert.equal(scenario.writes.includes(write.resolvedMind), true, "unexpected_write_destination");
   for (const mind of scenario.writes) assert.equal(commits.some(c => c.resolvedMind === mind && !c.result.isError), true, "required_commit_missing");
+  for (const commit of commits.filter(c => !c.result.isError)) {
+    const revision = commit.result.structuredContent?.data?.revision?.revision_id;
+    assert.equal(typeof revision, "string", "commit_revision_missing");
+    assert.equal(calls.some(c => c.tool === "validate_mind" && c.resolvedMind === commit.resolvedMind &&
+      c.result.structuredContent?.data?.valid === true && c.result.structuredContent.data.resolved_revision?.revision_id === revision), true, "committed_revision_validation_missing");
+    assert.equal(calls.some(c => c.tool === "fetch" && c.resolvedMind === commit.resolvedMind &&
+      c.result.structuredContent?.data?.entry?.revision_id === revision), true, "committed_content_readback_missing");
+  }
   return calls.map(c => ({ tool: c.tool, mind: c.resolvedMind, error: c.result.isError === true }));
 }

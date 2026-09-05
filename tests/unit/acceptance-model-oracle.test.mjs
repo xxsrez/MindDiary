@@ -15,3 +15,11 @@ test("unseen locator, forbidden Personal read and unsolicited writes fail the or
   assert.throws(() => verifyModelTrace([], scenario), /required_read_missing/);
   assert.throws(() => verifyModelTrace([...prefix, call("set_personal_mind_description", {}, {})], scenario), /unsolicited_configuration/);
 });
+test("a successful write is insufficient without exact committed content and OKF read-back", () => {
+  const writing = { ...scenario, writes: ["/shared"] };
+  const committed = [...prefix, call("commit_changeset", { mind: "/shared" }, { revision: { revision_id: "revision-2" } })];
+  assert.throws(() => verifyModelTrace(committed, writing), /committed_revision_validation_missing/);
+  const valid = [...committed, call("validate_mind", { mind: "/shared" }, { valid: true, resolved_revision: { revision_id: "revision-2" } })];
+  assert.throws(() => verifyModelTrace(valid, writing), /committed_content_readback_missing/);
+  assert.doesNotThrow(() => verifyModelTrace([...valid, call("fetch", { id: "opaque-entry" }, { entry: { entry_id: "opaque-entry", revision_id: "revision-2" } })], writing));
+});
