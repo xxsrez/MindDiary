@@ -167,3 +167,10 @@ cleanup request обрабатывает максимум одного ещё н
 run; `cleaned` выдаётся только после полного read-back и записи receipt.
 `POST /_acceptance/recover` применяет тот же bounded step к максимум двум
 просроченным или отозванным runs. Активные runs он не отзывает.
+
+Controller-only `GET /_acceptance/inventory` возвращает bounded aggregate
+baseline/final counts: текущие principals/owned Minds из штатного metadata
+projection, число R2 objects и bytes, search/OAuth/session/cleanup rows.
+Email, IDs, keys и corpus не возвращаются. Результат помечается неполным, если
+предел страницы исчерпан; неполный snapshot не доказывает отсутствие остатков.
+Это read-only диагностическая поверхность отдельной test composition.

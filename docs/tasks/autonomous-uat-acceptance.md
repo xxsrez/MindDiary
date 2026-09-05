@@ -384,3 +384,34 @@ actor. Клиент продолжает `state=cleaning` до final receipt. Д
 SDK journal: exact create/mutation keys и payload сохраняются до запроса;
 локальный тест потери ответа подтверждает повтор исходных keys и неизменного
 payload; после сохранённого success повторный запрос не отправляется. Полная SDK fixture/matrix приёмка ещё впереди.
+
+### Повторяемый набор данных и независимая сверка остатков
+
+Реальный 60-секундный hosted run подтвердил expiry: web session и новый
+exchange отклонены, затем run очищен. Дополнительный локальный тест собирает
+настоящий ordinary Worker entrypoint (только неиспользуемый UI fallback заменён
+заглушкой): валидная acceptance cookie даёт 401, test adapter отсутствует во
+входах ordinary bundle. MD-403 переведена в In Review до фиксации этого теста.
+
+Version 4 (`ce8ec73b1f93c687618b1f60b74743a5e8d072af`, CI `33993682124`)
+опубликована: source `a69b2cad100d874fca2d68be7b3631cd7c67dd63`, deployment
+`appgdep_example322911c03a7bfb66`, env revision 2. Cleanup выполняется
+по одному actor; отдельная проверка с полным SDK fixture относится к следующему
+cut, который также добавляет aggregate inventory.
+
+SDK fixture создаёт четыре роли normal create/invite/accept, независимые
+Personal/ordinary lanes и две content revisions каждой через настоящий MCP.
+Сохранённый commit после потери ответа сначала разрешается через
+`reconcile_changeset` с оригинальным payload. Сквозной локальный тест теряет
+ответ уже committed изменения, пересоздаёт SDK из private journal и проверяет
+ровно три revisions на lane (initial + create + replace), без лишнего commit.
+Два overlapping runs не мешают друг другу: cleanup первого сохраняет доступ
+во втором. После обоих cleanup complete inventory равен baseline: principals,
+owned Minds, R2 objects/bytes, search, OAuth, actor/session/journal rows — ноль.
+
+Команда `scripts/check-acceptance-fixture-hosted.mjs <run-tag>` получает secrets
+из закрытых настроенных references и требует `MD_ACCEPTANCE_EXPECTED_SHA`.
+Она сохраняет журнал до mutations, поддерживает явную проверку потери ответа
+`MD_ACCEPTANCE_INJECT_LOST_COMMIT=1`, проверяет роли/историю и выполняет bounded
+cleanup с отрицательным MCP probe и final/baseline inventory. Повтор того же tag
+использует прежний журнал; новый tag означает новый изолированный run.

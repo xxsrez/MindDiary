@@ -9,6 +9,7 @@ import probe from "./worker.mjs";
 import { AcceptanceSessionStore } from "./session-store.mjs";
 import { handleAcceptanceSession } from "./session-http.mjs";
 import { cleanupRun } from "./cleanup.mjs";
+import { acceptanceInventory } from "./inventory.mjs";
 
 const stores = new WeakMap();
 const runtimeEnvironments = new WeakMap();
@@ -54,7 +55,7 @@ export default {
         try { return await product.fetch(internalRequest, environment, context); }
         finally { recoveryIdentities.delete(internalRequest); }
       },
-      (input) => runtimes.get(environment.DB).resumeAccountDeletion(input)));
+      (input) => runtimes.get(environment.DB).resumeAccountDeletion(input)), () => acceptanceInventory(environment));
     if (sessionResponse) return sessionResponse;
     const actor = await store.actorForRequest(request);
     if (path === "/" && !actor) return probe.fetch(request, environment);

@@ -62,7 +62,7 @@ export class AcceptanceClient {
     return cookie;
   }
   async mutation(name, actorId, { path, method = "POST", body, csrf }) {
-    if (!path.startsWith("/api/v1/") || !["POST", "PATCH", "DELETE"].includes(method)) throw new Error("invalid_product_mutation");
+    if (!path.startsWith("/api/v1/") || !["POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new Error("invalid_product_mutation");
     const actor = this.state.actors[actorId]; if (!actor?.cookie) throw new Error("actor_session_required");
     const payload = { actorId, path, method, body };
     let operation = this.state.operations[name];
@@ -88,5 +88,36 @@ export class AcceptanceClient {
     if (this.state.receipt.state !== "cleaned") throw new Error("cleanup_still_pending");
     this.state.phase = "cleaned"; this.state.actors = {}; this.state.operations = {};
     await this.save(); return this.state.receipt;
+  }
+  async mcp(token, name, args = {}) {
+    const response = await this.request("/api/mcp", { method: "POST", headers: {
+      authorization: `Bearer ${token}`, "x-md-acceptance-run": this.state.run.run_id,
+      "mcp-method": "tools/call", "mcp-name": name, "mcp-protocol-version": "2026-07-28",
+      "content-type": "application/json", accept: "application/json, text/event-stream",
+    }, body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args, _meta: {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": { name: "mind-diary-acceptance", version: "1" },
+      "io.modelcontextprotocol/clientCapabilities": {},
+    } } } });
+    if (!response.ok) throw new Error(`mcp_http_${response.status}`);
+    const envelope = await response.json(), result = envelope.result;
+    if (envelope.error || result?.isError || !result?.structuredContent?.ok) throw new Error("mcp_tool_failed:" + (result?.structuredContent?.error?.code ?? "protocol_error"));
+    return result.structuredContent.data;
+  }
+  async commit(name, token, payload) {
+    const key = `mcp:${name}`;
+    let operation = this.state.operations[key];
+    if (operation?.phase === "completed") return operation.result;
+    if (operation) {
+      const reconciled = await this.mcp(token, "reconcile_changeset", operation.payload);
+      if (reconciled.status === "committed") {
+        operation.result = reconciled; operation.phase = "completed"; await this.save(); return reconciled;
+      }
+    } else {
+      operation = { phase: "pending", payload: { ...payload, idempotency_key: "acceptance-commit:" + crypto.randomUUID() } };
+      this.state.operations[key] = operation; await this.save();
+    }
+    operation.result = await this.mcp(token, "commit_changeset", operation.payload);
+    operation.phase = "completed"; await this.save(); return operation.result;
   }
 }
