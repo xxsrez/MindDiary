@@ -184,6 +184,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 
 ## Активные планы
 
+- [Автономная UAT-приёмка на тестовых пользователях](tasks/autonomous-uat-acceptance.md)
+  — MD-400: отдельная тестовая среда, автоматические сессии, сценарии,
+  восстановление и доказательства приёмки без рутинных действий пользователя.
 - [План восстановления MVP 0.1](tasks/2026-08-24-mvp-recovery-plan/README.md)
   — current state 40 незавершённых Tasks, интерактивная
   [визуальная карта системы и перехода](tasks/2026-08-24-mvp-recovery-plan/system-transition-presentation.html),

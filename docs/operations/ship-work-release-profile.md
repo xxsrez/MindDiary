@@ -1,6 +1,6 @@
 # Профиль `ship-work-release` для Mind Diary
 
-Статус: accepted project configuration, revision 6, 2026-09-03.
+Статус: accepted project configuration, revision 7, 2026-09-05.
 
 Документ задаёт project-specific параметры Mind Diary по
 [provider-neutral profile contract](../specs/ship-work-release-project-profile.md).
@@ -19,11 +19,14 @@ adapters и их hosted canaries сохраняются как post-MVP graph, �
 `uat.changed-surface`. Их code/tests могут присутствовать в exact candidate;
 это не является hosted support claim и не блокирует terminal 0.1.
 
-Revision 5 сохраняет terminal `uat.operator-directory-canary`: exact-candidate
-three-actor read-only probe с environment-only credential references и
-redacted receipt. Account/audience/allowlist setup, provider privacy read-back
-и external cleanup остаются отдельными explicit-authority prerequisites и не
-выполняются runner-ом. Final handoff дополнительно требует assertion о fresh
+Revision 7 сохраняет terminal `uat.operator-directory-canary` и исправляет
+расхождение его объявления с принятым runbook и runner: три distinct Sites
+sessions поступают через environment, обычный idempotent bootstrap и создание
+собственных временных Minds/read-only tokens разрешены, cleanup обязателен.
+Чтение операторского каталога остаётся read-only. Создание внешних accounts,
+audience/allowlist setup, provider privacy read-back и external cleanup остаются
+отдельными prerequisites и не выполняются runner-ом. Final handoff
+дополнительно требует assertion о fresh
 real Marketplace/Codex first-user flow: install, read-first OAuth, explicit
 write step-up, independent Personal/ordinary write lanes, Markdown
 write/history/export и revoke
@@ -51,7 +54,7 @@ requested-write capability. Synthetic и UAT evidence обязаны подтв�
 ~~~yaml
 schema: ship-work-release/project-profile/v1
 profile_id: mind-diary
-profile_revision: 6
+profile_revision: 7
 
 context:
   schema: ship-work-release/context-bindings/v1
@@ -1053,8 +1056,8 @@ evidence:
           command: [npm, run, uat:operator-directory-canary, "--"]
           runbook: docs/operations/uat-operator-directory-canary.md
           phases: [setup, verify, cleanup, recovery]
-          product_mutations: forbidden
-          account_bootstrap: forbidden
+          product_mutations: canary-owned-temporary-mind-and-per-run-read-only-tokens-only
+          account_bootstrap: normal-idempotent-bootstrap-for-three-authenticated-test-actors
           provider_configuration_mutation: forbidden
           external_cleanup_readback: required-separately-for-md-280
         inputs:
@@ -1063,7 +1066,7 @@ evidence:
           deployment_id: { value_from: run.uat_deployment_id }
           actor_source: { literal: environment-backed-sites-session }
           actor_classes: { literal: [operator, mind-role, ordinary] }
-          credential_refs: { literal: six-distinct-environment-only-references }
+          credential_refs: { literal: three-distinct-sites-session-environment-only-references }
         required_assertion_ids:
           - sessions.environment_backed_only
           - sessions.three_distinct_registered_principals
