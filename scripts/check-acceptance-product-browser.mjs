@@ -85,13 +85,13 @@ try {
     phase = "token_secret_dialog";
     await page.locator("[data-secret-dialog][open]").waitFor();
     phase = "token_self_check";
-    await page.locator("[data-run-mcp-self-check]").click();
+    // The product starts this check automatically when the token is revealed.
     await page.locator('[data-mcp-self-check][data-diagnostic-state="passed"], [data-mcp-self-check][data-diagnostic-state="failed"]').waitFor();
     const diagnostic = await page.locator('[data-mcp-self-check]').getAttribute('data-diagnostic-state');
     console.log(JSON.stringify({ phase, diagnostic }));
     assert.equal(diagnostic, "passed");
     phase = "token_secret_close";
-    await page.getByRole("button", { name: "Close permanently", exact: true }).click();
+    await Promise.all([page.waitForNavigation({ waitUntil: "domcontentloaded" }), page.getByRole("button", { name: "Close permanently", exact: true }).click()]);
     assert.doesNotMatch(await page.locator("[data-secret-value]").textContent(), /mdp_v1_/);
   }
   const verifier = randomBytes(32).toString("base64url");
