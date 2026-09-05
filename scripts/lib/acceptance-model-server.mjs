@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 
 // An isolated model under test. No executor delegation or global config writes.
 export class AcceptanceModelServer {
-  constructor({ executable = "/opt/homebrew/bin/codex", directory, onTool, maxTokens = 100000, maxCalls = 60 }) {
-    Object.assign(this, { executable, directory, onTool, maxTokens, maxCalls });
+  constructor({ executable = "/opt/homebrew/bin/codex", directory, onTool, onTrace = async () => {}, maxTokens = 100000, maxCalls = 60 }) {
+    Object.assign(this, { executable, directory, onTool, onTrace, maxTokens, maxCalls });
     this.pending = new Map(); this.events = []; this.waiters = []; this.id = 0; this.calls = 0;
   }
   async start() {
@@ -44,13 +44,15 @@ export class AcceptanceModelServer {
       if (event.method !== "item/tool/call") { this.send({ id: event.id, error: { code: -32601, message: "Not available in acceptance model" } }); return; }
       if (++this.calls > this.maxCalls) { this.fail(new Error("model_tool_budget_exceeded")); this.child.kill(); return; }
       const { tool, arguments: args, threadId, turnId } = event.params;
+      await this.onTrace({ method: "acceptance/toolRequested", params: { tool, arguments: args, threadId, turnId } });
       const result = await this.onTool(tool, args, { threadId, turnId });
-      this.events.push({ method: "acceptance/tool", params: { tool, arguments: args, result, threadId, turnId } });
+      const completed = { method: "acceptance/tool", params: { tool, arguments: args, result, threadId, turnId } };
+      await this.onTrace(completed); this.events.push(completed);
       this.send({ id: event.id, result: { contentItems: [{ type: "inputText", text: JSON.stringify(result) }], success: !result.isError } }); return;
     }
     // Do not retain hidden reasoning or provider raw events. Final text and tool data are synthetic and private.
     if (["item/started", "item/completed", "turn/completed", "thread/tokenUsage/updated", "thread/compacted", "model/rerouted", "error"].includes(event.method)) {
-      if (event.params?.item?.type !== "reasoning") this.events.push(event);
+      if (event.params?.item?.type !== "reasoning") { await this.onTrace(event); this.events.push(event); }
     }
     if (event.method === "thread/tokenUsage/updated") {
       this.usage = event.params.tokenUsage.total;
@@ -68,7 +70,7 @@ export class AcceptanceModelServer {
       this.pending.set(id, { resolve, reject, timer }); this.send({ id, method, params });
     });
   }
-  wait(predicate, from = this.events.length, timeout = 180000) {
+  wait(predicate, from = this.events.length, timeout = 360000) {
     const existing = this.events.slice(from).find(predicate); if (existing) return Promise.resolve(existing);
     if (this.failure) return Promise.reject(this.failure);
     return new Promise((resolve, reject) => {

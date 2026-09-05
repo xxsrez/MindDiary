@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
@@ -47,6 +47,9 @@ try {
   const catalog = await client.mcpEnvelope(token, "tools/list");
   assert.ok(catalog.result.tools.length > 5);
   const tools = catalog.result.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description, inputSchema: tool.inputSchema }));
+  receipt.catalog_hash = createHash("sha256").update(JSON.stringify(tools)).digest("hex");
+  receipt.package_path = plugin;
+  receipt.budget = { max_tokens_per_case: 400000, max_tool_calls_per_case: 50 };
   const shared = `/${fixture.handle}`;
   const cases = [
     { id: "null-personal-automatic-read", description: null, prompt: "What does our synthetic acceptance fixture currently say about the engineering decision?", reads: [shared], requiredReads: [shared], writes: [] },
@@ -59,12 +62,15 @@ try {
     const config = await client.mcp(token, "get_personal_mind_configuration");
     await client.mcp(token, "set_personal_mind_description", { description: scenario.description, expected_metadata_version: config.metadata_version, idempotency_key: `acceptance-model:${crypto.randomUUID()}` });
     const directory = join(client.directory, "models", scenario.id); await mkdir(directory, { recursive: true, mode: 0o700 });
-    server = new AcceptanceModelServer({ directory, maxTokens: 180000, maxCalls: 50, onTool: async (tool, args) => {
+    server = new AcceptanceModelServer({ directory, maxTokens: 400000, maxCalls: 50,
+      onTrace: event => appendFile(join(directory, "events.jsonl"), JSON.stringify(event) + "\n", { mode: 0o600 }),
+      onTool: async (tool, args) => {
       if (!tools.some(t => t.name === tool)) throw new Error("unknown_model_tool");
       const envelope = await client.mcpEnvelope(token, "tools/call", { name: tool, arguments: args });
       return envelope.result ?? { isError: true, content: [{ type: "text", text: "Protocol error" }] };
     } });
     await server.start(); await server.thread({ model: receipt.model, tools, skill });
+    assert.equal(server.model, receipt.model);
     let events;
     try {
       events = await server.turn(scenario.prompt);

@@ -26,8 +26,9 @@ export function verifyModelTrace(events, scenario) {
   }
   assert.equal(calls.some(c => ["get_personal_mind_configuration", "set_personal_mind_description"].includes(c.tool)), false, "unsolicited_configuration");
   const reads = calls.filter(c => ["search", "fetch", "browse_entries"].includes(c.tool));
+  const scopedReads = calls.filter(c => ["get_mind_info", "search", "fetch", "browse_entries", "list_revisions", "get_revision", "validate_mind"].includes(c.tool));
   const commits = calls.filter(c => c.tool === "commit_changeset");
-  for (const read of reads) assert.equal(scenario.reads.includes(read.resolvedMind), true, "unexpected_read_source");
+  for (const read of scopedReads) assert.equal(scenario.reads.includes(read.resolvedMind), true, "unexpected_read_source");
   for (const mind of scenario.requiredReads) assert.equal(reads.some(c => c.resolvedMind === mind && !c.result.isError), true, "required_read_missing");
   for (const write of commits) assert.equal(scenario.writes.includes(write.resolvedMind), true, "unexpected_write_destination");
   for (const mind of scenario.writes) assert.equal(commits.some(c => c.resolvedMind === mind && !c.result.isError), true, "required_commit_missing");

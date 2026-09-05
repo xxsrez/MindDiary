@@ -455,3 +455,20 @@ ephemeral thread с точным установленным skill и огран�
 других skills отключаются только в этом процессе. Бюджет, реальные traces и
 завершённое событие contextCompaction обязательны; текстовая имитация сжатия
 не принимается. Пока подтверждён только запуск App Server и model/list.
+
+Проверка capability затем выполнила настоящий tool call и завершённый
+`contextCompaction` на `codex-cli 0.153.0`, `gpt-6-astra`. Пробный live model
+runner `d135d0436040efa44aada50d90ea1ea39553c9ff` прочитал общий Mind и не
+обращался к Personal без description: пять реальных MCP вызовов, включая fetch.
+Исходный oracle ошибочно ожидал поле `mind` у fetch, хотя протокол передаёт
+opaque `id`; исходный run оставлен failed, cleanup восстановил baseline.
+Исправленный oracle связывает fetch с exact предшествующим search/browse и
+отклоняет неизвестный locator, запрещённый источник и незапрошенную запись.
+Повторная оценка сохранённой трассы прошла; это ещё не полный model run.
+
+Локальная product matrix проверяет все девять `null/empty/described` ×
+`disabled/read/read_write`, metadata conflict и exact replay configuration,
+credential scope narrowing, revision conflict, reconcile, history и полный OKF
+validation. Те же assertions доступны hosted runner; их локальный успех не
+является hosted evidence. MD-401–404 завершены; MD-405 в работе, MD-406–407
+остаются открытыми.
