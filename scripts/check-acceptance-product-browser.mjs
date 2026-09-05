@@ -63,9 +63,23 @@ try {
     const split = cookie.indexOf("=");
     await context.addCookies([{ name: cookie.slice(0, split), value: cookie.slice(split + 1), url: origin, secure: true, httpOnly: true, sameSite: "Lax" }]);
     const page = await context.newPage();
+    page.on("requestfailed", request => {
+      const url = new URL(request.url());
+      const target = url.origin === origin ? "site" : url.origin + url.pathname === callback ? "callback" : "other";
+      const code = request.failure()?.errorText;
+      diagnostics.push({ event: "request_failed", target, ...(typeof code === "string" && /^net::ERR_[A-Z_]+$/.test(code) ? { code } : {}) });
+    });
+    page.on("framenavigated", frame => {
+      if (frame !== page.mainFrame()) return;
+      let url; try { url = new URL(frame.url()); } catch { return; }
+      diagnostics.push({ event: "navigation", target: url.origin === origin ? "site" : url.origin + url.pathname === callback ? "callback" : "other" });
+    });
+    page.on("console", message => {
+      if (/Content Security Policy|form-action/.test(message.text())) diagnostics.push({ event: "csp_navigation_denied" });
+    });
     page.on("response", async response => {
       const url = new URL(response.url());
-      if (url.origin !== origin || !["/api/v1/account", "/api/v1/mcp-tokens", "/api/v1/session", "/api/mcp", "/api/mcp/2025-11-25"].includes(url.pathname)) return;
+      if (url.origin !== origin || !["/api/v1/account", "/api/v1/mcp-tokens", "/api/v1/session", "/api/mcp", "/api/mcp/2025-11-25", "/oauth/authorize"].includes(url.pathname)) return;
       let body; try { body = await response.json(); } catch {}
       const code = body?.error?.code ?? body?.result?.structuredContent?.error?.code;
       diagnostics.push({ path: url.pathname, status: response.status(), ...(typeof code === "string" && /^[a-z_]{1,80}$/.test(code) ? { code } : {}) });
@@ -115,8 +129,10 @@ try {
   authorize.search = new URLSearchParams({ client_id: clientId, redirect_uri: callback, response_type: "code", resource: origin + "/api/mcp", scope: "content:read personal:configure", state,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256" }).toString();
   await page.goto(authorize.href, { waitUntil: "domcontentloaded" });
+  phase = "oauth_connect_button";
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await page.waitForURL(callback + "?**");
+  phase = "oauth_callback_navigation";
+  await page.waitForURL(url => url.origin + url.pathname === callback);
   phase = "oauth_callback_state";
   assert.equal(callbackUrl.searchParams.get("state"), state);
   const exchange = { grant_type: "authorization_code", client_id: clientId, redirect_uri: callback, resource: origin + "/api/mcp", code: callbackUrl.searchParams.get("code"), code_verifier: verifier };
