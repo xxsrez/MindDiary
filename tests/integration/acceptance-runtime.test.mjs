@@ -66,10 +66,18 @@ test("four real bootstraps and normal bearer auth remain constrained by the run"
     if (!failedDelete) { failedDelete = true; throw new Error("Injected object cleanup failure"); }
     return bucketDelete(...args);
   };
-  const interrupted = await control(`/_acceptance/runs/${run.run_id}/cleanup`, "POST", {});
+  let interrupted;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    interrupted = await control(`/_acceptance/runs/${run.run_id}/cleanup`, "POST", {});
+    if (interrupted.status === 503) break;
+  }
   assert.equal(interrupted.status, 503);
   assert.equal(failedDelete, true);
-  const cleaned = await control(`/_acceptance/runs/${run.run_id}/cleanup`, "POST", {});
+  let cleaned;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    cleaned = await control(`/_acceptance/runs/${run.run_id}/cleanup`, "POST", {});
+    if ((await cleaned.clone().json()).state === "cleaned") break;
+  }
   assert.equal(cleaned.status, 200, await cleaned.clone().text());
   const receipt = await cleaned.json();
   assert.equal(receipt.state, "cleaned"); assert.equal(receipt.actors_cleaned, 4);

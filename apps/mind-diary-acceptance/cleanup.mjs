@@ -1,6 +1,6 @@
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 
-export async function cleanupRun(store, runId, productCall, resumeDeletion, fault = async () => {}) {
+export async function cleanupRun(store, runId, productCall, resumeDeletion, fault = async () => {}, maxActors = 1) {
   await store.ready();
   await store.db.batch([
     store.db.prepare("CREATE TABLE IF NOT EXISTS md_acceptance_cleanup_locks (run_id TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_at INTEGER NOT NULL)"),
@@ -21,7 +21,7 @@ export async function cleanupRun(store, runId, productCall, resumeDeletion, faul
   try {
     await store.statement("UPDATE md_acceptance_runs SET state = 'cleaning' WHERE id = ? AND state != 'cleaned'", runId).run();
     await fault("after_revoke");
-    const results = [];
+    const results = []; let processed = 0;
     for (const actor of run.actors) {
       await assertLease();
       await store.statement("INSERT OR IGNORE INTO md_acceptance_cleanup_journal (actor_id) VALUES (?)", actor.id).run();
@@ -72,6 +72,10 @@ export async function cleanupRun(store, runId, productCall, resumeDeletion, faul
       await store.statement("UPDATE md_acceptance_cleanup_journal SET done = 1, result_json = ? WHERE actor_id = ?", JSON.stringify(result), actor.id).run();
       results.push(result);
       await fault("after_actor", actor.id);
+      processed++;
+      if (processed >= maxActors && results.length < run.actors.length) {
+        return { run_id: runId, state: "cleaning", actors_cleaned: results.length, actors_remaining: run.actors.length - results.length };
+      }
     }
     await assertLease();
     const receipt = { run_id: runId, state: "cleaned", actors_cleaned: run.actors.length, results };

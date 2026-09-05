@@ -359,3 +359,28 @@ Reaper выбирает только expired/revoked/cleaning runs, максим
 MCP token отклонён, повторный cleanup возвращает сохранённый receipt.
 Эти проверки не заменяют hosted acceptance, SDK fixtures, полную матрицу
 пересечений и final/baseline counts. Задача остаётся In Progress.
+
+### Hosted sessions и фактическое восстановление
+
+Candidate `df001dbf605e45b1b482501030f19e9bb12c58e1`, CI `33993159765`
+прошёл; 229 build inputs verified. Source mirror
+`e6fb0e669ee7bc07d50f8478ee532323807158eb`, Site version 3, deployment
+`appgdep_examplee355ae314debe841` succeeded, env revision 2.
+Server hash `4dd9845cfb2e2884cc95e4c3f17f2af2abc5e80a9ba75b1989525da9ebf726ed`.
+Archive provider hash `73f6ec7a2e637c6a22a6628416d17bb4ebdc535fdcceb89960837a97171c3181`.
+
+На этом hosted target normal bootstrap создал четыре независимых principals
+и Personal Minds. Normal read-scoped MCP token работает; repeated exchange,
+wrong run и access после revoke отклонены. Запрос cleanup превысил клиентские
+45 секунд: результат был unknown, а не failure/pass. Live journal показал три
+завершённых actor и сохранённый успешный DELETE четвёртого. После read-back
+продолжен тот же run, без повторного setup; получен final `cleaned` receipt на
+четыре accounts. Штатная очистка отозвала token, удалила четыре indexed revisions
+и два shared canonical objects. Прямой read-back D1: actors, sessions и cleanup
+journal пусты. Это подтверждение данного сценария, не всей MD-404.
+
+По результату hosted timeout следующий cut ограничивает cleanup request одним
+actor. Клиент продолжает `state=cleaning` до final receipt. Добавлен private
+SDK journal: exact create/mutation keys и payload сохраняются до запроса;
+локальный тест потери ответа подтверждает повтор исходных keys и неизменного
+payload; после сохранённого success повторный запрос не отправляется. Полная SDK fixture/matrix приёмка ещё впереди.

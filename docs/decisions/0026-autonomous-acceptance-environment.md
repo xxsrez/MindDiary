@@ -159,3 +159,11 @@ AccountDeletionService; не создаёт новый deletion intent и не �
 сбой после удаления identity без её повторного создания и без прямых product
 DB mutations. Cleanup retries ограничены run lease и server-side lock;
 истёкший lock допускает возобновление, активный run reaper не трогает.
+
+Hosted-проверка первой реализации показала, что очистка четырёх accounts может
+пережить клиентский timeout, оставив честный persisted progress. Поэтому один
+cleanup request обрабатывает максимум одного ещё неочищенного actor и
+возвращает `state=cleaning` с количеством оставшихся. Клиент продолжает тот же
+run; `cleaned` выдаётся только после полного read-back и записи receipt.
+`POST /_acceptance/recover` применяет тот же bounded step к максимум двум
+просроченным или отозванным runs. Активные runs он не отзывает.

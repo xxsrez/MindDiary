@@ -27,9 +27,9 @@ for (const point of ["after_revoke", "before_delete", "after_delete", "after_act
     let injected = false;
     await assert.rejects(cleanupRun(store, run.id, product, async () => ({ pending: false }), async stage => {
       if (!injected && stage === point) { injected = true; throw new Error("interruption"); }
-    }), /interruption/);
+    }, 4), /interruption/);
     const restored = new AcceptanceSessionStore(db);
-    const receipt = await cleanupRun(restored, run.id, product, async () => ({ pending: false }));
+    const receipt = await cleanupRun(restored, run.id, product, async () => ({ pending: false }), undefined, 4);
     assert.equal(receipt.state, "cleaned"); assert.equal(deletes, 4); assert.equal(active.size, 0);
     assert.deepEqual(await cleanupRun(restored, run.id, product, async () => {}), receipt);
     assert.equal((await restored.run(other.id)).state, "active");
