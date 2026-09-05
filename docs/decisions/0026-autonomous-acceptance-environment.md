@@ -137,3 +137,25 @@ timings не заменяют реальные UI/model/hosted-performance asser
 MD-394/399 и исторические receipts автоматически не закрываются. Production,
 реальный Personal corpus, внешний account provisioning, AWS и платные seats
 не входят в решение.
+
+## Уточнение recovery contract (MD-404)
+
+Cleanup сначала переводит run в `cleaning`, прекращая обычный web/MCP доступ.
+Контроллер не получает recovery cookie: сервер создаёт in-process requests
+только для session/account preview/delete на identity принадлежащего run actor.
+Эта identity хранится в памяти по самому объекту Request, не в клиентском
+header, и не используется для content operations. Exact deletion payload и
+idempotency key сохраняются до DELETE. После потери ответа перечитывается
+состояние аккаунта; успешное исчезновение identity само по себе не доказывает
+завершение очистки объектов.
+
+Для уже committed account deletion общий runtime предоставляет узкий
+constructor-owned recovery port. Он принимает exact principal/impact/key,
+проверяет существующий pending cleanup record и повторяет штатный
+AccountDeletionService; не создаёт новый deletion intent и не публикуется
+через обычные HTTP/MCP routes. Test controller выбирает эти аргументы только
+из собственного сохранённого журнала. Отсутствие pending work подтверждается
+отдельным read-back; OAuth cleanup также завершается. Это позволяет восстановить
+сбой после удаления identity без её повторного создания и без прямых product
+DB mutations. Cleanup retries ограничены run lease и server-side lock;
+истёкший lock допускает возобновление, активный run reaper не трогает.

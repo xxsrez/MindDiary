@@ -336,3 +336,26 @@ controller/Origin и ограничение тела запроса. Полны�
 Это пока локальная проверка: новый issuer ещё не опубликован в hosted target.
 Очистка/recovery (MD-404), полная матрица агента (MD-405), отчёты/замеры
 (MD-406) и два итоговых запуска с прерыванием (MD-407) остаются впереди.
+
+## MD-404: восстановление очистки
+
+MD-403 implementation candidate `167e1b6bb52e3faa2356a6f7095cd16bdca4e73a`
+прошёл локальные 1134 tests / 68 browser tests и CI `33992744676`.
+MD-403 ещё не закрыта: hosted actor acceptance будет выполнена вместе с
+первым безопасно очищаемым стендом. MD-404 начата, поскольку её зависимость
+реализована в integration base; это не подмена status MD-403.
+
+Server cleanup сначала отзывает обычный доступ, затем по каждому actor
+сохраняет deletion command перед штатным account DELETE. Lock и журнал
+хранятся в отдельной test metadata. Для сбоя после удаления identity создан
+узкий in-process port продолжения уже committed AccountDeletionService;
+он отказывает для действующего аккаунта и не создаёт новый deletion intent.
+Reaper выбирает только expired/revoked/cleaning runs, максимум два за вызов.
+
+Локальные проверки: interruption после revoke, перед DELETE, после DELETE
+и между actors; повторный журнал не дублирует commits, соседний active run
+сохранён. Сквозной SQLite/product-runtime test искусственно прерывает R2 delete,
+повторный cleanup завершает pending work; после четырёх аккаунтов R2 пуст,
+MCP token отклонён, повторный cleanup возвращает сохранённый receipt.
+Эти проверки не заменяют hosted acceptance, SDK fixtures, полную матрицу
+пересечений и final/baseline counts. Задача остаётся In Progress.

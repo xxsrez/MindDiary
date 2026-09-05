@@ -216,6 +216,10 @@ export interface ProductSiteRuntimeOptions {
 }
 
 export interface ProductSiteRuntime {
+  /** Trusted recovery of an already committed deletion; never starts a new deletion. */
+  readonly resumeAccountDeletion: (input: Readonly<{
+    principalId: string; impactId: string; idempotencyKey: string;
+  }>) => Promise<Readonly<{ pending: false }>>;
   /** Trusted in-process producer route; deliberately absent from HTTP/MCP discovery. */
   readonly serverGeneratedIngress: Readonly<
     Pick<TrustedServerGeneratedIngressService, "stage">
@@ -2192,6 +2196,24 @@ export async function createProductSiteRuntime(
     serverGeneratedIngress,
     dispatchBackground,
     recoverBackground,
+    async resumeAccountDeletion(input: Readonly<{ principalId: string; impactId: string; idempotencyKey: string }>) {
+      const principalId = input.principalId as PrincipalId;
+      const context = await metadata.readAccountDeletionContext(principalId, input.impactId);
+      if (await metadata.readAccount(principalId) !== null) throw new Error("Account is still active.");
+      if (context?.kind === "impact") throw new Error("Deletion has not committed.");
+      if (context?.kind === "cleanup") {
+        await controlServices.accountDeletion.deleteAccount({
+          kind: "registered_principal", principalId,
+          authentication: { kind: "sites_identity" }, requestId: nextOpaque("deletion-recovery"),
+          deploymentCapabilities: [], occurredAtUtc: clock.now(),
+        }, { impactId: input.impactId, idempotencyKey: input.idempotencyKey, confirmation: "delete-account" });
+      }
+      await oauth.revokePrincipalConnections(input.principalId);
+      if (await metadata.readAccountDeletionContext(principalId, input.impactId) !== null) {
+        throw new Error("Deletion cleanup is still pending.");
+      }
+      return Object.freeze({ pending: false as const });
+    },
     async fetch(
       request: Request,
       deferActivity?: (promise: Promise<unknown>) => void,

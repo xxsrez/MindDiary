@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -48,6 +48,22 @@ export async function handleAcceptanceSession(request, store, controllerKey) {
       return json({ status: "authenticated" }, 200, { "set-cookie": session.cookie });
     }
     if (!(await controller(request, controllerKey))) return json({ error: "controller_required" }, 401);
+    if (pathname === "/_acceptance/recover" && request.method === "POST" && cleanup) {
+      if (Object.keys(await body(request)).length !== 0) return json({ error: "invalid_request" }, 400);
+      await store.ready();
+      const due = await store.statement("SELECT id FROM md_acceptance_runs WHERE state != 'cleaned' AND (state != 'active' OR expires_at <= ?) ORDER BY created_at LIMIT 2", store.now()).all();
+      const results = [];
+      for (const run of due.results) {
+        try { results.push(await cleanup(run.id)); }
+        catch { results.push({ run_id: run.id, state: "cleanup_pending" }); }
+      }
+      return json({ results }, results.some((r) => r.state !== "cleaned") ? 503 : 200);
+    }
+    const cleanupRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/cleanup$/.exec(pathname);
+    if (cleanupRoute && request.method === "POST" && cleanup) {
+      if (Object.keys(await body(request)).length !== 0) return json({ error: "invalid_request" }, 400);
+      return json(await cleanup(cleanupRoute[1]));
+    }
     if (pathname === "/_acceptance/runs" && request.method === "POST") {
       return json(projection(await store.create(await body(request), request.headers.get("idempotency-key"))));
     }

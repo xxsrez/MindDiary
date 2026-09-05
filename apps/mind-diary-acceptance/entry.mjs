@@ -8,24 +8,31 @@ import { assertAcceptanceTarget } from "./runtime-target.mjs";
 import probe from "./worker.mjs";
 import { AcceptanceSessionStore } from "./session-store.mjs";
 import { handleAcceptanceSession } from "./session-http.mjs";
+import { cleanupRun } from "./cleanup.mjs";
 
 const stores = new WeakMap();
 const runtimeEnvironments = new WeakMap();
+const recoveryIdentities = new WeakMap();
+const runtimes = new WeakMap();
 function storeFor(database) {
   if (!stores.has(database)) stores.set(database, new AcceptanceSessionStore(database));
   return stores.get(database);
 }
 
 const product = createMindDiaryProductWorker({
-  createRuntime: (options) => createProductSiteRuntime({
+  createRuntime: async (options) => {
+    const runtime = await createProductSiteRuntime({
     ...options,
     identity: { async readVerifiedIdentity(request) {
-      const actor = await storeFor(options.database).actorForRequest(request);
+      const actor = recoveryIdentities.get(request) ?? await storeFor(options.database).actorForRequest(request);
       return actor ? { kind: "authenticated", verifiedEmail: actor.subject, verifiedFullName: `Test actor ${actor.ordinal + 1}` } : { kind: "unauthenticated" };
     } },
     identityBindingProvider: "synthetic-test",
     mcpPrincipalAdmission: (principalId, request) => storeFor(options.database).admitPrincipal(principalId, request),
-  }),
+    });
+    runtimes.set(options.database, runtime);
+    return runtime;
+  },
   staticFetch: createProductUiStaticAssetResponse,
   readConfig: readRuntimeConfig,
   fallbackFetch: async () => new Response("Not found", { status: 404 }),
@@ -41,7 +48,13 @@ export default {
       return Response.json(__MD_ACCEPTANCE_BUILD__, { headers: { "cache-control": "no-store" } });
     }
     const store = storeFor(environment.DB);
-    const sessionResponse = await handleAcceptanceSession(request, store, environment.MD_ACCEPTANCE_CONTROLLER_KEY);
+    const sessionResponse = await handleAcceptanceSession(request, store, environment.MD_ACCEPTANCE_CONTROLLER_KEY, (runId) => cleanupRun(store, runId,
+      async (actor, internalRequest) => {
+        recoveryIdentities.set(internalRequest, actor);
+        try { return await product.fetch(internalRequest, environment, context); }
+        finally { recoveryIdentities.delete(internalRequest); }
+      },
+      (input) => runtimes.get(environment.DB).resumeAccountDeletion(input)));
     if (sessionResponse) return sessionResponse;
     const actor = await store.actorForRequest(request);
     if (path === "/" && !actor) return probe.fetch(request, environment);
