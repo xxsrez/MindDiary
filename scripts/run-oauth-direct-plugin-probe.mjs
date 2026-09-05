@@ -50,7 +50,7 @@ const REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect";
 const EVIDENCE_SCHEMA = "mind-diary/oauth-direct-plugin-evidence/v1";
 const BINDING_NAMESPACE = "synthetic-test";
 const CLIENT = "codex-cli";
-const CLIENT_VERSION = "0.152.1";
+const CLIENT_VERSION = "0.153.0";
 const CODEX_SKILL_DISCOVERY_PROMPT =
   "Check whether the installed Mind Diary skill is available. Do not call tools.";
 const MAX_CODEX_PROMPT_INPUT_BYTES = 2 * 1024 * 1024;
