@@ -23,6 +23,8 @@ export async function verifyProductMatrix(client, fixture) {
       const configuration = { description, expected_metadata_version: before.metadata_version, idempotency_key: `matrix:configuration:${crypto.randomUUID()}` };
       const configured = await client.mcp(token, "set_personal_mind_description", configuration);
       assert.equal(configured.description, kind === "described" ? description : null);
+      const replayedConfiguration = await client.mcp(token, "set_personal_mind_description", configuration);
+      assert.equal(replayedConfiguration.metadata_version, configured.metadata_version);
       assert.equal((await client.mcp(token, "get_personal_mind_configuration")).description, configured.description);
       await setMode(mode);
       const projection = await client.mcp(token, "list_minds");
@@ -42,7 +44,7 @@ export async function verifyProductMatrix(client, fixture) {
           const conflict = await client.mcpEnvelope(token, "tools/call", { name: "commit_changeset", arguments: { ...request, idempotency_key: request.idempotency_key + "-stale" } });
           assert.equal(conflict.result.isError, true);
           const historical = await client.mcp(token, "get_revision", { mind: "/me", revision_id: head }); assert.ok(historical);
-          const validation = await client.mcp(token, "validate_mind", { mind: "/me" }); assert.ok(validation);
+          const validation = await client.mcp(token, "validate_mind", { mind: "/me" }); assert.equal(validation.valid, true);
         }
       }
       checked.push(`${kind}:${mode}`);
@@ -55,7 +57,13 @@ export async function verifyProductMatrix(client, fixture) {
   const readToken = issued.data.secret;
   const denied = await client.mcpEnvelope(readToken, "tools/call", { name: "get_personal_mind_configuration", arguments: {} });
   assert.equal(denied.result.isError, true);
+  const personal = (await client.mcp(readToken, "list_minds")).minds.find(mind => mind.route === "/me");
+  const deniedWrite = await client.mcpEnvelope(readToken, "tools/call", { name: "commit_changeset", arguments: { mind: "/me", expected_revision: personal.head.revision_id,
+    idempotency_key: `matrix:read-denied:${crypto.randomUUID()}`, summary: "Must remain forbidden", operations: [{ type: "create_file", path: "concepts/forbidden.md", text: "---\ntype: Reference\n---\n\nMust not be committed.\n" }] } });
+  assert.equal(deniedWrite.result.isError, true);
   const oldConfig = await client.mcp(token, "get_personal_mind_configuration");
   await client.mcp(token, "set_personal_mind_description", { description: null, expected_metadata_version: oldConfig.metadata_version, idempotency_key: `matrix:reset:${crypto.randomUUID()}` });
+  const stale = await client.mcpEnvelope(token, "tools/call", { name: "set_personal_mind_description", arguments: { description: "Stale configuration", expected_metadata_version: oldConfig.metadata_version, idempotency_key: `matrix:stale:${crypto.randomUUID()}` } });
+  assert.equal(stale.result.structuredContent.error.code, "metadata_conflict");
   return { schema: "mind-diary/acceptance-product-matrix/v1", status: "passed", personal_mode_description_cells: checked, scope_narrowing: true, committed_reconciliation: true, stale_revision_denied: true };
 }
