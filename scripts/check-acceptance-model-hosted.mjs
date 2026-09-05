@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 import { createCollaborationFixture } from "./lib/acceptance-fixture.mjs";
 import { AcceptanceModelServer } from "./lib/acceptance-model-server.mjs";
+import { verifyModelTrace } from "./lib/acceptance-model-oracle.mjs";
 
 let phase = "configuration";
 process.once("uncaughtException", () => { console.error(JSON.stringify({ status: "failed", phase })); process.exit(1); });
@@ -74,15 +75,8 @@ try {
         assert.equal(calls[0]?.params.tool, "list_minds");
         events = [...events, ...after];
       }
-      const calls = events.filter(e => e.method === "acceptance/tool").map(e => e.params);
-      const contentReads = calls.filter(c => ["search", "fetch", "browse_entries"].includes(c.tool));
-      const commits = calls.filter(c => c.tool === "commit_changeset");
-      assert.equal(calls.some(c => c.tool === "set_personal_mind_description"), false);
-      for (const read of contentReads) assert.equal(scenario.reads.includes(read.arguments.mind), true);
-      for (const mind of scenario.requiredReads) assert.equal(contentReads.some(c => c.arguments.mind === mind), true);
-      for (const write of commits) assert.equal(scenario.writes.includes(write.arguments.mind), true);
-      for (const mind of scenario.writes) assert.equal(commits.some(c => c.arguments.mind === mind && !c.result.isError), true);
-      receipt.cases.push({ id: scenario.id, status: "passed", calls: calls.map(c => ({ tool: c.tool, mind: c.arguments.mind ?? null, error: c.result.isError === true })), compacted: scenario.compact === true, usage: server.usage });
+      const calls = verifyModelTrace(events, scenario);
+      receipt.cases.push({ id: scenario.id, status: "passed", calls, compacted: scenario.compact === true, usage: server.usage });
       console.log(JSON.stringify({ phase, status: "passed", calls: calls.length, compacted: scenario.compact === true }));
     } finally {
       await writeFile(join(directory, "trace.json"), JSON.stringify({ receipt: { ...receipt, cases: [] }, scenario, events: server.events }), { mode: 0o600 });
