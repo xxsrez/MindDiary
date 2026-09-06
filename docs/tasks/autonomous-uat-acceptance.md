@@ -620,3 +620,12 @@ reconciliation. Четыре actors удалены, полная inventory v2 п
 Исторические MD-394/MD-399 не могут быть закрыты новым join. Пока остаются
 полный объединённый model run, реальные performance measurements, persistence
 и recovery components и два полных повторяемых запуска MD-407.
+
+
+Model run `md405-model-partial-v7-20260906` на test v7 и чистом runner
+`bb63b31f3bd9ba2878dcefedfdcc3254e3a158b0` прошёл `overlap-partial-write`:
+23 tool calls, 232344 tokens из лимита 400000; первый commit проверен,
+вторая запись отклонена после реального изменения режима, частичный отказ
+сообщён. Cleanup подтвердил baseline restored. Это отдельный case, не полный
+14-case receipt. Запущен отдельный настоящий performance run; результат пока
+не объявлен.

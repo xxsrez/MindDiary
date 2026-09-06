@@ -90,3 +90,39 @@ MCP credential, повторная очистка и итоговая inventory.
 
 Этот mapping распределяет проверки нового scope. Он не закрывает MD-399 и не
 заменяет его исторические требования migration/release/first-user evidence.
+
+## Одна команда для управляющего агента
+
+```text
+npm run acceptance:run -- <unique-tag> <private-configuration.json>
+```
+
+Configuration содержит `identity`, результат applicability и `package_path`
+установленного Mind Diary. Запуск требует чистый Git checkout и пустую полную
+inventory тестового target. Configuration и runner SHA фиксируются в закрытом
+журнале; повтор команды продолжает тот же запуск. Для нового независимого
+прогона нужен новый tag.
+
+Порядок: persistence prepare → повторная публикация точной saved version →
+persistence verify → product → browser CI → model → recovery → performance →
+provider telemetry → применимые реальные platform canaries → общий join.
+Браузерная проверка запускается через GitHub workflow со stored secrets;
+координатор получает только aggregate artifact по точному CI run ID.
+
+Для Sites команда выдаёт `agent_checkpoint` с exact project/version и именем
+закрытого файла результата. Управляющий агент вызывает поддерживаемый Sites
+connector, сохраняет настоящий terminal deployment read-back либо worker log
+result и снова выполняет ту же команду. Во время performance sample агент
+собирает bounded logs, не дожидаясь потери начала окна. Эти точки предназначены
+для агента и не требуют рутинного подтверждения пользователя.
+
+При прерывании частично созданный component очищается по своему журналу,
+проверяется inventory, увеличивается номер попытки и повторяется этот этап.
+Подготовленная persistence fixture и завершённая performance sample сохраняются
+для соответствующей контрольной точки. Завершённый component повторно
+валидируется и сверяется с закреплённым hash; повреждённый artifact не пропускается.
+Настоящие platform receipts передаёт управляющий агент после проверки источника;
+из произвольного JSON самостоятельно вывести доверенное происхождение нельзя.
+
+Реализация команды требует живой проверки полного цикла MD-407. До двух полных
+прогонов и interruption/recovery это не заявление о завершённой автоматизации.

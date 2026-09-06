@@ -77,7 +77,7 @@ try {
     { id: "overlap-unknown-commit", description: topics, unknownCommit: true, prompt: "Our lasting engineering decision: synthetic acceptance evidence uses a Granite manifest that lists all completed checks and their checksums. Explain how that helps future releases.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: ["/me", shared] },
     { id: "overlap-partial-write", description: topics, partialCommit: true, prompt: "Our lasting engineering decision: synthetic acceptance recovery drills use an Obsidian checklist that records the last verified commit before retrying. Explain why we use it.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: ["/me", shared] },
   ];
-  const selectedIds = process.env.MD_ACCEPTANCE_MODEL_CASES?.split(",");
+  const selectedIds = process.env.MD_ACCEPTANCE_MODEL_CASES?.trim() ? process.env.MD_ACCEPTANCE_MODEL_CASES.split(",") : undefined;
   if (selectedIds && (new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => !cases.some(c => c.id === id)))) throw new Error("invalid_model_case_selection");
   const selectedCases = selectedIds ? cases.filter(c => selectedIds.includes(c.id)) : cases;
   if (selectedIds?.includes("overlap-semantic-noop") && !selectedIds.includes("overlap-automatic-save")) throw new Error("noop_case_requires_preceding_save_case");

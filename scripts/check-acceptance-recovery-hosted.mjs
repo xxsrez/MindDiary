@@ -25,6 +25,7 @@ const build = await (await primary.request("/_acceptance/build")).json();
 assert.equal(identity.project_id, "appgprj_example8ca2ca9e5243cfd6");
 for (const key of ["candidate_sha", "common_modules_sha256", "test_adapter_sha256"]) assert.equal(identity[key], build[key]);
 const baseline = await primary.control("/_acceptance/inventory");
+primary.state.recovery = { baseline }; await primary.save();
 const assertions = {}, events = [];
 const record = (name, details = {}) => { events.push({ name, at: new Date().toISOString(), ...details }); console.log(JSON.stringify({ phase: name, status: "passed" })); };
 function loseResponse(client, matches, message) {

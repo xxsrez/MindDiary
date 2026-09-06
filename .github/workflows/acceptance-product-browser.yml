@@ -1,10 +1,15 @@
 name: Acceptance product browser
+run-name: Acceptance ${{ inputs.run_tag || github.run_id }}
 on:
   workflow_dispatch:
     inputs:
       candidate:
         description: Exact deployed acceptance candidate SHA
         required: true
+        type: string
+      run_tag:
+        description: Unique coordinator run tag
+        required: false
         type: string
       identity_json:
         description: Exact non-secret acceptance identity JSON for joined evidence
