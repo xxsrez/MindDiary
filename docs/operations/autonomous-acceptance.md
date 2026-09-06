@@ -54,3 +54,39 @@ deployment того же artifact и точного чтения revision/conten
 bypass остаётся отдельным credential. Логи провайдера могут содержать request
 headers: их нельзя выводить целиком. Публикуемый отчёт содержит только digest,
 идентификаторы версии, результаты assertions и сводку очистки.
+
+## Сохранность после публикации и восстановление
+
+`node scripts/check-acceptance-persistence-hosted.mjs <tag> prepare <identity.json>`
+создаёт обычным API fixture и сохраняет закрытый checkpoint с точными revision
+и digest прочитанного содержимого. Агент повторно публикует тот же saved Site
+version через Sites, проверяет terminal deployment и передаёт обновлённую
+identity в `verify`. Команда отклоняет смену artifact или runner между фазами,
+читает те же revisions/locators и очищает fixture. `cleanup` завершает
+незаконченный checkpoint без заявления об успешной проверке.
+
+`node scripts/check-acceptance-recovery-hosted.mjs <tag> <identity.json>`
+теряет ответы после настоящих setup/bootstrap/commit/cleanup операций,
+повторно открывает закрытый журнал и проверяет восстановление. Одновременно
+существует второй run с реальным TTL 60 секунд; reaper должен очистить только
+истёкший run, оставив активный доступным. Отдельно проверяются отзыв сессии и
+MCP credential, повторная очистка и итоговая inventory. Недоступность сервиса
+моделируется HTTP 503 в controller transport: receipt явно отличает эту
+инъекцию от настоящего сбоя провайдера. Ни fake success, ни virtual TTL clock
+в hosted runner не используются.
+
+## Соответствие продуктовой матрице MD-399
+
+| Условие | Свидетельство нового запуска |
+| --- | --- |
+| Mode × description, настройка/очистка/conflict | product: 9 cells, metadata CAS, scope narrowing |
+| Два тематических чтения, независимые записи/no-op | model: described-overlap-read, overlap-automatic-save, overlap-semantic-noop |
+| Частичный успех и неизвестный результат | model: overlap-partial-write, overlap-unknown-commit; recovery: commit interruption |
+| ACL/scopes/revoke, stale routing | product ACL/scope matrix; browser revoke; model read-only/disabled и повтор после compaction |
+| Personal → shared запрет, недоверенный description | model: personal-to-shared-negative, description-injection |
+| Modern/compat, история/OKF | browser self-check; product history/OKF; performance оба профиля |
+| Restart и сохранность | persistence: same artifact redeploy и exact read-back |
+| Установленный plugin и fresh session | model exact package digest и новый AppServer thread; отдельно применимый реальный Marketplace/Sites canary |
+
+Этот mapping распределяет проверки нового scope. Он не закрывает MD-399 и не
+заменяет его исторические требования migration/release/first-user evidence.
