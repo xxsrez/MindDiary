@@ -1,6 +1,6 @@
 # Профиль `ship-work-release` для Mind Diary
 
-Статус: accepted project configuration, revision 7, 2026-09-05.
+Статус: accepted project configuration, revision 8, 2026-09-06.
 
 Документ задаёт project-specific параметры Mind Diary по
 [provider-neutral profile contract](../specs/ship-work-release-project-profile.md).
@@ -18,6 +18,15 @@ adapters и их hosted canaries сохраняются как post-MVP graph, �
 в batch release capability set и не активируют `dev.changed-surface` или
 `uat.changed-surface`. Их code/tests могут присутствовать в exact candidate;
 это не является hosted support claim и не блокирует terminal 0.1.
+
+Revision 8 добавляет отдельный перспективный контракт автоматической приёмки
+MD-400: [порядок запуска и применимость проверок](autonomous-acceptance.md).
+Он не изменяет историческую приёмку MD-394/MD-399 и перечисленные ниже
+обязательства прежних releases. Проверки настоящей платформенной identity,
+операторского каталога и первого подключения выбираются по изменениям
+соответствующих компонентов и конфигурации провайдера. Отсутствие изменения
+не является свидетельством успешной платформенной проверки. Если проверка
+применима, synthetic identity её не заменяет.
 
 Revision 7 сохраняет terminal `uat.operator-directory-canary` и исправляет
 расхождение его объявления с принятым runbook и runner: три distinct Sites

@@ -1,3 +1,4 @@
+import { verifyAcceptanceApplicability, verifyApplicablePlatformReceipts } from "./acceptance-applicability.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { verifyPerformanceTelemetryCaptureReceipt } from "./performance-telemetry-capture.mjs";
@@ -88,9 +89,13 @@ export function verifyAcceptanceComponent(value) {
   assert.equal(artifact_sha256, acceptanceDigest(unsigned), "component_hash_mismatch");
   return value;
 }
-export function joinAcceptanceSuite(manifest, components) {
-  keys(manifest, ["schema", "identity", "runner_sha", "package_sha256", "component_hashes"], "invalid_suite_manifest");
+export function joinAcceptanceSuite(manifest, components, platformReceipts = []) {
+  keys(manifest, ["schema", "identity", "runner_sha", "package_sha256", "component_hashes", "applicability", "platform_receipt_hashes"], "invalid_suite_manifest");
   assert.equal(manifest.schema, "mind-diary/acceptance-manifest/v1");
+  const applicability = verifyAcceptanceApplicability(manifest.applicability);
+  assert.equal(applicability.policy, "autonomous-v1", "historical_contract_requires_legacy_gate");
+  assert.equal(applicability.candidate_sha, manifest.identity.candidate_sha, "applicability_candidate_mismatch");
+  verifyApplicablePlatformReceipts(applicability, platformReceipts, manifest.platform_receipt_hashes);
   identity(manifest.identity); assert.match(manifest.runner_sha, SHA); assert.match(manifest.package_sha256, HASH);
   keys(manifest.component_hashes, ACCEPTANCE_COMPONENTS, "component_hash_coverage_missing");
   assert.equal(components.length, ACCEPTANCE_COMPONENTS.length, "component_coverage_missing");
@@ -104,6 +109,7 @@ export function joinAcceptanceSuite(manifest, components) {
   }
   const result = { schema: "mind-diary/acceptance-suite/v1", status: "passed", identity: manifest.identity,
     runner_sha: manifest.runner_sha, package_sha256: manifest.package_sha256, component_hashes: manifest.component_hashes,
+    applicability_sha256: applicability.artifact_sha256, platform_receipt_hashes: manifest.platform_receipt_hashes,
     coverage: [...ACCEPTANCE_COMPONENTS], cleanup: "baseline_restored" };
   return { ...result, artifact_sha256: acceptanceDigest(result) };
 }

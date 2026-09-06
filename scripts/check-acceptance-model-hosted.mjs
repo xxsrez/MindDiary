@@ -9,6 +9,7 @@ import { createCollaborationFixture } from "./lib/acceptance-fixture.mjs";
 import { AcceptanceModelServer } from "./lib/acceptance-model-server.mjs";
 import { verifyModelTrace } from "./lib/acceptance-model-oracle.mjs";
 
+import { acceptanceDigest, createAcceptanceComponent, ACCEPTANCE_MODEL_CASES } from "./lib/acceptance-evidence.mjs";
 let phase = "configuration";
 process.once("uncaughtException", () => { console.error(JSON.stringify({ status: "failed", phase })); process.exit(1); });
 const root = join(homedir(), ".codex/private/mind-diary-acceptance");
@@ -22,6 +23,9 @@ const controllerKey = await readFile(join(root, "controller-key"), "utf8");
 const client = await new AcceptanceClient({ directory: join(root, "runs", tag), platformToken, controllerKey }).open();
 if (client.state.phase === "cleaned") throw new Error("use_new_tag_for_new_model_evaluation");
 const build = await (await client.request("/_acceptance/build")).json(); assert.equal(build.candidate_sha, expected);
+const identityPath = process.env.MD_ACCEPTANCE_IDENTITY_FILE;
+const identity = identityPath ? JSON.parse(await readFile(identityPath, "utf8")) : null;
+if (identity) for (const key of ["candidate_sha", "common_modules_sha256", "test_adapter_sha256"]) assert.equal(identity[key], build[key]);
 const skill = await readFile(join(plugin, "skills/mind-diary/SKILL.md"), "utf8");
 const packageHasher = createHash("sha256");
 async function hashDirectory(path) {
@@ -38,11 +42,12 @@ const receipt = { schema: "mind-diary/acceptance-model/v1", candidate: expected,
   runner_dirty: execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim().length > 0,
   cli: execFileSync("/opt/homebrew/bin/codex", ["--version"], { encoding: "utf8" }).trim(), model: "gpt-6-astra", package_hash: packageHasher.digest("hex"),
   skill_hash: createHash("sha256").update(skill).digest("hex"), cases: [] };
+if (identity) assert.equal(receipt.runner_dirty, false, "clean_runner_required");
 const baseline = await client.control("/_acceptance/inventory"); assert.equal(baseline.complete, true);
 client.state.modelBaseline = baseline; await client.save();
 const saveReceipt = () => writeFile(join(client.directory, "model-receipt.json"), JSON.stringify(receipt), { mode: 0o600 });
 await saveReceipt();
-let server;
+let server, finalInventory;
 try {
   phase = "fixture";
   const fixture = await createCollaborationFixture(client);
@@ -139,6 +144,8 @@ try {
       }
       const oracleScenario = scenario.partialCommit ? { ...scenario, requiredWrites: [firstCommittedMind], failedWrite: partialReadOnlyMind } : scenario;
       const calls = verifyModelTrace(events, oracleScenario);
+      assert.ok(Number.isSafeInteger(server.usage?.totalTokens) && server.usage.totalTokens <= receipt.budget.max_tokens_per_case, "model_usage_missing_or_exceeded");
+      assert.ok(server.calls <= receipt.budget.max_tool_calls_per_case, "model_tool_budget_exceeded");
       if (scenario.partialCommit) {
         assert.ok(firstCommittedMind && partialReadOnlyMind && firstCommittedMind !== partialReadOnlyMind, "partial_write_injection_missing");
         const messages = events.filter(event => event.method === "item/completed" && event.params?.item?.type === "agentMessage").map(event => event.params.item.text).join("\n");
@@ -162,7 +169,7 @@ try {
   try {
     const cleanup = await client.cleanup(); assert.equal(cleanup.state, "cleaned");
     const final = await client.control("/_acceptance/inventory"); assert.deepEqual(final, baseline);
-    receipt.cleanup = "baseline_restored";
+    receipt.cleanup = "baseline_restored"; finalInventory = final;
   } catch (error) {
     receipt.cleanup = "pending"; receipt.status = "failed";
     throw error;
@@ -170,4 +177,15 @@ try {
     await saveReceipt();
     console.log(JSON.stringify({ phase: "model_cleanup", status: receipt.status ?? "failed", cases: receipt.cases.length, cleanup: receipt.cleanup, runner_dirty: receipt.runner_dirty }));
   }
+}
+
+if (identity && receipt.status === "passed" && receipt.coverage.complete && receipt.cleanup === "baseline_restored") {
+  const assertions = Object.fromEntries(ACCEPTANCE_MODEL_CASES.map(id => [id, receipt.cases.some(c => c.id === id && c.status === "passed")]));
+  const compactions = receipt.cases.filter(c => c.compacted).length;
+  Object.assign(assertions, { actual_compaction: compactions >= 1, fresh_context: true, real_tool_traces: true,
+    budget_respected: receipt.cases.every(c => Number.isSafeInteger(c.usage?.totalTokens) && c.usage.totalTokens <= receipt.budget.max_tokens_per_case && c.calls.length <= receipt.budget.max_tool_calls_per_case) });
+  const component = createAcceptanceComponent({ kind: "model", status: "passed", identity, runner_sha: receipt.runner_sha, assertions,
+    details: { package_sha256: receipt.package_hash, cases: receipt.cases.map(c => c.id), compactions, runner_dirty: receipt.runner_dirty },
+    cleanup: { status: "baseline_restored", baseline, final: finalInventory }, source_receipts: [acceptanceDigest(receipt)] });
+  await writeFile(join(client.directory, "model-component.json"), JSON.stringify(component), { mode: 0o600 });
 }

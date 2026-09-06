@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { acceptanceDigest, createAcceptanceComponent } from "./lib/acceptance-evidence.mjs";
+import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
@@ -7,6 +9,10 @@ import { createCollaborationFixture } from "./lib/acceptance-fixture.mjs";
 import { verifyProductMatrix } from "./lib/acceptance-product-matrix.mjs";
 import { verifyAclMatrix } from "./lib/acceptance-acl-matrix.mjs";
 
+const runnerSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const identityPath = process.env.MD_ACCEPTANCE_IDENTITY_FILE;
+const identity = identityPath ? JSON.parse(await readFile(identityPath, "utf8")) : null;
+if (identity && execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim()) throw new Error("clean_runner_required");
 const privateRoot = join(homedir(), ".codex/private/mind-diary-acceptance");
 const tag = process.argv[2] ?? crypto.randomUUID();
 if (!/^[A-Za-z0-9_-]{1,80}$/.test(tag)) throw new Error("invalid_run_tag");
@@ -19,6 +25,10 @@ let client = await new AcceptanceClient(config).open();
 const buildResponse = await client.request("/_acceptance/build");
 assert.equal(buildResponse.status, 200);
 const build = await buildResponse.json(); assert.equal(build.candidate_sha, expected);
+if (identity) {
+  assert.equal(identity.candidate_sha, expected);
+  for (const field of ["common_modules_sha256", "test_adapter_sha256"]) assert.equal(identity[field], build[field]);
+}
 if (client.state.phase === "cleaned") {
   console.log(JSON.stringify({ status: "previously_cleaned", candidate: expected, receipt: client.state.receipt }));
 } else {
@@ -71,5 +81,17 @@ if (client.state.phase === "cleaned") {
     assert.deepEqual(final.rows, client.state.baseline.rows);
     client.state.finalInventory = final; client.state.verified = verified; await client.save();
     console.log(JSON.stringify({ phase: "cleaned", verified, candidate: expected, receipt, final }));
+    if (identity && verified && client.state.productMatrix?.status === "passed" && client.state.aclMatrix?.status === "passed") {
+      const matrix = client.state.productMatrix, acl = client.state.aclMatrix;
+      const source = { build, matrix, acl, cleanup: receipt, baseline: client.state.baseline, final, runner_sha: runnerSha };
+      const component = createAcceptanceComponent({ kind: "product", status: "passed", identity, runner_sha: runnerSha,
+        assertions: { personal_mode_matrix: matrix.personal_mode_description_cells.length === 9,
+          credential_scope_narrowing: matrix.scope_narrowing, metadata_cas: matrix.metadata_cas,
+          revision_cas: matrix.stale_revision_denied, history: matrix.history, okf: matrix.okf,
+          acl_roles: acl.roles.length === 3, invitations: true, outsider_denied: acl.outsider_private_mind_denied },
+        details: { matrix, acl }, cleanup: { status: "baseline_restored", baseline: client.state.baseline, final }, source_receipts: [acceptanceDigest(source)] });
+      await writeFile(join(client.directory, "product-source.json"), JSON.stringify(source), { mode: 0o600 });
+      await writeFile(join(client.directory, "product-component.json"), JSON.stringify(component), { mode: 0o600 });
+    }
   }
 }

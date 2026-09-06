@@ -1,3 +1,4 @@
+import { deriveAcceptanceApplicability } from "../../scripts/lib/acceptance-applicability.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fixture } from "../helpers/performance-fixture.mjs";
@@ -15,7 +16,7 @@ function prepared() {
     details: kind === "model" ? { package_sha256: "f".repeat(64), cases: [...ACCEPTANCE_MODEL_CASES], compactions: 1, runner_dirty: false }
       : kind === "performance" ? { report, evaluation } : kind === "persistence" ? { previous_deployment_id: "appgdep_previous" } : {},
     cleanup: { status: "baseline_restored", baseline: inventory, final: structuredClone(inventory) }, source_receipts: ["a".repeat(64)] }));
-  return { components, manifest: { schema: "mind-diary/acceptance-manifest/v1", identity, runner_sha: "e".repeat(40), package_sha256: "f".repeat(64), component_hashes: Object.fromEntries(components.map(c => [c.kind, c.artifact_sha256])) } };
+  return { components, manifest: { schema: "mind-diary/acceptance-manifest/v1", identity, runner_sha: "e".repeat(40), package_sha256: "f".repeat(64), component_hashes: Object.fromEntries(components.map(c => [c.kind, c.artifact_sha256])), platform_receipt_hashes: {}, applicability: deriveAcceptanceApplicability({ base_sha: "b".repeat(40), candidate_sha: identity.candidate_sha, scope_identifiers: ["MD-400"], changed_paths: [], provider_configuration_changed: false }) } };
 }
 function reseal(value) { const { artifact_sha256, ...unsigned } = value; return { ...unsigned, artifact_sha256: acceptanceDigest(unsigned) }; }
 test("a complete independently anchored suite joins", () => { const { components, manifest } = prepared(); assert.equal(joinAcceptanceSuite(manifest, components).status, "passed"); });

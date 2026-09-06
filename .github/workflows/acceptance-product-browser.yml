@@ -6,6 +6,10 @@ on:
         description: Exact deployed acceptance candidate SHA
         required: true
         type: string
+      identity_json:
+        description: Exact non-secret acceptance identity JSON for joined evidence
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -23,11 +27,21 @@ jobs:
           node-version: 22.13.0
           cache: npm
       - run: npm ci
+      - run: npm run build
       - run: npx playwright install-deps chromium
       - name: Verify real product forms and OAuth on the private test Site
         env:
           MD_ACCEPTANCE_PLATFORM_TOKEN: ${{ secrets.MD_ACCEPTANCE_PLATFORM_TOKEN }}
           MD_ACCEPTANCE_CONTROLLER_KEY: ${{ secrets.MD_ACCEPTANCE_CONTROLLER_KEY }}
           MD_ACCEPTANCE_OAUTH_CLIENT_ID: ${{ vars.MD_ACCEPTANCE_OAUTH_CLIENT_ID }}
+          MD_ACCEPTANCE_IDENTITY_JSON: ${{ inputs.identity_json }}
+          MD_ACCEPTANCE_OUTPUT_DIRECTORY: ${{ runner.temp }}/acceptance-report
           MD_ACCEPTANCE_EXPECTED_SHA: ${{ inputs.candidate }}
         run: node scripts/check-acceptance-product-browser.mjs
+      - uses: actions/upload-artifact@v4
+        if: success() && inputs.identity_json != ''
+        with:
+          name: acceptance-browser-evidence
+          path: ${{ runner.temp }}/acceptance-report/*.json
+          if-no-files-found: error
+          retention-days: 7

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { acceptanceDigest, createAcceptanceComponent, ACCEPTANCE_ASSERTIONS } from "./lib/acceptance-evidence.mjs";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -29,6 +31,12 @@ if (/^\d+$/.test(process.env.GITHUB_RUN_ID ?? "") && /^\d+$/.test(process.env.GI
 }
 const build = await (await client.request("/_acceptance/build")).json();
 assert.equal(build.candidate_sha, expected);
+const identity = process.env.MD_ACCEPTANCE_IDENTITY_JSON ? JSON.parse(process.env.MD_ACCEPTANCE_IDENTITY_JSON) : null;
+const runnerSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+if (identity) {
+  assert.equal(execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim(), "", "clean_runner_required");
+  for (const key of ["candidate_sha", "common_modules_sha256", "test_adapter_sha256"]) assert.equal(identity[key], build[key]);
+}
 const baseline = await client.control("/_acceptance/inventory");
 assert.equal(baseline.complete, true);
 const browser = await chromium.launch({ headless: true });
@@ -187,6 +195,17 @@ try {
   const final = await client.control("/_acceptance/inventory");
   if (JSON.stringify(final) !== JSON.stringify(baseline)) console.error(JSON.stringify({ phase: "cleanup_inventory", baseline, final }));
   assert.deepEqual(final, baseline);
-  console.log(JSON.stringify({ schema: "mind-diary/acceptance-product-browser/v1", status: verified ? "passed" : "failed", candidate: expected, runner_sha: process.env.GITHUB_SHA, contexts: contexts.length,
-    bootstrap_forms: verified, token_opt_in_forms: verified, modern_compat_self_check: verified, oauth_pkce_consent_rotation_revoke: verified, cleanup: "baseline_restored" }));
+  const receipt = { schema: "mind-diary/acceptance-product-browser/v1", status: verified ? "passed" : "failed", candidate: expected, runner_sha: runnerSha, contexts: contexts.length,
+    bootstrap_forms: verified, token_opt_in_forms: verified, modern_compat_self_check: verified, oauth_pkce_consent_rotation_revoke: verified, cleanup: "baseline_restored" };
+  console.log(JSON.stringify(receipt));
+  if (identity && verified) {
+    assert.equal(contexts.length, 4);
+    const component = createAcceptanceComponent({ kind: "browser", status: "passed", identity, runner_sha: runnerSha,
+      assertions: Object.fromEntries(ACCEPTANCE_ASSERTIONS.browser.map(name => [name, true])), details: receipt,
+      cleanup: { status: "baseline_restored", baseline, final }, source_receipts: [acceptanceDigest(receipt)] });
+    const output = process.env.MD_ACCEPTANCE_OUTPUT_DIRECTORY ?? client.directory;
+    await mkdir(output, { recursive: true, mode: 0o700 });
+    await writeFile(join(output, "browser-source.json"), JSON.stringify(receipt), { mode: 0o600 });
+    await writeFile(join(output, "browser-component.json"), JSON.stringify(component), { mode: 0o600 });
+  }
 }

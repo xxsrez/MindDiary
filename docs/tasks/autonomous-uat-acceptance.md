@@ -601,3 +601,22 @@ SDK повторяет только 503 и transport timeout по тому же 
 старого значения. Значения секретов в evidence не сохраняются. При анализе
 provider logs управляющий агент извлекает только безопасные поля и не выводит
 целый request headers object.
+
+### Проверка test v7 и общий контракт, 2026-09-06
+
+Candidate `8daaaa137d1e824f494e874860fda22f5fe1a66b` опубликован как test v7,
+deployment `appgdep_example1a4a5e9cb106bdb2`, environment revision 3.
+CI `33999662215`, полный локальный gate и dev restart smoke прошли. Новый
+controller credential принят; старый получил HTTP 401. После возобновления
+прерванной очистки расширенного model run независимая inventory вернулась к нулю.
+
+Hosted run `md405-product-matrix-v7-20260905` прошёл все 9 сочетаний
+null/empty/described и disabled/read/read_write, credential narrowing,
+metadata/revision CAS, history/OKF, editor/reader/outsider ACL и lost-commit
+reconciliation. Четыре actors удалены, полная inventory v2 после очистки
+совпала с пустой baseline. Это product evidence, не полный MD-400 pass.
+
+Перспективная применимость платформенных canaries вынесена в profile revision 8.
+Исторические MD-394/MD-399 не могут быть закрыты новым join. Пока остаются
+полный объединённый model run, реальные performance measurements, persistence
+и recovery components и два полных повторяемых запуска MD-407.

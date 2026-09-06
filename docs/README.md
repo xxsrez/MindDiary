@@ -433,3 +433,5 @@ delivery contract. До anonymous publication потребуется новая
 - [ADR-0025: описание Personal Mind и тематическое использование двух Minds](decisions/0025-personal-mind-description-routing.md)
 - [ADR-0026: отдельная среда автономной приёмки](decisions/0026-autonomous-acceptance-environment.md)
 - [План Personal description и маршрутизации](tasks/personal-mind-description-routing.md)
+
+- [Автоматическая приёмка и применимость платформенных проверок](operations/autonomous-acceptance.md)
