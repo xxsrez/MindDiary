@@ -27,3 +27,13 @@ test("foreign provider, missing signed correlation, truncation and mixed version
     const { input, result, ids } = inputs(); mutate(result); assert.throws(() => createSitesLogPerformanceCapture(input, result, ids));
   }
 });
+test("bounded overlapping captures preserve each actual envelope and reject conflicting duplicate events", () => {
+  const { input, result, ids } = inputs();
+  const captures = [{ ...result, events: result.events.slice(0, 100) }, { ...result, events: result.events.slice(50) }];
+  const captured = createSitesLogPerformanceCapture(input, captures, ids);
+  assert.equal(captured.receipt.control_plane_source.result_kind, "sites-log-envelope-batch");
+  assert.equal(captured.receipt.control_plane_source.envelope_sha256s.length, 2);
+  assert.equal(verifyPerformanceTelemetryCaptureReceipt(captured.receipt, captured.telemetryJsonl).event_count, result.events.length);
+  const duplicate = structuredClone(result.events[0]); duplicate.source.value += 1;
+  assert.throws(() => createSitesLogPerformanceCapture(input, [result, { ...result, events: [duplicate] }], ids), /conflicting_provider_event/);
+});

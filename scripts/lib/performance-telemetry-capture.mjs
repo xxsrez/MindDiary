@@ -183,7 +183,9 @@ const SITES_LOG_CAPTURE_SCHEMA = "mind-diary/performance-telemetry-capture/v2";
 const SITES_LOG_CAPTURE_GENERATOR = "mind-diary/sites-log-envelope-capture/v2";
 function sitesCaptureUnsigned(value, projection) {
   const source = value.control_plane_source;
-  assertExactKeys(source, new Set(["tool", "project_id", "result_sha256", "provider_script", "provider_version_ids", "event_ids"]), "invalid_sites_log_source");
+  const batched = source.result_kind === "sites-log-envelope-batch";
+  assertExactKeys(source, new Set(["tool", "project_id", "result_sha256", "provider_script", "provider_version_ids", "event_ids", ...(batched ? ["result_kind", "envelope_sha256s"] : [])]), "invalid_sites_log_source");
+  if (batched && (!Array.isArray(source.envelope_sha256s) || source.envelope_sha256s.length < 1 || source.envelope_sha256s.some(hash => !SHA256.test(hash)))) fail("invalid_sites_log_batch");
   if (source.tool !== "sites_get_site_worker_logs" || source.project_id !== value.deployment?.site_project_id ||
     typeof source.result_sha256 !== "string" || !SHA256.test(source.result_sha256) || typeof source.provider_script !== "string" || !source.provider_script ||
     !Array.isArray(source.event_ids) || source.event_ids.length < 1 || new Set(source.event_ids).size !== source.event_ids.length ||
@@ -197,15 +199,21 @@ function sitesCaptureUnsigned(value, projection) {
     control_plane_source: source, ...projection };
 }
 export function createSitesLogPerformanceCapture(input, result, correlationIds) {
-  if (result?.project_id !== input.deployment?.site_project_id || !Array.isArray(result.events)) fail("wrong_sites_log_project");
-  const selected = result.events.filter(event => correlationIds.includes(event.source?.benchmarkCorrelationId));
+  const envelopes = Array.isArray(result) ? result : [result];
+  if (!envelopes.length || envelopes.some(value => value?.project_id !== input.deployment?.site_project_id || !Array.isArray(value.events))) fail("wrong_sites_log_project");
+  const selected = envelopes.flatMap(value => value.events).filter(event => correlationIds.includes(event.source?.benchmarkCorrelationId));
   if (!selected.length) fail("signed_provider_telemetry_missing");
-  const ids = new Set(), versions = new Set(), telemetry = [];
+  const ids = new Set(), versions = new Set(), telemetry = [], eventDigests = new Map();
   for (const event of selected) {
     const source = event.source, workers = event.$workers;
     if (source.event !== "mind-diary.privacy-safe-observability" || source.schema !== "mind-diary/privacy-safe-observability/v2" ||
       workers?.scriptName !== input.provider_script || workers.truncated === true || !event.$metadata?.id || !workers.scriptVersion?.id) fail("invalid_provider_event");
-    if (ids.has(event.$metadata.id)) continue;
+    const eventDigest = digest(canonical({ source, workers }));
+    if (ids.has(event.$metadata.id)) {
+      if (eventDigests.get(event.$metadata.id) !== eventDigest) fail("conflicting_provider_event");
+      continue;
+    }
+    eventDigests.set(event.$metadata.id, eventDigest);
     ids.add(event.$metadata.id); versions.add(workers.scriptVersion.id);
     telemetry.push({ event: "mind-diary.performance-gate-telemetry", schema: "mind-diary/performance-gate-telemetry/v1",
       kind: source.kind, metric: source.metric, surface: source.surface, operation: source.operation, outcome: source.outcome, unit: source.unit,
@@ -215,7 +223,8 @@ export function createSitesLogPerformanceCapture(input, result, correlationIds) 
   }
   const text = telemetry.map(event => JSON.stringify(event)).join("\n") + "\n";
   const unsigned = sitesCaptureUnsigned({ ...input, status: "passed", generator: SITES_LOG_CAPTURE_GENERATOR, control_plane_source: {
-    tool: "sites_get_site_worker_logs", project_id: result.project_id, result_sha256: digest(canonical(result)), provider_script: input.provider_script,
+    tool: "sites_get_site_worker_logs", project_id: envelopes[0].project_id, result_sha256: digest(canonical(result)), provider_script: input.provider_script,
+    ...(Array.isArray(result) ? { result_kind: "sites-log-envelope-batch", envelope_sha256s: envelopes.map(value => digest(canonical(value))) } : {}),
     provider_version_ids: [...versions].sort(), event_ids: [...ids].sort(),
   } }, telemetryProjection(text));
   return { telemetry, telemetryJsonl: text, receipt: { ...unsigned, artifact_sha256: digest(canonical(unsigned)) } };

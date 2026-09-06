@@ -80,12 +80,15 @@ if (action === "cleanup") {
     await client.cleanup();
     const final = await client.control("/_acceptance/inventory");
     assert.deepEqual(final, p.baseline);
-    if (p.passed) {
+    const evaluatorSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const evaluatorClean = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim() === "";
+    if (p.passed && evaluatorSha === p.runner_sha && evaluatorClean) {
       const component = createAcceptanceComponent({ kind: "performance", status: "passed", identity: p.identity, runner_sha: p.runner_sha,
         assertions: Object.fromEntries(ACCEPTANCE_ASSERTIONS.performance.map(name => [name, true])), details: { report: p.report, evaluation: p.evaluation },
         cleanup: { status: "baseline_restored", baseline: p.baseline, final }, source_receipts: [acceptanceDigest(p.samples), p.evaluation.telemetry_capture.control_plane_source.result_sha256.slice(7)] });
       await write("performance-component.json", component);
     }
+    if (p.passed && (evaluatorSha !== p.runner_sha || !evaluatorClean)) console.log(JSON.stringify({ phase: "component_not_emitted", reason: "collector_and_evaluator_runner_differ", collector_sha: p.runner_sha, evaluator_sha: evaluatorSha }));
     delete p.bindingKey; await client.save();
     console.log(JSON.stringify({ phase, status: p.passed ? "passed" : "failed", cleanup: "baseline_restored" }));
   }
