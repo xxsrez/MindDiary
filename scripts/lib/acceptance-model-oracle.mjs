@@ -8,6 +8,13 @@ export function registerModelMindSelectors(selectors, minds) {
   }
 }
 
+export function verifyPartialWriteReport(events) {
+  const messages = events.filter(event => event.method === "item/completed" && event.params?.item?.type === "agentMessage")
+    .map(event => event.params.item.text).join("\n");
+  assert.match(messages, /could(?:n't| not)|unable|failed|rejected|denied|read.only|not saved|not written|не удалось|отклон|только для чтения|не сохран/i,
+    "partial_failure_not_reported");
+}
+
 // Fetch takes an opaque locator, not a Mind argument. Bind that locator to an
 // earlier successful scoped discovery; never infer a source from corpus text.
 export function verifyModelTrace(events, scenario) {

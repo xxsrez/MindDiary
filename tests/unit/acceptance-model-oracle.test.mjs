@@ -1,9 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { verifyModelTrace } from "../../scripts/lib/acceptance-model-oracle.mjs";
+import { verifyModelTrace, verifyPartialWriteReport } from "../../scripts/lib/acceptance-model-oracle.mjs";
 const call = (tool, args, data) => ({ method: "acceptance/tool", params: { tool, arguments: args, result: { isError: false, structuredContent: { data } } } });
 const scenario = { reads: ["/shared"], requiredReads: ["/shared"], writes: [] };
 const prefix = [call("list_minds", {}, { minds: [{ route: "/shared" }, { route: "/me" }] }), call("search", { mind: "/shared" }, { results: [{ entry: { entry_id: "opaque-entry" } }] })];
+test("partial failure reports recognize explicit rejection without treating tool output as a user report", () => {
+  const message = text => ({ method: "item/completed", params: { item: { type: "agentMessage", text } } });
+  assert.doesNotThrow(() => verifyPartialWriteReport([message("Saved in Personal Mind. Saving to Synthetic collaboration was rejected because its writable configuration was unavailable.")]));
+  assert.doesNotThrow(() => verifyPartialWriteReport([message("Personal сохранён; запись в общий Mind отклонена.")]));
+  assert.throws(() => verifyPartialWriteReport([message("Saved in Personal Mind.")]), /partial_failure_not_reported/);
+  assert.throws(() => verifyPartialWriteReport([message("Saved in both Minds."), { method: "acceptance/tool", params: { result: { content: [{ text: "write rejected" }] } } }]), /partial_failure_not_reported/);
+});
 test("opaque fetch is bound to the preceding exact scoped search", () => {
   const trace = verifyModelTrace([...prefix, call("fetch", { id: "opaque-entry" }, { entry: { entry_id: "opaque-entry" } })], scenario);
   assert.equal(trace.at(-1).mind, "/shared");

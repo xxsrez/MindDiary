@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 import { createCollaborationFixture } from "./lib/acceptance-fixture.mjs";
 import { AcceptanceModelServer } from "./lib/acceptance-model-server.mjs";
-import { verifyModelTrace, registerModelMindSelectors } from "./lib/acceptance-model-oracle.mjs";
+import { verifyModelTrace, registerModelMindSelectors, verifyPartialWriteReport } from "./lib/acceptance-model-oracle.mjs";
 
 import { acceptanceDigest, createAcceptanceComponent, ACCEPTANCE_MODEL_CASES } from "./lib/acceptance-evidence.mjs";
 let phase = "configuration";
@@ -151,8 +151,7 @@ try {
       assert.ok(server.calls <= receipt.budget.max_tool_calls_per_case, "model_tool_budget_exceeded");
       if (scenario.partialCommit) {
         assert.ok(firstCommittedMind && partialReadOnlyMind && firstCommittedMind !== partialReadOnlyMind, "partial_write_injection_missing");
-        const messages = events.filter(event => event.method === "item/completed" && event.params?.item?.type === "agentMessage").map(event => event.params.item.text).join("\n");
-        assert.match(messages, /could(?:n't| not)|unable|failed|read.only|not saved|not written|не удалось|только для чтения|не сохран/i, "partial_failure_not_reported");
+        verifyPartialWriteReport(events);
       }
       if (scenario.unknownCommit) assert.equal(unknownInjected, true);
       receipt.cases.push({ id: scenario.id, status: "passed", calls, compacted: scenario.compact === true, ...(scenario.partialCommit ? { first_committed_mind: firstCommittedMind, failed_write_mind: partialReadOnlyMind } : {}), usage: server.usage });
