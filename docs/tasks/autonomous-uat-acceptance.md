@@ -691,3 +691,27 @@ waiter мог отклониться раньше ожидающего click и 
 ожидаемый URL приведён к действующему контракту. Неудачный запуск не считается
 чистым полным проходом; его CI fixture очищен по точному run ID, полная
 inventory снова нулевая.
+
+### Повтор браузера и полная model matrix
+
+Browser CI `34005427820` на runner
+`1db24c6b4f4bdd60482c52ee2b7d93e215531010` прошёл все формы, четыре contexts,
+modern/compat self-check, OAuth PKCE/code replay/refresh/revoke и очистку.
+После перехода по ссылке runner также ждёт `DOMContentLoaded`, чтобы не
+взаимодействовать с формой раньше загрузки её module script. Общий CI
+`34005418077` прошёл.
+
+Новый проход `md407-full-a2-20260906` выполнил persistence после deployment
+`appgdep_examplef09bb8a8798934b6`, затем product matrix и browser CI
+`34006423795`. Все три компонента прошли и очистились. Model matrix прошла
+12 сценариев, включая настоящий compaction, инъекцию в description,
+Personal-to-shared negative, независимую автоматическую запись и no-op.
+
+Сценарий unknown commit был отклонён oracle с `unexpected_read_source`:
+модель использовала обычный `handle` из `list_minds`, который сервер принимает,
+но oracle сопоставлял только route и Mind ID. Каталог теперь также связывает
+свой непустой handle с canonical route. Неизвестный handle, чужой Personal ID
+и непрослеживаемый locator по-прежнему отклоняются; шесть unit tests прошли.
+Сохранённый trace успешно переоценён, однако первоначальный model run остаётся
+failed с 12 cases и подтверждённой полной очисткой. Он не считается полным
+чистым проходом; итоговая приёмка требует нового запуска на исправленном runner.

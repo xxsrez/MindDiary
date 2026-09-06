@@ -18,6 +18,7 @@ export function verifyModelTrace(events, scenario) {
     if (call.tool === "list_minds" && !call.result.isError) for (const mind of data.minds) {
       selectors.set(mind.route, mind.route);
       if (mind.mind_id) selectors.set(mind.mind_id, mind.route);
+      if (typeof mind.handle === "string" && mind.handle.length > 0) selectors.set(mind.handle, mind.route);
     }
     let mind = selectors.get(call.arguments.mind) ?? call.arguments.mind ?? null;
     if (call.tool === "fetch") mind = locators.get(call.arguments.id) ?? null;

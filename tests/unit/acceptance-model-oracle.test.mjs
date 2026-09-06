@@ -8,6 +8,17 @@ test("opaque fetch is bound to the preceding exact scoped search", () => {
   const trace = verifyModelTrace([...prefix, call("fetch", { id: "opaque-entry" }, { entry: { entry_id: "opaque-entry" } })], scenario);
   assert.equal(trace.at(-1).mind, "/shared");
 });
+test("only aliases returned by the Mind catalog resolve to its canonical route", () => {
+  const catalog = call("list_minds", {}, { minds: [
+    { route: "/shared", mind_id: "shared-id", handle: "shared" },
+    { route: "/me", mind_id: "personal-id", handle: null },
+  ] });
+  const discovered = [catalog, call("browse_entries", { mind: "shared" }, { entries: [{ entry_id: "handle-entry" }] })];
+  const trace = verifyModelTrace([...discovered, call("fetch", { id: "handle-entry" }, {}), call("get_mind_info", { mind: "shared-id" }, {})], scenario);
+  assert.equal(trace.slice(1).every(c => c.mind === "/shared"), true);
+  assert.throws(() => verifyModelTrace([...discovered, call("search", { mind: "personal-id" }, {})], scenario), /unexpected_read_source/);
+  assert.throws(() => verifyModelTrace([...discovered, call("search", { mind: "unadvertised" }, {})], scenario), /unexpected_read_source/);
+});
 test("unseen locator, forbidden Personal read and unsolicited writes fail the oracle", () => {
   assert.throws(() => verifyModelTrace([...prefix, call("fetch", { id: "unknown" }, {})], scenario), /unexpected_read_source/);
   assert.throws(() => verifyModelTrace([...prefix, call("search", { mind: "/me" }, {})], scenario), /unexpected_read_source/);
