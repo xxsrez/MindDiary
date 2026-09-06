@@ -157,6 +157,10 @@ for (const definition of fixtureDefinitions) {
 
       if (definition.count > 0) {
         const hydratedCard = page.locator("[data-connections-collection] .md-token-card").first();
+        await expect(hydratedCard).toHaveClass(/md-connection-row/);
+        await expect(hydratedCard.locator("..")).toHaveClass(/md-settings-collection/);
+        await expect(hydratedCard).not.toContainText("Connected app");
+        expect((await hydratedCard.boundingBox()).height).toBeLessThanOrEqual(160);
         const hydratedReadSummary = hydratedCard
           .locator("dt", { hasText: /^Read scope$/u })
           .locator("..").locator("dd");

@@ -116,14 +116,15 @@
 
   const connectionCard = (item) => {
     const href = `/settings/connections/${encodeURIComponent(item.connection_ref)}`;
-    const article = node("article", "md-token-card");
+    const article = node("article", "md-token-card md-entity-row md-connection-row");
+    article.dataset.iaRow = "";
     const heading = node("div", "md-token-card__heading");
     const title = node("div");
     const h3 = node("h3");
     const titleLink = node("a", "", item.client_name);
     titleLink.href = href;
     h3.append(titleLink);
-    title.append(h3, node("p", "", "Connected app"));
+    title.append(h3);
     heading.append(title, node("span", "md-token-state md-token-state--active", "● Connected"));
 
     const metadata = node("dl", "md-token-card__metadata");
@@ -184,7 +185,7 @@
     section.setAttribute("aria-labelledby", "connections-heading");
     const heading = node("h2", "", "Active connections");
     heading.id = "connections-heading";
-    const grid = node("div", "md-token-grid");
+    const grid = node("div", "md-token-grid md-settings-collection");
     grid.append(...items.map(connectionCard));
     section.append(heading, grid);
     if (nextCursor !== null) {
