@@ -11,7 +11,8 @@ export async function acceptanceRuntime(t, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), "acceptance-harness-")); t.after(() => rm(directory, { recursive: true, force: true }));
   const compiled = await build({ absWorkingDir: resolve(import.meta.dirname, "../.."), entryPoints: ["apps/mind-diary-acceptance/entry.mjs"], bundle: true, platform: "browser", format: "esm", write: false, logLevel: "silent", define: { __MD_ACCEPTANCE_BUILD__: JSON.stringify(options.buildIdentity ?? null) } });
   await writeFile(join(directory, "worker.mjs"), compiled.outputFiles[0].contents);
-  const worker = (await import(pathToFileURL(join(directory, "worker.mjs")).href)).default;
+  const module = await import(pathToFileURL(join(directory, "worker.mjs")).href);
+  const worker = options.createRuntime ? module.createAcceptanceWorker({ createRuntime: options.createRuntime }) : module.default;
   const db = new SqliteD1(), bucket = new FakeR2Bucket(), pending = [];
   t.after(async () => { await Promise.allSettled(pending); db.close(); });
   const env = { DB: db, MIND_DIARY_BUCKET: bucket, MIND_DIARY_PUBLIC_ORIGIN: ACCEPTANCE_ORIGIN, MD_ACCEPTANCE_PROJECT_ID: ACCEPTANCE_PROJECT, MD_ACCEPTANCE_CONTROLLER_KEY: "a".repeat(43) };
