@@ -12,11 +12,17 @@ import { cleanupRun } from "./cleanup.mjs";
 import { acceptanceInventory } from "./inventory.mjs";
 import { recoverOrphanOAuth } from "./oauth-recovery.mjs";
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
+import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
 
 const stores = new WeakMap();
 const runtimeEnvironments = new WeakMap();
 const recoveryIdentities = new WeakMap();
 const runtimes = new WeakMap();
+const telemetryJournals = new WeakMap();
+function telemetryFor(database) {
+  if (!telemetryJournals.has(database)) telemetryJournals.set(database, new AcceptanceTelemetryJournal(database, __MD_ACCEPTANCE_BUILD__));
+  return telemetryJournals.get(database);
+}
 function storeFor(database) {
   if (!stores.has(database)) stores.set(database, new AcceptanceSessionStore(database));
   return stores.get(database);
@@ -26,6 +32,7 @@ const product = createMindDiaryProductWorker({
   createRuntime: async (options) => {
     const runtime = await createProductSiteRuntime({
     ...options,
+    observabilityWriter: { write: value => telemetryFor(options.database).write(value) },
     identity: { async readVerifiedIdentity(request) {
       const actor = recoveryIdentities.get(request) ?? await storeFor(options.database).actorForRequest(request);
       return actor ? { kind: "authenticated", verifiedEmail: actor.subject, verifiedFullName: `Test actor ${actor.ordinal + 1}` } : { kind: "unauthenticated" };
@@ -69,7 +76,15 @@ export default {
     if (!runtimeEnvironments.has(environment)) runtimeEnvironments.set(environment, { ...environment });
     const runtimeEnvironment = runtimeEnvironments.get(environment);
     runtimeEnvironment.MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS = (await store.operatorPrincipalIds()).join(",");
-    const response = await product.fetch(request, runtimeEnvironment, context);
+    const journal = telemetryFor(environment.DB);
+    let measurement, response;
+    try {
+      measurement = await journal.begin(actor?.run_id ?? request.headers.get("x-md-acceptance-run"), request.headers.get("x-mind-diary-performance-correlation-id"));
+      response = await product.fetch(request, runtimeEnvironment, context);
+      await journal.finish(measurement, response.ok);
+    } catch {
+      return Response.json({ error: "acceptance_telemetry_unavailable" }, { status: 503 });
+    } finally { journal.cancel(measurement); }
     if (actor && response.ok && (path === "/api/v1/account" && request.method === "POST" || path === "/api/v1/session" && request.method === "GET")) {
       const value = await response.clone().json();
       const principalId = path === "/api/v1/account" ? value.data?.principal_id : value.data?.principal?.principal_id;

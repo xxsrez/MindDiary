@@ -152,6 +152,7 @@ export function createPerformanceTelemetryCaptureReceipt(input, telemetryJsonl) 
 }
 
 export function verifyPerformanceTelemetryCaptureReceipt(value, telemetryJsonl) {
+  if (value?.schema === "mind-diary/performance-telemetry-capture/v3") return verifySitesD1PerformanceCapture(value, telemetryJsonl);
   if (value?.schema === "mind-diary/performance-telemetry-capture/v2") return verifySitesLogPerformanceCapture(value, telemetryJsonl);
   assertExactKeys(value, TOP_LEVEL_KEYS, "invalid_capture_receipt");
   if (typeof value.artifact_sha256 !== "string" || !SHA256.test(value.artifact_sha256)) {
@@ -233,6 +234,68 @@ function verifySitesLogPerformanceCapture(value, text) {
   const projection = text === undefined ? { telemetry_jsonl_sha256: value.telemetry_jsonl_sha256, event_count: value.event_count } : telemetryProjection(text);
   if (!SHA256.test(projection.telemetry_jsonl_sha256 ?? "") || !Number.isSafeInteger(projection.event_count) || projection.event_count < 1) fail("invalid_telemetry_projection");
   const unsigned = sitesCaptureUnsigned(value, projection), recreated = { ...unsigned, artifact_sha256: digest(canonical(unsigned)) };
+  if (canonical(value) !== canonical(recreated)) fail("invalid_capture_receipt");
+  return recreated;
+}
+
+const D1_SCHEMA = "mind-diary/performance-telemetry-capture/v3";
+const D1_GENERATOR = "mind-diary/sites-d1-telemetry-capture/v1";
+function d1CaptureUnsigned(value, projection) {
+  const source = value.control_plane_source;
+  assertExactKeys(source, new Set(["tool", "project_id", "binding_name", "table_name", "run_id", "test_adapter_sha256", "result_sha256", "page_sha256s", "row_ids"]), "invalid_sites_d1_source");
+  if (source.tool !== "sites_read_database_table_rows" || source.project_id !== value.deployment?.site_project_id || source.binding_name !== "DB"
+    || source.table_name !== "md_acceptance_telemetry" || !/^[a-f0-9-]{36}$/.test(source.run_id ?? "") || !/^[a-f0-9]{64}$/.test(source.test_adapter_sha256 ?? "")
+    || !SHA256.test(source.result_sha256 ?? "") || !Array.isArray(source.page_sha256s) || !source.page_sha256s.length || source.page_sha256s.length > 164
+    || source.page_sha256s.some(hash => !SHA256.test(hash)) || !Array.isArray(source.row_ids) || !source.row_ids.length || source.row_ids.length > 4096
+    || new Set(source.row_ids).size !== source.row_ids.length || source.row_ids.length !== projection.event_count
+    || source.row_ids.some(id => !/^[a-z0-9_:-]{1,128}$/.test(id))) fail("invalid_sites_d1_source");
+  if (value.status !== "passed" || !SHA.test(value.candidate_sha ?? "") || value.environment !== "uat" || value.generator !== D1_GENERATOR) fail("invalid_sites_d1_capture");
+  const startedAt = exactUtc(value.started_at, "invalid_started_at"), completedAt = exactUtc(value.completed_at, "invalid_completed_at");
+  if (Date.parse(completedAt) < Date.parse(startedAt)) fail("invalid_capture_window");
+  return { schema: D1_SCHEMA, status: "passed", candidate_sha: value.candidate_sha, environment: "uat", target_url: exactTargetUrl(value.target_url),
+    deployment: exactDeployment(value.deployment), started_at: startedAt, completed_at: completedAt, generator: D1_GENERATOR,
+    control_plane_source: source, ...projection };
+}
+export function createSitesD1PerformanceCapture(input, pages, correlationIds) {
+  if (!Array.isArray(pages) || !pages.length || pages.length > 164) fail("invalid_sites_d1_pages");
+  const rowIds = new Set(), telemetry = [], selected = new Set(correlationIds); let offset = 0;
+  for (const [pageIndex, page] of pages.entries()) {
+    const projection = page.model_projection;
+    if (page.project_id !== input.deployment?.site_project_id || page.binding_name !== "DB" || page.table_name !== "md_acceptance_telemetry"
+      || page.offset !== offset || !Array.isArray(page.rows) || page.rows.length < 1 || page.rows.length > 25 || !projection
+      || projection.truncated !== false || projection.truncated_values !== 0 || projection.omitted_columns !== 0 || projection.omitted_rows !== 0) fail("invalid_sites_d1_page");
+    offset += page.rows.length;
+    const more = pageIndex < pages.length - 1;
+    if (page.has_more !== more || projection.next_offset !== (more ? offset : null)) fail("incomplete_sites_d1_pages");
+    for (const row of page.rows) {
+      if (row.run_id !== input.run_id || row.candidate_sha !== input.candidate_sha || row.adapter_sha256 !== input.test_adapter_sha256
+        || !selected.has(row.correlation_id) || !Number.isSafeInteger(row.event_index) || row.event_index < 0 || row.event_index >= 16) fail("foreign_sites_d1_row");
+      const parts = [0, 1, 2, 3].map(index => row[`event_json_${index}`]);
+      if (parts.some(part => typeof part !== "string" || part.length > 240)) fail("invalid_sites_d1_event");
+      const source = JSON.parse(parts.join("")), rowId = `${row.run_id}:${row.correlation_id}:${row.event_index}`;
+      if (rowIds.has(rowId)) fail("duplicate_sites_d1_row");
+      rowIds.add(rowId);
+      if (source.event !== "mind-diary.privacy-safe-observability" || source.schema !== "mind-diary/privacy-safe-observability/v2"
+        || source.benchmarkCorrelationId !== row.correlation_id || source.metric !== "request_latency_ms") fail("invalid_sites_d1_event");
+      telemetry.push({ event: "mind-diary.performance-gate-telemetry", schema: "mind-diary/performance-gate-telemetry/v1",
+        kind: source.kind, metric: source.metric, surface: source.surface, operation: source.operation, outcome: source.outcome, unit: source.unit,
+        value: source.value, occurredAtUtc: source.occurredAtUtc, requestId: source.requestId ?? null, jobId: source.jobId ?? null, cohort: source.cohort ?? null,
+        lineage: { candidateSha: input.candidate_sha, siteVersionId: input.deployment.site_version_id, deploymentId: input.deployment.deployment_id },
+        benchmarkCorrelationId: source.benchmarkCorrelationId });
+    }
+  }
+  const text = telemetry.map(event => JSON.stringify(event)).join("\n") + "\n";
+  const unsigned = d1CaptureUnsigned({ ...input, status: "passed", generator: D1_GENERATOR, control_plane_source: {
+    tool: "sites_read_database_table_rows", project_id: input.deployment.site_project_id, binding_name: "DB", table_name: "md_acceptance_telemetry",
+    run_id: input.run_id, test_adapter_sha256: input.test_adapter_sha256, result_sha256: digest(canonical(pages)),
+    page_sha256s: pages.map(page => digest(canonical(page))), row_ids: [...rowIds].sort(),
+  } }, telemetryProjection(text));
+  return { telemetry, telemetryJsonl: text, receipt: { ...unsigned, artifact_sha256: digest(canonical(unsigned)) } };
+}
+function verifySitesD1PerformanceCapture(value, text) {
+  const projection = text === undefined ? { telemetry_jsonl_sha256: value.telemetry_jsonl_sha256, event_count: value.event_count } : telemetryProjection(text);
+  if (!SHA256.test(projection.telemetry_jsonl_sha256 ?? "") || !Number.isSafeInteger(projection.event_count) || projection.event_count < 1) fail("invalid_telemetry_projection");
+  const unsigned = d1CaptureUnsigned(value, projection), recreated = { ...unsigned, artifact_sha256: digest(canonical(unsigned)) };
   if (canonical(value) !== canonical(recreated)) fail("invalid_capture_receipt");
   return recreated;
 }

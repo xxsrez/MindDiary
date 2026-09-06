@@ -142,18 +142,13 @@ for (;;) {
     await run("recovery", "check-acceptance-recovery-hosted.mjs", [runTag("recovery"), identityPath]);
     await add("recovery", componentPath("recovery")); state.stage = "performance"; await save();
   } else if (state.stage === "performance") {
-    const captureReady = await optional(join(directory, "capture-started.json"));
-    if (!captureReady || captureReady.project_id !== state.identity.project_id || !Number.isFinite(Date.parse(captureReady.started_at)) ||
-      Date.now() - Date.parse(captureReady.started_at) > 60000 || Date.parse(captureReady.started_at) > Date.now()) {
-      checkpoint("start_bounded_sites_log_capture_before_samples", { project_id: state.identity.project_id, interval_seconds: 12, limit: 100,
-        output: join(directory, "capture-started.json"), logs_output: join(directory, "performance-sites-logs.json") }); break;
-    }
     await run("performance", "check-acceptance-performance-hosted.mjs", [runTag("performance"), "sample", identityPath],
-      { MD_ACCEPTANCE_LOG_JOURNAL: join(directory, "performance-sites-logs.jsonl") });
+      { MD_ACCEPTANCE_TELEMETRY_SOURCE: "d1" });
     state.stage = "provider_logs"; await save();
   } else if (state.stage === "provider_logs") {
-    const path = join(directory, "performance-sites-logs.json");
-    if (!await optional(path)) { checkpoint("capture_actual_sites_logs_and_save_private_result", { project_id: state.identity.project_id,
+    const path = join(directory, "performance-sites-d1.json");
+    if (!await optional(path)) { checkpoint("capture_all_sites_d1_telemetry_pages_and_save_private_result", { project_id: state.identity.project_id,
+      binding_name: "DB", table_name: "md_acceptance_telemetry", limit: 25, max_pages: 164,
       run_directory: join(root, "runs", runTag("performance")), output: path }); break; }
     await run("performance", "check-acceptance-performance-hosted.mjs", [runTag("performance"), "finalize", path]);
     await add("performance", componentPath("performance")); state.stage = "platform"; await save();

@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 import { createAcceptancePerformanceFixture } from "./lib/acceptance-performance-fixture.mjs";
 import { collectPerformanceSamples } from "./benchmark-runtime-performance.mjs";
-import { createSitesLogPerformanceCapture } from "./lib/performance-telemetry-capture.mjs";
+import { createSitesLogPerformanceCapture, createSitesD1PerformanceCapture } from "./lib/performance-telemetry-capture.mjs";
 import { evaluatePerformanceGate, verifyPerformanceScenarioCredentialBindings } from "./lib/performance-gate.mjs";
 import { ACCEPTANCE_ASSERTIONS, acceptanceDigest, createAcceptanceComponent } from "./lib/acceptance-evidence.mjs";
 
@@ -54,19 +54,23 @@ if (action === "cleanup") {
     client.state.performance.clock_before = await observeAcceptanceClock(client, identity.candidate_sha); await client.save();
     phase = "performance_samples";
     let sampleCount = 0, batch = [];
-    const collectionDeadline = Date.now() + 2700000;
-    const collection = { schema: "mind-diary/performance-collection/v1", policy: "provider-telemetry-batches", max_samples_per_batch: 7,
-      max_barrier_wait_ms: 120000, max_collection_ms: 2700000, batches: [] };
+    const sourceKind = process.env.MD_ACCEPTANCE_TELEMETRY_SOURCE ?? "d1";
+    assert.ok(["d1", "worker_logs"].includes(sourceKind), "invalid_telemetry_source");
+    const durable = sourceKind === "d1";
+    const collectionDeadline = Date.now() + (durable ? 1800000 : 2700000);
+    const collection = { schema: "mind-diary/performance-collection/v1", policy: durable ? "durable-d1" : "provider-telemetry-batches",
+      ...(durable ? { max_collection_ms: 1800000 } : { max_samples_per_batch: 7, max_barrier_wait_ms: 120000, max_collection_ms: 2700000, batches: [] }) };
     client.state.performance.collection = collection;
+    await write("performance-collection.json", collection);
     const journalPath = process.env.MD_ACCEPTANCE_LOG_JOURNAL ?? join(client.directory, "sites-log-captures.jsonl");
     const samples = await collectPerformanceSamples(f.scenario, Buffer.from(process.env.MD_PERF_CORRELATION_KEY, "base64url"), async sample => {
       await appendFile(join(client.directory, "performance-samples.jsonl"), JSON.stringify(sample) + "\n", { mode: 0o600 });
       const definition = f.scenario.requests.find(value => value.id === sample.definition_id);
       assert.ok(definition, "sample_definition_missing");
-      batch.push({ ...sample, profile: definition.profile, operation: definition.operation });
+      if (!durable) batch.push({ ...sample, profile: definition.profile, operation: definition.operation });
       sampleCount++;
       if (Date.now() >= collectionDeadline) throw Error("performance_collection_deadline_exceeded");
-      if (batch.length === 7 || sampleCount % 21 === 0) {
+      if (!durable && (batch.length === 7 || sampleCount % 21 === 0)) {
         phase = "provider_telemetry_barrier";
         collection.batches.push(await waitForAcceptanceTelemetry({ journalPath, projectId: identity.project_id, samples: batch,
           timeoutMs: Math.min(120000, collectionDeadline - Date.now()) }));
@@ -97,8 +101,11 @@ if (action === "cleanup") {
     phase = "provider_telemetry_join";
     const source = JSON.parse(await readFile(inputPath, "utf8"));
     const correlations = p.samples.connectorResults.flatMap(r => r.sample_windows.map(w => w.benchmark_correlation_id));
-    const captured = createSitesLogPerformanceCapture({ candidate_sha: p.identity.candidate_sha, environment: "uat", target_url: p.scenario.target_url,
-      deployment: p.profile_readback.deployment, started_at: p.samples.startedAt, completed_at: new Date().toISOString(), provider_script: "site---6a9c795089608191bc1b52e06234fc4a" }, source, correlations);
+    const capture = p.collection?.policy === "durable-d1" ? createSitesD1PerformanceCapture : createSitesLogPerformanceCapture;
+    const captured = capture({ candidate_sha: p.identity.candidate_sha, environment: "uat", target_url: p.scenario.target_url,
+      deployment: p.profile_readback.deployment, started_at: p.samples.startedAt, completed_at: new Date().toISOString(),
+      run_id: client.state.run.run_id, test_adapter_sha256: p.identity.test_adapter_sha256,
+      provider_script: "site---6a9c795089608191bc1b52e06234fc4a" }, source, correlations);
     const evaluation = { candidate_sha: p.identity.candidate_sha, deployment_id: p.identity.deployment_id, environment: "uat", target_url: p.scenario.target_url,
       started_at: p.samples.startedAt, completed_at: p.samples.completedAt, warm_samples: 20, scenario: p.scenario, profile_readback: p.profile_readback,
       ...(p.clock_calibration ? { clock_calibration: p.clock_calibration } : {}),

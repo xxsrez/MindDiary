@@ -1,7 +1,9 @@
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
+import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
 
 export async function cleanupRun(store, runId, productCall, resumeDeletion, fault = async () => {}, maxActors = 1) {
   await store.ready();
+  await new AcceptanceTelemetryJournal(store.db, null).ready();
   await store.db.batch([
     store.db.prepare("CREATE TABLE IF NOT EXISTS md_acceptance_cleanup_locks (run_id TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_at INTEGER NOT NULL)"),
     store.db.prepare("CREATE TABLE IF NOT EXISTS md_acceptance_cleanup_journal (actor_id TEXT PRIMARY KEY, command_json TEXT, result_json TEXT, done INTEGER NOT NULL DEFAULT 0)"),
@@ -81,6 +83,7 @@ export async function cleanupRun(store, runId, productCall, resumeDeletion, faul
     const receipt = { run_id: runId, state: "cleaned", actors_cleaned: run.actors.length, results };
     await store.db.batch([
       store.statement("INSERT OR REPLACE INTO md_acceptance_cleanup_receipts (run_id,receipt_json) VALUES (?,?)", runId, JSON.stringify(receipt)),
+      store.statement("DELETE FROM md_acceptance_telemetry WHERE run_id = ?", runId),
       store.statement("DELETE FROM md_acceptance_cleanup_journal WHERE actor_id IN (SELECT id FROM md_acceptance_actors WHERE run_id = ?)", runId),
       store.statement("DELETE FROM md_acceptance_sessions WHERE run_id = ?", runId),
       store.statement("DELETE FROM md_acceptance_exchanges WHERE run_id = ?", runId),
