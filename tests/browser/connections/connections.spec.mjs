@@ -443,6 +443,9 @@ test("Advanced MCP dialog receives and restores focus without exposing raw ident
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/settings/developer/mcp`);
+  await expect(page.locator("[data-token-form]")).toBeHidden();
+  await tabUntil(page, ".md-settings-create > summary");
+  await page.keyboard.press("Enter");
   await tabUntil(page, "#token-name");
   await page.keyboard.type("Keyboard-created fixture token");
   await page.locator("#token-access").selectOption("content:write");
@@ -489,5 +492,29 @@ test("deterministic error fixtures keep actions unavailable on both credential s
   await page.goto(`${fixture.origin}/settings/developer/mcp`);
   await expect(page.getByRole("alert")).toContainText("Personal tokens are unavailable");
   await expect(page.locator("[data-personal-token]")).toHaveCount(0);
+  await context.close();
+});
+
+
+test("Settings uses a side menu and reveals secondary work only on request", async ({ browser }) => {
+  const fixture = fixtures.find((candidate) => candidate.count === 1);
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/settings/developer/mcp`);
+  for (const width of [1280, 900]) {
+    await page.setViewportSize({ width, height: 800 });
+    const nav = await page.locator('[data-ia-nav="settings"]').boundingBox();
+    const main = await page.locator("main").boundingBox();
+    expect(nav.x + nav.width).toBeLessThanOrEqual(main.x + 1);
+    await expectNoHorizontalOverflow(page);
+  }
+  await expect(page.locator("[data-token-form]")).toBeHidden();
+  await expect(page.locator(".md-settings-endpoints")).toBeHidden();
+  await page.locator(".md-settings-config > summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "Copy modern config" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
   await context.close();
 });

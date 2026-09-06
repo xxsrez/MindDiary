@@ -382,7 +382,7 @@ function renderAccountProfile(
     </div><div class="md-settings-row__content">
     <form data-profile-form data-profile-version="${profile.profileVersion}" data-profile-key="${escapeUntrustedText(profile.idempotencyKey)}">
       <div class="md-field">
-        <label for="profile-display-name">Display name</label>
+        <label class="md-visually-hidden" for="profile-display-name">Display name</label>
         <input id="profile-display-name" name="display_name" type="text" required minlength="1" maxlength="80" autocomplete="name" value="${escapeUntrustedText(model.displayName)}">
       </div>
       <button class="md-button md-button--primary" type="submit">Save profile name</button>
@@ -399,7 +399,7 @@ function renderCurrentIdentity(): string {
     <h2 id="current-sign-in-title">Sign-in</h2></div>
     <div class="md-settings-row__content"><p><strong>ChatGPT through OpenAI Sites</strong></p>
     <p>Mind Diary does not create or store a separate password.</p>
-    <nav class="md-route-links" aria-label="Account connection actions">
+    <nav class="md-route-links md-settings-identity-links" aria-label="Account connection actions">
       <a class="md-button md-button--secondary" href="/help/codex">Install and connect Mind Diary</a>
       <a class="md-button md-button--secondary" href="/settings/connections">View Connections</a>
     </nav></div>
@@ -490,7 +490,7 @@ export function renderAccountDeletion(
         <div>
           <p class="md-eyebrow">Account settings</p>
           <h1>Account and profile</h1>
-          <p>Your profile, sign-in and account controls.</p>
+          <p>Your name and account preferences.</p>
         </div>
       </div>
       <div class="md-settings-list" data-account-lifecycle>
@@ -498,7 +498,7 @@ export function renderAccountDeletion(
         ${renderCurrentIdentity()}
         ${renderRecoveryHandoff()}
       </div>
-      <section class="md-settings-danger" aria-labelledby="delete-account-title">
+      <details class="md-settings-danger md-settings-disclosure" data-account-deletion-disclosure><summary><span><strong>Delete account</strong><small>Permanently delete your account and owned Minds.</small></span><span class="md-settings-disclosure-action" aria-hidden="true">Review deletion</span></summary><div class="md-settings-disclosure-body">
         <div class="md-section-heading">
           <div>
             <p class="md-eyebrow">Danger zone</p>
@@ -508,7 +508,7 @@ export function renderAccountDeletion(
           </div>
         </div>
         <div data-account-deletion-panel>${renderAccountDeletionPanel(model.state)}</div>
-      </section>
+      </div></details>
     </main>
     ${renderMindDiaryAuthenticatedFooter("account")}
   </div>`;
@@ -856,7 +856,15 @@ export function installAccountDeletionUi(
     }
   });
 
-  void controller.loadPreview();
+  const disclosure = shell.querySelector<HTMLDetailsElement>("[data-account-deletion-disclosure]");
+  if (disclosure) {
+    on<Event>(disclosure, "toggle", () => {
+      if (disclosure.open && controller.getState().kind === "loading") void controller.loadPreview();
+    });
+    if (disclosure.open) void controller.loadPreview();
+  } else {
+    void controller.loadPreview();
+  }
   return () => {
     controller.dispose();
     for (const cleanup of cleanups.reverse()) cleanup();

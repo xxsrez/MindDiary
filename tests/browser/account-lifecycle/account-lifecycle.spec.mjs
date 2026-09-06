@@ -136,6 +136,9 @@ test("signed-out entry, isolated bootstrap, reopen, conflict, and exact deletion
   await expect(page.getByRole("button", { name: "Save profile name" })).toBeDisabled();
 
   await page.reload();
+  await expect(page.locator("[data-account-deletion-panel]")).toBeHidden();
+  await page.locator("[data-account-deletion-disclosure] > summary").focus();
+  await page.keyboard.press("Enter");
   const impact = page.locator('[data-ia-impact="account-delete"]');
   await expect(impact).toBeVisible();
   await expect(impact).toContainText("Browser Shared");

@@ -161,7 +161,9 @@ export function renderMindDiaryAuthenticatedHeader(
     activeNavigation === "connections" || activeNavigation === "tokens";
   const settingsContext = settingsCurrent
     ? `<nav class="md-context-navigation" aria-label="Settings sections" data-ia-nav="settings">
-        ${MIND_DIARY_SETTINGS_SECTIONS.map((section) => `<a href="${section.href}" data-ia-settings-section="${section.id}"${activeAttribute(activeNavigation, section.navigation)}>${section.label}</a>`).join("\n        ")}
+        <p class="md-settings-nav-title">Settings</p>
+        ${["Personal", "Integrations"].map((group) => `<section class="md-settings-nav-group"><h2>${group}</h2>${MIND_DIARY_SETTINGS_SECTIONS.filter((section) => group === "Personal" ? section.id === "account" : section.id !== "account").map((section) => `<a href="${section.href}" data-ia-settings-section="${section.id}"${activeAttribute(activeNavigation, section.navigation)}><span class="md-settings-nav-icon" aria-hidden="true">${section.id === "account" ? "○" : section.id === "connections" ? "⊞" : "⌘"}</span>${section.label}</a>`).join("")}</section>`).join("")}
+
       </nav>`
     : "";
   const settingsCurrentAttribute = settingsCurrent ? ' aria-current="page"' : "";

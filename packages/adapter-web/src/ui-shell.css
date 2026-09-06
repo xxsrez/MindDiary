@@ -2277,28 +2277,32 @@ h3 {
 
 .md-mind-icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 
-/* Settings use the same compact rows and neutral surfaces as Minds. */
-.md-shell .md-context-navigation {
-  background: #fff;
-  padding: 0 1rem;
-  gap: 1rem;
+/* Settings: grouped navigation and one focused work area, as in Task Manager. */
+.md-shell:has(.md-settings-main) { background: #fff; }
+.md-shell .md-context-navigation { position: static; display: flex; align-items: center; gap: 0.375rem; padding: 0.5rem 1rem; background: #f8f9fb; border-color: #e8eaf0; }
+.md-settings-nav-title, .md-settings-nav-group h2 { display: none; }
+.md-settings-nav-group { display: contents; }
+.md-shell .md-context-navigation a { min-height: 2.75rem; padding: 0.5rem 0.75rem; border: 0; border-radius: 6px; color: #5d6472; font-size: 0.8125rem; font-weight: 500; gap: 0.5rem; }
+.md-shell .md-context-navigation a[aria-current="page"] { background: #eeebf7; color: #513590; box-shadow: none; font-weight: 600; }
+.md-settings-nav-icon { width: 1rem; text-align: center; font-size: 1rem; }
+.md-shell .md-settings-main { width: 100%; max-width: 58rem; margin: 0; padding: 1.5rem; font-size: 0.8125rem; }
+.md-shell .md-settings-main > .md-page-heading { margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid #e8eaf0; }
+.md-shell .md-settings-main h1 { font-size: 1.25rem; letter-spacing: -0.02em; }
+.md-shell .md-settings-main .md-page-heading p { margin-top: 0.375rem; font-size: 0.8125rem; color: #707887; }
+.md-shell .md-settings-main .md-button { font-size: 0.8125rem; padding: 0.5rem 0.75rem; }
+.md-shell .md-settings-main h2 { font-size: 0.875rem; }
+@media (min-width: 64rem) {
+  .md-shell:has(.md-settings-main) { grid-template-columns: 13rem 12.5rem minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .md-shell:has(.md-settings-main) .md-navigation-surface { grid-row: 1 / -1; }
+  .md-shell .md-context-navigation { grid-column: 2; grid-row: 1 / -1; position: sticky; top: 0; height: 100dvh; display: block; padding: 1.5rem 0.75rem; border-right: 1px solid #e8eaf0; border-bottom: 0; overflow-y: auto; }
+  .md-shell .md-context-navigation .md-settings-nav-title { display: block; margin: 0 0.5rem 1.5rem; font-size: 0.9375rem; font-weight: 650; color: #283142; }
+  .md-settings-nav-group { display: block; }
+  .md-settings-nav-group + .md-settings-nav-group { margin-top: 1.5rem; }
+  .md-settings-nav-group h2 { display: block; margin: 0 0.5rem 0.375rem; color: #707887; font-size: 0.625rem; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600; }
+  .md-shell .md-context-navigation a { display: flex; width: 100%; }
+  .md-shell .md-settings-main { grid-column: 3; grid-row: 1; padding: 2rem clamp(1.5rem, 3vw, 3rem) 3rem; }
+  .md-shell:has(.md-settings-main) .md-footer { grid-column: 3; grid-row: 2; }
 }
-.md-shell .md-context-navigation a {
-  padding: 0.75rem 0.25rem;
-  border-radius: 0;
-  border-bottom: 2px solid transparent;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #5d6472;
-}
-.md-shell .md-context-navigation a[aria-current="page"] {
-  background: transparent;
-  box-shadow: none;
-  border-bottom-color: #6c4bb6;
-  color: #513590;
-  font-weight: 650;
-}
-.md-shell .md-settings-main { max-width: 76rem; }
 .md-shell .md-settings-list { display: grid; min-width: 0; }
 .md-shell .md-settings-row {
   display: grid;
@@ -2378,4 +2382,61 @@ h3 {
   .md-shell .md-settings-main > .md-credential-mode-panel > section { grid-template-columns: minmax(0, 1fr); }
   .md-shell .md-settings-main > .md-credential-mode-panel h2 { grid-row: auto; }
   .md-shell .md-settings-main > .md-credential-mode-panel p { grid-column: 1; }
+}
+
+/* Quiet form rows and explicit entry points for secondary workflows. */
+.md-shell .md-settings-row { grid-template-columns: minmax(9rem, 0.9fr) minmax(0, 1.1fr); padding: 1rem 0; gap: 1rem 1.5rem; border-top: 0; border-bottom: 1px solid #e8eaf0; }
+.md-shell .md-settings-row h2 { font-size: 0.8125rem; font-weight: 600; }
+.md-shell .md-settings-row__label p { font-size: 0.75rem; line-height: 1.5; }
+.md-shell .md-settings-row form { width: 100%; max-width: none; justify-items: end; gap: 0.5rem; }
+.md-shell .md-settings-row input { min-height: 2.75rem; padding: 0.5rem 0.625rem; font-size: 0.8125rem; border-radius: 6px; background: #fafbfc; }
+.md-shell .md-settings-row [data-profile-status]:empty { display: none; }
+.md-shell .md-settings-identity-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.md-shell .md-settings-identity-links a { min-height: 2.75rem; padding: 0; background: transparent; border: 0; box-shadow: none; color: #685098; font-size: 0.75rem; text-decoration: underline; }
+.md-shell .md-settings-disclosure { margin: 0; border: 0; border-bottom: 1px solid #e8eaf0; border-radius: 0; padding: 0; background: transparent; }
+.md-settings-disclosure > summary { display: flex; min-height: 4.5rem; align-items: center; justify-content: space-between; gap: 1rem; list-style: none; cursor: pointer; padding: 1rem 0; }
+.md-settings-disclosure > summary::-webkit-details-marker { display: none; }
+.md-settings-disclosure > summary > span:first-child { display: grid; gap: 0.25rem; }
+.md-settings-disclosure summary strong { font-size: 0.8125rem; font-weight: 600; }
+.md-settings-disclosure summary small { font-size: 0.75rem; color: #707887; }
+.md-settings-disclosure-action { display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0.5rem 0.75rem; border: 1px solid #dfe2e8; border-radius: 6px; font-size: 0.75rem; white-space: nowrap; }
+.md-settings-disclosure[open] > summary .md-settings-disclosure-action { background: #f0edf8; }
+.md-shell .md-settings-danger > summary strong, .md-settings-danger .md-settings-disclosure-action { color: #a33b44; }
+.md-shell .md-settings-recovery { border: 0; border-bottom: 1px solid #e8eaf0; background: transparent; font-size: 0.8125rem; }
+.md-shell .md-settings-recovery > summary { min-height: 3.5rem; font-size: 0.8125rem; font-weight: 500; }
+.md-shell .md-settings-create > .md-setup-card { display: block; margin: 0 0 1rem; padding: 1rem; border: 1px solid #e8eaf0; background: #fafbfc; }
+.md-shell .md-settings-create h2, .md-shell .md-settings-endpoints h2 { display: none; }
+.md-shell .md-settings-create .md-token-form { margin-top: 1rem; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
+.md-shell .md-settings-create .md-token-form > .md-field:nth-child(3) { grid-column: 1 / -1; grid-row: 3; }
+.md-shell .md-settings-create .md-token-form > .md-field:nth-child(3) label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; }
+.md-shell .md-settings-create .md-token-form input[type="checkbox"] { width: 1.125rem; height: 1.125rem; min-height: 0; flex: none; }
+.md-shell .md-settings-create .md-token-form > .md-field:first-child { grid-column: 1 / -1; }
+.md-shell .md-settings-create .md-token-form > button { justify-self: end; grid-column: 2; }
+.md-shell .md-settings-config .md-settings-endpoints { margin: 0 0 1rem; padding: 1rem; border-color: #e8eaf0; background: #fafbfc; }
+.md-shell .md-settings-main .md-state { padding: 1.5rem; border: 1px dashed #dfe2e8; background: #fafbfc; border-radius: 6px; text-align: left; }
+.md-shell .md-settings-main .md-state h2 { margin-top: 0; }
+.md-shell .md-settings-main .md-token-card h3 { font-size: 0.875rem; }
+.md-shell .md-settings-main .md-token-card__metadata { gap: 0.5rem; }
+.md-shell .md-settings-main .md-token-card__metadata dt { font-size: 0.6875rem; }
+.md-shell .md-settings-main .md-token-card__metadata dd { font-size: 0.75rem; }
+@media (max-width: 40rem) {
+  .md-shell .md-settings-main { padding: 1.25rem 1rem; }
+  .md-shell .md-settings-row { grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+  .md-shell .md-settings-create .md-token-form { display: flex; flex-direction: column; }
+  .md-settings-nav-icon { display: none; }
+  .md-settings-disclosure > summary { align-items: start; }
+  .md-settings-disclosure-action { white-space: normal; }
+}
+
+.md-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (min-width: 48rem) and (max-width: 63.999rem) {
+  .md-shell:has(.md-settings-main) { grid-template-columns: 11rem minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .md-shell:has(.md-settings-main) .md-app-bar { grid-column: 1 / -1; }
+  .md-shell .md-context-navigation { grid-column: 1; grid-row: 2 / 4; display: block; align-self: stretch; padding: 1.5rem 0.75rem; border-right: 1px solid #e8eaf0; border-bottom: 0; }
+  .md-settings-nav-group { display: block; }
+  .md-settings-nav-group + .md-settings-nav-group { margin-top: 1.5rem; }
+  .md-settings-nav-group h2 { display: block; margin: 0 0.5rem 0.5rem; font-size: 0.625rem; color: #707887; letter-spacing: 0.06em; text-transform: uppercase; }
+  .md-shell .md-context-navigation a { display: flex; width: 100%; }
+  .md-shell .md-settings-main { grid-column: 2; grid-row: 2; }
+  .md-shell:has(.md-settings-main) .md-footer { grid-column: 2; grid-row: 3; }
 }
