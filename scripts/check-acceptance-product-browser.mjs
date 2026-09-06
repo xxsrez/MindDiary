@@ -120,10 +120,14 @@ try {
       diagnostics.push({ path: url.pathname, status: response.status(), ...(typeof code === "string" && /^[a-z_]{1,80}$/.test(code) ? { code } : {}) });
     });
     await page.goto(origin, { waitUntil: "domcontentloaded" });
-    const created = page.waitForResponse(r => r.url() === origin + "/api/v1/account" && r.request().method() === "POST");
-    await page.getByRole("button", { name: "Create isolated account", exact: true }).click();
-    assert.equal((await created).status(), 200);
-    await page.waitForURL(origin + "/");
+    // Attach every rejection handler immediately. A detached response waiter
+    // can otherwise terminate CI before the finally block cleans the run.
+    const [created] = await Promise.all([
+      page.waitForResponse(r => r.url() === origin + "/api/v1/account" && r.request().method() === "POST"),
+      page.waitForURL(origin + "/me", { waitUntil: "domcontentloaded" }),
+      page.getByRole("button", { name: "Create isolated account", exact: true }).click(),
+    ]);
+    assert.equal(created.status(), 200);
   }
   // A fresh context has no product session, even though the platform route is reachable.
   const firstCookies = await contexts[0].cookies(origin);
@@ -139,9 +143,11 @@ try {
     assert.equal(await form.locator('[name="personal_configure"]').isChecked(), false);
     await form.getByLabel("Token name", { exact: true }).fill(configure ? "Synthetic configure" : "Synthetic read");
     if (configure) await form.locator('[name="personal_configure"]').check();
-    const issued = page.waitForResponse(r => r.url() === origin + "/api/v1/mcp-tokens" && r.request().method() === "POST");
-    await form.getByRole("button", { name: "Create token", exact: true }).click();
-    const response = await issued; assert.equal(response.status(), 200);
+    const [response] = await Promise.all([
+      page.waitForResponse(r => r.url() === origin + "/api/v1/mcp-tokens" && r.request().method() === "POST"),
+      form.getByRole("button", { name: "Create token", exact: true }).click(),
+    ]);
+    assert.equal(response.status(), 200);
     const body = await response.json();
     phase = "token_scope_readback";
     assert.equal(body.data.token.scopes.includes("personal:configure"), configure);

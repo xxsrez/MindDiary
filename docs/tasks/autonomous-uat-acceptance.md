@@ -661,3 +661,33 @@ reaper: cleanup по контракту обрабатывает один actor 
 полностью очищены, исходный report остаётся failed. SDK теперь ограниченно
 продолжает sweep и читает фактические состояния заданных runs; интеграционный
 тест подтвердил несколько chunks и сохранение соседнего active run.
+
+### Проверка восстановления и первый общий прогон
+
+На runner `d22e3afab7e65dfbfc9f0263ce1e022a97108702` hosted recovery
+`md405-recovery-v7b-20260906` прошёл lost setup/bootstrap/commit/cleanup,
+настоящий TTL, сохранение соседнего active run, revoke и ограниченную
+HTTP 503-инъекцию. Полная inventory восстановлена; component
+`855d17f6e7d8ff7ca44965a16c6fe9cd694aafa9f9007588fbbdb8035552b180`.
+
+На обычной UAT нативный Codex AppServer успешно выполнил read-only OAuth,
+обновил refresh credential и получил отказ после отзыва. Opt-in token forms
+добавляли `personal:configure` только при выбранной галочке; оба токена прошли
+modern/compat self-check. Оба временных токена и новый OAuth grant отозваны,
+локальная credential удалена; 12 прежних подключений сохранены. Личный corpus
+не читался и не изменялся. Это применимые перспективные platform canaries,
+а не полный исторический Marketplace gate MD-399.
+
+Первый общий запуск `md407-full-a-20260906` подтвердил точные revisions и
+content после повторной публикации той же saved version: deployment
+`appgdep_example22dbae9c31df6579`, persistence component
+`b9f609524e02f1ae96539e66db6f9a55f4219b0b0afb36524c6917ed86d81ca9`.
+Затем прошли product 9-cell matrix, ACL, history/OKF и очистка.
+
+Browser CI `34004941809` завершился failed на bootstrap: runner ждал `/`,
+хотя продукт после регистрации открывает `/me`. Отдельно созданный response
+waiter мог отклониться раньше ожидающего click и аварийно завершить процесс
+до `finally`. Ожидания ответа, перехода и клика объединяются в `Promise.all`,
+ожидаемый URL приведён к действующему контракту. Неудачный запуск не считается
+чистым полным проходом; его CI fixture очищен по точному run ID, полная
+inventory снова нулевая.
