@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
 
+export function registerModelMindSelectors(selectors, minds) {
+  for (const mind of minds) {
+    selectors.set(mind.route, mind.route);
+    if (mind.mind_id) selectors.set(mind.mind_id, mind.route);
+    if (typeof mind.handle === "string" && mind.handle.length > 0) selectors.set(mind.handle, mind.route);
+  }
+}
+
 // Fetch takes an opaque locator, not a Mind argument. Bind that locator to an
 // earlier successful scoped discovery; never infer a source from corpus text.
 export function verifyModelTrace(events, scenario) {
@@ -15,11 +23,7 @@ export function verifyModelTrace(events, scenario) {
     assert.equal(["commandExecution", "fileChange", "webSearch", "collabAgentToolCall"].includes(event.params?.item?.type), false, "unexpected_builtin_tool");
     if (event.method !== "acceptance/tool") continue;
     const call = event.params, data = call.result.structuredContent?.data;
-    if (call.tool === "list_minds" && !call.result.isError) for (const mind of data.minds) {
-      selectors.set(mind.route, mind.route);
-      if (mind.mind_id) selectors.set(mind.mind_id, mind.route);
-      if (typeof mind.handle === "string" && mind.handle.length > 0) selectors.set(mind.handle, mind.route);
-    }
+    if (call.tool === "list_minds" && !call.result.isError) registerModelMindSelectors(selectors, data.minds);
     let mind = selectors.get(call.arguments.mind) ?? call.arguments.mind ?? null;
     if (call.tool === "fetch") mind = locators.get(call.arguments.id) ?? null;
     if (["search", "browse_entries", "get_revision", "get_mind_info", "commit_changeset"].includes(call.tool) && mind && !call.result.isError) registerEntries(data, mind);

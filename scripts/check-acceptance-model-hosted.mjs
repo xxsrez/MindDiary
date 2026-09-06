@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 import { createCollaborationFixture } from "./lib/acceptance-fixture.mjs";
 import { AcceptanceModelServer } from "./lib/acceptance-model-server.mjs";
-import { verifyModelTrace } from "./lib/acceptance-model-oracle.mjs";
+import { verifyModelTrace, registerModelMindSelectors } from "./lib/acceptance-model-oracle.mjs";
 
 import { acceptanceDigest, createAcceptanceComponent, ACCEPTANCE_MODEL_CASES } from "./lib/acceptance-evidence.mjs";
 let phase = "configuration";
@@ -99,21 +99,23 @@ try {
     await client.mcp(token, "set_personal_mind_description", { description: scenario.description, expected_metadata_version: config.metadata_version, idempotency_key: `acceptance-model:${crypto.randomUUID()}` });
     const directory = join(client.directory, "models", scenario.id); await mkdir(directory, { recursive: true, mode: 0o700 });
     let unknownInjected = false, firstCommittedMind = null, partialReadOnlyMind = null;
+    const observedSelectors = new Map();
     server = new AcceptanceModelServer({ directory, maxTokens: 400000, maxCalls: 50,
       onTrace: event => appendFile(join(directory, "events.jsonl"), JSON.stringify(event) + "\n", { mode: 0o600 }),
       onTool: async (tool, args) => {
       if (!tools.some(t => t.name === tool)) throw new Error("unknown_model_tool");
-      if (scenario.partialCommit && firstCommittedMind && tool === "commit_changeset" && args.mind !== firstCommittedMind && !partialReadOnlyMind) {
-        assert.ok(["/me", shared].includes(args.mind), "unexpected_partial_destination");
+      const selectedMind = observedSelectors.get(args.mind) ?? args.mind;
+      if (scenario.partialCommit && firstCommittedMind && tool === "commit_changeset" && selectedMind !== firstCommittedMind && !partialReadOnlyMind) {
+        assert.ok(["/me", shared].includes(selectedMind), "unexpected_partial_destination");
         const owner = fixture.actors.owner.actor_id;
         const cookie = await client.session(owner);
         const projection = await (await client.request("/api/v1/mind-usage", { headers: { cookie } })).json();
         const accountPage = await client.request("/settings/account", { headers: { cookie } });
         const csrf = /name="mind-diary-csrf-token" content="([^"]+)"/.exec(await accountPage.text())[1];
-        await client.mutation(`model:partial:${scenario.id}`, owner, { path: `/api/v1/minds/${args.mind === "/me" ? "me" : fixture.handle}/usage`, method: "PUT", csrf,
+        await client.mutation(`model:partial:${scenario.id}`, owner, { path: `/api/v1/minds/${selectedMind === "/me" ? "me" : fixture.handle}/usage`, method: "PUT", csrf,
           body: { usage_mode: "read", expected_usage_version: projection.data.usage_version } });
-        partialReadOnlyMind = args.mind;
-        await appendFile(join(directory, "events.jsonl"), JSON.stringify({ method: "acceptance/injectedUsageChange", params: { mind: args.mind, usage_mode: "read", first_committed_mind: firstCommittedMind } }) + "\n", { mode: 0o600 });
+        partialReadOnlyMind = selectedMind;
+        await appendFile(join(directory, "events.jsonl"), JSON.stringify({ method: "acceptance/injectedUsageChange", params: { mind: selectedMind, usage_mode: "read", first_committed_mind: firstCommittedMind } }) + "\n", { mode: 0o600 });
       }
       let envelope;
       try { envelope = await client.mcpEnvelope(token, "tools/call", { name: tool, arguments: args }); }
@@ -122,7 +124,8 @@ try {
         return { isError: true, structuredContent: { ok: false, error: { code: error.message } }, content: [{ type: "text", text: error.message }] };
       }
       const result = envelope.result ?? { isError: true, content: [{ type: "text", text: "Protocol error" }] };
-      if (scenario.partialCommit && tool === "commit_changeset" && !result.isError && !firstCommittedMind) firstCommittedMind = args.mind;
+      if (tool === "list_minds" && !result.isError) registerModelMindSelectors(observedSelectors, result.structuredContent.data.minds);
+      if (scenario.partialCommit && tool === "commit_changeset" && !result.isError && !firstCommittedMind) firstCommittedMind = selectedMind;
       if (scenario.unknownCommit && !unknownInjected && tool === "commit_changeset" && !result.isError) {
         unknownInjected = true;
         await appendFile(join(directory, "events.jsonl"), JSON.stringify({ method: "acceptance/injectedLostResponse", params: { arguments: args, committedResult: result } }) + "\n", { mode: 0o600 });

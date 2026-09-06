@@ -12,6 +12,7 @@ import { evaluatePerformanceGate, verifyPerformanceScenarioCredentialBindings } 
 import { ACCEPTANCE_ASSERTIONS, acceptanceDigest, createAcceptanceComponent } from "./lib/acceptance-evidence.mjs";
 
 import { observeAcceptanceClock, createAcceptanceClockCalibration } from "./lib/acceptance-clock-calibration.mjs";
+import { waitForAcceptanceTelemetry } from "./lib/acceptance-telemetry-barrier.mjs";
 
 let phase = "configuration";
 process.once("uncaughtException", () => { console.error(JSON.stringify({ status: "failed", phase })); process.exit(1); });
@@ -52,10 +53,26 @@ if (action === "cleanup") {
     client.state.performance.scenario = f.scenario; client.state.performance.profile_readback = f.profileReadback; await client.save();
     client.state.performance.clock_before = await observeAcceptanceClock(client, identity.candidate_sha); await client.save();
     phase = "performance_samples";
-    let sampleCount = 0;
+    let sampleCount = 0, batch = [];
+    const collectionDeadline = Date.now() + 1800000;
+    const collection = { schema: "mind-diary/performance-collection/v1", policy: "provider-telemetry-batches", max_samples_per_batch: 5,
+      max_barrier_wait_ms: 60000, max_collection_ms: 1800000, batches: [] };
+    client.state.performance.collection = collection;
+    const journalPath = process.env.MD_ACCEPTANCE_LOG_JOURNAL ?? join(client.directory, "sites-log-captures.jsonl");
     const samples = await collectPerformanceSamples(f.scenario, Buffer.from(process.env.MD_PERF_CORRELATION_KEY, "base64url"), async sample => {
       await appendFile(join(client.directory, "performance-samples.jsonl"), JSON.stringify(sample) + "\n", { mode: 0o600 });
-      if (++sampleCount % 21 === 0) console.log(JSON.stringify({ phase, requests_completed: sampleCount / 21, requests_total: f.scenario.requests.length }));
+      const definition = f.scenario.requests.find(value => value.id === sample.definition_id);
+      assert.ok(definition, "sample_definition_missing");
+      batch.push({ ...sample, profile: definition.profile, operation: definition.operation });
+      sampleCount++;
+      if (Date.now() >= collectionDeadline) throw Error("performance_collection_deadline_exceeded");
+      if (batch.length === 5 || sampleCount % 21 === 0) {
+        phase = "provider_telemetry_barrier";
+        collection.batches.push(await waitForAcceptanceTelemetry({ journalPath, projectId: identity.project_id, samples: batch,
+          timeoutMs: Math.min(60000, collectionDeadline - Date.now()) }));
+        await write("performance-collection.json", collection); batch = []; phase = "performance_samples";
+      }
+      if (sampleCount % 21 === 0) console.log(JSON.stringify({ phase, requests_completed: sampleCount / 21, requests_total: f.scenario.requests.length }));
     });
     client.state.performance.samples = samples; await client.save();
     const after = await observeAcceptanceClock(client, identity.candidate_sha);
@@ -91,8 +108,8 @@ if (action === "cleanup") {
     const evaluatorClean = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim() === "";
     if (p.passed && evaluatorSha === p.runner_sha && evaluatorClean) {
       const component = createAcceptanceComponent({ kind: "performance", status: "passed", identity: p.identity, runner_sha: p.runner_sha,
-        assertions: Object.fromEntries(ACCEPTANCE_ASSERTIONS.performance.map(name => [name, true])), details: { report: p.report, evaluation: p.evaluation },
-        cleanup: { status: "baseline_restored", baseline: p.baseline, final }, source_receipts: [acceptanceDigest(p.samples), p.evaluation.telemetry_capture.control_plane_source.result_sha256.slice(7)] });
+        assertions: Object.fromEntries(ACCEPTANCE_ASSERTIONS.performance.map(name => [name, true])), details: { report: p.report, evaluation: p.evaluation, ...(p.collection ? { collection: p.collection } : {}) },
+        cleanup: { status: "baseline_restored", baseline: p.baseline, final }, source_receipts: [acceptanceDigest(p.samples), p.evaluation.telemetry_capture.control_plane_source.result_sha256.slice(7), ...(p.collection ? [acceptanceDigest(p.collection)] : [])] });
       await write("performance-component.json", component);
     }
     if (p.passed && (evaluatorSha !== p.runner_sha || !evaluatorClean)) console.log(JSON.stringify({ phase: "component_not_emitted", reason: "collector_and_evaluator_runner_differ", collector_sha: p.runner_sha, evaluator_sha: evaluatorSha }));

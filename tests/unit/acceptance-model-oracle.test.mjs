@@ -58,4 +58,8 @@ test("partial writes require a real denial and read-back of the independent succ
   assert.throws(() => verifyModelTrace([...prefix, ...success], partial), /partial_failure_missing/);
   assert.throws(() => verifyModelTrace([...prefix, denied], partial), /required_commit_missing/);
   assert.throws(() => verifyModelTrace([...prefix, ...success, denied, call("commit_changeset", { mind: "/me" }, {})], partial), /partial_failed_destination_committed/);
+  const aliases = structuredClone([call("list_minds", {}, { minds: [{ route: "/shared", handle: "shared", mind_id: "shared-id" }, { route: "/me", mind_id: "personal-id" }] }), ...prefix.slice(1), ...success, denied]);
+  for (const event of aliases) if (event.params.arguments.mind === "/shared") event.params.arguments.mind = "shared";
+  aliases.at(-1).params.arguments.mind = "personal-id";
+  assert.doesNotThrow(() => verifyModelTrace(aliases, partial));
 });

@@ -470,7 +470,7 @@ function summarizeSamples(samples) {
   });
 }
 
-function requiredGroupOperations(profile, operation) {
+export function requiredPerformanceGroupOperations(profile, operation) {
   return profile === "web"
     ? Object.freeze(["stage_authentication", "stage_application", "stage_total", "home"])
     : Object.freeze([profile, "stage_authentication", "stage_application", "stage_total", operation]);
@@ -491,7 +491,7 @@ function matchingGroup(group, profile, operation) {
   const surface = profile === "web" ? "control" : "mcp";
   if (group.some((event) => event.surface !== surface)) return false;
   const operations = new Set(group.map((event) => event.operation));
-  return requiredGroupOperations(profile, operation).every((item) => operations.has(item));
+  return requiredPerformanceGroupOperations(profile, operation).every((item) => operations.has(item));
 }
 
 function groupWindow(group) {

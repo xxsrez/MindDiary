@@ -148,7 +148,8 @@ for (;;) {
       checkpoint("start_bounded_sites_log_capture_before_samples", { project_id: state.identity.project_id, interval_seconds: 12, limit: 100,
         output: join(directory, "capture-started.json"), logs_output: join(directory, "performance-sites-logs.json") }); break;
     }
-    await run("performance", "check-acceptance-performance-hosted.mjs", [runTag("performance"), "sample", identityPath]);
+    await run("performance", "check-acceptance-performance-hosted.mjs", [runTag("performance"), "sample", identityPath],
+      { MD_ACCEPTANCE_LOG_JOURNAL: join(directory, "performance-sites-logs.jsonl") });
     state.stage = "provider_logs"; await save();
   } else if (state.stage === "provider_logs") {
     const path = join(directory, "performance-sites-logs.json");
