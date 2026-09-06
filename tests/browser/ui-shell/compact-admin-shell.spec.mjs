@@ -623,7 +623,7 @@ acceptance("IA-A11Y-02", "forced colors and reduced motion preserve current stat
     await expect(page.locator('[data-ia-nav-item="my-mind"]')).toBeFocused();
     await expect(page.locator("[data-ia-settings-item]")).toHaveAttribute("aria-current", "page");
     await expect(page.locator('[data-ia-nav="settings"] a[aria-current="page"]'))
-      .toHaveText("Advanced MCP");
+      .toHaveAccessibleName("Advanced MCP");
     const transitionMs = await page.locator("[data-ia-mobile-drawer]").evaluate((element) =>
       getComputedStyle(element).transitionDuration.split(",").map((duration) =>
         duration.trim().endsWith("ms")

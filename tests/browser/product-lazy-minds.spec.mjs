@@ -102,14 +102,20 @@ test("heavy navigation pages render their shell before deferred collection reads
   await expect(page.getByRole("heading", { name: "Sent invitations" })).toHaveCount(0);
   await expect(page.getByText("only invitations that need your response")).toBeVisible();
 
+  let deletionPreviewRequests = 0;
   await page.route("**/api/v1/account/deletion-impact", async (route) => {
+    deletionPreviewRequests += 1;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
     await route.continue();
   });
   await page.goto(`${origin}/settings/account`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("[data-account-deletion-panel]")).toBeHidden();
+  expect(deletionPreviewRequests).toBe(0);
+  await page.locator("[data-account-deletion-disclosure] > summary").click();
   await expect(page.getByRole("heading", { name: "Loading the exact deletion preview" })).toBeVisible();
   await expect(page.locator("[data-account-deletion-impact]")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Review the deletion cascade" })).toBeVisible();
+  expect(deletionPreviewRequests).toBe(1);
 
   await page.route("**/api/v1/connections", async (route) => {
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
