@@ -131,16 +131,24 @@ connector, сохраняет настоящий terminal deployment read-back �
 Настоящие platform receipts передаёт управляющий агент после проверки источника;
 из произвольного JSON самостоятельно вывести доверенное происхождение нельзя.
 
-Реализация команды требует живой проверки полного цикла MD-407. До двух полных
-прогонов и interruption/recovery это не заявление о завершённой автоматизации.
+Полный живой цикл A4, повторные persistence/product/browser проверки B2 и
+14 сценариев модели с возобновлённой очисткой подтверждены в
+[итоге MD-400](../tasks/autonomous-uat-acceptance.md).
+Пользователь затем прямо ограничил объём завершающей приёмки: дополнительные
+performance/recovery B2 и третий полный цикл после прерывания координатора
+не проводились. Не трактуйте их как passed. Выполненные recovery assertions
+A4 и точные версии каждого runner сохранены отдельно.
 
 
 Performance использует [ADR-0027](../decisions/0027-durable-acceptance-telemetry.md):
 тестовый адаптер сохраняет исходные latency events общего runtime в D1 для
 подписанных benchmark-запросов. После всех samples агент сначала читает
 `sites_read_database_overview`, затем все страницы `md_acceptance_telemetry`
-через `sites_read_database_table_rows`, binding `DB`, limit 25, начиная с offset 0
+через `sites_read_database_table_rows`, binding `DB`, limit 15, начиная с offset 0
 и следуя точному `model_projection.next_offset`. Максимум 164 страницы.
+Инструмент допускает до 25 строк, но в живом capture 20/25 приводили к
+truncation. Страницы по 15 строк сохранили все 2100 events без обрезки;
+truncated ответ нельзя использовать или пропускать как полную страницу.
 Массив настоящих structured responses сохраняется в закрытый
 `performance-sites-d1.json`. Значения нельзя собирать заново по памяти или
 заменять самостоятельно сформированными строками. Перед capture других
