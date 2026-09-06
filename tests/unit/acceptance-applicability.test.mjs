@@ -26,7 +26,7 @@ test("a platform pass requires actual surface assertions and its independent rec
   const seal = value => ({ ...value, artifact_sha256: createHash("sha256").update(JSON.stringify(value)).digest("hex") });
   const source = { schema: "mind-diary/acceptance-platform-canary/v1", surface: "sites_identity", status: "passed", candidate_sha: base.candidate_sha,
     identity_source: "openai-sites", target_class: "ordinary-uat", deployment_id: "appgdep_actual",
-    assertions: { authenticated_sites_context: true, stable_principal_readback: true, unauthenticated_denied: true }, source_receipts: ["a".repeat(64)] };
+    assertions: { authenticated_sites_context: true, registered_account_readback: true, unauthenticated_denied: true }, source_receipts: ["a".repeat(64)] };
   const receipt = seal(source);
   assert.equal(verifyApplicablePlatformReceipts(policy, [receipt], { sites_identity: receipt.artifact_sha256 }), true);
   for (const changed of [{ ...source, assertions: {} }, { ...source, identity_source: "synthetic" }, { ...source, target_class: "test" }]) {
@@ -34,4 +34,13 @@ test("a platform pass requires actual surface assertions and its independent rec
     assert.throws(() => verifyApplicablePlatformReceipts(policy, [receipt], { sites_identity: receipt.artifact_sha256 }));
   }
   assert.throws(() => verifyApplicablePlatformReceipts(policy, [receipt], { sites_identity: "b".repeat(64) }), /not_anchored/);
+});
+
+test("prospective canaries follow the changed boundary while historical install evidence stays required", () => {
+  const oauth = deriveAcceptanceApplicability({ ...base, changed_paths: ["packages/adapter-oauth-sites/src/index.ts"] });
+  assert.deepEqual(oauth.required_assertions.first_user_connection, ["cleanup_verified", "read_first_oauth", "refresh_rotation", "revoke_denied"]);
+  const plugin = deriveAcceptanceApplicability({ ...base, changed_paths: ["plugins/mind-diary/.mcp.json"] });
+  assert.ok(plugin.required_assertions.first_user_connection.includes("fresh_marketplace_install"));
+  const historical = deriveAcceptanceApplicability({ ...base, scope_identifiers: ["MD-399"], changed_paths: [] });
+  assert.ok(historical.required_assertions.first_user_connection.includes("fresh_marketplace_install"));
 });

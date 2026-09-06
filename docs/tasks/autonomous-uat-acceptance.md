@@ -653,3 +653,11 @@ Sites build прошёл. Во встроенном браузере выпол�
 Cleanup восстановил baseline полностью. Новый coordinator требует запустить
 capture до samples; report v4 отдельно проверяет измеренные границы clock
 offset, сохраняя durations, бюджеты, coverage и старый report v3 без изменения.
+
+
+Первый hosted recovery run прошёл lost setup/bootstrap/commit, overlapping run
+и настоящий TTL expiry, но ошибочно остановился на промежуточном HTTP 503
+reaper: cleanup по контракту обрабатывает один actor за вызов. Оба runs
+полностью очищены, исходный report остаётся failed. SDK теперь ограниченно
+продолжает sweep и читает фактические состояния заданных runs; интеграционный
+тест подтвердил несколько chunks и сохранение соседнего active run.

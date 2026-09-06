@@ -41,7 +41,7 @@ function loseResponse(client, matches, message) {
     return response;
   };
 }
-let passed = false, final;
+let passed = false, final, failure;
 try {
   loseResponse(primary, url => url.endsWith("/_acceptance/runs"), "lost_setup_response");
   await assert.rejects(primary.setup(), /lost_setup_response/);
@@ -68,8 +68,8 @@ try {
   while (Date.now() <= expiring.expires_at + 1000) await new Promise(resolve => setTimeout(resolve, Math.min(1000, expiring.expires_at + 1001 - Date.now())));
   assert.equal((await secondary.request("/api/v1/session", { headers: { cookie: expiringCookie } })).status, 401);
   assertions.ttl_expiry = true;
-  const recovered = await primary.control("/_acceptance/recover", "POST", {});
-  assert.ok(recovered.results.some(result => result.run_id === expiring.run_id && result.state === "cleaned"));
+  const recovered = await primary.recoverDueRuns([expiring.run_id]);
+  assert.ok(recovered.runs.some(result => result.run_id === expiring.run_id && result.state === "cleaned"));
   assert.equal((await primary.control(`/_acceptance/runs/${primary.state.run.run_id}`)).state, "active");
   assert.equal((await primary.mcp(token, "list_minds")).minds.length, 2);
   assertions.active_run_preserved = true; record("expired_run_cleaned_active_run_preserved");
@@ -93,12 +93,15 @@ try {
   assert.deepEqual(repeated, cleaned);
   assertions.cleanup_interruption = true; assertions.idempotent_cleanup = true;
   record("cleanup_interruption_recovered"); passed = true;
+} catch (error) {
+  failure = { phase, kind: error.name, ...( /^acceptance_control_http_[0-9]{3}$/.test(error.message) ? { code: error.message } : {}) };
+  throw error;
 } finally {
   phase = "final_cleanup";
   primary.transport = fetch; secondary.transport = fetch;
   for (const client of [secondary, primary]) if (client.state.run || client.state.runInput) await client.cleanup();
   final = await primary.control("/_acceptance/inventory"); assert.deepEqual(final, baseline);
-  const source = { schema: "mind-diary/acceptance-recovery/v1", status: passed ? "passed" : "failed", identity, runner_sha: runnerSha, assertions, events,
+  const source = { schema: "mind-diary/acceptance-recovery/v1", status: passed ? "passed" : "failed", identity, runner_sha: runnerSha, assertions, events, ...(failure ? { failure } : {}),
     cleanup: { status: "baseline_restored", baseline, final } };
   await writeFile(join(primary.directory, "recovery-source.json"), JSON.stringify(source), { mode: 0o600 });
   if (passed) {

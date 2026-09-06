@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 export const PLATFORM_ASSERTIONS = Object.freeze({
-  sites_identity: ["authenticated_sites_context", "stable_principal_readback", "unauthenticated_denied"],
+  sites_identity: ["authenticated_sites_context", "registered_account_readback", "unauthenticated_denied"],
   operator_directory: ["three_distinct_sites_sessions", "own_account_isolation", "operator_directory_readback", "cleanup_verified"],
   first_user_connection: ["fresh_marketplace_install", "read_first_oauth", "explicit_write_step_up", "independent_write_lanes", "markdown_history_export", "revoke_denied", "cleanup_verified"],
 });
@@ -24,9 +24,20 @@ export function deriveAcceptanceApplicability(input) {
     operator_directory: historical || input.provider_configuration_changed || directory.length > 0,
     first_user_connection: historical || input.provider_configuration_changed || firstUser.length > 0,
   };
+  const firstAssertions = historical || input.provider_configuration_changed || paths.some(path => /^(plugins\/|\.codex-plugin\/)/.test(path))
+    ? [...PLATFORM_ASSERTIONS.first_user_connection]
+    : [...new Set([
+      ...(paths.some(path => /^packages\/adapter-oauth-sites\//.test(path)) ? ["read_first_oauth", "refresh_rotation", "revoke_denied", "cleanup_verified"] : []),
+      ...(paths.some(path => /^packages\/adapter-web\/(src\/(connections|token-management)|assets\/product-ui-client)/.test(path)) ? ["token_opt_in_forms", "modern_compat_self_check", "cleanup_verified"] : []),
+    ])];
+  const required_assertions = {
+    sites_identity: required.sites_identity ? [...PLATFORM_ASSERTIONS.sites_identity] : [],
+    operator_directory: required.operator_directory ? [...PLATFORM_ASSERTIONS.operator_directory] : [],
+    first_user_connection: required.first_user_connection ? firstAssertions.sort() : [],
+  };
   const value = { schema: "mind-diary/acceptance-applicability/v1", policy: historical ? "historical-contract-preserved" : "autonomous-v1",
     base_sha: input.base_sha, candidate_sha: input.candidate_sha, scope_identifiers: [...new Set(input.scope_identifiers)].sort(),
-    changed_paths: paths, provider_configuration_changed: input.provider_configuration_changed, required,
+    changed_paths: paths, provider_configuration_changed: input.provider_configuration_changed, required, required_assertions,
     reasons: { sites_identity: identity, operator_directory: directory, first_user_connection: firstUser } };
   return { ...value, artifact_sha256: hash(value) };
 }
@@ -44,7 +55,7 @@ export function verifyApplicablePlatformReceipts(applicability, receipts, expect
   for (const receipt of receipts) {
     assert.equal(receipt.schema, "mind-diary/acceptance-platform-canary/v1");
     assert.equal(receipt.status, "passed", "platform_canary_failed");
-    assert.deepEqual(Object.keys(receipt.assertions ?? {}).sort(), [...PLATFORM_ASSERTIONS[receipt.surface]].sort(), "platform_assertion_coverage_missing");
+    assert.deepEqual(Object.keys(receipt.assertions ?? {}).sort(), [...policy.required_assertions[receipt.surface]].sort(), "platform_assertion_coverage_missing");
     assert.ok(Object.values(receipt.assertions).every(value => value === true), "platform_assertion_failed");
     assert.equal(receipt.candidate_sha, policy.candidate_sha, "platform_candidate_mismatch");
     assert.equal(receipt.identity_source, "openai-sites", "synthetic_identity_is_not_platform_proof");

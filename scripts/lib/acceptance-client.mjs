@@ -108,6 +108,23 @@ export class AcceptanceClient {
     this.state.phase = "cleaned"; this.state.actors = {}; this.state.operations = {};
     await this.save(); return this.state.receipt;
   }
+  async recoverDueRuns(runIds) {
+    if (!Array.isArray(runIds) || runIds.length < 1 || runIds.length > 2 || runIds.some(id => !/^[a-f0-9-]{36}$/.test(id))) throw new Error("invalid_recovery_targets");
+    const deadline = Date.now() + 300000;
+    for (let attempt = 0; attempt < 16; attempt++) {
+      try {
+        const sweep = await this.control("/_acceptance/recover", "POST", {});
+        const runs = [];
+        for (const id of runIds) runs.push(await this.control(`/_acceptance/runs/${id}`));
+        if (runs.every(run => run.state === "cleaned")) return { sweep, runs, attempts: attempt + 1 };
+      } catch (error) {
+        if (error.message !== "acceptance_control_http_503" && !["AbortError", "TimeoutError"].includes(error.name)) throw error;
+      }
+      if (attempt === 15 || Date.now() >= deadline) throw new Error("recovery_still_pending");
+      await this.sleep(Math.min(15000, 1000 * 2 ** Math.min(attempt, 4)));
+    }
+    throw new Error("recovery_still_pending");
+  }
   async mcpEnvelope(token, method, params = {}) {
     const response = await this.request("/api/mcp", { method: "POST", headers: {
       authorization: `Bearer ${token}`, "x-md-acceptance-run": this.state.run.run_id,
