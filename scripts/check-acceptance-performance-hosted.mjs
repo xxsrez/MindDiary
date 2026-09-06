@@ -54,9 +54,9 @@ if (action === "cleanup") {
     client.state.performance.clock_before = await observeAcceptanceClock(client, identity.candidate_sha); await client.save();
     phase = "performance_samples";
     let sampleCount = 0, batch = [];
-    const collectionDeadline = Date.now() + 1800000;
-    const collection = { schema: "mind-diary/performance-collection/v1", policy: "provider-telemetry-batches", max_samples_per_batch: 5,
-      max_barrier_wait_ms: 60000, max_collection_ms: 1800000, batches: [] };
+    const collectionDeadline = Date.now() + 2700000;
+    const collection = { schema: "mind-diary/performance-collection/v1", policy: "provider-telemetry-batches", max_samples_per_batch: 7,
+      max_barrier_wait_ms: 120000, max_collection_ms: 2700000, batches: [] };
     client.state.performance.collection = collection;
     const journalPath = process.env.MD_ACCEPTANCE_LOG_JOURNAL ?? join(client.directory, "sites-log-captures.jsonl");
     const samples = await collectPerformanceSamples(f.scenario, Buffer.from(process.env.MD_PERF_CORRELATION_KEY, "base64url"), async sample => {
@@ -66,10 +66,10 @@ if (action === "cleanup") {
       batch.push({ ...sample, profile: definition.profile, operation: definition.operation });
       sampleCount++;
       if (Date.now() >= collectionDeadline) throw Error("performance_collection_deadline_exceeded");
-      if (batch.length === 5 || sampleCount % 21 === 0) {
+      if (batch.length === 7 || sampleCount % 21 === 0) {
         phase = "provider_telemetry_barrier";
         collection.batches.push(await waitForAcceptanceTelemetry({ journalPath, projectId: identity.project_id, samples: batch,
-          timeoutMs: Math.min(60000, collectionDeadline - Date.now()) }));
+          timeoutMs: Math.min(120000, collectionDeadline - Date.now()) }));
         await write("performance-collection.json", collection); batch = []; phase = "performance_samples";
       }
       if (sampleCount % 21 === 0) console.log(JSON.stringify({ phase, requests_completed: sampleCount / 21, requests_total: f.scenario.requests.length }));
@@ -80,7 +80,16 @@ if (action === "cleanup") {
       before: client.state.performance.clock_before, after }); await client.save();
     console.log(JSON.stringify({ phase: "provider_capture_required", status: "samples_recorded", run_id: client.state.run.run_id,
       candidate: identity.candidate_sha, started_at: samples.startedAt, completed_at: samples.completedAt, sample_count: sampleCount }));
-  } catch (error) { await client.cleanup(); throw error; }
+  } catch (error) {
+    const known = ["provider_telemetry_barrier_timeout", "performance_collection_deadline_exceeded", "foreign_telemetry_journal", "invalid_telemetry_journal"];
+    const failure = { schema: "mind-diary/performance-sampling-failure/v1", phase,
+      code: known.includes(error.message) ? error.message : "sampling_failed", cleanup: "pending" };
+    await write("performance-sampling-failure.json", failure);
+    try { await client.cleanup(); failure.cleanup = "completed"; }
+    catch { failure.cleanup = "failed"; }
+    await write("performance-sampling-failure.json", failure);
+    throw error;
+  }
 } else {
   const p = client.state.performance;
   assert.ok(p?.samples && client.state.phase !== "cleaned");

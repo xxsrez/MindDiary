@@ -4,11 +4,11 @@ import { requiredPerformanceGroupOperations } from "./performance-gate.mjs";
 
 // Backpressure for the provider's bounded, eventually visible log query.
 // This is scheduling only: the final gate still verifies the original capture.
-export async function waitForAcceptanceTelemetry({ journalPath, projectId, samples, timeoutMs = 60000,
+export async function waitForAcceptanceTelemetry({ journalPath, projectId, samples, timeoutMs = 120000,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now }) {
-  assert.ok(samples.length > 0 && samples.length <= 5);
+  assert.ok(samples.length > 0 && samples.length <= 7);
   assert.equal(new Set(samples.map(sample => sample.benchmark_correlation_id)).size, samples.length);
-  assert.ok(timeoutMs > 0 && timeoutMs <= 60000);
+  assert.ok(timeoutMs > 0 && timeoutMs <= 120000);
   const started = now();
   for (;;) {
     let text = "";

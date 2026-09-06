@@ -32,3 +32,13 @@ test("missing operations, a different request ID and foreign target never releas
     await assert.rejects(waitForAcceptanceTelemetry({ journalPath, projectId, samples: [sample] }), /foreign_telemetry_journal/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+test("provider visibility after one minute is accepted within the declared two-minute bound", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "md-barrier-")); const journalPath = join(dir, "logs.jsonl"); let clock = 0;
+  try {
+    await writeFile(journalPath, envelope(["fetch"]));
+    const result = await waitForAcceptanceTelemetry({ journalPath, projectId, samples: [sample],
+      now: () => clock, sleep: async ms => { clock += ms; if (clock === 75000) await writeFile(journalPath, envelope(operations)); } });
+    assert.equal(result.waited_ms, 75000);
+    await assert.rejects(waitForAcceptanceTelemetry({ journalPath, projectId, samples: [sample], timeoutMs: 120001 }));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
