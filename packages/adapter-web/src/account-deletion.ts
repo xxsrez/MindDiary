@@ -374,10 +374,12 @@ function renderAccountProfile(
       <p role="alert">Reload this page before changing the display name. No profile command is available from incomplete state.</p>
     </section>`;
   }
-  return `<section class="md-profile-card" aria-labelledby="account-profile-title">
+  return `<section class="md-settings-row" aria-labelledby="account-profile-title">
+    <div class="md-settings-row__label">
     <p class="md-eyebrow">Account profile</p>
     <h2 id="account-profile-title">Display name</h2>
-    <p>This name is also shown on <strong>${escapeUntrustedText(profile.personalMindName)}</strong> at <a href="/me">/me</a>. Renaming it does not change the Mind address, identity, history, or content HEAD.</p>
+    <p>Shown on your <a href="/me">My Mind</a>. Renaming keeps its address and content.</p>
+    </div><div class="md-settings-row__content">
     <form data-profile-form data-profile-version="${profile.profileVersion}" data-profile-key="${escapeUntrustedText(profile.idempotencyKey)}">
       <div class="md-field">
         <label for="profile-display-name">Display name</label>
@@ -386,32 +388,35 @@ function renderAccountProfile(
       <button class="md-button md-button--primary" type="submit">Save profile name</button>
       <p class="md-form__status" role="status" aria-live="polite" data-profile-status></p>
     </form>
+    </div>
   </section>`;
 }
 
 function renderCurrentIdentity(): string {
-  return `<section class="md-profile-card" aria-labelledby="current-sign-in-title" data-current-account-identity>
+  return `<section class="md-settings-row" aria-labelledby="current-sign-in-title" data-current-account-identity>
+    <div class="md-settings-row__label">
     <p class="md-eyebrow">Current sign-in</p>
-    <h2 id="current-sign-in-title">ChatGPT through OpenAI Sites</h2>
-    <p>Mind Diary does not create or store a separate password. After sign-in, access is resolved through the internal account binding; an email address is not shown or used as the visible account identifier here.</p>
+    <h2 id="current-sign-in-title">Sign-in</h2></div>
+    <div class="md-settings-row__content"><p><strong>ChatGPT through OpenAI Sites</strong></p>
+    <p>Mind Diary does not create or store a separate password.</p>
     <nav class="md-route-links" aria-label="Account connection actions">
       <a class="md-button md-button--secondary" href="/help/codex">Install and connect Mind Diary</a>
       <a class="md-button md-button--secondary" href="/settings/connections">View Connections</a>
-    </nav>
+    </nav></div>
   </section>`;
 }
 
 function renderRecoveryHandoff(): string {
-  return `<section class="md-profile-card" aria-labelledby="identity-recovery-title" data-identity-recovery-handoff>
-    <p class="md-eyebrow">Fail-closed identity recovery</p>
-    <h2 id="identity-recovery-title">If a later sign-in is not linked</h2>
+  return `<details class="md-disclosure md-settings-recovery" data-identity-recovery-handoff>
+    <summary id="identity-recovery-title">Account recovery</summary>
+    <div class="md-settings-disclosure-body"><h2>If a later sign-in is not linked</h2>
     <ol>
       <li>Do not create an isolated account if you expect access from an earlier account.</li>
       <li>Contact the pilot operator through the same trusted channel that admitted you.</li>
       <li>Say only that the authenticated identity is unlinked. Never send an MCP token, private Mind content, query, export URL, or download URL.</li>
     </ol>
-    <p>The operator must verify identity independently. Mind Diary does not relink, merge, or transfer access automatically, and access remains unchanged during review.</p>
-  </section>`;
+    <p>The operator must verify identity independently. Mind Diary does not relink, merge, or transfer access automatically, and access remains unchanged during review.</p></div>
+  </details>`;
 }
 
 function renderStale(
@@ -480,20 +485,20 @@ export function renderAccountDeletion(
   return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-mind-diary-account-deletion data-deletion-state="${model.state.kind}" data-nav-open="false">
     <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "account")}
-    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+    <main id="main-content" class="md-main md-settings-main" tabindex="-1" data-ia-main>
       <div class="md-page-heading" data-ia-page-header>
         <div>
           <p class="md-eyebrow">Account settings</p>
           <h1>Account and profile</h1>
-          <p>Manage the profile attached to My Mind, review the recovery boundary, and inspect the exact deletion cascade.</p>
+          <p>Your profile, sign-in and account controls.</p>
         </div>
       </div>
-      <div class="md-my-mind-layout" data-account-lifecycle>
-        ${renderCurrentIdentity()}
+      <div class="md-settings-list" data-account-lifecycle>
         ${renderAccountProfile(model)}
+        ${renderCurrentIdentity()}
         ${renderRecoveryHandoff()}
       </div>
-      <section aria-labelledby="delete-account-title">
+      <section class="md-settings-danger" aria-labelledby="delete-account-title">
         <div class="md-section-heading">
           <div>
             <p class="md-eyebrow">Danger zone</p>

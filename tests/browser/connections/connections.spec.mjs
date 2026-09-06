@@ -75,7 +75,7 @@ async function expectNoHorizontalOverflow(page) {
     )]
       .filter((element) => {
         const style = getComputedStyle(element);
-        return style.display !== "none" && style.visibility !== "hidden";
+        return element.checkVisibility() && style.display !== "none" && style.visibility !== "hidden";
       })
       .map((element) => ({
         tag: element.tagName.toLowerCase(),
@@ -403,6 +403,10 @@ test("Advanced MCP shows credential scope without a token target and keeps revok
   await page.goto(`${fixture.origin}/settings/developer/mcp?state=active`);
 
   const token = page.locator("[data-personal-token]").first();
+  await expect(token.locator("details")).not.toHaveAttribute("open");
+  await token.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expectNoHorizontalOverflow(page);
   await expect(token.getByRole("heading", { name: "Credential scope" })).toBeVisible();
   await expect(token.getByRole("heading", { name: "Account-wide Mind modes" })).toBeVisible();
   await expect(token.getByText("This token does not own a separate Mind choice", { exact: false })).toBeVisible();

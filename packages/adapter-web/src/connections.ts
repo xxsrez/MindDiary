@@ -104,9 +104,9 @@ function nextLink(path: string, cursor: string | null, label: string): string {
 function renderConnectionCard(item: ConnectionListItem): string {
   if (!CONNECTION_REF.test(item.connectionRef)) return "";
   const href = `/settings/connections/${encodeURIComponent(item.connectionRef)}`;
-  return `<article class="md-token-card md-entity-row" data-ia-row>
+  return `<article class="md-token-card md-entity-row md-connection-row" data-ia-row>
     <div class="md-token-card__heading">
-      <div><h3><a href="${href}">${escapeUntrustedText(item.clientName)}</a></h3><p>Connected app</p></div>
+      <div><h3><a href="${href}">${escapeUntrustedText(item.clientName)}</a></h3></div>
       <span class="md-token-state md-token-state--active">● Connected</span>
     </div>
     <dl class="md-token-card__metadata">
@@ -128,13 +128,13 @@ export function renderConnectionsPageDocument(model: ConnectionsPageModel): stri
   } else if (model.collection.kind === "empty") {
     collection = `<section class="md-state md-state--empty" data-connections-collection data-collection-state="empty" data-ia-route-state="empty"><h2>No active connections</h2><p>Install Mind Diary from the available Marketplace, then ask Codex to use one of your Minds. Codex will open the read consent when it first needs access.</p><a class="md-button md-button--primary" href="${MIND_DIARY_CODEX_HELP_ROUTE}" data-ia-primary-action>Open the three-step guide</a></section>`;
   } else {
-    collection = `<section aria-labelledby="connections-heading" data-connections-collection data-collection-state="ready" data-ia-collection><h2 id="connections-heading">Active connections</h2><div class="md-token-grid">${model.collection.items.map(renderConnectionCard).join("")}</div>${nextLink("/settings/connections", model.collection.nextCursor, "Next connections")}</section>`;
+    collection = `<section aria-labelledby="connections-heading" data-connections-collection data-collection-state="ready" data-ia-collection><h2 id="connections-heading">Active connections</h2><div class="md-token-grid md-settings-collection">${model.collection.items.map(renderConnectionCard).join("")}</div>${nextLink("/settings/connections", model.collection.nextCursor, "Next connections")}</section>`;
   }
   return document("Connections", `<div class="md-shell" data-mind-diary-shell data-ia-shell data-connections-page data-nav-open="false">
     <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "connections")}
-    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
-      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Codex access</p><h1>Connections</h1><p>See connected clients and their credential scopes. Which Minds Codex uses is one account-wide setting on the Minds page.</p></div></div>
+    <main id="main-content" class="md-main md-settings-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Codex access</p><h1>Connections</h1><p>Manage connected apps. Choose which Minds they can use on the <a href="/minds#mind-usage-heading">Minds page</a>.</p></div></div>
       ${collection}
       <p class="md-caveat"><a href="/settings/developer/mcp">Advanced MCP</a> is for personal tokens, endpoints, and diagnostics.</p>
     </main>
@@ -181,7 +181,7 @@ export function renderConnectionDetailDocument(model: ConnectionDetailModel): st
   return document(`${connection.clientName} connection`, `<div class="md-shell" data-mind-diary-shell data-ia-shell data-connection-detail data-nav-open="false">
     <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "connections")}
-    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+    <main id="main-content" class="md-main md-settings-main" tabindex="-1" data-ia-main>
       <p><a href="/settings/connections">← Connections</a></p>
       <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Connected app</p><h1>${escapeUntrustedText(connection.clientName)}</h1><p>Connected ${escapeUntrustedText(dateLabel(connection.createdAt))}; last used ${escapeUntrustedText(dateLabel(connection.lastUsedAt))}.</p></div><span class="md-token-state md-token-state--active">● Connected</span></div>
       ${renderOrdinaryConnectionAccess(connection.connectionRef, connection.canWrite, connection.canRead)}
@@ -194,10 +194,10 @@ export function renderConnectionDetailDocument(model: ConnectionDetailModel): st
 function renderPersonalToken(token: PersonalTokenItem, index: number): string {
   if (!PERSONAL_TOKEN_REF.test(token.personalTokenRef)) return "";
   const canWrite = token.scopes.includes("content:write");
-  return `<article class="md-token-card" data-personal-token>
+  return `<article class="md-token-card md-settings-token" data-personal-token>
     <div class="md-token-card__heading"><div><h3>${escapeUntrustedText(token.name)}</h3><p><code>${escapeUntrustedText(token.displayPrefix)}</code></p></div><span class="md-token-state md-token-state--${token.state}">${escapeUntrustedText(token.state)}</span></div>
     <dl class="md-token-card__metadata"><div><dt>Scopes</dt><dd>${escapeUntrustedText(token.scopes.join(", "))}</dd></div><div><dt>Expires</dt><dd>${escapeUntrustedText(dateLabel(token.expiresAt))}</dd></div><div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(token.lastUsedAt))}</dd></div></dl>
-    ${token.state === "active" ? renderAdvancedTokenAccess({ personalTokenRef: token.personalTokenRef, canWrite, canRead: token.scopes.includes("content:read"), headingSuffix: `item-${index + 1}` }) : ""}
+    ${token.state === "active" ? `<details class="md-settings-token-access"><summary>Access details</summary>${renderAdvancedTokenAccess({ personalTokenRef: token.personalTokenRef, canWrite, canRead: token.scopes.includes("content:read"), headingSuffix: `item-${index + 1}` })}</details>` : ""}
     ${token.state === "active" ? `<button class="md-button md-button--danger" type="button" data-revoke-personal-token data-revoke-endpoint="/api/v1/mcp-tokens/${token.personalTokenRef}">Revoke token</button><p class="md-form__status" role="status" aria-live="polite" data-revoke-status></p>` : ""}
   </article>`;
 }
@@ -218,17 +218,17 @@ export function renderAdvancedMcpPageDocument(model: AdvancedMcpPageModel): stri
     ? `<section class="md-state md-state--error" role="alert"><h2>Personal tokens are unavailable</h2><p>${escapeUntrustedText(model.collection.message)}</p></section>`
     : model.collection.kind === "empty"
       ? `<section class="md-state md-state--empty"><h2>No ${model.state} personal tokens</h2><p>Create a token only for direct MCP setup or recovery.</p></section>`
-      : `<div class="md-token-grid">${model.collection.items.map(renderPersonalToken).join("")}</div>${nextLink(`/settings/developer/mcp?state=${model.state}`, model.collection.nextCursor, "Next tokens")}`;
+      : `<div class="md-token-grid md-settings-collection">${model.collection.items.map(renderPersonalToken).join("")}</div>${nextLink(`/settings/developer/mcp?state=${model.state}`, model.collection.nextCursor, "Next tokens")}`;
   return document("Advanced MCP", `<div class="md-shell" data-mind-diary-shell data-ia-shell data-advanced-mcp data-nav-open="false">
     <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "tokens")}
-    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
-      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Advanced</p><h1>Advanced MCP</h1><p>Personal tokens, exact endpoints, and protocol-oriented recovery. Marketplace connections live under <a href="/settings/connections">Connections</a>.</p></div></div>
-      <nav aria-label="Personal token state"><a href="?state=active"${model.state === "active" ? ' aria-current="page"' : ""}>Active</a> · <a href="?state=revoked"${model.state === "revoked" ? ' aria-current="page"' : ""}>Revoked</a> · <a href="?state=expired"${model.state === "expired" ? ' aria-current="page"' : ""}>Expired</a></nav>
+    <main id="main-content" class="md-main md-settings-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Advanced</p><h1>Advanced MCP</h1><p>Tokens and configuration for direct MCP clients. Connected apps live under <a href="/settings/connections">Connections</a>.</p></div></div>
+      <nav class="md-settings-filters" aria-label="Personal token state"><a href="?state=active"${model.state === "active" ? ' aria-current="page"' : ""}>Active</a><a href="?state=revoked"${model.state === "revoked" ? ' aria-current="page"' : ""}>Revoked</a><a href="?state=expired"${model.state === "expired" ? ' aria-current="page"' : ""}>Expired</a></nav>
       <section aria-labelledby="personal-tokens-heading"><div class="md-section-heading"><div><h2 id="personal-tokens-heading">Personal tokens</h2></div></div>${tokens}</section>
       ${renderPersonalTokenCreation()}
       ${renderPersonalTokenSecretDialog()}
-      <section class="md-setup-card"><h2>Endpoints and Codex config</h2><dl class="md-card__metadata"><div><dt>Modern MCP 2026-07-28</dt><dd><code>${escapeUntrustedText(`${origin}${MIND_DIARY_MCP_MODERN_PATH}`)}</code></dd></div><div><dt>Compatibility MCP 2025-11-25</dt><dd><code>${escapeUntrustedText(`${origin}${MIND_DIARY_MCP_COMPATIBILITY_PATH}`)}</code></dd></div></dl><h3>Modern</h3><pre><code id="mind-diary-modern-config" tabindex="-1" data-code-value>${escapeUntrustedText(modern)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-modern-config">Copy modern config</button><h3>Compatibility</h3><pre><code id="mind-diary-compatibility-config" tabindex="-1" data-code-value>${escapeUntrustedText(compatibility)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-compatibility-config">Copy compatibility config</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p><p class="md-caveat"><strong>UAT:</strong> this is not production. Personal tokens are for direct setup and recovery; Marketplace connections use OAuth.</p></section>
+      <section class="md-setup-card md-settings-endpoints"><h2>Endpoints and Codex config</h2><dl class="md-card__metadata"><div><dt>Modern MCP 2026-07-28</dt><dd><code>${escapeUntrustedText(`${origin}${MIND_DIARY_MCP_MODERN_PATH}`)}</code></dd></div><div><dt>Compatibility MCP 2025-11-25</dt><dd><code>${escapeUntrustedText(`${origin}${MIND_DIARY_MCP_COMPATIBILITY_PATH}`)}</code></dd></div></dl><h3>Modern</h3><pre><code id="mind-diary-modern-config" tabindex="-1" data-code-value>${escapeUntrustedText(modern)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-modern-config">Copy modern config</button><h3>Compatibility</h3><pre><code id="mind-diary-compatibility-config" tabindex="-1" data-code-value>${escapeUntrustedText(compatibility)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-compatibility-config">Copy compatibility config</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p><p class="md-caveat"><strong>UAT:</strong> this is not production. Personal tokens are for direct setup and recovery; Marketplace connections use OAuth.</p></section>
     </main>
     ${renderMindDiaryAuthenticatedFooter("tokens")}
   </div>`);
