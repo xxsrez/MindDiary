@@ -1,6 +1,7 @@
 # План Personal description и маршрутизации
 
-Статус: реализация начата 2026-09-05, Issue Grinder Соло.
+Статус: MD-394 и все пять дочерних задач Done, подтверждено Task Manager 2026-09-06.
+Режим Issue Grinder Соло. Текущий результат и границы — в конце документа.
 Project Mind Diary; live current Release 0.3; выбранный scope — MD-394 и его live подзадачи.
 
 ## Принятые требования пользователя
@@ -22,10 +23,10 @@ Personal explicit-only; с ним — тематический. При совп�
    auth/capability, idempotency, read-back, modern/compat parity. Зависит от 1.
 3. **Завершено (MD-397 Done).** Site: projection/help и mode×description; настройка description остаётся
    MCP workflow. Зависит от 1.
-4. **Реализовано, проверка In Review (MD-398).** Plugin: инструкции выбора/настройки, два bounded reads и независимых
+4. **Завершено (MD-398 Done).** Plugin: инструкции выбора/настройки, два bounded reads и независимых
    saves/no-ops/reconciliation, source boundary и fresh-session scenarios.
    Зависит от 2. Hooks только если проверка покажет необходимость.
-5. **In Progress (MD-399).** Integrated acceptance: полный gate, dev smoke и exact-artifact UAT по
+5. **Завершено (MD-399 Done).** Integrated acceptance: полный gate, dev smoke и exact-artifact UAT по
    [профилю доставки](../operations/ship-work-release-profile.md). Зависит от 2–4.
 
 Реализуемое решение задачи 2: отдельная узкая credential capability
@@ -42,7 +43,12 @@ partial/unknown outcome и freshness после compaction. Два commits не 
 между Minds; rollback успешного первого не выполняется автоматически.
 Исторический MD-382 — предшественник, не duplicate и не evidence новой реализации.
 
-## Статус текущего планирования
+## История планирования и исполнения
+
+Ниже сохранены прежние контрольные точки; их статусы и следующий шаг не
+определяют текущую очередь. Итоговое сопоставление находится в конце.
+
+### Первоначальное планирование
 
 Контракт и ADR обновлены. В Task Manager созданы MD-394 (Epic) и пять
 подзадач с Label Feature в релизе 0.3 (изначально Backlog):
@@ -130,3 +136,16 @@ admin-enforced policy. Старый native MCP credential корректно н�
 scope. Новые credentials не созданы; ни обхода браузерного отказа, ни изменений
 пользовательского corpus не выполнялось. MD-396/397/399 и Epic In Progress,
 MD-398 In Review, MD-395 Done. Полная приёмка остаётся открытой.
+
+
+## Итоговая приёмка исходного результата
+
+2026-09-06 исходный MD-394 возобновлён после ошибочной остановки на MD-400.
+MD-396/397 переоткрывались из-за combined scopes и checkbox; исправления уже
+в UAT127 и подтверждены повторными hosted проверками. MD-398 закрывает реальные
+14 model scenarios и compaction. Для MD-399 выполнено отдельное
+[сопоставление каждого критерия с источниками](../reports/2026-09-05-personal-description-routing.md#итоговое-сопоставление-md-394md-399-2026-09-06).
+Полные длительные повторения не запускались. Все пять пунктов плана технически
+выполнены. После native comments и read-back подтверждены MD-399 Done v6
+и MD-394 Done v10; MD-395–398 также Done.
+Прежние browser/approval/token blockers больше не являются текущими.

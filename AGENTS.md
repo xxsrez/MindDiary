@@ -186,7 +186,7 @@ delivery profile и ADR-0008/ADR-0009
   `space_handle` человекочитаем и не является access token; настоящая
   share-by-link capability потребует отдельного случайного секрета.
 - Целевой routing-контракт задают ADR-0025 и `docs/specs/mind-usage-modes.md`
-  (2026-09-05; реализация опубликована в UAT, полная приёмка MD-399 открыта). `usage_mode`
+  (2026-09-05; реализация и приёмка опубликованы в UAT127, MD-399 Done; границы evidence — в отчёте 2026-09-05-personal-description-routing). `usage_mode`
   определяет разрешённые действия, nullable description — темы автоматического
   чтения/записи. Personal без description используется только по прямой просьбе;
   с description — по теме в пределах effective mode/scopes/ACL. Personal identity
