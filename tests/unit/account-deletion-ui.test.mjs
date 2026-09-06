@@ -113,7 +113,7 @@ test("preview renders the exact safe cascade and no private content", () => {
   assert.match(html, /href="\/help\/codex">Install and connect Mind Diary<\/a>/);
   assert.match(html, /href="\/settings\/connections">View Connections<\/a>/);
   assert.match(html, /data-profile-form data-profile-version="3"/);
-  assert.match(html, /Renaming it does not change the Mind address, identity, history, or content HEAD/);
+  assert.match(html, /Renaming keeps its address and content/);
   assert.match(html, /data-identity-recovery-handoff/);
   assert.match(html, /same trusted channel that admitted you/);
   assert.match(html, /does not relink, merge, or transfer access automatically/);
