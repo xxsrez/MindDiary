@@ -564,3 +564,14 @@ Connections должен сохранять компактную строку и
 асинхронного получения данных. Повторный browser render использует те же классы
 `md-connection-row` и `md-settings-collection`, что и сервер; старый карточный
 шаблон и повторная подпись Connected app не возвращаются после загрузки.
+
+
+Исправление повторного render Connections опубликовано в UAT version 130:
+`6313fe7ce8bd172f1c9ab8d441dc6db29f2dff9a`, deployment
+`appgdep_examplee2879105821d72ca` (`succeeded`).
+1181 Node-проверка и 69 браузерных сценариев прошли; тест проверяет компактные
+классы после получения данных и высоту строки с длинным именем не более 160 px
+при viewport 1440 px. Dev persistence/restart и оба MCP-профиля проверены.
+[CI](https://github.com/xxsrez/MindDiary/actions/runs/34034022668) успешен.
+Опубликованный составной Connections script побайтно совпал с candidate;
+native MCP `list_minds` успешен. Авторизованная страница открыта в браузере Codex.
