@@ -136,13 +136,21 @@ try {
   const page = contexts[0].pages()[0];
   phase = "token_forms";
   for (const configure of [false, true]) {
+    phase = "token_connections_navigation";
     await page.goto(origin + "/settings/connections", { waitUntil: "domcontentloaded" });
+    phase = "token_advanced_link";
     await page.getByRole("main").getByRole("link", { name: "Advanced MCP", exact: true }).click();
+    await page.waitForLoadState("domcontentloaded");
+    phase = "token_form_ready";
     const form = page.locator("[data-token-form]");
     await form.waitFor();
+    phase = "token_default_opt_in";
     assert.equal(await form.locator('[name="personal_configure"]').isChecked(), false);
+    phase = "token_name_input";
     await form.getByLabel("Token name", { exact: true }).fill(configure ? "Synthetic configure" : "Synthetic read");
+    phase = "token_select_opt_in";
     if (configure) await form.locator('[name="personal_configure"]').check();
+    phase = "token_submit";
     const [response] = await Promise.all([
       page.waitForResponse(r => r.url() === origin + "/api/v1/mcp-tokens" && r.request().method() === "POST"),
       form.getByRole("button", { name: "Create token", exact: true }).click(),
