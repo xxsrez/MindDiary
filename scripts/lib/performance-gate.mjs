@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { verifyAcceptanceClockCalibration } from "./acceptance-clock-calibration.mjs";
 
 import {
   PILOT_COHORTS,
@@ -547,6 +548,11 @@ export function evaluatePerformanceGate(input) {
   } catch {
     addFailure("telemetry_capture_invalid");
   }
+  let clock = { lower_ms: 0, upper_ms: 0 };
+  if (input.clock_calibration) {
+    try { clock = verifyAcceptanceClockCalibration(input.clock_calibration, input); }
+    catch { addFailure("clock_calibration_invalid"); }
+  }
   const runWindow = durationWindow(input.started_at, input.completed_at);
   if (typeof input.candidate_sha !== "string" || !SHA.test(input.candidate_sha)) addFailure("invalid_candidate_sha");
   if (typeof input.deployment_id !== "string" || !DEPLOYMENT.test(input.deployment_id)) addFailure("invalid_deployment_id");
@@ -608,7 +614,7 @@ export function evaluatePerformanceGate(input) {
   }
   if (runWindow !== null && safeTelemetry.some((event) => {
     const observed = Date.parse(event.occurredAtUtc);
-    return observed < runWindow.started || observed > runWindow.completed;
+    return observed < runWindow.started + clock.lower_ms || observed > runWindow.completed + clock.upper_ms;
   })) addFailure("telemetry_outside_run_window");
 
   const groups = groupTelemetry(safeTelemetry);
@@ -683,7 +689,7 @@ export function evaluatePerformanceGate(input) {
           return requestId === sampleWindow.request_id &&
             group.every((event) =>
               event.benchmarkCorrelationId === sampleWindow.benchmark_correlation_id) &&
-            observed.started >= window.started && observed.completed <= window.completed &&
+            observed.started >= window.started + clock.lower_ms && observed.completed <= window.completed + clock.upper_ms &&
             matchingGroup(group, definition.profile, definition.operation);
         });
         if (matches.length !== 1) {
@@ -699,7 +705,7 @@ export function evaluatePerformanceGate(input) {
       assignedGroups.add(requestId);
       if (group.some(({ outcome }) => outcome !== "success")) addFailure(`telemetry_request_failed:${definition.id}`);
     }
-    if (correlated.length > 0 && groupTime(correlated[0][1]) > coldCompleted) {
+    if (correlated.length > 0 && groupTime(correlated[0][1]) > coldCompleted + clock.upper_ms) {
       addFailure(`telemetry_cold_request_mismatch:${definition.id}`);
     }
     if (definition.profile !== "web") {
@@ -787,7 +793,8 @@ export function evaluatePerformanceGate(input) {
   const completedAt = input.completed_at ?? null;
   const durationMs = runWindow === null ? null : runWindow.completed - runWindow.started;
   const unsigned = Object.freeze({
-    schema: PERFORMANCE_GATE_SCHEMA,
+    schema: input.clock_calibration ? "mind-diary/performance-gate/v4" : PERFORMANCE_GATE_SCHEMA,
+    ...(input.clock_calibration ? { clock_calibration_sha256: clock.artifact_sha256 ?? null } : {}),
     status: failures.length === 0 ? "passed" : "failed",
     candidate_sha: input.candidate_sha ?? null,
     deployment: profileReadback.deployment ?? null,
@@ -821,9 +828,11 @@ export function evaluatePerformanceGate(input) {
 }
 
 export function verifyPerformanceGateArtifact(value) {
-  assertExactKeys(value, REPORT_KEYS, "invalid_performance_report");
+  const calibrated = value.schema === "mind-diary/performance-gate/v4";
+  assertExactKeys(value, new Set([...REPORT_KEYS, ...(calibrated ? ["clock_calibration_sha256"] : [])]), "invalid_performance_report");
+  if (calibrated && !SHA256.test(value.clock_calibration_sha256 ?? "")) reject("invalid_clock_calibration_hash");
   if (
-    value.schema !== PERFORMANCE_GATE_SCHEMA || typeof value.artifact_sha256 !== "string" ||
+    (!calibrated && value.schema !== PERFORMANCE_GATE_SCHEMA) || typeof value.artifact_sha256 !== "string" ||
     !SHA256.test(value.artifact_sha256)
   ) reject("invalid_performance_report");
   const { artifact_sha256: artifact, ...unsigned } = value;

@@ -142,6 +142,12 @@ for (;;) {
     await run("recovery", "check-acceptance-recovery-hosted.mjs", [runTag("recovery"), identityPath]);
     await add("recovery", componentPath("recovery")); state.stage = "performance"; await save();
   } else if (state.stage === "performance") {
+    const captureReady = await optional(join(directory, "capture-started.json"));
+    if (!captureReady || captureReady.project_id !== state.identity.project_id || !Number.isFinite(Date.parse(captureReady.started_at)) ||
+      Date.now() - Date.parse(captureReady.started_at) > 60000 || Date.parse(captureReady.started_at) > Date.now()) {
+      checkpoint("start_bounded_sites_log_capture_before_samples", { project_id: state.identity.project_id, interval_seconds: 12, limit: 100,
+        output: join(directory, "capture-started.json"), logs_output: join(directory, "performance-sites-logs.json") }); break;
+    }
     await run("performance", "check-acceptance-performance-hosted.mjs", [runTag("performance"), "sample", identityPath]);
     state.stage = "provider_logs"; await save();
   } else if (state.stage === "provider_logs") {

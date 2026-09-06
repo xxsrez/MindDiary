@@ -11,6 +11,8 @@ import { createSitesLogPerformanceCapture } from "./lib/performance-telemetry-ca
 import { evaluatePerformanceGate, verifyPerformanceScenarioCredentialBindings } from "./lib/performance-gate.mjs";
 import { ACCEPTANCE_ASSERTIONS, acceptanceDigest, createAcceptanceComponent } from "./lib/acceptance-evidence.mjs";
 
+import { observeAcceptanceClock, createAcceptanceClockCalibration } from "./lib/acceptance-clock-calibration.mjs";
+
 let phase = "configuration";
 process.once("uncaughtException", () => { console.error(JSON.stringify({ status: "failed", phase })); process.exit(1); });
 const [tag, action, inputPath] = process.argv.slice(2);
@@ -48,6 +50,7 @@ if (action === "cleanup") {
     for (const [id, credential] of Object.entries(f.credentials)) process.env[`MD_PERF_${id.toUpperCase()}`] = credential.token;
     verifyPerformanceScenarioCredentialBindings(f.scenario, f.profileReadback, process.env);
     client.state.performance.scenario = f.scenario; client.state.performance.profile_readback = f.profileReadback; await client.save();
+    client.state.performance.clock_before = await observeAcceptanceClock(client, identity.candidate_sha); await client.save();
     phase = "performance_samples";
     let sampleCount = 0;
     const samples = await collectPerformanceSamples(f.scenario, Buffer.from(process.env.MD_PERF_CORRELATION_KEY, "base64url"), async sample => {
@@ -55,6 +58,9 @@ if (action === "cleanup") {
       if (++sampleCount % 21 === 0) console.log(JSON.stringify({ phase, requests_completed: sampleCount / 21, requests_total: f.scenario.requests.length }));
     });
     client.state.performance.samples = samples; await client.save();
+    const after = await observeAcceptanceClock(client, identity.candidate_sha);
+    client.state.performance.clock_calibration = createAcceptanceClockCalibration({ candidate_sha: identity.candidate_sha, target_url: f.scenario.target_url,
+      before: client.state.performance.clock_before, after }); await client.save();
     console.log(JSON.stringify({ phase: "provider_capture_required", status: "samples_recorded", run_id: client.state.run.run_id,
       candidate: identity.candidate_sha, started_at: samples.startedAt, completed_at: samples.completedAt, sample_count: sampleCount }));
   } catch (error) { await client.cleanup(); throw error; }
@@ -69,6 +75,7 @@ if (action === "cleanup") {
       deployment: p.profile_readback.deployment, started_at: p.samples.startedAt, completed_at: new Date().toISOString(), provider_script: "site---6a9c795089608191bc1b52e06234fc4a" }, source, correlations);
     const evaluation = { candidate_sha: p.identity.candidate_sha, deployment_id: p.identity.deployment_id, environment: "uat", target_url: p.scenario.target_url,
       started_at: p.samples.startedAt, completed_at: p.samples.completedAt, warm_samples: 20, scenario: p.scenario, profile_readback: p.profile_readback,
+      ...(p.clock_calibration ? { clock_calibration: p.clock_calibration } : {}),
       connector_results: p.samples.connectorResults, server_telemetry: captured.telemetry, telemetry_capture: captured.receipt };
     const report = evaluatePerformanceGate(evaluation);
     await write("performance-evaluation.json", evaluation); await write("performance-report.json", report);

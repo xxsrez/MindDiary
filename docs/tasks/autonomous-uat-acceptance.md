@@ -629,3 +629,27 @@ Model run `md405-model-partial-v7-20260906` на test v7 и чистом runner
 сообщён. Cleanup подтвердил baseline restored. Это отдельный case, не полный
 14-case receipt. Запущен отдельный настоящий performance run; результат пока
 не объявлен.
+
+
+### Проверка обычной UAT и первого performance run
+
+Обычная UAT обновлена до version 125: candidate
+`8daaaa137d1e824f494e874860fda22f5fe1a66b`, source
+`2f9464217383841ac0a99ad5e044d99dc7ec787e`, deployment
+`appgdep_example13d378d195b6573c` (succeeded, environment revision 4).
+Audience public сохранена. Artifact проверен для exact candidate; отдельный
+Sites build прошёл. Во встроенном браузере выполнен настоящий вход через
+правильный ChatGPT account, открылись Home и Account. Bypass без пользовательской
+сессии возвращает product 401; это ожидаемое разделение platform bypass и identity.
+Прямой browser navigation к JSON session API заблокирован browser client;
+его результат не назван product failure. Полный first-user canary ещё не завершён.
+
+`md406-performance-v7-20260906` собрал все 273 настоящих samples (13 × 21),
+00:40:47.953–00:52:04.235 UTC. Report failed: начало provider capture потеряло
+37 correlation IDs из-за позднего старта и лимита 100 событий; дополнительно
+строгое сравнение UTC выявило смещение серверных часов относительно Mac
+(например +39 ms после клиентского receive при совпадающих request/correlation).
+Это не performance pass и не основание объявлять regression продукта.
+Cleanup восстановил baseline полностью. Новый coordinator требует запустить
+capture до samples; report v4 отдельно проверяет измеренные границы clock
+offset, сохраняя durations, бюджеты, coverage и старый report v3 без изменения.

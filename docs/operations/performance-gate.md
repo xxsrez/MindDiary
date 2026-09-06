@@ -191,3 +191,29 @@ aggregate timings, correlation counts, failures и canonical
 normal application lifecycle и отдельно проверяет cleanup. Cleanup failure не
 переписывает performance result и остаётся release blocker-ом в owning
 capacity/UAT row. Никакой production action этот runbook не разрешает.
+
+## Перспективный report v4: измеренные границы смещения часов
+
+Для автономной приёмки MD-400 добавляется отдельный report v4. V3 и старые
+receipts сохраняют прежнюю проверку без поправки. Причина — в живом замере
+серверный timestamp при совпадающих signed correlation/request IDs оказался
+на десятки миллисекунд позже клиентского получения ответа. Это не duration
+регрессия, а разные wall clocks.
+
+До и после samples сборщик делает по три настоящих GET к `/_acceptance/build` того же test target. Сохраняются клиентские UTC send/
+receive, HTTP `Date`, status 200 и hash actual body с проверенным candidate.
+HTTP Date имеет секундную точность: для каждого probe допустимый offset
+лежит между `Date - received` и `Date + 999ms - sent`. Используется пересечение
+шести интервалов; пустое пересечение, RTT больше 2 секунд, неопределённость
+больше 3 секунд, абсолютное смещение больше 5 секунд либо отсутствие probe
+до/после всего run дают failed calibration. Никакое вручную заданное смещение
+не принимается.
+
+V4 проверяет положение неизменённых server timestamps в client window,
+расширенном только этими измеренными границами. Идентификаторы request,
+подписанная correlation, provider version, source envelope hashes и полная
+coverage по-прежнему обязательны. Клиентские durations и server durations
+не меняются; бюджеты, 20 warm samples и history growth остаются прежними.
+Hash calibration включается в report v4 и перепроверяется при общем join.
+Это проверка согласованности источников времени, а не доказательство отсутствия
+произвольных скачков часов между probes; при их наблюдении run отклоняется.
