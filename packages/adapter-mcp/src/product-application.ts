@@ -103,6 +103,60 @@ function snakeOutput(value: unknown): unknown {
   return mapKeys(value, toSnakeKey);
 }
 
+function camelListFilesInput(
+  value: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const { where, ...rest } = value;
+  return Object.freeze({
+    ...camelInput(rest),
+    ...(Object.hasOwn(value, "where") ? { where } : {}),
+  });
+}
+
+function toolInput(
+  name: string,
+  value: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return name === "list_files" ? camelListFilesInput(value) : camelInput(value);
+}
+
+function snakeListFilesOutput(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return snakeOutput(value);
+  }
+  const { files, aggregate, ...rest } = value as Readonly<Record<string, unknown>>;
+  const convertedFiles = Array.isArray(files)
+    ? Object.freeze(files.map((file) => {
+        if (file === null || typeof file !== "object" || Array.isArray(file)) {
+          return snakeOutput(file);
+        }
+        const { metadata, ...descriptor } = file as Readonly<Record<string, unknown>>;
+        return Object.freeze({
+          ...(snakeOutput(descriptor) as Readonly<Record<string, unknown>>),
+          metadata,
+        });
+      }))
+    : files;
+  let convertedAggregate = snakeOutput(aggregate);
+  if (
+    aggregate !== null &&
+    typeof aggregate === "object" &&
+    !Array.isArray(aggregate) &&
+    (aggregate as Readonly<Record<string, unknown>>).kind === "distinct"
+  ) {
+    const { values, ...descriptor } = aggregate as Readonly<Record<string, unknown>>;
+    convertedAggregate = Object.freeze({
+      ...(snakeOutput(descriptor) as Readonly<Record<string, unknown>>),
+      values,
+    });
+  }
+  return Object.freeze({
+    ...(snakeOutput(rest) as Readonly<Record<string, unknown>>),
+    files: convertedFiles,
+    aggregate: convertedAggregate,
+  });
+}
+
 function canonicalCommitOperations(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
   return Object.freeze(value.map((item) => {
@@ -539,7 +593,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
       request.name === "reconcile_file_stage" ||
       request.name === "open_bundle_file_picker";
     try {
-      const input = camelInput(request.arguments);
+      const input = toolInput(request.name, request.arguments);
       if (request.name === "resolve_mind") {
         await this.#dependencies.discovery.resolveMind(request.actor, input.handle);
         return Object.freeze({ kind: "allowed" as const });
@@ -574,7 +628,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
   }
 
   async executeToolCall(request: Parameters<McpContentApplication["executeToolCall"]>[0]): Promise<unknown> {
-    const input = camelInput(request.arguments);
+    const input = toolInput(request.name, request.arguments);
     switch (request.name) {
       case "get_personal_mind_configuration":
       case "set_personal_mind_description": {
@@ -810,7 +864,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
       case "browse_entries":
         return snakeOutput(await this.#dependencies.browse.browseEntries(request.actor, input));
       case "list_files":
-        return snakeOutput(await this.#dependencies.browse.listFiles(request.actor, input, request.signal));
+        return snakeListFilesOutput(
+          await this.#dependencies.browse.listFiles(request.actor, input, request.signal),
+        );
       case "grep_files":
         return snakeOutput(await this.#dependencies.browse.grepFiles(request.actor, input, request.signal));
       case "read_files":

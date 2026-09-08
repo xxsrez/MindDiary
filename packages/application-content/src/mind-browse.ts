@@ -174,6 +174,7 @@ export interface FileOperationCursorLocatorPayload {
   readonly kind: "file_operation";
   readonly operation: "list" | "grep" | "read";
   readonly spaceId: SpaceId;
+  readonly usageVersion: number | null;
   readonly revisionId: RevisionId;
   readonly manifestHash: Sha256Digest;
   readonly requestHash: Sha256Digest;
@@ -375,6 +376,7 @@ function parseLocatorPayload(value: unknown): Readonly<MindLocatorPayload> | nul
         "kind",
         "operation",
         "spaceId",
+        "usageVersion",
         "revisionId",
         "manifestHash",
         "requestHash",
@@ -386,6 +388,8 @@ function parseLocatorPayload(value: unknown): Readonly<MindLocatorPayload> | nul
         value.operation !== "grep" &&
         value.operation !== "read") ||
       !validOpaqueIdentity(value.spaceId) ||
+      !(value.usageVersion === null ||
+        (Number.isSafeInteger(value.usageVersion) && (value.usageVersion as number) >= 0)) ||
       !validOpaqueIdentity(value.revisionId) ||
       typeof value.manifestHash !== "string" ||
       !SHA256_PATTERN.test(value.manifestHash) ||
@@ -406,6 +410,7 @@ function parseLocatorPayload(value: unknown): Readonly<MindLocatorPayload> | nul
       kind: "file_operation",
       operation: value.operation,
       spaceId: value.spaceId as SpaceId,
+      usageVersion: value.usageVersion as number | null,
       revisionId: value.revisionId as RevisionId,
       manifestHash: value.manifestHash as Sha256Digest,
       requestHash: value.requestHash as Sha256Digest,
@@ -1222,7 +1227,10 @@ export class MindBrowseService {
       JSON.stringify(fileOperationRequestValue("list", request)),
     ));
     const selected = selectEntries(envelope.manifest.entries, request.selector);
-    this.#validateFileOperationCursor(cursor, info.mind.mindId, envelope, requestHash, selected.length);
+    this.#validateFileOperationCursor(
+      cursor, info.mind.mindId, info.mind.settingsVersion ?? null,
+      envelope, requestHash, selected.length,
+    );
 
     const manifestFields = new Set([
       "path", "kind", "mediaType", "size", "sha256", "revisionId",
@@ -1359,6 +1367,7 @@ export class MindBrowseService {
       ? await this.#encodeFileOperationCursor(
           "list",
           info.mind.mindId,
+          info.mind.settingsVersion ?? null,
           envelope,
           requestHash,
           nextOffset,
@@ -1441,7 +1450,10 @@ export class MindBrowseService {
       JSON.stringify(fileOperationRequestValue("grep", request)),
     ));
     const selected = selectEntries(envelope.manifest.entries, request.selector);
-    this.#validateFileOperationCursor(cursor, info.mind.mindId, envelope, requestHash, selected.length);
+    this.#validateFileOperationCursor(
+      cursor, info.mind.mindId, info.mind.settingsVersion ?? null,
+      envelope, requestHash, selected.length,
+    );
     const expressions = request.patterns.map((pattern) => RE2JS.compile(
       request.syntax === "literal" ? regexEscape(pattern) : pattern,
       request.caseSensitive ? 0 : RE2JS.CASE_INSENSITIVE,
@@ -1591,6 +1603,7 @@ export class MindBrowseService {
       ? await this.#encodeFileOperationCursor(
           "grep",
           info.mind.mindId,
+          info.mind.settingsVersion ?? null,
           envelope,
           requestHash,
           fileOffset,
@@ -1656,7 +1669,10 @@ export class MindBrowseService {
     const requestHash = await this.#objects.calculateSha256(new TextEncoder().encode(
       JSON.stringify(fileOperationRequestValue("read", request)),
     ));
-    this.#validateFileOperationCursor(cursor, info.mind.mindId, envelope, requestHash, request.requests.length);
+    this.#validateFileOperationCursor(
+      cursor, info.mind.mindId, info.mind.settingsVersion ?? null,
+      envelope, requestHash, request.requests.length,
+    );
     const items: Array<ReadFilesResult["items"][number]> = [];
     let returnedBytes = 0;
     let requestOffset = cursor?.fileOffset ?? 0;
@@ -1781,6 +1797,7 @@ export class MindBrowseService {
       ? await this.#encodeFileOperationCursor(
           "read",
           info.mind.mindId,
+          info.mind.settingsVersion ?? null,
           envelope,
           requestHash,
           requestOffset,
@@ -1956,6 +1973,7 @@ export class MindBrowseService {
   #validateFileOperationCursor(
     cursor: Readonly<FileOperationCursorLocatorPayload> | null,
     spaceId: SpaceId,
+    usageVersion: number | null,
     envelope: Readonly<CanonicalRevisionEnvelope>,
     requestHash: Sha256Digest,
     end: number,
@@ -1963,6 +1981,7 @@ export class MindBrowseService {
     if (cursor === null) return;
     if (
       cursor.spaceId !== spaceId ||
+      cursor.usageVersion !== usageVersion ||
       cursor.revisionId !== envelope.revision.revisionId ||
       cursor.manifestHash !== envelope.revision.manifestHash ||
       cursor.requestHash !== requestHash ||
@@ -1980,6 +1999,7 @@ export class MindBrowseService {
   async #encodeFileOperationCursor(
     operation: FileOperationCursorLocatorPayload["operation"],
     spaceId: SpaceId,
+    usageVersion: number | null,
     envelope: Readonly<CanonicalRevisionEnvelope>,
     requestHash: Sha256Digest,
     fileOffset: number,
@@ -1991,6 +2011,7 @@ export class MindBrowseService {
       kind: "file_operation",
       operation,
       spaceId,
+      usageVersion,
       revisionId: envelope.revision.revisionId,
       manifestHash: envelope.revision.manifestHash,
       requestHash,

@@ -1655,7 +1655,16 @@ test("empty account reaches a strict starter commit and first useful search/fetc
         message: "Added [First useful Memory](concepts/first-memory.md).",
       };
     }
-    return { type: "create_file", path: file.path, text: file.text };
+    return {
+      type: "create_file",
+      path: file.path,
+      text: file.path === "concepts/first-memory.md"
+        ? file.text.replace(
+            /^---\n/u,
+            "---\nfooBar: camel-case\nfoo_bar: snake-case\nwireShape:\n  fooBar: camel-case\n  foo_bar: snake-case\n",
+          )
+        : file.text,
+    };
   });
   const committed = await modernTool(
     runtime,
@@ -1794,6 +1803,41 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "log.md",
   ]);
   assert.equal(listedFiles.aggregate.count, 3);
+  const metadataWireShape = await modernTool(
+    runtime,
+    secret,
+    "starter-list-files-metadata-wire-shape",
+    "list_files",
+    {
+      mind: "/me",
+      revision_selector: { kind: "revision", revision_id: starterRevisionId },
+      paths: ["concepts/first-memory.md"],
+      where: {
+        field: "metadata.wireShape",
+        op: "eq",
+        value: { fooBar: "camel-case", foo_bar: "snake-case" },
+      },
+      select_metadata_fields: [
+        "metadata.fooBar",
+        "metadata.foo_bar",
+        "metadata.wireShape",
+      ],
+      aggregate: { kind: "distinct", field: "metadata.wireShape" },
+    },
+  );
+  assert.deepEqual(metadataWireShape.files.map(({ path, metadata }) => ({ path, metadata })), [{
+    path: "concepts/first-memory.md",
+    metadata: {
+      "metadata.fooBar": "camel-case",
+      "metadata.foo_bar": "snake-case",
+      "metadata.wireShape": { fooBar: "camel-case", foo_bar: "snake-case" },
+    },
+  }]);
+  assert.deepEqual(metadataWireShape.aggregate, {
+    kind: "distinct",
+    field: "metadata.wireShape",
+    values: [{ fooBar: "camel-case", foo_bar: "snake-case" }],
+  });
   const greppedFiles = await modernTool(
     runtime,
     secret,

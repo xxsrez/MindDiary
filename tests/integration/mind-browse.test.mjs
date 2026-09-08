@@ -582,6 +582,83 @@ test("disabled Mind invalidates previously issued fetch and resource locators be
   assert.equal(env.observedObjects.reads(), 0);
 });
 
+test("file-operation cursors are invalid after usage mode changes and then returns to read", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "File Cursor Usage Owner");
+  const mind = await createMind(env, owner, "file-cursor-usage");
+  const enabled = await env.usage.mutate({
+    actor: actor(owner.principalId, "request_enable_file_cursor_usage"),
+    spaceId: mind.mindId,
+    usageMode: "read",
+    expectedUsageVersion: 0,
+    idempotencyKey: "enable-file-cursor-usage",
+  });
+  assert.equal(enabled.kind, "applied");
+  env.metadata.setCurrentAuthorizationStateForTest(
+    {
+      principalId: owner.principalId,
+      spaceId: mind.mindId,
+      tokenId: "token_file_cursor_usage",
+    },
+    {
+      principal: { principalId: owner.principalId, state: "active" },
+      space: {
+        spaceId: mind.mindId,
+        state: "active",
+        visibility: "private",
+        accessVersion: version(1),
+      },
+      membership: {
+        principalId: owner.principalId,
+        spaceId: mind.mindId,
+        role: "owner",
+        state: "active",
+        version: version(1),
+      },
+      token: {
+        tokenId: "token_file_cursor_usage",
+        principalId: owner.principalId,
+        state: "active",
+        scopes: ["content:read"],
+        version: version(1),
+        expiresAt: "2027-08-07T00:00:00.000Z",
+      },
+    },
+  );
+  const currentActor = mcpActor(owner.principalId, "token_file_cursor_usage");
+  const first = await env.mcpBrowse.listFiles(currentActor, {
+    mind: mind.handle,
+    limit: 1,
+  });
+  assert.ok(first.nextCursor);
+
+  const disabled = await env.usage.mutate({
+    actor: actor(owner.principalId, "request_disable_file_cursor_usage"),
+    spaceId: mind.mindId,
+    usageMode: "disabled",
+    expectedUsageVersion: 1,
+    idempotencyKey: "disable-file-cursor-usage",
+  });
+  assert.equal(disabled.kind, "applied");
+  const reenabled = await env.usage.mutate({
+    actor: actor(owner.principalId, "request_reenable_file_cursor_usage"),
+    spaceId: mind.mindId,
+    usageMode: "read",
+    expectedUsageVersion: 2,
+    idempotencyKey: "reenable-file-cursor-usage",
+  });
+  assert.equal(reenabled.kind, "applied");
+
+  await assert.rejects(
+    env.mcpBrowse.listFiles(currentActor, {
+      mind: mind.handle,
+      cursor: first.nextCursor,
+      limit: 1,
+    }),
+    expectFailure("file_operation_cursor_invalid"),
+  );
+});
+
 test("browse materializes a scaled page with bounded concurrency and deterministic order", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Scaled Browse Owner");
