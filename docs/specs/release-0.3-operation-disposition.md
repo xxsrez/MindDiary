@@ -251,7 +251,7 @@ Modern `2026-07-28`:
 | `resources/templates/list` | keep | Authenticated empty list; no implicit templates |
 | `resources/list` | change | Enumerate only authorized root `index` resources from current access, without binding |
 | `resources/read` | change | Reauthorize exact `okf://spaces/{space_id}/revisions/{revision_id}/...`; no HEAD or cross-Mind fallback |
-| `tools/list` | change | Advertise the 17-tool direct projection; omit the Apps picker and native stage |
+| `tools/list` | change | Advertise the 21-tool direct projection; omit the Apps picker and native stage |
 | `tools/call` | change | Execute only advertised target tool and target schemas |
 | `initialize` | remove | Preserve explicit `Method not found`; modern profile never starts legacy lifecycle |
 | `ping` | remove | Preserve current `Method not found`; not silently added by this migration |
