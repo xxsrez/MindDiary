@@ -145,9 +145,13 @@ Performance использует [ADR-0027](../decisions/0027-durable-acceptance
 подписанных benchmark-запросов. После всех samples агент сначала читает
 `sites_read_database_overview`, затем все страницы `md_acceptance_telemetry`
 через `sites_read_database_table_rows`, binding `DB`, limit 15, начиная с offset 0
-и следуя точному `model_projection.next_offset`. Максимум 164 страницы.
+и следуя точному `model_projection.next_offset`. Максимум 256 страниц.
 Инструмент допускает до 25 строк, но в живом capture 20/25 приводили к
-truncation. Страницы по 15 строк сохранили все 2100 events без обрезки;
+truncation. Исторический A4 capture занимал 2100 events; после добавления
+`list_files`, `grep_files` и `read_files` текущая закрытая matrix создаёт 3108
+events и занимает 208 страниц по 15 строк. Новый предел оставляет ограниченный
+запас до 3840 строк, не превращая чтение в неограниченный scan. Страницы по 15
+строк сохраняют полный ответ без обрезки;
 truncated ответ нельзя использовать или пропускать как полную страницу.
 Массив настоящих structured responses сохраняется в закрытый
 `performance-sites-d1.json`. Значения нельзя собирать заново по памяти или

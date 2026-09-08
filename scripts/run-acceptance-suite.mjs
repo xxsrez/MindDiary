@@ -148,7 +148,7 @@ for (;;) {
   } else if (state.stage === "provider_logs") {
     const path = join(directory, "performance-sites-d1.json");
     if (!await optional(path)) { checkpoint("capture_all_sites_d1_telemetry_pages_and_save_private_result", { project_id: state.identity.project_id,
-      binding_name: "DB", table_name: "md_acceptance_telemetry", limit: 25, max_pages: 164,
+      binding_name: "DB", table_name: "md_acceptance_telemetry", limit: 15, max_pages: 256,
       run_directory: join(root, "runs", runTag("performance")), output: path }); break; }
     await run("performance", "check-acceptance-performance-hosted.mjs", [runTag("performance"), "finalize", path]);
     await add("performance", componentPath("performance")); state.stage = "platform"; await save();

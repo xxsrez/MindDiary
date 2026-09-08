@@ -245,7 +245,7 @@ function d1CaptureUnsigned(value, projection) {
   assertExactKeys(source, new Set(["tool", "project_id", "binding_name", "table_name", "run_id", "test_adapter_sha256", "result_sha256", "page_sha256s", "row_ids"]), "invalid_sites_d1_source");
   if (source.tool !== "sites_read_database_table_rows" || source.project_id !== value.deployment?.site_project_id || source.binding_name !== "DB"
     || source.table_name !== "md_acceptance_telemetry" || !/^[a-f0-9-]{36}$/.test(source.run_id ?? "") || !/^[a-f0-9]{64}$/.test(source.test_adapter_sha256 ?? "")
-    || !SHA256.test(source.result_sha256 ?? "") || !Array.isArray(source.page_sha256s) || !source.page_sha256s.length || source.page_sha256s.length > 164
+    || !SHA256.test(source.result_sha256 ?? "") || !Array.isArray(source.page_sha256s) || !source.page_sha256s.length || source.page_sha256s.length > 256
     || source.page_sha256s.some(hash => !SHA256.test(hash)) || !Array.isArray(source.row_ids) || !source.row_ids.length || source.row_ids.length > 4096
     || new Set(source.row_ids).size !== source.row_ids.length || source.row_ids.length !== projection.event_count
     || source.row_ids.some(id => !/^[a-z0-9_:-]{1,128}$/.test(id))) fail("invalid_sites_d1_source");
@@ -257,7 +257,7 @@ function d1CaptureUnsigned(value, projection) {
     control_plane_source: source, ...projection };
 }
 export function createSitesD1PerformanceCapture(input, pages, correlationIds) {
-  if (!Array.isArray(pages) || !pages.length || pages.length > 164) fail("invalid_sites_d1_pages");
+  if (!Array.isArray(pages) || !pages.length || pages.length > 256) fail("invalid_sites_d1_pages");
   const rowIds = new Set(), telemetry = [], selected = new Set(correlationIds); let offset = 0;
   for (const [pageIndex, page] of pages.entries()) {
     const projection = page.model_projection;

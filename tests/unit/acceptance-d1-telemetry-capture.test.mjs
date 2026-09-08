@@ -44,3 +44,7 @@ test("foreign table, candidate, adapter or run, truncation, duplicate rows and p
     const { input, pages, ids } = inputs(); mutate(pages); assert.throws(() => createSitesD1PerformanceCapture(input, pages, ids));
   }
 });
+test("D1 capture remains bounded to 256 complete provider pages", () => {
+  const { input, pages, ids } = inputs();
+  assert.throws(() => createSitesD1PerformanceCapture(input, Array.from({ length: 257 }, () => pages[0]), ids));
+});
