@@ -263,6 +263,10 @@ Differential runner executes the common subset against pinned
 the same immutable bytes. It compares exact ordered paths, match lines/spans,
 counts and selected bytes, then exercises pagination, revoke, exact historical
 revision, invalid cursor, limits and cleanup.
+`npm run gate:file-operations-differential` fail closed требует этот exact
+external oracle. Общий repository suite пропускает только differential test,
+если бинарник `rg` отсутствует в runner image; неподходящая установленная
+версия остаётся ошибкой.
 
 UAT acceptance additionally binds exact Git SHA, Sites version/deployment,
 modern/compat catalogs and a fresh installed plugin journey. It records only

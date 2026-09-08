@@ -737,6 +737,15 @@ test("BundleFile listing returns metadata only, verifies preview bytes, and stay
 });
 
 test("differential file operations compose over one exact mixed-file revision with bounded continuations", async (t) => {
+  try {
+    assert.match(execFileSync("rg", ["--version"], { encoding: "utf8" }), /^ripgrep 15\.2\.0$/mu);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      t.skip("external ripgrep oracle is unavailable; run gate:file-operations-differential");
+      return;
+    }
+    throw error;
+  }
   const env = harness();
   const owner = await createAccount(env, 31, "File Operation Owner");
   const mind = await createMind(env, owner, "file-operation-fixture");
@@ -804,8 +813,6 @@ test("differential file operations compose over one exact mixed-file revision wi
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, file.bytes);
   }
-  assert.match(execFileSync("rg", ["--version"], { encoding: "utf8" }), /^ripgrep 15\.2\.0$/mu);
-
   const firstList = await env.browse.listFiles(actor(owner.principalId), {
     mind: mind.handle,
     includeGlobs: ["**/*.md"],
