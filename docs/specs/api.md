@@ -12,6 +12,13 @@
 > [режимы использования Mind](mind-usage-modes.md). Historical sections ниже не
 > переопределяют этот target и не доказывают его реализацию.
 
+> **Принятая поправка MD-409, 2026-09-08.** Текущий Content MCP добавляет
+> детерминированные read-only `list_files`, `grep_files` и `read_files` для
+> одной enabled exact revision. Их canonical semantics, limits, cursors,
+> text/metadata profile и отличия от local `rg` заданы в
+> [спецификации файловых операций](mcp-file-operations.md); historical catalog
+> ниже не ограничивает эту новую surface.
+
 Статус: proposal для верификации, обновлено 2026-08-27. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
 Product API и direct MCP route/compatibility repair реализованы, развёрнуты как
@@ -1369,6 +1376,9 @@ list_mcp_tokens
 browse_entries
 search_entries
 fetch_entry
+list_files
+grep_files
+read_files
 list_revisions
 get_revision
 validate_revision
@@ -1850,6 +1860,9 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 | `browse_entries` | read | true | false | false |
 | `search` | read | true | false | false |
 | `fetch` | read | true | false | false |
+| `list_files` | read | true | false | false |
+| `grep_files` | read | true | false | false |
+| `read_files` | read | true | false | false |
 | `list_revisions` | read | true | false | false |
 | `get_revision` | read | true | false | false |
 | `validate_mind` | read | true | false | false |

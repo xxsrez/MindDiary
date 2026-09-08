@@ -7,6 +7,9 @@ import {
   type Authorizer,
   type BundleFileObjectStore,
   type ObjectStore,
+  type OpenedBundleFileObject,
+  type OpenedSpaceCanonicalObject,
+  type SpaceCanonicalObjectStore,
   type CredentialContentAccessAuthorizer,
 } from "@mind-diary/application-ports";
 import {
@@ -28,17 +31,57 @@ import {
 } from "@mind-diary/domain";
 import { okfFileKind, parseOkfFile } from "@mind-diary/okf-codec";
 import type { OkfDiagnostic } from "@mind-diary/okf-codec";
+import { RE2JS } from "re2js";
+import { parse as parseYaml } from "yaml";
 import {
   analyzeBundleFileReferences,
   type BundleFileReferenceStatus,
 } from "./bundle-file-references.js";
 import { inspectSafeRasterPreview } from "./bundle-file-downloads.js";
+import { MindBrowseFailure } from "./mind-browse-failure.js";
+import {
+  MAX_GREP_SCAN_BYTES,
+  MAX_METADATA_SCAN_BYTES,
+  MAX_TEXT_BUNDLE_FILE_BYTES,
+  byteOffsetAt,
+  compareUnknown,
+  evaluateMetadataFilter,
+  exactJsonEqual,
+  fileFields,
+  fileOperationRequestValue,
+  headEndByte,
+  isTextMediaType,
+  isUtf8Boundary,
+  jsonValue,
+  metadataAt,
+  normalizeGrepFilesRequest,
+  normalizeListFilesRequest,
+  normalizeReadFilesRequest,
+  readHeadBytes,
+  regexEscape,
+  scalarAfter,
+  scalarBefore,
+  scalarCompare,
+  selectEntries,
+  splitTextLines,
+  wordScalar,
+  type ExactTextFile,
+  type FileMetadataStatus,
+  type FileOperationItemError,
+  type GrepFileResult,
+  type GrepFilesResult,
+  type GrepLineMatch,
+  type GrepMatchSpan,
+  type ListFilesResult,
+  type MindFileDescriptor,
+  type ReadFileResultItem,
+  type ReadFilesResult,
+} from "./file-operations.js";
 
 import {
   MindDiscoveryFailure,
   MindDiscoveryService,
   type MindDiscoveryDescriptor,
-  type MindDiscoveryFailureCode,
   type MindDiscoveryRevisionDescriptor,
   type MindDiscoveryStore,
   type MindRevisionSelector,
@@ -92,34 +135,6 @@ async function mapBounded<Input, Output>(
 
 type AllowedAuthorization = Extract<AuthorizationDecision, { readonly kind: "allowed" }>;
 
-export type MindBrowseFailureCode =
-  | MindDiscoveryFailureCode
-  | "invalid_request"
-  | "invalid_path"
-  | "invalid_limit"
-  | "invalid_cursor"
-  | "invalid_fetch_budget"
-  | "locator_not_found"
-  | "resource_not_found"
-  | "revision_integrity_failure"
-  | "read_conflict"
-  | "mind_binding_required"
-  | "binding_owner_revoked"
-  | "binding_state_unavailable";
-
-/** Safe content-read failure. It never embeds a locator payload or private content. */
-export class MindBrowseFailure extends Error {
-  readonly code: MindBrowseFailureCode;
-  readonly retryable: boolean;
-
-  constructor(code: MindBrowseFailureCode, message: string, retryable = false) {
-    super(message);
-    this.name = "MindBrowseFailure";
-    this.code = code;
-    this.retryable = retryable;
-  }
-}
-
 export interface ExactEntryLocatorPayload {
   readonly version: 1;
   readonly kind: "entry" | "continuation";
@@ -156,10 +171,24 @@ export interface BundleFileListCursorLocatorPayload {
   readonly end: number;
 }
 
+export interface FileOperationCursorLocatorPayload {
+  readonly version: 1;
+  readonly kind: "file_operation";
+  readonly operation: "list" | "grep" | "read";
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly manifestHash: Sha256Digest;
+  readonly requestHash: Sha256Digest;
+  readonly fileOffset: number;
+  readonly lineOffset: number;
+  readonly end: number;
+}
+
 export type MindLocatorPayload =
   | ExactEntryLocatorPayload
   | BrowseCursorLocatorPayload
-  | BundleFileListCursorLocatorPayload;
+  | BundleFileListCursorLocatorPayload
+  | FileOperationCursorLocatorPayload;
 
 /** Server-side opaque locator boundary. Decoding is never exposed to MCP clients. */
 export interface MindLocatorCodec {
@@ -338,6 +367,52 @@ function parseLocatorPayload(value: unknown): Readonly<MindLocatorPayload> | nul
       revisionId: value.revisionId as RevisionId,
       manifestHash: value.manifestHash as Sha256Digest,
       start: value.start as number,
+      end: value.end as number,
+    });
+  }
+  if (value.kind === "file_operation") {
+    if (
+      !hasExactKeys(value, [
+        "version",
+        "kind",
+        "operation",
+        "spaceId",
+        "revisionId",
+        "manifestHash",
+        "requestHash",
+        "fileOffset",
+        "lineOffset",
+        "end",
+      ]) ||
+      (value.operation !== "list" &&
+        value.operation !== "grep" &&
+        value.operation !== "read") ||
+      !validOpaqueIdentity(value.spaceId) ||
+      !validOpaqueIdentity(value.revisionId) ||
+      typeof value.manifestHash !== "string" ||
+      !SHA256_PATTERN.test(value.manifestHash) ||
+      typeof value.requestHash !== "string" ||
+      !SHA256_PATTERN.test(value.requestHash) ||
+      !Number.isSafeInteger(value.fileOffset) ||
+      (value.fileOffset as number) < 0 ||
+      !Number.isSafeInteger(value.lineOffset) ||
+      (value.lineOffset as number) < 0 ||
+      !Number.isSafeInteger(value.end) ||
+      (value.end as number) < 0 ||
+      (value.fileOffset as number) > (value.end as number)
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      version: LOCATOR_VERSION,
+      kind: "file_operation",
+      operation: value.operation,
+      spaceId: value.spaceId as SpaceId,
+      revisionId: value.revisionId as RevisionId,
+      manifestHash: value.manifestHash as Sha256Digest,
+      requestHash: value.requestHash as Sha256Digest,
+      fileOffset: value.fileOffset as number,
+      lineOffset: value.lineOffset as number,
       end: value.end as number,
     });
   }
@@ -1098,6 +1173,525 @@ export class MindBrowseService {
     });
   }
 
+  async listFiles(
+    actor: ActorContext,
+    query: unknown,
+  ): Promise<Readonly<ListFilesResult>> {
+    const request = normalizeListFilesRequest(query);
+    const cursor = await this.#fileOperationCursor(request.cursor, "list");
+    const selector = cursor !== null && !request.hasRevisionSelector
+      ? ({ kind: "revision", revisionId: cursor.revisionId } satisfies MindRevisionSelector)
+      : request.revisionSelector;
+    let info;
+    try {
+      info = await this.#discovery.getMindInfo(actor, request.mind, selector);
+    } catch (error) {
+      if (cursor !== null && error instanceof MindDiscoveryFailure) {
+        throw new MindBrowseFailure("file_operation_cursor_invalid", "File operation cursor is invalid.");
+      }
+      mapDiscoveryFailure(error);
+    }
+    const initialAuthorization = await this.#requireAuthorization(
+      actor,
+      info.mind.mindId,
+      "content:browse",
+      info.revisionMode,
+      "mind_not_found",
+    );
+    const envelope = await this.#readVerifiedEnvelope(
+      info.mind.mindId,
+      info.resolvedRevision.revisionId,
+      "revision_not_found",
+    );
+    const requestHash = await this.#objects.calculateSha256(new TextEncoder().encode(
+      JSON.stringify(fileOperationRequestValue("list", request)),
+    ));
+    const selected = selectEntries(envelope.manifest.entries, request.selector);
+    this.#validateFileOperationCursor(cursor, info.mind.mindId, envelope, requestHash, selected.length);
+
+    const manifestFields = new Set([
+      "path", "kind", "mediaType", "size", "sha256", "revisionId",
+      "revisionCommittedAt", "metadataStatus",
+    ]);
+    const referencedFields = [
+      ...request.selectMetadataFields,
+      ...request.sort.map((item) => item.field),
+      ...(request.aggregate.kind === "distinct" ? [request.aggregate.field] : []),
+    ];
+    const metadataNeeded = request.where !== undefined ||
+      referencedFields.some((field) => !manifestFields.has(field));
+    const metadataSort = request.sort.some((item) => !manifestFields.has(item.field));
+    if (metadataSort && selected.reduce((sum, entry) => sum + entry.size, 0) > MAX_METADATA_SCAN_BYTES) {
+      throw new MindBrowseFailure(
+        "file_operation_budget_exhausted",
+        "Metadata sort exceeds the bounded scan budget.",
+      );
+    }
+
+    const prepared: Array<Readonly<{
+      entry: Readonly<RevisionManifestEntry>;
+      descriptor: Readonly<MindFileDescriptor>;
+      fields: Readonly<Record<string, unknown>>;
+    }>> = [];
+    let scannedFiles = 0;
+    let scannedBytes = 0;
+    let rawOffset = metadataSort ? 0 : (cursor?.fileOffset ?? 0);
+    let scanBudgetHit = false;
+    for (let index = rawOffset; index < selected.length; index += 1) {
+      const entry = selected[index]!;
+      let metadataStatus: FileMetadataStatus = "not_requested";
+      let metadata: Readonly<Record<string, unknown>> | null = null;
+      if (metadataNeeded) {
+        if (scannedBytes + entry.size > MAX_METADATA_SCAN_BYTES) {
+          scanBudgetHit = true;
+          rawOffset = index;
+          break;
+        }
+        const parsed = await this.#fileMetadata(envelope.revision.spaceId, envelope.manifest.format, entry);
+        metadataStatus = parsed.status;
+        metadata = parsed.metadata;
+        scannedFiles += 1;
+        scannedBytes += entry.size;
+      }
+      const fields = fileFields(
+        entry,
+        metadataStatus,
+        metadata,
+        envelope.revision.revisionId,
+        info.resolvedRevision.committedAt,
+      );
+      if (request.where === undefined || evaluateMetadataFilter(request.where, fields)) {
+        const projected = request.selectMetadataFields.length === 0 || metadata === null
+          ? metadata
+          : Object.freeze(Object.fromEntries(request.selectMetadataFields.flatMap((field) => {
+              const selectedValue = metadataAt(fields, field);
+              return selectedValue.exists ? [[field, jsonValue(selectedValue.value)]] : [];
+            })));
+        prepared.push(Object.freeze({
+          entry,
+          fields,
+          descriptor: Object.freeze({
+            path: entry.path,
+            kind: entry.kind,
+            mediaType: entry.mediaType,
+            size: entry.size,
+            sha256: entry.sha256,
+            revisionId: envelope.revision.revisionId,
+            revisionCommittedAt: info.resolvedRevision.committedAt,
+            metadataStatus,
+            metadata: projected,
+          }),
+        }));
+      }
+      rawOffset = index + 1;
+      if (!metadataSort && prepared.length >= request.limit) break;
+    }
+    prepared.sort((left, right) => {
+      for (const sort of request.sort) {
+        const order = compareUnknown(metadataAt(left.fields, sort.field).value, metadataAt(right.fields, sort.field).value);
+        if (order !== 0) return sort.direction === "asc" ? order : -order;
+      }
+      return scalarCompare(left.entry.path, right.entry.path);
+    });
+    const page = metadataSort
+      ? prepared.slice(cursor?.fileOffset ?? 0, (cursor?.fileOffset ?? 0) + request.limit)
+      : prepared;
+    const nextOffset = metadataSort
+      ? (cursor?.fileOffset ?? 0) + page.length
+      : rawOffset;
+    const pageDomainLength = metadataSort ? prepared.length : selected.length;
+    const incomplete = scanBudgetHit || nextOffset < pageDomainLength;
+    const nextCursor = incomplete
+      ? await this.#encodeFileOperationCursor(
+          "list",
+          info.mind.mindId,
+          envelope,
+          requestHash,
+          nextOffset,
+          0,
+          selected.length,
+        )
+      : null;
+    let aggregate: ListFilesResult["aggregate"] = Object.freeze({ kind: "none" });
+    if (request.aggregate.kind === "count") {
+      aggregate = Object.freeze({ kind: "count", count: page.length });
+    } else if (request.aggregate.kind === "distinct") {
+      const values: unknown[] = [];
+      for (const item of page) {
+        const selectedValue = metadataAt(item.fields, request.aggregate.field);
+        if (selectedValue.exists && !values.some((value) => exactJsonEqual(value, selectedValue.value))) {
+          values.push(jsonValue(selectedValue.value));
+        }
+      }
+      values.sort(compareUnknown);
+      aggregate = Object.freeze({
+        kind: "distinct",
+        field: request.aggregate.field,
+        values: Object.freeze(values),
+      });
+    }
+    await this.#requireSameAuthorization(
+      actor,
+      info.mind.mindId,
+      "content:browse",
+      info.revisionMode,
+      initialAuthorization,
+      "mind_not_found",
+    );
+    return Object.freeze({
+      mind: info.mind,
+      resolvedRevision: info.resolvedRevision,
+      files: Object.freeze(page.map((item) => item.descriptor)),
+      aggregate,
+      scanned: Object.freeze({ files: scannedFiles, bytes: scannedBytes }),
+      incomplete,
+      incompleteReason: incomplete ? (scanBudgetHit ? "scan_budget" : "page_limit") : null,
+      nextCursor,
+    });
+  }
+
+  async grepFiles(
+    actor: ActorContext,
+    query: unknown,
+  ): Promise<Readonly<GrepFilesResult>> {
+    const request = normalizeGrepFilesRequest(query);
+    const cursor = await this.#fileOperationCursor(request.cursor, "grep");
+    const selector = cursor !== null && !request.hasRevisionSelector
+      ? ({ kind: "revision", revisionId: cursor.revisionId } satisfies MindRevisionSelector)
+      : request.revisionSelector;
+    let info;
+    try {
+      info = await this.#discovery.getMindInfo(actor, request.mind, selector);
+    } catch (error) {
+      if (cursor !== null && error instanceof MindDiscoveryFailure) {
+        throw new MindBrowseFailure("file_operation_cursor_invalid", "File operation cursor is invalid.");
+      }
+      mapDiscoveryFailure(error);
+    }
+    const initialAuthorization = await this.#requireAuthorization(
+      actor,
+      info.mind.mindId,
+      "content:search",
+      info.revisionMode,
+      "mind_not_found",
+    );
+    const envelope = await this.#readVerifiedEnvelope(
+      info.mind.mindId,
+      info.resolvedRevision.revisionId,
+      "revision_not_found",
+    );
+    const requestHash = await this.#objects.calculateSha256(new TextEncoder().encode(
+      JSON.stringify(fileOperationRequestValue("grep", request)),
+    ));
+    const selected = selectEntries(envelope.manifest.entries, request.selector);
+    this.#validateFileOperationCursor(cursor, info.mind.mindId, envelope, requestHash, selected.length);
+    const expressions = request.patterns.map((pattern) => RE2JS.compile(
+      request.syntax === "literal" ? regexEscape(pattern) : pattern,
+      request.caseSensitive ? 0 : RE2JS.CASE_INSENSITIVE,
+    ));
+    const files: GrepFileResult[] = [];
+    const errors: Array<{ path: string; error: FileOperationItemError }> = [];
+    let scannedFiles = 0;
+    let scannedBytes = 0;
+    let returnedRows = 0;
+    let returnedBytes = 0;
+    let fileOffset = cursor?.fileOffset ?? 0;
+    let lineOffset = cursor?.lineOffset ?? 0;
+    let incompleteReason: GrepFilesResult["incompleteReason"] = null;
+
+    outer: for (; fileOffset < selected.length; fileOffset += 1, lineOffset = 0) {
+      const entry = selected[fileOffset]!;
+      if (scannedBytes + entry.size > MAX_GREP_SCAN_BYTES) {
+        incompleteReason = "scan_budget";
+        break;
+      }
+      const loaded = await this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry);
+      scannedFiles += 1;
+      scannedBytes += entry.size;
+      if (loaded.kind === "error") {
+        errors.push(Object.freeze({ path: entry.path, error: loaded.error }));
+        continue;
+      }
+      const lines = splitTextLines(loaded.file.text);
+      const matches: GrepLineMatch[] = [];
+      let matchingLines = 0;
+      let occurrences = 0;
+      let stopAfterFile = false;
+      for (let index = lineOffset; index < lines.length; index += 1) {
+        const line = lines[index]!;
+        const spans: GrepMatchSpan[] = [];
+        expressions.forEach((expression, patternIndex) => {
+          const matcher = expression.matcher(line.text);
+          while (matcher.find()) {
+            const start = matcher.start();
+            const end = matcher.end();
+            const accepted = (!request.wholeLine || (start === 0 && end === line.text.length)) &&
+              (!request.wholeWord || (!wordScalar(scalarBefore(line.text, start)) && !wordScalar(scalarAfter(line.text, end))));
+            if (accepted) {
+              const startInLine = byteOffsetAt(line.text, start);
+              const endInLine = byteOffsetAt(line.text, end);
+              spans.push(Object.freeze({
+                patternIndex,
+                startColumn: Array.from(line.text.slice(0, start)).length + 1,
+                endColumn: Array.from(line.text.slice(0, end)).length + 1,
+                startByte: line.startByte + startInLine,
+                endByte: line.startByte + endInLine,
+              }));
+            }
+          }
+        });
+        if (spans.length === 0) continue;
+        spans.sort((left, right) => left.startByte - right.startByte || left.patternIndex - right.patternIndex);
+        matchingLines += 1;
+        occurrences += spans.length;
+        if (request.output === "matches") {
+          const rowBytes = new TextEncoder().encode(line.text).byteLength;
+          if (returnedRows >= request.limit || returnedBytes + rowBytes > request.maxOutputBytes) {
+            incompleteReason = returnedRows >= request.limit ? "page_limit" : "response_budget";
+            lineOffset = index;
+            stopAfterFile = true;
+            break;
+          }
+          matches.push(Object.freeze({
+            lineNumber: index + 1,
+            startByte: line.startByte,
+            endByte: line.endByte,
+            text: line.text,
+            spans: Object.freeze(spans),
+            beforeContext: Object.freeze(lines.slice(Math.max(0, index - request.beforeContext), index).map((item) => item.text)),
+            afterContext: Object.freeze(lines.slice(index + 1, index + 1 + request.afterContext).map((item) => item.text)),
+          }));
+          returnedRows += 1;
+          returnedBytes += rowBytes;
+        }
+      }
+      const qualifies = request.output === "count" ||
+        (request.output === "matches" && matches.length > 0) ||
+        (request.output === "files_with_matches" && matchingLines > 0) ||
+        (request.output === "files_without_match" && matchingLines === 0);
+      if (qualifies) {
+        if (request.output !== "matches" && returnedRows >= request.limit) {
+          incompleteReason = "page_limit";
+          break;
+        }
+        files.push(Object.freeze({
+          path: entry.path,
+          kind: entry.kind,
+          mediaType: entry.mediaType,
+          sha256: entry.sha256,
+          revisionId: envelope.revision.revisionId,
+          matchingLines,
+          occurrences,
+          count: request.countUnit === "occurrences" ? occurrences : matchingLines,
+          matches: Object.freeze(matches),
+        }));
+        if (request.output !== "matches") returnedRows += 1;
+      }
+      if (stopAfterFile) break outer;
+    }
+    const incomplete = incompleteReason !== null || fileOffset < selected.length;
+    const nextCursor = incomplete
+      ? await this.#encodeFileOperationCursor(
+          "grep",
+          info.mind.mindId,
+          envelope,
+          requestHash,
+          fileOffset,
+          lineOffset,
+          selected.length,
+        )
+      : null;
+    await this.#requireSameAuthorization(
+      actor,
+      info.mind.mindId,
+      "content:search",
+      info.revisionMode,
+      initialAuthorization,
+      "mind_not_found",
+    );
+    return Object.freeze({
+      mind: info.mind,
+      resolvedRevision: info.resolvedRevision,
+      output: request.output,
+      countUnit: request.countUnit,
+      files: Object.freeze(files),
+      errors: Object.freeze(errors),
+      scanned: Object.freeze({ files: scannedFiles, bytes: scannedBytes }),
+      returned: Object.freeze({ rows: returnedRows, bytes: returnedBytes }),
+      incomplete,
+      incompleteReason: incomplete ? (incompleteReason ?? "page_limit") : null,
+      nextCursor,
+    });
+  }
+
+  async readFiles(
+    actor: ActorContext,
+    query: unknown,
+  ): Promise<Readonly<ReadFilesResult>> {
+    const request = normalizeReadFilesRequest(query);
+    const cursor = await this.#fileOperationCursor(request.cursor, "read");
+    const selector = cursor !== null && !request.hasRevisionSelector
+      ? ({ kind: "revision", revisionId: cursor.revisionId } satisfies MindRevisionSelector)
+      : request.revisionSelector;
+    let info;
+    try {
+      info = await this.#discovery.getMindInfo(actor, request.mind, selector);
+    } catch (error) {
+      if (cursor !== null && error instanceof MindDiscoveryFailure) {
+        throw new MindBrowseFailure("file_operation_cursor_invalid", "File operation cursor is invalid.");
+      }
+      mapDiscoveryFailure(error);
+    }
+    const initialAuthorization = await this.#requireAuthorization(
+      actor,
+      info.mind.mindId,
+      "content:fetch",
+      info.revisionMode,
+      "mind_not_found",
+    );
+    const envelope = await this.#readVerifiedEnvelope(
+      info.mind.mindId,
+      info.resolvedRevision.revisionId,
+      "revision_not_found",
+    );
+    const requestHash = await this.#objects.calculateSha256(new TextEncoder().encode(
+      JSON.stringify(fileOperationRequestValue("read", request)),
+    ));
+    this.#validateFileOperationCursor(cursor, info.mind.mindId, envelope, requestHash, request.requests.length);
+    const items: Array<ReadFilesResult["items"][number]> = [];
+    let returnedBytes = 0;
+    let requestOffset = cursor?.fileOffset ?? 0;
+    let continuationByte = cursor?.lineOffset ?? 0;
+    let incomplete = false;
+    for (; requestOffset < request.requests.length; requestOffset += 1, continuationByte = 0) {
+      const selection = request.requests[requestOffset]!;
+      const entry = envelope.manifest.entries.find((candidate) => candidate.path === selection.path);
+      if (entry === undefined) {
+        items.push(Object.freeze({
+          kind: "error",
+          path: selection.path,
+          error: Object.freeze({ code: "file_not_found", retryable: false }),
+        }));
+        continue;
+      }
+      const loaded = selection.mode === "head"
+        ? await this.#loadTextFileHead(
+            envelope.revision.spaceId,
+            envelope.manifest.format,
+            entry,
+            selection.count,
+          )
+        : await this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry);
+      if (loaded.kind === "error") {
+        items.push(Object.freeze({ kind: "error", path: selection.path, error: loaded.error }));
+        continue;
+      }
+      const lines = splitTextLines(loaded.file.text);
+      const total = entry.size;
+      let start = 0;
+      let end = total;
+      let requestedLineRange: ReadFileResultItem["lineRange"] = null;
+      if (selection.mode === "head") {
+        const count = Math.min(selection.count, lines.length);
+        end = loaded.file.bytes.byteLength;
+        requestedLineRange = Object.freeze({
+          start: count === 0 ? 0 : 1,
+          end: count,
+          total: "complete" in loaded && loaded.complete ? lines.length : null,
+        });
+      } else if (selection.mode === "tail") {
+        const count = Math.min(selection.count, lines.length);
+        const first = lines.length - count;
+        start = count === 0 ? 0 : lines[first]!.startByte;
+        requestedLineRange = Object.freeze({ start: count === 0 ? 0 : first + 1, end: lines.length, total: lines.length });
+      } else if (selection.mode === "lines") {
+        if (selection.startLine > lines.length || selection.endLine > lines.length) {
+          items.push(Object.freeze({
+            kind: "error",
+            path: selection.path,
+            error: Object.freeze({ code: "range_out_of_bounds", retryable: false }),
+          }));
+          continue;
+        }
+        start = lines[selection.startLine - 1]!.startByte;
+        end = lines[selection.endLine - 1]!.endWithTerminatorByte;
+        requestedLineRange = Object.freeze({ start: selection.startLine, end: selection.endLine, total: lines.length });
+      } else if (selection.mode === "bytes") {
+        if (selection.endByte > total || !isUtf8Boundary(loaded.file.bytes, selection.startByte) ||
+          !isUtf8Boundary(loaded.file.bytes, selection.endByte)) {
+          items.push(Object.freeze({
+            kind: "error",
+            path: selection.path,
+            error: Object.freeze({
+              code: selection.endByte > total ? "range_out_of_bounds" : "utf8_boundary_required",
+              retryable: false,
+            }),
+          }));
+          continue;
+        }
+        start = selection.startByte;
+        end = selection.endByte;
+      }
+      if (continuationByte > 0) start = Math.max(start, continuationByte);
+      const remaining = request.maxOutputBytes - returnedBytes;
+      if (remaining < MIN_FETCH_BYTE_BUDGET && start < end) {
+        incomplete = true;
+        break;
+      }
+      const pageEnd = safeUtf8PageEnd(loaded.file.bytes, start, end, remaining);
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(loaded.file.bytes.slice(start, pageEnd));
+      returnedBytes += pageEnd - start;
+      items.push(Object.freeze({
+        kind: "file",
+        file: Object.freeze({
+          path: entry.path,
+          kind: entry.kind,
+          mediaType: entry.mediaType,
+          sha256: entry.sha256,
+          revisionId: envelope.revision.revisionId,
+          text,
+          byteRange: Object.freeze({ start, end: pageEnd, total }),
+          lineRange: requestedLineRange,
+          truncated: pageEnd < end,
+          nextRange: pageEnd < end ? Object.freeze({ startByte: pageEnd, endByte: end }) : null,
+        }),
+      }));
+      if (pageEnd < end) {
+        continuationByte = pageEnd;
+        incomplete = true;
+        break;
+      }
+    }
+    const nextCursor = incomplete
+      ? await this.#encodeFileOperationCursor(
+          "read",
+          info.mind.mindId,
+          envelope,
+          requestHash,
+          requestOffset,
+          continuationByte,
+          request.requests.length,
+        )
+      : null;
+    await this.#requireSameAuthorization(
+      actor,
+      info.mind.mindId,
+      "content:fetch",
+      info.revisionMode,
+      initialAuthorization,
+      "mind_not_found",
+    );
+    return Object.freeze({
+      mind: info.mind,
+      resolvedRevision: info.resolvedRevision,
+      items: Object.freeze(items),
+      returnedBytes,
+      incomplete,
+      incompleteReason: incomplete ? "response_budget" : null,
+      nextCursor,
+    });
+  }
+
   async fetch(
     actor: ActorContext,
     requestValue: unknown,
@@ -1225,6 +1819,279 @@ export class MindBrowseService {
       "resource_not_found",
     );
     return result;
+  }
+
+  async #fileOperationCursor(
+    encoded: string | null,
+    operation: FileOperationCursorLocatorPayload["operation"],
+  ): Promise<Readonly<FileOperationCursorLocatorPayload> | null> {
+    if (encoded === null) return null;
+    const decoded = await this.#locators.decode(encoded);
+    if (
+      decoded === null || decoded.kind !== "file_operation" || decoded.operation !== operation
+    ) {
+      throw new MindBrowseFailure(
+        "file_operation_cursor_invalid",
+        "File operation cursor is invalid.",
+      );
+    }
+    return decoded;
+  }
+
+  #validateFileOperationCursor(
+    cursor: Readonly<FileOperationCursorLocatorPayload> | null,
+    spaceId: SpaceId,
+    envelope: Readonly<CanonicalRevisionEnvelope>,
+    requestHash: Sha256Digest,
+    end: number,
+  ): void {
+    if (cursor === null) return;
+    if (
+      cursor.spaceId !== spaceId ||
+      cursor.revisionId !== envelope.revision.revisionId ||
+      cursor.manifestHash !== envelope.revision.manifestHash ||
+      cursor.requestHash !== requestHash ||
+      cursor.end !== end ||
+      cursor.fileOffset < 0 || cursor.fileOffset >= end ||
+      cursor.lineOffset < 0
+    ) {
+      throw new MindBrowseFailure(
+        "file_operation_cursor_invalid",
+        "File operation cursor is invalid.",
+      );
+    }
+  }
+
+  async #encodeFileOperationCursor(
+    operation: FileOperationCursorLocatorPayload["operation"],
+    spaceId: SpaceId,
+    envelope: Readonly<CanonicalRevisionEnvelope>,
+    requestHash: Sha256Digest,
+    fileOffset: number,
+    lineOffset: number,
+    end: number,
+  ): Promise<string> {
+    return await this.#locators.encode(Object.freeze({
+      version: LOCATOR_VERSION,
+      kind: "file_operation",
+      operation,
+      spaceId,
+      revisionId: envelope.revision.revisionId,
+      manifestHash: envelope.revision.manifestHash,
+      requestHash,
+      fileOffset,
+      lineOffset,
+      end,
+    }));
+  }
+
+  async #loadTextFile(
+    spaceId: SpaceId,
+    manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
+    entry: Readonly<RevisionManifestEntry>,
+  ): Promise<Readonly<
+    | { readonly kind: "file"; readonly file: Readonly<ExactTextFile> }
+    | { readonly kind: "error"; readonly error: FileOperationItemError }
+  >> {
+    if (entry.kind === "opaque" && !isTextMediaType(entry.mediaType)) {
+      return Object.freeze({
+        kind: "error",
+        error: Object.freeze({ code: "file_not_text", retryable: false }),
+      });
+    }
+    if (entry.kind === "opaque" && entry.size > MAX_TEXT_BUNDLE_FILE_BYTES) {
+      return Object.freeze({
+        kind: "error",
+        error: Object.freeze({ code: "file_scan_limit_exceeded", retryable: false }),
+      });
+    }
+    let bytes: Uint8Array;
+    if (entry.kind === "markdown") {
+      bytes = await this.#readVerifiedObject(spaceId, manifestFormat, entry);
+    } else {
+      if (!("getBundleFile" in this.#objects)) {
+        throw new MindBrowseFailure(
+          "revision_integrity_failure",
+          "The exact revision object store cannot read BundleFiles.",
+        );
+      }
+      let object;
+      try {
+        object = await (this.#objects as BundleFileObjectStore).getBundleFile(spaceId, entry.sha256);
+      } catch (error) {
+        if (error instanceof ObjectStoreFailure) {
+          throw new MindBrowseFailure(
+            "revision_integrity_failure",
+            "The exact revision BundleFile failed integrity verification.",
+          );
+        }
+        throw error;
+      }
+      if (
+        object === null || object.sha256 !== entry.sha256 || object.mediaType !== entry.mediaType ||
+        object.size !== entry.size || object.bytes.byteLength !== entry.size ||
+        (await this.#objects.calculateSha256(object.bytes)) !== entry.sha256
+      ) {
+        throw new MindBrowseFailure(
+          "revision_integrity_failure",
+          "The exact revision BundleFile failed integrity verification.",
+        );
+      }
+      bytes = new Uint8Array(object.bytes);
+    }
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return Object.freeze({
+        kind: "file",
+        file: Object.freeze({ entry, bytes, text }),
+      });
+    } catch {
+      return Object.freeze({
+        kind: "error",
+        error: Object.freeze({ code: "unsupported_text_encoding", retryable: false }),
+      });
+    }
+  }
+
+  async #loadTextFileHead(
+    spaceId: SpaceId,
+    manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
+    entry: Readonly<RevisionManifestEntry>,
+    lineCount: number,
+  ): Promise<Readonly<
+    | { readonly kind: "file"; readonly file: Readonly<ExactTextFile>; readonly complete: boolean }
+    | { readonly kind: "error"; readonly error: FileOperationItemError }
+  >> {
+    if (entry.kind === "opaque" && !isTextMediaType(entry.mediaType)) {
+      return Object.freeze({
+        kind: "error",
+        error: Object.freeze({ code: "file_not_text", retryable: false }),
+      });
+    }
+    if (entry.size > MAX_TEXT_BUNDLE_FILE_BYTES) {
+      return Object.freeze({
+        kind: "error",
+        error: Object.freeze({ code: "file_scan_limit_exceeded", retryable: false }),
+      });
+    }
+    let opened: Readonly<OpenedBundleFileObject | OpenedSpaceCanonicalObject> | null = null;
+    try {
+      if (
+        entry.kind === "markdown" &&
+        (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
+        "openSpaceCanonicalObject" in this.#objects &&
+        typeof (this.#objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject === "function"
+      ) {
+        opened = await (this.#objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject!(
+          "markdown",
+          spaceId,
+          entry.sha256,
+        );
+      } else if (entry.kind === "opaque" && "openBundleFile" in this.#objects) {
+        opened = await (this.#objects as BundleFileObjectStore).openBundleFile(spaceId, entry.sha256);
+      }
+    } catch (error) {
+      if (error instanceof ObjectStoreFailure) {
+        throw new MindBrowseFailure(
+          "revision_integrity_failure",
+          "The exact revision file failed integrity verification.",
+        );
+      }
+      throw error;
+    }
+    if (opened === null) {
+      const loaded = await this.#loadTextFile(spaceId, manifestFormat, entry);
+      if (loaded.kind === "error") return loaded;
+      const end = headEndByte(loaded.file.bytes, lineCount, true)!;
+      const bytes = loaded.file.bytes.slice(0, end);
+      return Object.freeze({
+        kind: "file",
+        file: Object.freeze({
+          entry,
+          bytes,
+          text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+        }),
+        complete: end === entry.size,
+      });
+    }
+    if (
+      opened.sha256 !== entry.sha256 || opened.mediaType !== entry.mediaType ||
+      opened.size !== entry.size
+    ) {
+      await opened.body.cancel("metadata mismatch").catch(() => undefined);
+      throw new MindBrowseFailure(
+        "revision_integrity_failure",
+        "The exact revision file failed integrity verification.",
+      );
+    }
+    try {
+      const partial = await readHeadBytes(opened.body, entry.size, lineCount);
+      if (
+        partial.complete &&
+        (await this.#objects.calculateSha256(partial.bytes)) !== entry.sha256
+      ) throw new Error("digest mismatch");
+      return Object.freeze({
+        kind: "file",
+        file: Object.freeze({
+          entry,
+          bytes: partial.bytes,
+          text: new TextDecoder("utf-8", { fatal: true }).decode(partial.bytes),
+        }),
+        complete: partial.complete,
+      });
+    } catch {
+      throw new MindBrowseFailure(
+        "revision_integrity_failure",
+        "The exact revision file failed integrity verification.",
+      );
+    }
+  }
+
+  async #fileMetadata(
+    spaceId: SpaceId,
+    manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
+    entry: Readonly<RevisionManifestEntry>,
+  ): Promise<Readonly<{
+    status: FileMetadataStatus;
+    metadata: Readonly<Record<string, unknown>> | null;
+  }>> {
+    const loaded = await this.#loadTextFile(spaceId, manifestFormat, entry);
+    if (loaded.kind === "error") {
+      return Object.freeze({ status: "unsupported", metadata: null });
+    }
+    if (entry.kind === "markdown") {
+      const parsed = parseOkfFile({ path: entry.path, bytes: loaded.file.bytes });
+      if (!parsed.valid || parsed.file === null) {
+        return Object.freeze({ status: "invalid", metadata: null });
+      }
+      if (parsed.file.kind !== "concept" && parsed.file.kind !== "index") {
+        return Object.freeze({ status: "unsupported", metadata: null });
+      }
+      return Object.freeze({
+        status: "available",
+        metadata: jsonValue(parsed.file.frontmatter) as Readonly<Record<string, unknown>>,
+      });
+    }
+    try {
+      let value: unknown;
+      if (entry.mediaType === "application/json" || entry.mediaType.endsWith("+json")) {
+        value = JSON.parse(loaded.file.text);
+      } else if (
+        entry.mediaType === "application/yaml" || entry.mediaType === "application/x-yaml" ||
+        entry.mediaType === "text/yaml"
+      ) {
+        value = parseYaml(loaded.file.text, { schema: "core", maxAliasCount: 0 });
+      } else {
+        return Object.freeze({ status: "unsupported", metadata: null });
+      }
+      if (!isRecord(value)) return Object.freeze({ status: "unsupported", metadata: null });
+      return Object.freeze({
+        status: "available",
+        metadata: jsonValue(value) as Readonly<Record<string, unknown>>,
+      });
+    } catch {
+      return Object.freeze({ status: "invalid", metadata: null });
+    }
   }
 
   async #entrySummary(
@@ -1473,7 +2340,7 @@ export class MindBrowseService {
   async #requireAuthorization(
     actor: ActorContext,
     spaceId: SpaceId,
-    capability: "content:browse" | "content:fetch",
+    capability: "content:browse" | "content:fetch" | "content:search",
     revisionMode: RevisionMode,
     denialCode: "mind_not_found" | "locator_not_found" | "resource_not_found",
   ): Promise<AllowedAuthorization> {
@@ -1517,7 +2384,7 @@ export class MindBrowseService {
   async #requireSameAuthorization(
     actor: ActorContext,
     spaceId: SpaceId,
-    capability: "content:browse" | "content:fetch",
+    capability: "content:browse" | "content:fetch" | "content:search",
     revisionMode: RevisionMode,
     expected: AllowedAuthorization,
     denialCode: "mind_not_found" | "locator_not_found" | "resource_not_found",

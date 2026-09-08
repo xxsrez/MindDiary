@@ -32,6 +32,9 @@ export const MCP_CONTENT_TOOLS = [
   "browse_entries",
   "search",
   "fetch",
+  "list_files",
+  "grep_files",
+  "read_files",
   "list_revisions",
   "get_revision",
   "validate_mind",
@@ -439,6 +442,117 @@ const SEARCH_INPUT_SCHEMA = strictInputSchema(
 
 const FETCH_INPUT_SCHEMA = strictInputSchema({ id: LOCATOR_ID_SCHEMA }, ["id"]);
 
+const FILE_PATH_SCHEMA = Object.freeze({ type: "string", minLength: 1, maxLength: 1_024 });
+const FILE_SELECTOR_PROPERTIES = Object.freeze({
+  paths: Object.freeze({ type: "array", minItems: 1, maxItems: 100, uniqueItems: true, items: FILE_PATH_SCHEMA }),
+  prefix: Object.freeze({ type: "string", maxLength: 1_024 }),
+  recursive: Object.freeze({ type: "boolean" }),
+  include_globs: Object.freeze({ type: "array", maxItems: 32, uniqueItems: true, items: Object.freeze({ type: "string", minLength: 1, maxLength: 256 }) }),
+  exclude_globs: Object.freeze({ type: "array", maxItems: 32, uniqueItems: true, items: Object.freeze({ type: "string", minLength: 1, maxLength: 256 }) }),
+  kinds: Object.freeze({ type: "array", minItems: 1, maxItems: 2, uniqueItems: true, items: Object.freeze({ enum: Object.freeze(["markdown", "opaque"]) }) }),
+  media_types: Object.freeze({ type: "array", maxItems: 32, uniqueItems: true, items: NON_EMPTY_STRING_SCHEMA }),
+});
+const METADATA_FIELD_SCHEMA = Object.freeze({
+  type: "string",
+  minLength: 1,
+  maxLength: 256,
+  pattern: "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$",
+});
+const METADATA_FILTER_LEAF_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["field", "op"]),
+  properties: Object.freeze({
+    field: METADATA_FIELD_SCHEMA,
+    op: Object.freeze({ enum: Object.freeze(["exists", "eq", "in", "lt", "lte", "gt", "gte"]) }),
+    value: Object.freeze({}),
+  }),
+});
+const METADATA_FILTER_SCHEMA = Object.freeze({
+  oneOf: Object.freeze([
+    METADATA_FILTER_LEAF_SCHEMA,
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["all"]),
+      properties: Object.freeze({ all: Object.freeze({ type: "array", minItems: 1, maxItems: 16, items: METADATA_FILTER_LEAF_SCHEMA }) }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["any"]),
+      properties: Object.freeze({ any: Object.freeze({ type: "array", minItems: 1, maxItems: 16, items: METADATA_FILTER_LEAF_SCHEMA }) }),
+    }),
+  ]),
+});
+const LIST_FILES_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+    ...FILE_SELECTOR_PROPERTIES,
+    where: METADATA_FILTER_SCHEMA,
+    select_metadata_fields: Object.freeze({ type: "array", maxItems: 32, uniqueItems: true, items: METADATA_FIELD_SCHEMA }),
+    sort: Object.freeze({
+      type: "array",
+      minItems: 1,
+      maxItems: 3,
+      items: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze(["field", "direction"]),
+        properties: Object.freeze({ field: METADATA_FIELD_SCHEMA, direction: Object.freeze({ enum: Object.freeze(["asc", "desc"]) }) }),
+      }),
+    }),
+    aggregate: Object.freeze({
+      oneOf: Object.freeze([
+        Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["kind"]), properties: Object.freeze({ kind: Object.freeze({ const: "count" }) }) }),
+        Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["kind", "field"]), properties: Object.freeze({ kind: Object.freeze({ const: "distinct" }), field: METADATA_FIELD_SCHEMA }) }),
+      ]),
+    }),
+    cursor: OPAQUE_ID_SCHEMA,
+    limit: PAGE_LIMIT_SCHEMA,
+  },
+  ["mind"],
+);
+const GREP_FILES_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+    ...FILE_SELECTOR_PROPERTIES,
+    patterns: Object.freeze({ type: "array", minItems: 1, maxItems: 8, items: Object.freeze({ type: "string", minLength: 1, maxLength: 256 }) }),
+    syntax: Object.freeze({ enum: Object.freeze(["literal", "regex"]) }),
+    case_sensitive: Object.freeze({ type: "boolean" }),
+    whole_word: Object.freeze({ type: "boolean" }),
+    whole_line: Object.freeze({ type: "boolean" }),
+    output: Object.freeze({ enum: Object.freeze(["matches", "files_with_matches", "files_without_match", "count"]) }),
+    count_unit: Object.freeze({ enum: Object.freeze(["matching_lines", "occurrences"]) }),
+    before_context: Object.freeze({ type: "integer", minimum: 0, maximum: 3 }),
+    after_context: Object.freeze({ type: "integer", minimum: 0, maximum: 3 }),
+    cursor: OPAQUE_ID_SCHEMA,
+    limit: PAGE_LIMIT_SCHEMA,
+    max_output_bytes: Object.freeze({ type: "integer", minimum: 4, maximum: 1_048_576 }),
+  },
+  ["mind", "patterns"],
+);
+const READ_FILE_SELECTION_SCHEMA = Object.freeze({
+  oneOf: Object.freeze([
+    Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["path", "mode"]), properties: Object.freeze({ path: FILE_PATH_SCHEMA, mode: Object.freeze({ const: "whole" }) }) }),
+    Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["path", "mode", "count"]), properties: Object.freeze({ path: FILE_PATH_SCHEMA, mode: Object.freeze({ enum: Object.freeze(["head", "tail"]) }), count: Object.freeze({ type: "integer", minimum: 1, maximum: 100_000 }) }) }),
+    Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["path", "mode", "start_line", "end_line"]), properties: Object.freeze({ path: FILE_PATH_SCHEMA, mode: Object.freeze({ const: "lines" }), start_line: Object.freeze({ type: "integer", minimum: 1 }), end_line: Object.freeze({ type: "integer", minimum: 1 }) }) }),
+    Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["path", "mode", "start_byte", "end_byte"]), properties: Object.freeze({ path: FILE_PATH_SCHEMA, mode: Object.freeze({ const: "bytes" }), start_byte: Object.freeze({ type: "integer", minimum: 0 }), end_byte: Object.freeze({ type: "integer", minimum: 1 }) }) }),
+  ]),
+});
+const READ_FILES_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+    requests: Object.freeze({ type: "array", minItems: 1, maxItems: 32, items: READ_FILE_SELECTION_SCHEMA }),
+    cursor: OPAQUE_ID_SCHEMA,
+    max_output_bytes: Object.freeze({ type: "integer", minimum: 4, maximum: 1_048_576 }),
+  },
+  ["mind", "requests"],
+);
+
 const LIST_REVISIONS_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
@@ -716,6 +830,94 @@ const FETCH_OUTPUT_SCHEMA = toolOutputSchema(
   }),
 );
 
+const FILE_OPERATION_ITEM_ERROR_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["code", "retryable"]),
+  properties: Object.freeze({
+    code: Object.freeze({ enum: Object.freeze([
+      "file_not_found", "file_not_text", "unsupported_text_encoding",
+      "file_scan_limit_exceeded", "range_out_of_bounds", "utf8_boundary_required",
+    ]) }),
+    retryable: Object.freeze({ const: false }),
+  }),
+});
+const FILE_DESCRIPTOR_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "path", "kind", "media_type", "size", "sha256", "revision_id",
+    "revision_committed_at", "metadata_status", "metadata",
+  ]),
+  properties: Object.freeze({
+    path: FILE_PATH_SCHEMA,
+    kind: Object.freeze({ enum: Object.freeze(["markdown", "opaque"]) }),
+    media_type: NON_EMPTY_STRING_SCHEMA,
+    size: Object.freeze({ type: "integer", minimum: 0 }),
+    sha256: SHA256_SCHEMA,
+    revision_id: OPAQUE_ID_SCHEMA,
+    revision_committed_at: Object.freeze({ type: "string", format: "date-time" }),
+    metadata_status: Object.freeze({ enum: Object.freeze(["not_requested", "available", "unsupported", "invalid"]) }),
+    metadata: Object.freeze({ type: Object.freeze(["object", "null"]) }),
+  }),
+});
+const LIST_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "mind", "resolved_revision", "files", "aggregate", "scanned",
+    "incomplete", "incomplete_reason", "next_cursor",
+  ]),
+  properties: Object.freeze({
+    mind: MIND_DESCRIPTOR_SCHEMA,
+    resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+    files: Object.freeze({ type: "array", items: FILE_DESCRIPTOR_SCHEMA }),
+    aggregate: Object.freeze({ type: "object" }),
+    scanned: Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["files", "bytes"]), properties: Object.freeze({ files: Object.freeze({ type: "integer", minimum: 0 }), bytes: Object.freeze({ type: "integer", minimum: 0 }) }) }),
+    incomplete: Object.freeze({ type: "boolean" }),
+    incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["page_limit", "scan_budget", null]) }),
+    next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+  }),
+}));
+const GREP_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "mind", "resolved_revision", "output", "count_unit", "files", "errors", "scanned",
+    "returned", "incomplete", "incomplete_reason", "next_cursor",
+  ]),
+  properties: Object.freeze({
+    mind: MIND_DESCRIPTOR_SCHEMA,
+    resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+    output: Object.freeze({ enum: Object.freeze(["matches", "files_with_matches", "files_without_match", "count"]) }),
+    count_unit: Object.freeze({ enum: Object.freeze(["matching_lines", "occurrences"]) }),
+    files: Object.freeze({ type: "array", items: Object.freeze({ type: "object" }) }),
+    errors: Object.freeze({ type: "array", items: Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["path", "error"]), properties: Object.freeze({ path: FILE_PATH_SCHEMA, error: FILE_OPERATION_ITEM_ERROR_SCHEMA }) }) }),
+    scanned: Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["files", "bytes"]), properties: Object.freeze({ files: Object.freeze({ type: "integer", minimum: 0 }), bytes: Object.freeze({ type: "integer", minimum: 0 }) }) }),
+    returned: Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["rows", "bytes"]), properties: Object.freeze({ rows: Object.freeze({ type: "integer", minimum: 0 }), bytes: Object.freeze({ type: "integer", minimum: 0 }) }) }),
+    incomplete: Object.freeze({ type: "boolean" }),
+    incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["page_limit", "scan_budget", "response_budget", null]) }),
+    next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+  }),
+}));
+const READ_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "mind", "resolved_revision", "items", "returned_bytes", "incomplete",
+    "incomplete_reason", "next_cursor",
+  ]),
+  properties: Object.freeze({
+    mind: MIND_DESCRIPTOR_SCHEMA,
+    resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+    items: Object.freeze({ type: "array", items: Object.freeze({ type: "object" }) }),
+    returned_bytes: Object.freeze({ type: "integer", minimum: 0 }),
+    incomplete: Object.freeze({ type: "boolean" }),
+    incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["response_budget", null]) }),
+    next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+  }),
+}));
+
 const REVISION_MANIFEST_SUMMARY_SCHEMA = Object.freeze({
   type: "object",
   additionalProperties: false,
@@ -885,6 +1087,36 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "Fetch Markdown through a server-issued opaque entry or continuation ID fixed to one still-enabled Mind, immutable revision, path, and byte range. The locator never bypasses current usage mode, scope, or access.",
     inputSchema: FETCH_INPUT_SCHEMA,
     outputSchema: FETCH_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "list_files",
+    title: "List exact-revision files",
+    description:
+      "List Markdown and explicit text BundleFiles in one enabled Mind and exact immutable revision. Supports bounded path/glob selection, metadata projection/filter/sort, aggregates, and opaque manifest-bound pagination; it never executes shell commands or semantic interpretation.",
+    inputSchema: LIST_FILES_INPUT_SCHEMA,
+    outputSchema: LIST_FILES_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "grep_files",
+    title: "Search exact-revision file content",
+    description:
+      "Run bounded literal or safe single-line regex matching over selected UTF-8 files in one enabled Mind and exact immutable revision. Results preserve path, line, byte-span and pattern provenance and never use semantic search or hidden corpus expansion.",
+    inputSchema: GREP_FILES_INPUT_SCHEMA,
+    outputSchema: GREP_FILES_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "read_files",
+    title: "Read exact file ranges",
+    description:
+      "Read one to 32 exact paths from one enabled Mind and immutable revision using whole, head, tail, line, or UTF-8 byte ranges. Response limits yield an opaque continuation fixed to the manifest and original request.",
+    inputSchema: READ_FILES_INPUT_SCHEMA,
+    outputSchema: READ_FILES_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),

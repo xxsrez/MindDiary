@@ -129,6 +129,11 @@ export interface SpaceCanonicalObject extends SpaceCanonicalObjectMetadata {
   readonly bytes: Uint8Array;
 }
 
+/** Streaming canonical read used when a bounded prefix does not require the tail. */
+export interface OpenedSpaceCanonicalObject extends SpaceCanonicalObjectMetadata {
+  readonly body: ReadableStream<Uint8Array>;
+}
+
 export interface SpaceCanonicalObjectPutResult {
   readonly object: Readonly<SpaceCanonicalObjectMetadata>;
   readonly status: "stored" | "already_exists";
@@ -164,6 +169,11 @@ export interface SpaceCanonicalObjectStore {
     spaceId: SpaceId,
     sha256: Sha256Digest,
   ): Promise<Readonly<SpaceCanonicalObject> | null>;
+  openSpaceCanonicalObject?(
+    kind: SpaceCanonicalObjectKind,
+    spaceId: SpaceId,
+    sha256: Sha256Digest,
+  ): Promise<Readonly<OpenedSpaceCanonicalObject> | null>;
   listSpaceCanonicalObjects(
     request: Readonly<SpaceCanonicalObjectListRequest>,
   ): Promise<readonly Readonly<SpaceCanonicalObjectMetadata>[]>;

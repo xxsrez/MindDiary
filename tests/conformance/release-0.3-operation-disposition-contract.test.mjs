@@ -435,7 +435,7 @@ test("all current MCP tools have a disposition and the target catalog is exact",
       "get_export_status",
     ],
   );
-  assert.equal(fixture.targetMcpCatalog.length, 20);
+  assert.equal(fixture.targetMcpCatalog.length, 23);
   for (const tool of fixture.mcpTools) {
     assertExactKeys(tool, ["name", "disposition", "profile", "mindScope", "owner"], tool.name);
     assert.ok(profiles.has(tool.profile), `${tool.name}: unknown profile`);

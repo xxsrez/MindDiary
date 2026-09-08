@@ -9,7 +9,7 @@ const INVENTORY_PATH = new URL(
 );
 const EXPECTED_SCHEMA = "mind-diary/file-ingress-hosted-tool-inventory/v1";
 const EXPECTED_SOURCE = "mind-diary-hosted-mcp-tools-list";
-const EXPECTED_TOOL_COUNT = 20;
+const EXPECTED_TOOL_COUNT = 23;
 
 function schemaHash(value) {
   return `sha256:${createHash("sha256").update(canonical(value)).digest("hex")}`;

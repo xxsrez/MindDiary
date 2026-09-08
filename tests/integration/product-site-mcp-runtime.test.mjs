@@ -806,6 +806,24 @@ async function legacyMcp(runtime, secret, body) {
   }));
 }
 
+async function legacyTool(runtime, secret, id, progressToken, name, args) {
+  const response = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: {
+      _meta: { progressToken },
+      name,
+      arguments: args,
+    },
+  });
+  assert.equal(response.status, 200, name);
+  const body = await response.json();
+  assert.equal(body.result?.isError, false, `${name}: ${JSON.stringify(body)}`);
+  assert.equal(body.result?.structuredContent?.ok, true, name);
+  return body.result.structuredContent.data;
+}
+
 async function modernMcp(runtime, secret, body, benchmarkCorrelationId) {
   return responseFrom(runtime, new Request(`${ORIGIN}${MCP_ENDPOINT}`, {
     method: "POST",
@@ -1758,6 +1776,57 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(database.metadataTailReads - tailReadsBeforeBrowse, 2);
   const indexEntry = browsed.entries.find(({ path }) => path === "index.md");
   assert.ok(indexEntry);
+  const listedFiles = await modernTool(
+    runtime,
+    secret,
+    "starter-list-files",
+    "list_files",
+    {
+      mind: "/me",
+      revision_selector: { kind: "revision", revision_id: starterRevisionId },
+      include_globs: ["**/*.md"],
+      aggregate: { kind: "count" },
+    },
+  );
+  assert.deepEqual(listedFiles.files.map(({ path }) => path), [
+    "concepts/first-memory.md",
+    "index.md",
+    "log.md",
+  ]);
+  assert.equal(listedFiles.aggregate.count, 3);
+  const greppedFiles = await modernTool(
+    runtime,
+    secret,
+    "starter-grep-files",
+    "grep_files",
+    {
+      mind: "/me",
+      revision_selector: { kind: "revision", revision_id: starterRevisionId },
+      paths: ["concepts/first-memory.md"],
+      patterns: ["concrete fact", "reusable note"],
+      output: "count",
+      count_unit: "occurrences",
+    },
+  );
+  assert.equal(greppedFiles.count_unit, "occurrences");
+  assert.equal(greppedFiles.files[0].count, 3);
+  const rangedFiles = await modernTool(
+    runtime,
+    secret,
+    "starter-read-files",
+    "read_files",
+    {
+      mind: "/me",
+      revision_selector: { kind: "revision", revision_id: starterRevisionId },
+      requests: [
+        { path: "index.md", mode: "head", count: 3 },
+        { path: "log.md", mode: "lines", start_line: 1, end_line: 3 },
+      ],
+    },
+  );
+  assert.equal(rangedFiles.items.length, 2);
+  assert.match(rangedFiles.items[0].file.text, /okf_version/u);
+  assert.match(rangedFiles.items[1].file.text, /# Log/u);
   const tailReadsBeforeFetch = database.metadataTailReads;
   const locatorHandlesBeforeFetch = database.locatorHandles.size;
   const fetchedIndex = await modernTool(
@@ -2648,7 +2717,51 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     JSON.stringify(personalMind),
   );
 
-  const previousRevisionId = personalMind.head.revision_id;
+  const compatibilityRevision = personalMind.head.revision_id;
+  const compatibilityList = await legacyTool(
+    runtime,
+    secret,
+    "compatibility-list-files",
+    20,
+    "list_files",
+    {
+      mind: "/me",
+      revision_selector: { kind: "revision", revision_id: compatibilityRevision },
+      include_globs: ["**/*.md"],
+    },
+  );
+  assert.ok(compatibilityList.files.some(({ path }) => path === "index.md"));
+  const compatibilityGrep = await legacyTool(
+    runtime,
+    secret,
+    "compatibility-grep-files",
+    21,
+    "grep_files",
+    {
+      mind: "/me",
+      revision_selector: { kind: "revision", revision_id: compatibilityRevision },
+      paths: ["index.md"],
+      patterns: ["first Memory"],
+      output: "files_with_matches",
+    },
+  );
+  assert.deepEqual(compatibilityGrep.files.map(({ path }) => path), ["index.md"]);
+  const compatibilityRead = await legacyTool(
+    runtime,
+    secret,
+    "compatibility-read-files",
+    22,
+    "read_files",
+    {
+      mind: "/me",
+      revision_selector: { kind: "revision", revision_id: compatibilityRevision },
+      requests: [{ path: "index.md", mode: "head", count: 2 }],
+    },
+  );
+  assert.equal(compatibilityRead.items.length, 1);
+  assert.match(compatibilityRead.items[0].file.text, /okf_version/u);
+
+  const previousRevisionId = compatibilityRevision;
   const committed = await legacyMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: 3,

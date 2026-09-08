@@ -61,6 +61,9 @@ const REQUIRED_PROFILE_OPERATIONS = Object.freeze({
   starter_small: Object.freeze([
     "list_minds",
     "browse_entries",
+    "list_files",
+    "grep_files",
+    "read_files",
     "search",
     "fetch",
   ]),

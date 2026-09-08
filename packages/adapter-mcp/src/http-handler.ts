@@ -528,6 +528,12 @@ function readToolSuccessMessage(name: McpReadToolName): string {
       return "Searched the resolved Mind revision.";
     case "fetch":
       return "Fetched the exact entry revision.";
+    case "list_files":
+      return "Listed files in the exact Mind revision.";
+    case "grep_files":
+      return "Searched file content in the exact Mind revision.";
+    case "read_files":
+      return "Read exact file ranges from the Mind revision.";
     case "list_revisions":
       return "Listed Mind revisions.";
     case "get_revision":
@@ -650,6 +656,20 @@ function readFailureMessage(code: string): string {
       return "The revision selector is invalid.";
     case "invalid_query":
       return "The query is invalid.";
+    case "invalid_file_operation":
+      return "The file operation arguments are invalid.";
+    case "invalid_glob":
+      return "The file glob is invalid.";
+    case "invalid_metadata_filter":
+      return "The metadata filter is invalid.";
+    case "invalid_sort":
+      return "The file sort is invalid.";
+    case "unsupported_pattern":
+      return "The search pattern is unsupported.";
+    case "file_operation_cursor_invalid":
+      return "The file operation cursor is invalid.";
+    case "file_operation_budget_exhausted":
+      return "The bounded file operation budget is exhausted.";
     case "invalid_request":
     default:
       return "The tool arguments are invalid.";

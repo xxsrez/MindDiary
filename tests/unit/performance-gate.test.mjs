@@ -103,7 +103,7 @@ test("profile receipt verifies observed Minds, revisions, files and bytes and re
 test("scenario is exact-SHA/deployment scoped and forbids inline credentials and declared matrix", () => {
   const receipt = profileReceipt();
   const scenario = validatePerformanceScenario(rawScenario(), receipt);
-  assert.equal(scenario.requests.length, 13);
+  assert.equal(scenario.requests.length, 19);
   assert.equal(
     verifyPerformanceScenarioCredentialBindings(scenario, receipt, credentialEnvironment()),
     true,
@@ -151,10 +151,10 @@ test("performance gate passes only correlated web, modern and compatibility cold
   const report = evaluatePerformanceGate(fixture());
   assert.equal(report.status, "passed", JSON.stringify(report.failures));
   assert.deepEqual(report.failures, []);
-  assert.equal(report.connector.length, 13);
+  assert.equal(report.connector.length, 19);
   assert.ok(report.connector.every(({ telemetry_correlated_requests }) =>
     telemetry_correlated_requests === 21));
-  assert.equal(report.server.length, 8);
+  assert.equal(report.server.length, 14);
   assert.ok(report.server.every(({ warm }) => warm.samples >= 20));
   assert.deepEqual(report.history_growth.map(({ ratio }) => ratio), [1.1, 1.1]);
   assert.deepEqual(verifyPerformanceGateArtifact(report), report);

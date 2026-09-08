@@ -14,6 +14,7 @@ import {
   type ImmutableObjectWriteRequest,
   REVISION_MANIFEST_MEDIA_TYPE,
   type SpaceCanonicalObject,
+  type OpenedSpaceCanonicalObject,
   type SpaceCanonicalObjectMetadata,
   type SpaceCanonicalObjectPutResult,
   type SpaceCanonicalObjectWriteRequest,
@@ -567,6 +568,22 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     ) throw new ObjectStoreFailure("object_tampered", "Space canonical bytes are invalid");
     if (kind === "markdown") assertMarkdown(bytes, metadata.mediaType);
     return Object.freeze({ ...metadata, bytes });
+  }
+
+  async openSpaceCanonicalObject(
+    kind: SpaceCanonicalObjectMetadata["kind"],
+    spaceId: SpaceCanonicalObjectMetadata["spaceId"],
+    digest: Digest,
+  ): Promise<Readonly<OpenedSpaceCanonicalObject> | null> {
+    assertDigest(digest);
+    const object = await this.#get(spaceCanonicalKey(kind, spaceId, digest));
+    if (!object) return null;
+    const metadata = spaceCanonicalMetadataFromR2(object);
+    if (
+      metadata.kind !== kind || metadata.spaceId !== spaceId ||
+      metadata.sha256 !== digest
+    ) throw new ObjectStoreFailure("object_tampered", "Space canonical metadata is invalid");
+    return Object.freeze({ ...metadata, body: bodyStream(object) });
   }
 
   async listSpaceCanonicalObjects(

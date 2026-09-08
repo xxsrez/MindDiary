@@ -10,6 +10,7 @@ import {
   type ObjectStore,
   REVISION_MANIFEST_MEDIA_TYPE,
   type SpaceCanonicalObject,
+  type OpenedSpaceCanonicalObject,
   type SpaceCanonicalObjectMetadata,
   type SpaceCanonicalObjectPutResult,
   type SpaceCanonicalObjectWriteRequest,
@@ -318,6 +319,25 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     return Object.freeze({
       ...this.#spaceCanonicalMetadata(stored),
       bytes: new Uint8Array(stored.bytes),
+    });
+  }
+
+  async openSpaceCanonicalObject(
+    kind: SpaceCanonicalObjectMetadata["kind"],
+    spaceId: SpaceCanonicalObjectMetadata["spaceId"],
+    digest: Digest,
+  ): Promise<Readonly<OpenedSpaceCanonicalObject> | null> {
+    const object = await this.getSpaceCanonicalObject(kind, spaceId, digest);
+    if (object === null) return null;
+    const bytes = new Uint8Array(object.bytes);
+    return Object.freeze({
+      ...this.#spaceCanonicalMetadata(object as StoredSpaceCanonicalObject),
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
     });
   }
 

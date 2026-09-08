@@ -42,7 +42,10 @@ export interface ProductMcpApplicationDependencies {
     configureMyMindDescription(actor: AuthenticatedActor, command: { description: string | null; expectedMetadataVersion: number; idempotencyKey: string }): Promise<unknown>;
   };
   readonly discovery: Pick<MindDiscoveryService, "listMinds" | "resolveMind" | "getMindInfo">;
-  readonly browse: Pick<MindBrowseService, "browseEntries" | "listBundleFiles" | "fetch" | "readResource">;
+  readonly browse: Pick<
+    MindBrowseService,
+    "browseEntries" | "listBundleFiles" | "listFiles" | "grepFiles" | "readFiles" | "fetch" | "readResource"
+  >;
   readonly search: Pick<MindSearchService, "searchEntries">;
   readonly history: Pick<MindHistoryService, "listRevisions" | "getRevision">;
   readonly validation: Pick<MindValidationService, "validateMind">;
@@ -806,6 +809,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
       }
       case "browse_entries":
         return snakeOutput(await this.#dependencies.browse.browseEntries(request.actor, input));
+      case "list_files":
+        return snakeOutput(await this.#dependencies.browse.listFiles(request.actor, input));
+      case "grep_files":
+        return snakeOutput(await this.#dependencies.browse.grepFiles(request.actor, input));
+      case "read_files":
+        return snakeOutput(await this.#dependencies.browse.readFiles(request.actor, input));
       case "list_bundle_files": {
         const result = await this.#dependencies.browse.listBundleFiles(request.actor, input);
         return snakeOutput({

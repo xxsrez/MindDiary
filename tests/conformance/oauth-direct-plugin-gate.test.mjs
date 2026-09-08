@@ -96,7 +96,7 @@ test("full schema inventory stays closed while the deployed default catalog omit
     inputSchema,
     outputSchema,
   }));
-  assert.equal(current.length, 20);
+  assert.equal(current.length, 23);
   const nativeIngress = current.find(({ name }) => name === "get_file_ingress_capabilities");
   assert.deepEqual(
     nativeIngress?.outputSchema?.properties?.data?.properties?.native_file_parameter?.required,
@@ -113,11 +113,11 @@ test("full schema inventory stays closed while the deployed default catalog omit
   const verifiedNativeCatalog = current.filter(
     ({ name }) => name !== "open_bundle_file_picker",
   );
-  assert.equal(verifiedNativeCatalog.length, 19);
+  assert.equal(verifiedNativeCatalog.length, 22);
   assert.equal(assertCodexCompatibleVerifiedNativeCatalog(verifiedNativeCatalog), true);
   const defaultWriteCatalog = current.filter(({ name }) =>
     name !== "open_bundle_file_picker" && name !== "stage_bundle_file");
-  assert.equal(defaultWriteCatalog.length, 18);
+  assert.equal(defaultWriteCatalog.length, 21);
   assert.equal(assertCodexCompatibleDefaultWriteCatalog(defaultWriteCatalog), true);
   assert.equal(assertCodexCompatibleReadCatalog(current.filter(
     ({ name }) => name !== "open_bundle_file_picker" &&

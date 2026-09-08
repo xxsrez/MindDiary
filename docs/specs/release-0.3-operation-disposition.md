@@ -186,6 +186,9 @@ indistinguishable `404` for every other actor.
 | `browse_entries` | change → Content MCP | One enabled explicit Mind/revision per call; no corpus vacuum or fallback. MD-376 |
 | `search` | change → Content MCP | One enabled explicit Mind/revision only; multiple relevant Minds require sequential calls. MD-376 |
 | `fetch` | change → Content MCP | Opaque exact-revision locator unchanged; current usage and access are rechecked. MD-376 |
+| `list_files` | add → Content MCP | Deterministic manifest/path and bounded structured-metadata selection for one enabled explicit Mind/revision. MD-408/MD-415 |
+| `grep_files` | add → Content MCP | Literal or safe single-line regex matching over explicitly selected UTF-8 files; no semantic expansion. MD-408/MD-414 |
+| `read_files` | add → Content MCP | Whole/head/tail/line/UTF-8 byte ranges for up to 32 exact paths, with manifest-bound continuation. MD-408/MD-416 |
 | `list_revisions` | change → Content MCP | Enabled explicit Mind; current access only; history stays read-only. MD-376 |
 | `get_revision` | change → Content MCP | Explicit Mind + exact revision; historical view stays read-only |
 | `validate_mind` | change → Content MCP | Standalone exact revision validation; not import-session validation |
@@ -204,19 +207,26 @@ indistinguishable `404` for every other actor.
 | `start_export` | move → Sites control | Omit from catalog; exact old call returns side-effect-free `operation_moved_to_sites` with the Sites REST route and never starts a job. MD-359/MD-361 |
 | `get_export_status` | move → Sites control | Omit from catalog; exact old call returns the same side-effect-free migration result; Site status/download only. MD-359/MD-361 |
 
-The complete target schema catalog therefore contains 18 tools, in stable order.
-Endpoint profiles publish only their exact safe projection: direct modern and
+The complete target schema catalog therefore contains 23 tools, in stable order,
+including the two ADR-0025 Personal-configuration tools and three MD-408 file
+operation tools. Endpoint profiles publish only their exact safe projection:
+direct modern and
 compatibility omit both `open_bundle_file_picker` and `stage_bundle_file`, a
 constructor-verified native route may publish `stage_bundle_file` without the
 picker, and `/api/mcp/apps` publishes the complete catalog.
 
 ```text
+get_personal_mind_configuration
+set_personal_mind_description
 list_minds
 resolve_mind
 get_mind_info
 browse_entries
 search
 fetch
+list_files
+grep_files
+read_files
 list_revisions
 get_revision
 validate_mind

@@ -47,6 +47,8 @@ import type { OkfBundleFixture } from "@mind-diary/okf-codec";
 
 export * from "./mind-discovery.js";
 export * from "./mind-browse.js";
+export * from "./mind-browse-failure.js";
+export * from "./file-operations.js";
 export * from "./mind-history.js";
 export * from "./mind-bindings.js";
 export * from "./automatic-capture.js";
@@ -69,6 +71,9 @@ export const CONTENT_QUERIES = [
   "browse_entries",
   "search_entries",
   "fetch_entry",
+  "list_files",
+  "grep_files",
+  "read_files",
   "list_revisions",
   "get_revision",
   "validate_revision",
@@ -110,6 +115,9 @@ export type McpPerformanceTool =
   | "browse_entries"
   | "search"
   | "fetch"
+  | "list_files"
+  | "grep_files"
+  | "read_files"
   | "list_revisions"
   | "get_revision"
   | "validate_mind"

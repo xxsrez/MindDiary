@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { InMemoryAuditSink } from "@mind-diary/adapter-audit-memory";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
+import { REVISION_MANIFEST_MEDIA_TYPE } from "@mind-diary/application-ports";
 import {
   CanonicalRevisionCoordinator,
   MindBrowseFailure,
@@ -20,6 +25,7 @@ import {
 import {
   CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
+  REVISION_MANIFEST_FORMAT_V4,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
   serializeRevisionManifest,
@@ -120,6 +126,11 @@ function trackedObjects(delegate) {
       bundleOpens += 1;
       return delegate.openBundleFile(spaceId, sha256);
     },
+    getBundleFile: (spaceId, sha256) => delegate.getBundleFile(spaceId, sha256),
+    getSpaceCanonicalObject: (kind, spaceId, sha256) =>
+      delegate.getSpaceCanonicalObject(kind, spaceId, sha256),
+    openSpaceCanonicalObject: (kind, spaceId, sha256) =>
+      delegate.openSpaceCanonicalObject(kind, spaceId, sha256),
     listImmutableObjects: (request) => delegate.listImmutableObjects(request),
     deleteImmutableObject: (request) => delegate.deleteImmutableObject(request),
     reads: () => immutableReads,
@@ -297,10 +308,14 @@ async function commitMixedFiles(env, owner, mind, markdownFiles, opaqueFiles, su
       mediaType: file.mediaType,
       size: opaqueObjects[index].object.size,
     })),
-  ]);
-  const manifestHash = await env.objects.calculateSha256(
-    encoder.encode(serializeRevisionManifest(manifest)),
-  );
+  ], REVISION_MANIFEST_FORMAT_V4);
+  const manifestObject = await env.objects.putSpaceCanonicalObject({
+    kind: "revision_manifest",
+    spaceId: mind.mindId,
+    bytes: encoder.encode(serializeRevisionManifest(manifest)),
+    mediaType: REVISION_MANIFEST_MEDIA_TYPE,
+    createdAt: CHANGED_AT,
+  });
   const revisionId = env.nextRevisionId();
   const envelope = createCanonicalRevisionEnvelope({
     revisionId,
@@ -310,7 +325,8 @@ async function commitMixedFiles(env, owner, mind, markdownFiles, opaqueFiles, su
     committedAt: CHANGED_AT,
     committedBy: { kind: "principal", principalId: owner.principalId },
     manifest,
-    manifestHash,
+    manifestHash: manifestObject.object.sha256,
+    manifestSize: manifestObject.object.size,
     summary,
   });
   const result = await env.metadata.commitRevision({
@@ -718,6 +734,371 @@ test("BundleFile listing returns metadata only, verifies preview bytes, and stay
   });
   assert.equal(current.resolvedRevision.revisionId, currentRevision);
   assert.deepEqual(current.files.map((file) => file.path), ["assets/current.zip"]);
+});
+
+test("file operations compose over one exact mixed-file revision with bounded continuations", async (t) => {
+  const env = harness();
+  const owner = await createAccount(env, 31, "File Operation Owner");
+  const mind = await createMind(env, owner, "file-operation-fixture");
+  const markdownFiles = fixtureFiles();
+  const opaqueFiles = [
+    {
+      path: "data/profile.json",
+      mediaType: "application/json",
+      bytes: encoder.encode('{"team":"runtime","rank":2,"enabled":true}\n'),
+    },
+    {
+      path: "data/settings.yaml",
+      mediaType: "application/yaml",
+      bytes: encoder.encode("team: product\nrank: 1\n"),
+    },
+    {
+      path: "notes/plain.txt",
+      mediaType: "text/plain",
+      bytes: encoder.encode("first line\nneedle café 🧠\nlast line\n"),
+    },
+    {
+      path: "logs/crlf.log",
+      mediaType: "text/plain",
+      bytes: encoder.encode("первая строка\r\nneedle warning\r\nlast\r\n"),
+    },
+    {
+      path: "code/example.ts",
+      mediaType: "text/plain",
+      bytes: encoder.encode("export const needle = /a+b?/u;\n"),
+    },
+    {
+      path: "notes/über [x].txt",
+      mediaType: "text/plain",
+      bytes: encoder.encode("literal .* characters\n"),
+    },
+    {
+      path: "notes/empty.txt",
+      mediaType: "text/plain",
+      bytes: new Uint8Array(),
+    },
+    {
+      path: "assets/manual.pdf",
+      mediaType: "application/pdf",
+      bytes: encoder.encode("%PDF-1.7\nneedle-hidden\n"),
+    },
+  ];
+  const exactRevision = await commitMixedFiles(
+    env,
+    owner,
+    mind,
+    markdownFiles,
+    opaqueFiles,
+    "Seed exact file-operation fixture",
+  );
+
+  const oracleRoot = await mkdtemp(join(tmpdir(), "mind-diary-file-operations-"));
+  t.after(() => rm(oracleRoot, { recursive: true, force: true }));
+  for (const file of markdownFiles) {
+    const target = join(oracleRoot, file.path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, file.text);
+  }
+  for (const file of opaqueFiles) {
+    const target = join(oracleRoot, file.path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, file.bytes);
+  }
+  assert.match(execFileSync("rg", ["--version"], { encoding: "utf8" }), /^ripgrep 15\.2\.0$/mu);
+
+  const firstList = await env.browse.listFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    includeGlobs: ["**/*.md"],
+    limit: 2,
+  });
+  assert.equal(firstList.resolvedRevision.revisionId, exactRevision);
+  assert.deepEqual(firstList.files.map((file) => file.path), [
+    "concepts/alpha.md",
+    "concepts/beta.md",
+  ]);
+  assert.equal(firstList.incomplete, true);
+  assert.ok(firstList.nextCursor);
+  const fullMarkdownList = await env.browse.listFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    includeGlobs: ["**/*.md"],
+    limit: 100,
+  });
+  const localMarkdownPaths = execFileSync(
+    "rg",
+    ["--files", "--hidden", "--no-ignore", "--glob", "**/*.md"],
+    { cwd: oracleRoot, encoding: "utf8" },
+  ).trim().split("\n").sort();
+  assert.deepEqual(fullMarkdownList.files.map((file) => file.path), localMarkdownPaths);
+
+  const metadataList = await env.browse.listFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    kinds: ["markdown"],
+    where: { field: "metadata.type", op: "eq", value: "Reference" },
+    selectMetadataFields: ["metadata.title", "metadata.tags"],
+    sort: [{ field: "metadata.title", direction: "desc" }],
+    aggregate: { kind: "distinct", field: "metadata.type" },
+    limit: 10,
+  });
+  assert.deepEqual(metadataList.files.map((file) => file.path), [
+    "concepts/nested/gamma.md",
+    "concepts/beta.md",
+    "concepts/alpha.md",
+  ]);
+  assert.deepEqual(metadataList.aggregate, {
+    kind: "distinct",
+    field: "metadata.type",
+    values: ["Reference"],
+  });
+  const metadataPageOne = await env.browse.listFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    kinds: ["markdown"],
+    where: { field: "metadata.type", op: "eq", value: "Reference" },
+    sort: [{ field: "metadata.title", direction: "asc" }],
+    limit: 2,
+  });
+  assert.equal(metadataPageOne.files.length, 2);
+  assert.equal(metadataPageOne.incomplete, true);
+  assert.ok(metadataPageOne.nextCursor);
+  const metadataPageTwo = await env.browse.listFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    kinds: ["markdown"],
+    where: { field: "metadata.type", op: "eq", value: "Reference" },
+    sort: [{ field: "metadata.title", direction: "asc" }],
+    cursor: metadataPageOne.nextCursor,
+    limit: 2,
+  });
+  assert.equal(metadataPageTwo.files.length, 1);
+  assert.equal(metadataPageTwo.incomplete, false);
+  assert.equal(metadataPageTwo.nextCursor, null);
+  assert.deepEqual(
+    [...metadataPageOne.files, ...metadataPageTwo.files].map(({ path }) => path),
+    ["concepts/alpha.md", "concepts/beta.md", "concepts/nested/gamma.md"],
+  );
+  const manifestOnlyList = await env.browse.listFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    sort: [{ field: "revisionId", direction: "asc" }],
+    limit: 100,
+  });
+  assert.equal(manifestOnlyList.scanned.files, 0);
+  assert.equal(manifestOnlyList.files.every((file) => file.revisionId === exactRevision), true);
+  const structuredMetadata = await env.browse.listFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    kinds: ["opaque"],
+    where: { field: "metadata.rank", op: "gte", value: 1 },
+    selectMetadataFields: ["metadata.team", "metadata.rank"],
+    sort: [{ field: "metadata.rank", direction: "asc" }],
+    limit: 10,
+  });
+  assert.deepEqual(structuredMetadata.files.map((file) => ({
+    path: file.path,
+    metadata: file.metadata,
+  })), [
+    { path: "data/settings.yaml", metadata: { "metadata.team": "product", "metadata.rank": 1 } },
+    { path: "data/profile.json", metadata: { "metadata.team": "runtime", "metadata.rank": 2 } },
+  ]);
+
+  const grep = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    patterns: ["needle", "café"],
+    syntax: "literal",
+    includeGlobs: ["notes/**", "assets/**"],
+    output: "matches",
+    limit: 10,
+  });
+  assert.equal(grep.resolvedRevision.revisionId, exactRevision);
+  assert.deepEqual(grep.files.map((file) => file.path), ["notes/plain.txt"]);
+  assert.equal(grep.files[0].matchingLines, 1);
+  assert.equal(grep.files[0].occurrences, 2);
+  assert.equal(grep.files[0].count, 1);
+  assert.equal(grep.countUnit, "matching_lines");
+  assert.deepEqual(grep.files[0].matches[0].spans.map((span) => span.patternIndex), [0, 1]);
+  assert.deepEqual(grep.errors, [{
+    path: "assets/manual.pdf",
+    error: { code: "file_not_text", retryable: false },
+  }]);
+  const localGrep = execFileSync(
+    "rg",
+    ["--json", "--fixed-strings", "-e", "needle", "-e", "café", "notes/plain.txt"],
+    { cwd: oracleRoot, encoding: "utf8" },
+  ).trim().split("\n").map((line) => JSON.parse(line)).find((row) => row.type === "match");
+  assert.ok(localGrep);
+  assert.equal(grep.files[0].matches[0].lineNumber, localGrep.data.line_number);
+  assert.deepEqual(
+    grep.files[0].matches[0].spans.map(({ startByte, endByte }) => ({
+      start: startByte - grep.files[0].matches[0].startByte,
+      end: endByte - grep.files[0].matches[0].startByte,
+    })),
+    localGrep.data.submatches.map(({ start, end }) => ({ start, end })),
+  );
+  const regexCount = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    paths: ["notes/plain.txt"],
+    patterns: ["(needle|café)"],
+    syntax: "regex",
+    output: "count",
+    countUnit: "occurrences",
+  });
+  assert.equal(regexCount.files[0].matchingLines, 1);
+  assert.equal(regexCount.files[0].occurrences, 2);
+  assert.equal(regexCount.files[0].count, 2);
+  assert.equal(regexCount.countUnit, "occurrences");
+  const literalRegexSyntax = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    paths: ["notes/plain.txt"],
+    patterns: ["needle(?= warning)"],
+    syntax: "literal",
+  });
+  assert.equal(literalRegexSyntax.files.length, 0);
+  await assert.rejects(
+    env.browse.grepFiles(actor(owner.principalId), {
+      mind: mind.handle,
+      patterns: ["needle(?= warning)"],
+      syntax: "regex",
+    }),
+    expectFailure("unsupported_pattern"),
+  );
+  await assert.rejects(
+    env.browse.grepFiles(actor(owner.principalId), {
+      mind: mind.handle,
+      patterns: ["needle"],
+      caseSensitive: "false",
+    }),
+    expectFailure("invalid_file_operation"),
+  );
+  await assert.rejects(
+    env.browse.listFiles(actor(owner.principalId), {
+      mind: mind.handle,
+      recursive: 1,
+    }),
+    expectFailure("invalid_file_operation"),
+  );
+  await assert.rejects(
+    env.browse.listFiles(actor(owner.principalId), {
+      mind: mind.handle,
+      prefix: "x".repeat(1_025),
+    }),
+    expectFailure("invalid_file_operation"),
+  );
+
+  const rangedRead = await env.browse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    requests: [
+      { path: "notes/plain.txt", mode: "head", count: 1 },
+      { path: "notes/plain.txt", mode: "lines", startLine: 2, endLine: 2 },
+      { path: "logs/crlf.log", mode: "tail", count: 1 },
+      { path: "notes/empty.txt", mode: "whole" },
+    ],
+    maxOutputBytes: 1_024,
+  });
+  assert.deepEqual(rangedRead.items.map((item) => item.file.text), [
+    "first line\n",
+    "needle café 🧠\n",
+    "last\r\n",
+    "",
+  ]);
+
+  let streamedBytes = 0;
+  let streamCanceled = false;
+  const streamingObjects = {
+    ...env.observedObjects,
+    openBundleFile: async (spaceId, sha256) => {
+      const object = await env.objects.getBundleFile(spaceId, sha256);
+      if (object === null) return null;
+      let offset = 0;
+      return {
+        ...object,
+        body: new ReadableStream({
+          pull(controller) {
+            if (offset >= object.bytes.byteLength) {
+              controller.close();
+              return;
+            }
+            controller.enqueue(object.bytes.slice(offset, offset + 1));
+            offset += 1;
+            streamedBytes += 1;
+          },
+          cancel() { streamCanceled = true; },
+        }),
+      };
+    },
+  };
+  const streamingBrowse = new MindBrowseService({
+    store: env.metadata,
+    objects: streamingObjects,
+    host: HOST,
+    locators: env.locators,
+  });
+  const streamedHead = await streamingBrowse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId: exactRevision },
+    requests: [{ path: "notes/plain.txt", mode: "head", count: 1 }],
+  });
+  assert.equal(streamedHead.items[0].file.text, "first line\n");
+  assert.equal(streamCanceled, true);
+  assert.ok(streamedBytes < opaqueFiles.find(({ path }) => path === "notes/plain.txt").bytes.byteLength);
+  assert.equal(streamedHead.items[0].file.lineRange.total, null);
+
+  const firstRead = await env.browse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    requests: [
+      { path: "notes/plain.txt", mode: "whole" },
+      { path: "assets/manual.pdf", mode: "whole" },
+    ],
+    maxOutputBytes: 16,
+  });
+  assert.equal(firstRead.resolvedRevision.revisionId, exactRevision);
+  assert.equal(firstRead.items[0].kind, "file");
+  assert.equal(firstRead.items[0].file.text, "first line\nneedl");
+  assert.equal(firstRead.items[0].file.truncated, true);
+  assert.equal(firstRead.incomplete, true);
+  assert.ok(firstRead.nextCursor);
+
+  await commitMixedFiles(
+    env,
+    owner,
+    mind,
+    fixtureFiles("NEW_HEAD_BODY", "NEW_HEAD_BODY"),
+    [],
+    "Move HEAD after exact file-operation cursor issuance",
+  );
+  let readCursor = firstRead.nextCursor;
+  let reconstructed = firstRead.items[0].file.text;
+  let finalRead;
+  while (readCursor !== null) {
+    finalRead = await env.browse.readFiles(actor(owner.principalId), {
+      mind: mind.handle,
+      requests: [
+        { path: "notes/plain.txt", mode: "whole" },
+        { path: "assets/manual.pdf", mode: "whole" },
+      ],
+      cursor: readCursor,
+      maxOutputBytes: 16,
+    });
+    assert.equal(finalRead.resolvedRevision.revisionId, exactRevision);
+    for (const item of finalRead.items) {
+      if (item.kind === "file") reconstructed += item.file.text;
+    }
+    readCursor = finalRead.nextCursor;
+  }
+  assert.equal(reconstructed, "first line\nneedle café 🧠\nlast line\n");
+  assert.deepEqual(
+    encoder.encode(reconstructed),
+    new Uint8Array(await readFile(join(oracleRoot, "notes/plain.txt"))),
+  );
+  assert.deepEqual(finalRead.items.at(-1), {
+    kind: "error",
+    path: "assets/manual.pdf",
+    error: { code: "file_not_text", retryable: false },
+  });
+  assert.equal(finalRead.nextCursor, null);
+
+  const invalidBoundary = await env.browse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId: exactRevision },
+    requests: [{ path: "notes/plain.txt", mode: "bytes", startByte: 24, endByte: 26 }],
+  });
+  assert.equal(invalidBoundary.items[0].kind, "error");
+  assert.equal(invalidBoundary.items[0].error.code, "utf8_boundary_required");
 });
 
 test("entry and continuation locators stay on one exact revision across a HEAD move", async () => {

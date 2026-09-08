@@ -50,12 +50,18 @@ export async function createAcceptancePerformanceFixture(client, identity, bindi
       assert.ok(provisioningId && readbackId && provisioningId !== readbackId);
       const browse = await client.mcp(token, "browse_entries", { mind: "/me" });
       assert.ok(browse.entries.length > 0);
-      const args = { list_minds: {}, browse_entries: { mind: "/me" }, search: { mind: "/me", query: "Mind" }, fetch: { id: browse.entries[0].entry_id },
+      const args = { list_minds: {}, browse_entries: { mind: "/me" },
+        list_files: { mind: "/me", revision_selector: { kind: "head" }, limit: 16 },
+        grep_files: { mind: "/me", revision_selector: { kind: "head" }, patterns: ["Mind"], output: "count" },
+        read_files: { mind: "/me", revision_selector: { kind: "head" }, requests: [{ path: "index.md", mode: "head", count: 8 }] },
+        search: { mind: "/me", query: "Mind" }, fetch: { id: browse.entries[0].entry_id },
         get_revision: { mind: "/me", revision_id: minds.find(m => m.route === "/me").head.revision_id } };
       await client.mcp(token, "fetch", args.fetch);
       const fingerprint = "sha256:" + createHash("sha256").update(JSON.stringify(minds.map(m => ({ id: m.mind_id, head: m.head.revision_id })).sort((a, b) => a.id.localeCompare(b.id)))).digest("hex");
       for (const id of scale === 1 ? ["starter", "history1"] : ["history10"]) {
-        const operations = id === "starter" ? ["list_minds", "browse_entries", "search", "fetch"] : ["get_revision"];
+        const operations = id === "starter"
+          ? ["list_minds", "browse_entries", "list_files", "grep_files", "read_files", "search", "fetch"]
+          : ["get_revision"];
         const observed = { minds: 2, revisions: scale, files, bytes };
         // Each profile has a distinct real read request even when it shares the starter fixture.
         await client.mcp(token, "get_revision", args.get_revision);

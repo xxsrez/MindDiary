@@ -1079,6 +1079,15 @@ export async function createProductSiteRuntime(
     listBundleFiles: (...args: Parameters<MindBrowseService["listBundleFiles"]>) =>
       metadata.withConsistentRead((store) =>
         contentReadServices(store).browse.listBundleFiles(...args)),
+    listFiles: (...args: Parameters<MindBrowseService["listFiles"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).browse.listFiles(...args)),
+    grepFiles: (...args: Parameters<MindBrowseService["grepFiles"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).browse.grepFiles(...args)),
+    readFiles: (...args: Parameters<MindBrowseService["readFiles"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).browse.readFiles(...args)),
     fetch: (...args: Parameters<MindBrowseService["fetch"]>) =>
       metadata.withConsistentRead((store) =>
         contentReadServices(store).browse.fetch(...args)),

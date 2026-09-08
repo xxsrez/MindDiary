@@ -59,6 +59,15 @@ function fixtureArguments(id, operation) {
   if (operation === "browse_entries") {
     return { mind: "/performance-starter", revision_selector: { kind: "head" } };
   }
+  if (operation === "list_files") {
+    return { mind: "/performance-starter", revision_selector: { kind: "head" }, limit: 16 };
+  }
+  if (operation === "grep_files") {
+    return { mind: "/performance-starter", revision_selector: { kind: "head" }, patterns: ["synthetic performance marker"], output: "count" };
+  }
+  if (operation === "read_files") {
+    return { mind: "/performance-starter", revision_selector: { kind: "head" }, requests: [{ path: "index.md", mode: "head", count: 8 }] };
+  }
   if (operation === "fetch") return { id: "entry_performance_starter" };
   if (operation === "search") {
     return { mind: "/performance-starter", query: "synthetic performance marker" };
@@ -68,7 +77,7 @@ function fixtureArguments(id, operation) {
 
 function operationsForKind(kind) {
   if (kind === "small_history") return ["get_revision"];
-  return ["list_minds", "browse_entries", "search", "fetch"];
+  return ["list_minds", "browse_entries", "list_files", "grep_files", "read_files", "search", "fetch"];
 }
 
 function profile(id, kind, observed, fingerprintId = id) {
@@ -172,6 +181,9 @@ function rawScenario() {
     requests.push(
       mcpRequest(profileName, "list_minds", "starter", "starter"),
       mcpRequest(profileName, "browse_entries", "starter", "starter_browse"),
+      mcpRequest(profileName, "list_files", "starter", "starter_list_files"),
+      mcpRequest(profileName, "grep_files", "starter", "starter_grep_files"),
+      mcpRequest(profileName, "read_files", "starter", "starter_read_files"),
       mcpRequest(profileName, "search", "starter", "starter_search"),
       mcpRequest(profileName, "fetch", "starter", "starter_fetch"),
       mcpRequest(

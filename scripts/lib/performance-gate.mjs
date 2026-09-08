@@ -28,6 +28,9 @@ export const PERFORMANCE_BUDGETS_MS = Object.freeze({
   server: Object.freeze({
     list_minds: 2_000,
     browse_entries: 2_000,
+    list_files: 2_000,
+    grep_files: 2_000,
+    read_files: 1_000,
     search: 2_000,
     fetch: 1_000,
   }),

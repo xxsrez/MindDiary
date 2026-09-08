@@ -941,6 +941,27 @@
       "owner": "MD-376"
     },
     {
+      "name": "list_files",
+      "disposition": "add",
+      "profile": "content-read",
+      "mindScope": "enabled-explicit-mind-revision",
+      "owner": "MD-415"
+    },
+    {
+      "name": "grep_files",
+      "disposition": "add",
+      "profile": "content-read",
+      "mindScope": "enabled-explicit-mind-revision",
+      "owner": "MD-414"
+    },
+    {
+      "name": "read_files",
+      "disposition": "add",
+      "profile": "content-read",
+      "mindScope": "enabled-explicit-mind-revision",
+      "owner": "MD-416"
+    },
+    {
       "name": "list_revisions",
       "disposition": "change",
       "profile": "content-read",
@@ -1069,6 +1090,9 @@
     "browse_entries",
     "search",
     "fetch",
+    "list_files",
+    "grep_files",
+    "read_files",
     "list_revisions",
     "get_revision",
     "validate_mind",

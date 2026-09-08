@@ -792,6 +792,7 @@ set_write_mind_binding -> atomically select 0..1 writable target
 capture_knowledge -> add one routine Memory only through enabled pinned policy
 stage_bundle_file -> verified opaque ref pinned to exact write generation
 list_bundle_files/get_bundle_file_download -> exact revision metadata/grant
+list_files/grep_files/read_files -> exact revision manifest/text operations
 content_tool(mind, revision?, ...) -> exactly one bound space_id
 ```
 
