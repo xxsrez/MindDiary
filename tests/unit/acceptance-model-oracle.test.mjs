@@ -40,6 +40,15 @@ test("a successful write is insufficient without exact committed content and OKF
   const valid = [...committed, call("validate_mind", { mind: "/shared" }, { valid: true, resolved_revision: { revision_id: "revision-2" } })];
   assert.throws(() => verifyModelTrace(valid, writing), /committed_content_readback_missing/);
   assert.doesNotThrow(() => verifyModelTrace([...valid, call("fetch", { id: "opaque-entry" }, { entry: { entry_id: "opaque-entry", revision_id: "revision-2" } })], writing));
+  assert.doesNotThrow(() => verifyModelTrace([...valid, call("read_files", { mind: "/shared", paths: ["wiki/decision.md"] }, { resolved_revision: { revision_id: "revision-2" }, items: [] })], writing));
+  assert.throws(() => verifyModelTrace([...valid, call("read_files", { mind: "/shared", paths: ["wiki/decision.md"] }, { resolved_revision: { revision_id: "revision-1" }, items: [] })], writing), /committed_content_readback_missing/);
+});
+test("file operations are scoped reads and only content-bearing operations satisfy required reads", () => {
+  const catalog = call("list_minds", {}, { minds: [{ route: "/shared" }, { route: "/me" }] });
+  assert.throws(() => verifyModelTrace([catalog, call("list_files", { mind: "/me" }, { items: [] })], scenario), /unexpected_read_source/);
+  assert.throws(() => verifyModelTrace([catalog, call("list_files", { mind: "/shared" }, { items: [] })], scenario), /required_read_missing/);
+  assert.doesNotThrow(() => verifyModelTrace([catalog, call("grep_files", { mind: "/shared", query: "decision" }, { items: [] })], scenario));
+  assert.doesNotThrow(() => verifyModelTrace([catalog, call("read_files", { mind: "/shared", paths: ["wiki/decision.md"] }, { items: [] })], scenario));
 });
 test("unknown commits require exact reconciliation before any retry", () => {
   const request = { mind: "/shared", idempotency_key: "original", expected_revision: "revision-1", operations: [] };

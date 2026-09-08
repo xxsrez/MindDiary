@@ -38,8 +38,8 @@ export function verifyModelTrace(events, scenario) {
     calls.push({ ...call, resolvedMind: mind });
   }
   assert.equal(calls.some(c => ["get_personal_mind_configuration", "set_personal_mind_description"].includes(c.tool)), false, "unsolicited_configuration");
-  const reads = calls.filter(c => ["search", "fetch", "browse_entries"].includes(c.tool));
-  const scopedReads = calls.filter(c => ["get_mind_info", "search", "fetch", "browse_entries", "list_revisions", "get_revision", "validate_mind"].includes(c.tool));
+  const reads = calls.filter(c => ["search", "fetch", "browse_entries", "grep_files", "read_files"].includes(c.tool));
+  const scopedReads = calls.filter(c => ["get_mind_info", "search", "fetch", "browse_entries", "list_files", "grep_files", "read_files", "list_revisions", "get_revision", "validate_mind"].includes(c.tool));
   const attempts = calls.filter(c => c.tool === "commit_changeset");
   const commits = [...attempts];
   for (const uncertain of attempts.filter(c => c.result.structuredContent?.error?.code === "transport_outcome_unknown")) {
@@ -66,8 +66,10 @@ export function verifyModelTrace(events, scenario) {
     assert.equal(typeof revision, "string", "commit_revision_missing");
     assert.equal(calls.some(c => c.tool === "validate_mind" && c.resolvedMind === commit.resolvedMind &&
       c.result.structuredContent?.data?.valid === true && c.result.structuredContent.data.resolved_revision?.revision_id === revision), true, "committed_revision_validation_missing");
-    assert.equal(calls.some(c => c.tool === "fetch" && c.resolvedMind === commit.resolvedMind &&
-      c.result.structuredContent?.data?.entry?.revision_id === revision), true, "committed_content_readback_missing");
+    assert.equal(calls.some(c => c.resolvedMind === commit.resolvedMind && (
+      (c.tool === "fetch" && c.result.structuredContent?.data?.entry?.revision_id === revision) ||
+      (c.tool === "read_files" && c.result.structuredContent?.data?.resolved_revision?.revision_id === revision)
+    )), true, "committed_content_readback_missing");
   }
   return calls.map(c => ({ tool: c.tool, mind: c.resolvedMind, error: c.result.isError === true }));
 }
