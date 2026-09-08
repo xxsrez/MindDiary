@@ -2228,6 +2228,39 @@ test("list_minds resolves a scaled candidate set from one D1 read-session", asyn
   assert.equal(database.metadataEvents.length, eventCount);
 });
 
+test("a detached read-session stays immutable while a nested live mutation completes", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  const original = opaqueId("space_detached_original");
+  const added = opaqueId("space_detached_added");
+  assert.equal((await store.reserveHandle({
+    host: HOST,
+    handle: "detached-original",
+    spaceId: original,
+  })).kind, "reserved");
+
+  await store.withDetachedConsistentRead(async (view) => {
+    assert.equal((await view.resolveHandle({
+      host: HOST,
+      handle: "detached-original",
+    }))?.spaceId, original);
+    assert.equal((await store.reserveHandle({
+      host: HOST,
+      handle: "detached-added",
+      spaceId: added,
+    })).kind, "reserved");
+    assert.deepEqual(
+      await view.resolveHandle({ host: HOST, handle: "detached-added" }),
+      { kind: "not_found" },
+    );
+  });
+
+  assert.equal((await store.resolveHandle({
+    host: HOST,
+    handle: "detached-added",
+  }))?.spaceId, added);
+});
+
 test("get_mind_info resolves one exact Mind from one D1 read-session", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();

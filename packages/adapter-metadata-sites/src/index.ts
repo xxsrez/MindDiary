@@ -670,45 +670,71 @@ export class SitesMetadataStore {
     }
     return this.#exclusive(async () => {
       await this.#refresh();
-      const view = new Proxy(Object.create(null) as this, {
-        get: (_target, property) => {
-          if (property === "readCurrentAuthorizationState") {
-            return (query: AuthorizationStateQuery) =>
-              currentAuthorizationStateWithToken(this.#metadata, this.#tokens, query);
-          }
-          if (property === "readCurrentAuthorizationStates") {
-            return (queries: readonly AuthorizationStateQuery[]) =>
-              Promise.all(
-                queries.map((query) =>
-                  currentAuthorizationStateWithToken(this.#metadata, this.#tokens, query),
-                ),
-              );
-          }
-          if (property === "readCurrentRouteAuthorizationState") {
-            return (query: MindRouteAuthorizationQuery) =>
-              currentRouteAuthorizationStateWithToken(
-                this.#metadata,
-                this.#tokens,
-                query,
-              );
-          }
-          if (typeof property !== "string") return undefined;
-          const selected = this.#select(property);
-          if (selected === null) return undefined;
-          const mutations = selected.target === "metadata"
-            ? METADATA_MUTATIONS
-            : TOKEN_MUTATIONS;
-          if (TRANSACTION_METHODS.has(property) || mutations.has(property)) {
-            return () => {
-              throw new TypeError("Sites metadata consistent read-session is read-only");
-            };
-          }
-          const current =
-            selected.target === "metadata" ? this.#metadata : this.#tokens;
-          return methodOf(current, property);
-        },
+      return operation(this.#consistentReadView(this.#metadata, this.#tokens));
+    });
+  }
+
+  /**
+   * One detached immutable view for a read that must perform a separate live
+   * authorization recheck before returning. The metadata lock is released
+   * after the snapshot is cloned, so the final current-state read cannot
+   * self-block behind the materialization callback.
+   */
+  async withDetachedConsistentRead<Result>(
+    operation: (store: this) => Promise<Result>,
+  ): Promise<Result> {
+    if (typeof operation !== "function") {
+      throw new TypeError("Sites metadata detached read-session callback is required");
+    }
+    const snapshot = await this.#exclusive(async () => {
+      await this.#refresh();
+      return Object.freeze({
+        metadata: this.#cloneMetadata(this.#metadata),
+        tokens: InMemoryMcpTokenStore.fromDurableSnapshot(
+          this.#tokens.exportDurableSnapshot(),
+        ),
       });
-      return operation(view);
+    });
+    return operation(this.#consistentReadView(snapshot.metadata, snapshot.tokens));
+  }
+
+  #consistentReadView(
+    metadata: InMemoryRevisionMetadataStore,
+    tokens: InMemoryMcpTokenStore,
+  ): this {
+    return new Proxy(Object.create(null) as this, {
+      get: (_target, property) => {
+        if (property === "readCurrentAuthorizationState") {
+          return (query: AuthorizationStateQuery) =>
+            currentAuthorizationStateWithToken(metadata, tokens, query);
+        }
+        if (property === "readCurrentAuthorizationStates") {
+          return (queries: readonly AuthorizationStateQuery[]) =>
+            Promise.all(
+              queries.map((query) =>
+                currentAuthorizationStateWithToken(metadata, tokens, query),
+              ),
+            );
+        }
+        if (property === "readCurrentRouteAuthorizationState") {
+          return (query: MindRouteAuthorizationQuery) =>
+            currentRouteAuthorizationStateWithToken(metadata, tokens, query);
+        }
+        if (typeof property !== "string") return undefined;
+        const target = property in metadata
+          ? "metadata"
+          : property in tokens
+            ? "tokens"
+            : null;
+        if (target === null) return undefined;
+        const mutations = target === "metadata" ? METADATA_MUTATIONS : TOKEN_MUTATIONS;
+        if (TRANSACTION_METHODS.has(property) || mutations.has(property)) {
+          return () => {
+            throw new TypeError("Sites metadata consistent read-session is read-only");
+          };
+        }
+        return methodOf(target === "metadata" ? metadata : tokens, property);
+      },
     });
   }
 

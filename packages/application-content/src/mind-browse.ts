@@ -586,6 +586,19 @@ export interface MindBrowseDependencies {
   readonly locators: MindLocatorCodec;
   readonly authorizer?: Authorizer;
   readonly credentialAccess?: CredentialContentAccessAuthorizer;
+  /**
+   * Optional live-state recheck used after response materialization. The
+   * primary store may be a request-scoped consistent snapshot; this hook must
+   * resolve usage and authorization from a newer current snapshot.
+   */
+  readonly finalAuthorizationRecheck?: (
+    actor: ActorContext,
+    request: Readonly<{
+      spaceId: SpaceId;
+      capability: "content:browse" | "content:fetch" | "content:search";
+      revisionMode: RevisionMode;
+    }>,
+  ) => Promise<AuthorizationDecision>;
 }
 
 interface NormalizedBrowseQuery {
@@ -884,6 +897,7 @@ export class MindBrowseService {
   readonly #locators: MindLocatorCodec;
   readonly #discovery: MindDiscoveryService;
   readonly #authorizer: Authorizer;
+  readonly #finalAuthorizationRecheck: MindBrowseDependencies["finalAuthorizationRecheck"];
 
   constructor(dependencies: MindBrowseDependencies) {
     this.#store = dependencies.store;
@@ -898,6 +912,7 @@ export class MindBrowseService {
     });
     this.#authorizer =
       dependencies.authorizer ?? new CapabilityAuthorizer(dependencies.store);
+    this.#finalAuthorizationRecheck = dependencies.finalAuthorizationRecheck;
   }
 
   async browseEntries(
@@ -2395,8 +2410,23 @@ export class MindBrowseService {
     expected: AllowedAuthorization,
     denialCode: "mind_not_found" | "locator_not_found" | "resource_not_found",
   ): Promise<void> {
+    let decision: AuthorizationDecision;
     try {
-      await this.#discovery.requireEnabledMindUsage(actor, spaceId);
+      if (this.#finalAuthorizationRecheck !== undefined) {
+        decision = await this.#finalAuthorizationRecheck(actor, {
+          spaceId,
+          capability,
+          revisionMode,
+        });
+      } else {
+        await this.#discovery.requireEnabledMindUsage(actor, spaceId);
+        decision = await this.#authorizer.authorize({
+          actor,
+          spaceId,
+          capability,
+          revisionMode,
+        });
+      }
     } catch (error) {
       if (error instanceof MindDiscoveryFailure) {
         throw new MindBrowseFailure(
@@ -2406,12 +2436,6 @@ export class MindBrowseService {
       }
       throw error;
     }
-    const decision = await this.#authorizer.authorize({
-      actor,
-      spaceId,
-      capability,
-      revisionMode,
-    });
     if (decision.kind === "denied") {
       if (decision.code === "authorization_state_changed") {
         throw new MindBrowseFailure(

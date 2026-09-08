@@ -9,7 +9,10 @@ import { InMemoryAuditSink } from "@mind-diary/adapter-audit-memory";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
-import { REVISION_MANIFEST_MEDIA_TYPE } from "@mind-diary/application-ports";
+import {
+  CapabilityAuthorizer,
+  REVISION_MANIFEST_MEDIA_TYPE,
+} from "@mind-diary/application-ports";
 import {
   CanonicalRevisionCoordinator,
   MindBrowseFailure,
@@ -1242,6 +1245,57 @@ test("file-operation budgets always advance or fail explicitly and abort a stall
   setTimeout(() => controller.abort(), 10);
   await assert.rejects(stalledRead, expectFailure("file_operation_budget_exhausted"));
   assert.equal(streamCanceled, true);
+});
+
+test("file operations compare their initial authorization with a separately refreshed final stamp", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 41, "File Authorization Owner");
+  const viewer = await createAccount(env, 42, "File Authorization Viewer");
+  const mind = await createMind(env, owner, "file-authorization-race");
+  const authorize = new CapabilityAuthorizer(env.metadata);
+  let rechecks = 0;
+  const finalAuthorizationRecheck = async (currentActor, request) => {
+    rechecks += 1;
+    assert.equal(
+      await env.metadata.changeOrdinaryVisibilityForTest(
+        mind.mindId,
+        "private",
+        CHANGED_AT,
+      ),
+      true,
+    );
+    return authorize.authorize({ actor: currentActor, ...request });
+  };
+  const browse = new MindBrowseService({
+    store: env.metadata,
+    objects: env.observedObjects,
+    host: HOST,
+    locators: env.locators,
+    finalAuthorizationRecheck,
+  });
+
+  for (const operation of [
+    () => browse.listFiles(actor(viewer.principalId), { mind: mind.handle }),
+    () => browse.grepFiles(actor(viewer.principalId), {
+      mind: mind.handle,
+      patterns: ["Alpha"],
+    }),
+    () => browse.readFiles(actor(viewer.principalId), {
+      mind: mind.handle,
+      requests: [{ path: "index.md", mode: "head", count: 1 }],
+    }),
+  ]) {
+    assert.equal(
+      await env.metadata.changeOrdinaryVisibilityForTest(
+        mind.mindId,
+        "public",
+        CHANGED_AT,
+      ),
+      true,
+    );
+    await assert.rejects(operation(), expectFailure("mind_not_found"));
+  }
+  assert.equal(rechecks, 3);
 });
 
 test("entry and continuation locators stay on one exact revision across a HEAD move", async () => {

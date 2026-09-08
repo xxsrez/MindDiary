@@ -95,7 +95,7 @@ test("background contract never grants authority from a serialized job", () => {
   assert.equal(BACKGROUND_APPLICATION_BOUNDARY.authorityFromJobPayload, false);
 });
 
-test("multi-object file reads keep their final authorization on fresh metadata", () => {
+test("multi-object file reads use a request snapshot and a separate fresh final authorization snapshot", () => {
   const source = readFileSync(
     new URL("../../packages/composition-root/src/product-site.ts", import.meta.url),
     "utf8",
@@ -104,6 +104,13 @@ test("multi-object file reads keep their final authorization on fresh metadata",
   const end = source.indexOf("fetch: (...args", start);
   assert.ok(start >= 0 && end > start);
   const fileOperations = source.slice(start, end);
-  assert.doesNotMatch(fileOperations, /withConsistentRead/u);
-  assert.match(fileOperations, /contentReadServices\(metadata\)/u);
+  assert.match(fileOperations, /metadata\.withDetachedConsistentRead/u);
+  assert.match(fileOperations, /fileReadServices\(store\)/u);
+
+  const recheckStart = source.indexOf("const finalFileAuthorizationRecheck");
+  assert.ok(recheckStart >= 0 && recheckStart < start);
+  const recheck = source.slice(recheckStart, start);
+  assert.match(recheck, /metadata\.withConsistentRead/u);
+  assert.match(recheck, /requireEnabledMindUsage/u);
+  assert.match(recheck, /scopedAuthorizer\.authorize/u);
 });

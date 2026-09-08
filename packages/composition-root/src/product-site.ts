@@ -1068,6 +1068,38 @@ export async function createProductSiteRuntime(
       }),
     });
   };
+  const finalFileAuthorizationRecheck: NonNullable<
+    ConstructorParameters<typeof MindBrowseService>[0]["finalAuthorizationRecheck"]
+  > = (actor, request) => metadata.withConsistentRead(async (store) => {
+    const scopedAuthorizer = new MindBindingContentAuthorizer({
+      delegate: new CapabilityAuthorizer(store),
+      bindings: store,
+      readAuthority: "current_acl",
+    });
+    const scopedDiscovery = new MindDiscoveryService({
+      store,
+      host,
+      credentialAccess: scopedAuthorizer,
+    });
+    await scopedDiscovery.requireEnabledMindUsage(actor, request.spaceId);
+    return scopedAuthorizer.authorize({ actor, ...request });
+  });
+  const fileReadServices = (store: typeof metadata) => {
+    const scopedAuthorizer = new MindBindingContentAuthorizer({
+      delegate: new CapabilityAuthorizer(store),
+      bindings: store,
+      readAuthority: "current_acl",
+    });
+    return new MindBrowseService({
+      store,
+      objects,
+      host,
+      locators,
+      authorizer: scopedAuthorizer,
+      credentialAccess: scopedAuthorizer,
+      finalAuthorizationRecheck: finalFileAuthorizationRecheck,
+    });
+  };
   // One current D1 snapshot/tail is the authority for one closed content-read
   // request. All binding, ACL, revision and final-stamp checks still run, but
   // they compare the same immutable read-session instead of paying for several
@@ -1079,14 +1111,14 @@ export async function createProductSiteRuntime(
     listBundleFiles: (...args: Parameters<MindBrowseService["listBundleFiles"]>) =>
       metadata.withConsistentRead((store) =>
         contentReadServices(store).browse.listBundleFiles(...args)),
-    // File operations may materialize multiple objects. Keep their final ACL
-    // check on the live store instead of pinning it to the initial D1 snapshot.
+    // File operations materialize against one request snapshot, then compare
+    // the initial stamp with a separately refreshed current snapshot.
     listFiles: (...args: Parameters<MindBrowseService["listFiles"]>) =>
-      contentReadServices(metadata).browse.listFiles(...args),
+      metadata.withDetachedConsistentRead((store) => fileReadServices(store).listFiles(...args)),
     grepFiles: (...args: Parameters<MindBrowseService["grepFiles"]>) =>
-      contentReadServices(metadata).browse.grepFiles(...args),
+      metadata.withDetachedConsistentRead((store) => fileReadServices(store).grepFiles(...args)),
     readFiles: (...args: Parameters<MindBrowseService["readFiles"]>) =>
-      contentReadServices(metadata).browse.readFiles(...args),
+      metadata.withDetachedConsistentRead((store) => fileReadServices(store).readFiles(...args)),
     fetch: (...args: Parameters<MindBrowseService["fetch"]>) =>
       metadata.withConsistentRead((store) =>
         contentReadServices(store).browse.fetch(...args)),
