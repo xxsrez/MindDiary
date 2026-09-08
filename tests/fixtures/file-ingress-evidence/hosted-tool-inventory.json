@@ -12,7 +12,7 @@
       "name": "commit_changeset",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:3fa9f04c7114f43db4a14cc6234e719066a904d2b3e80915245d3a3848b550fa",
-      "output_schema_sha256": "sha256:8083429705cf93d78a4259e4d9c7e83f59b71ab9beabaaa143dac981f9788a89"
+      "output_schema_sha256": "sha256:823b3a5f480134226a7bfaf8c0786f891723e5bfbe77c5145b5455b2b8ecc159"
     },
     {
       "name": "create_file_upload_intent",
