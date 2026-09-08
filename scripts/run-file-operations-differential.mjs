@@ -11,7 +11,7 @@ execFileSync(
   process.execPath,
   [
     "--test",
-    "--test-name-pattern=file operations compose",
+    "--test-name-pattern=differential file operations compose",
     "tests/integration/mind-browse.test.mjs",
   ],
   { cwd: new URL("..", import.meta.url), stdio: "inherit" },

@@ -245,6 +245,14 @@ test("schemas require one explicit Mind and one revision selector shape", () => 
     "mind",
     "revision_id",
   ]);
+
+  let nestedFilter = definitions.get("list_files").inputSchema.properties.where;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const allGroup = nestedFilter.oneOf.find((variant) => variant.required?.[0] === "all");
+    assert.ok(allGroup, `nested metadata all-group must be available at depth ${depth}`);
+    nestedFilter = allGroup.properties.all.items;
+  }
+  assert.deepEqual(nestedFilter.required, ["field", "op"]);
 });
 
 test("tools/list ignores provider order, duplicates, and undeclared tools", async () => {
@@ -308,6 +316,7 @@ test("read execution preserves explicit exact binding and adds structured/text r
   assert.equal(fixture.executionCalls.length, 1);
   assert.deepEqual(fixture.authorizationCalls[0].arguments, argumentsValue);
   assert.deepEqual(fixture.executionCalls[0].arguments, argumentsValue);
+  assert.ok(fixture.executionCalls[0].signal instanceof AbortSignal);
 });
 
 test("known read failures map to stable retryable errors without private text", async () => {

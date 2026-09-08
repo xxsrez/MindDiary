@@ -84,7 +84,8 @@ manifest/metadata selection без чтения body, если metadata не з�
 - optional `paths`, `prefix`, `recursive`, `include_globs`, `exclude_globs`;
 - optional `kinds: markdown | opaque`, `media_types`;
 - optional `where`, `select_metadata_fields`, `sort`;
-- optional `aggregate: count | distinct`, `cursor`, `limit`.
+- optional `aggregate: count | distinct`, `cursor`, `limit`,
+  `max_output_bytes`.
 
 Manifest fields: `path`, `kind`, `media_type`, `size`, `sha256`,
 `revision_id`, `revision_committed_at`. `metadata.<dot.path>` обращается только
@@ -94,6 +95,9 @@ Manifest fields: `path`, `kind`, `media_type`, `size`, `sha256`,
 - JSON/YAML text BundleFile — top-level parsed value;
 - другое содержимое получает `metadata_status=unsupported`;
 - invalid document получает `metadata_status=invalid`, а не empty metadata.
+
+Structured file больше 4 MiB не парсится и получает
+`metadata_status=unsupported`; такой entry не удерживает cursor на месте.
 
 Filter leaves: `exists`, `eq`, `in`, `lt`, `lte`, `gt`, `gte`; boolean nodes:
 `all` и `any`. Maximum depth 4, maximum 16 leaves. Equality is exact JSON
@@ -144,6 +148,11 @@ Every file result returns both counters plus `count`, whose value is selected
 by `count_unit`; the response repeats the effective `count_unit` so pagination
 and aggregation remain auditable.
 
+Response budget учитывает text совпадения и возвращённый before/after context.
+Если одна строка вместе с context не помещается даже в пустой response с
+заданным `max_output_bytes`, call завершается явным
+`file_operation_budget_exhausted`; cursor с неизменной позицией не выдаётся.
+
 ## `read_files`
 
 Назначение: exact `cat`/`head`/`tail`/line-range/byte-range read for 1–32 exact
@@ -192,6 +201,11 @@ time, row or response boundary returns `incomplete=true`, the exact reason and
 successfully complete. Unsupported text file and per-path failures remain in
 `items[].error`; target-level invalid request, authorization, revision
 integrity and cursor failure remain tool errors.
+
+Deadline имеет `incomplete_reason=time_budget`, если уже существует безопасная
+позиция продолжения. Abort входящего MCP request и deadline во время зависшего
+object stream отменяют reader и возвращают retryable
+`file_operation_budget_exhausted`, не удерживая Worker.
 
 Canonical safe codes added by this contract:
 

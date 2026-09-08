@@ -88,11 +88,13 @@ export interface McpContentApplication {
     readonly actor: McpAuthenticatedActor;
     readonly name: McpApplicationToolName;
     readonly arguments: Readonly<Record<string, unknown>>;
+    readonly signal?: AbortSignal;
   }): Promise<unknown>;
   executeToolCall(request: {
     readonly actor: McpAuthenticatedActor;
     readonly name: McpApplicationToolName;
     readonly arguments: Readonly<Record<string, unknown>>;
+    readonly signal?: AbortSignal;
   }): Promise<unknown>;
 }
 
@@ -1599,11 +1601,13 @@ export function createMcpHttpHandlerAtEndpoint(
             actor,
             name,
             arguments: toolArguments,
+            signal: request.signal,
           })
         : fusedExecution.call(dependencies.content, {
             actor,
             name,
             arguments: toolArguments,
+            signal: request.signal,
           }));
       const result = isReadToolName(name)
         ? normalizeReadToolExecutionResult(name, execution)

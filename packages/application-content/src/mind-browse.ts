@@ -7,9 +7,6 @@ import {
   type Authorizer,
   type BundleFileObjectStore,
   type ObjectStore,
-  type OpenedBundleFileObject,
-  type OpenedSpaceCanonicalObject,
-  type SpaceCanonicalObjectStore,
   type CredentialContentAccessAuthorizer,
 } from "@mind-diary/application-ports";
 import {
@@ -40,6 +37,7 @@ import {
 import { inspectSafeRasterPreview } from "./bundle-file-downloads.js";
 import { MindBrowseFailure } from "./mind-browse-failure.js";
 import {
+  FILE_OPERATION_WALL_CLOCK_BUDGET_MS,
   MAX_GREP_SCAN_BYTES,
   MAX_METADATA_SCAN_BYTES,
   MAX_TEXT_BUNDLE_FILE_BYTES,
@@ -48,8 +46,8 @@ import {
   evaluateMetadataFilter,
   exactJsonEqual,
   fileFields,
+  fileOperationBudgetState,
   fileOperationRequestValue,
-  headEndByte,
   isTextMediaType,
   isUtf8Boundary,
   jsonValue,
@@ -57,7 +55,7 @@ import {
   normalizeGrepFilesRequest,
   normalizeListFilesRequest,
   normalizeReadFilesRequest,
-  readHeadBytes,
+  loadTextFileHead,
   regexEscape,
   scalarAfter,
   scalarBefore,
@@ -1176,7 +1174,9 @@ export class MindBrowseService {
   async listFiles(
     actor: ActorContext,
     query: unknown,
+    signal?: AbortSignal,
   ): Promise<Readonly<ListFilesResult>> {
+    const deadlineAt = Date.now() + FILE_OPERATION_WALL_CLOCK_BUDGET_MS;
     const request = normalizeListFilesRequest(query);
     const cursor = await this.#fileOperationCursor(request.cursor, "list");
     const selector = cursor !== null && !request.hasRevisionSelector
@@ -1221,7 +1221,12 @@ export class MindBrowseService {
     const metadataNeeded = request.where !== undefined ||
       referencedFields.some((field) => !manifestFields.has(field));
     const metadataSort = request.sort.some((item) => !manifestFields.has(item.field));
-    if (metadataSort && selected.reduce((sum, entry) => sum + entry.size, 0) > MAX_METADATA_SCAN_BYTES) {
+    if (metadataSort && selected.reduce((sum, entry) => sum + (
+      entry.size <= MAX_TEXT_BUNDLE_FILE_BYTES &&
+      (entry.kind === "markdown" || isTextMediaType(entry.mediaType))
+        ? entry.size
+        : 0
+    ), 0) > MAX_METADATA_SCAN_BYTES) {
       throw new MindBrowseFailure(
         "file_operation_budget_exhausted",
         "Metadata sort exceeds the bounded scan budget.",
@@ -1232,26 +1237,41 @@ export class MindBrowseService {
       entry: Readonly<RevisionManifestEntry>;
       descriptor: Readonly<MindFileDescriptor>;
       fields: Readonly<Record<string, unknown>>;
+      nextOffset: number;
     }>> = [];
     let scannedFiles = 0;
     let scannedBytes = 0;
     let rawOffset = metadataSort ? 0 : (cursor?.fileOffset ?? 0);
     let scanBudgetHit = false;
+    let timeBudgetHit = false;
     for (let index = rawOffset; index < selected.length; index += 1) {
+      const budgetState = fileOperationBudgetState(signal, deadlineAt);
+      if (budgetState === "aborted") {
+        throw new MindBrowseFailure("file_operation_budget_exhausted", "File operation was aborted.", true);
+      }
+      if (budgetState === "deadline") {
+        timeBudgetHit = true;
+        rawOffset = index;
+        break;
+      }
       const entry = selected[index]!;
       let metadataStatus: FileMetadataStatus = "not_requested";
       let metadata: Readonly<Record<string, unknown>> | null = null;
       if (metadataNeeded) {
-        if (scannedBytes + entry.size > MAX_METADATA_SCAN_BYTES) {
+        if (entry.size > MAX_TEXT_BUNDLE_FILE_BYTES ||
+          (entry.kind === "opaque" && !isTextMediaType(entry.mediaType))) {
+          metadataStatus = "unsupported";
+        } else if (scannedBytes + entry.size > MAX_METADATA_SCAN_BYTES) {
           scanBudgetHit = true;
           rawOffset = index;
           break;
+        } else {
+          const parsed = await this.#fileMetadata(envelope.revision.spaceId, envelope.manifest.format, entry);
+          metadataStatus = parsed.status;
+          metadata = parsed.metadata;
+          scannedFiles += 1;
+          scannedBytes += entry.size;
         }
-        const parsed = await this.#fileMetadata(envelope.revision.spaceId, envelope.manifest.format, entry);
-        metadataStatus = parsed.status;
-        metadata = parsed.metadata;
-        scannedFiles += 1;
-        scannedBytes += entry.size;
       }
       const fields = fileFields(
         entry,
@@ -1270,6 +1290,7 @@ export class MindBrowseService {
         prepared.push(Object.freeze({
           entry,
           fields,
+          nextOffset: index + 1,
           descriptor: Object.freeze({
             path: entry.path,
             kind: entry.kind,
@@ -1293,14 +1314,32 @@ export class MindBrowseService {
       }
       return scalarCompare(left.entry.path, right.entry.path);
     });
-    const page = metadataSort
+    const candidatePage = metadataSort
       ? prepared.slice(cursor?.fileOffset ?? 0, (cursor?.fileOffset ?? 0) + request.limit)
       : prepared;
+    const page: typeof prepared = [];
+    let returnedBytes = 0;
+    let responseBudgetHit = false;
+    for (const item of candidatePage) {
+      const descriptorBytes = new TextEncoder().encode(JSON.stringify(item.descriptor)).byteLength;
+      if (descriptorBytes > request.maxOutputBytes) {
+        throw new MindBrowseFailure(
+          "file_operation_budget_exhausted",
+          "One file descriptor exceeds the requested response budget.",
+        );
+      }
+      if (returnedBytes + descriptorBytes > request.maxOutputBytes) {
+        responseBudgetHit = true;
+        break;
+      }
+      page.push(item);
+      returnedBytes += descriptorBytes;
+    }
     const nextOffset = metadataSort
       ? (cursor?.fileOffset ?? 0) + page.length
-      : rawOffset;
+      : responseBudgetHit ? page.at(-1)!.nextOffset : rawOffset;
     const pageDomainLength = metadataSort ? prepared.length : selected.length;
-    const incomplete = scanBudgetHit || nextOffset < pageDomainLength;
+    const incomplete = scanBudgetHit || timeBudgetHit || responseBudgetHit || nextOffset < pageDomainLength;
     const nextCursor = incomplete
       ? await this.#encodeFileOperationCursor(
           "list",
@@ -1344,8 +1383,9 @@ export class MindBrowseService {
       files: Object.freeze(page.map((item) => item.descriptor)),
       aggregate,
       scanned: Object.freeze({ files: scannedFiles, bytes: scannedBytes }),
+      returnedBytes,
       incomplete,
-      incompleteReason: incomplete ? (scanBudgetHit ? "scan_budget" : "page_limit") : null,
+      incompleteReason: incomplete ? (timeBudgetHit ? "time_budget" : scanBudgetHit ? "scan_budget" : responseBudgetHit ? "response_budget" : "page_limit") : null,
       nextCursor,
     });
   }
@@ -1353,7 +1393,9 @@ export class MindBrowseService {
   async grepFiles(
     actor: ActorContext,
     query: unknown,
+    signal?: AbortSignal,
   ): Promise<Readonly<GrepFilesResult>> {
+    const deadlineAt = Date.now() + FILE_OPERATION_WALL_CLOCK_BUDGET_MS;
     const request = normalizeGrepFilesRequest(query);
     const cursor = await this.#fileOperationCursor(request.cursor, "grep");
     const selector = cursor !== null && !request.hasRevisionSelector
@@ -1400,7 +1442,25 @@ export class MindBrowseService {
     let incompleteReason: GrepFilesResult["incompleteReason"] = null;
 
     outer: for (; fileOffset < selected.length; fileOffset += 1, lineOffset = 0) {
+      const fileBudgetState = fileOperationBudgetState(signal, deadlineAt);
+      if (fileBudgetState === "aborted") {
+        throw new MindBrowseFailure("file_operation_budget_exhausted", "File operation was aborted.", true);
+      }
+      if (fileBudgetState === "deadline") {
+        incompleteReason = "time_budget";
+        break;
+      }
       const entry = selected[fileOffset]!;
+      if (entry.size > MAX_TEXT_BUNDLE_FILE_BYTES ||
+        (entry.kind === "opaque" && !isTextMediaType(entry.mediaType))) {
+        const skipped = await this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry);
+        scannedFiles += 1;
+        if (skipped.kind === "error") {
+          errors.push(Object.freeze({ path: entry.path, error: skipped.error }));
+          continue;
+        }
+        throw new MindBrowseFailure("revision_integrity_failure", "File admission state is inconsistent.");
+      }
       if (scannedBytes + entry.size > MAX_GREP_SCAN_BYTES) {
         incompleteReason = "scan_budget";
         break;
@@ -1418,6 +1478,16 @@ export class MindBrowseService {
       let occurrences = 0;
       let stopAfterFile = false;
       for (let index = lineOffset; index < lines.length; index += 1) {
+        const lineBudgetState = fileOperationBudgetState(signal, deadlineAt);
+        if (lineBudgetState === "aborted") {
+          throw new MindBrowseFailure("file_operation_budget_exhausted", "File operation was aborted.", true);
+        }
+        if (lineBudgetState === "deadline") {
+          incompleteReason = "time_budget";
+          lineOffset = index;
+          stopAfterFile = true;
+          break;
+        }
         const line = lines[index]!;
         const spans: GrepMatchSpan[] = [];
         expressions.forEach((expression, patternIndex) => {
@@ -1442,27 +1512,39 @@ export class MindBrowseService {
         });
         if (spans.length === 0) continue;
         spans.sort((left, right) => left.startByte - right.startByte || left.patternIndex - right.patternIndex);
-        matchingLines += 1;
-        occurrences += spans.length;
         if (request.output === "matches") {
-          const rowBytes = new TextEncoder().encode(line.text).byteLength;
+          const beforeContext = lines.slice(Math.max(0, index - request.beforeContext), index).map((item) => item.text);
+          const afterContext = lines.slice(index + 1, index + 1 + request.afterContext).map((item) => item.text);
+          const rowBytes = [line.text, ...beforeContext, ...afterContext]
+            .reduce((sum, value) => sum + new TextEncoder().encode(value).byteLength, 0);
+          if (rowBytes > request.maxOutputBytes) {
+            throw new MindBrowseFailure(
+              "file_operation_budget_exhausted",
+              "One grep result row exceeds the requested response budget.",
+            );
+          }
           if (returnedRows >= request.limit || returnedBytes + rowBytes > request.maxOutputBytes) {
             incompleteReason = returnedRows >= request.limit ? "page_limit" : "response_budget";
             lineOffset = index;
             stopAfterFile = true;
             break;
           }
+          matchingLines += 1;
+          occurrences += spans.length;
           matches.push(Object.freeze({
             lineNumber: index + 1,
             startByte: line.startByte,
             endByte: line.endByte,
             text: line.text,
             spans: Object.freeze(spans),
-            beforeContext: Object.freeze(lines.slice(Math.max(0, index - request.beforeContext), index).map((item) => item.text)),
-            afterContext: Object.freeze(lines.slice(index + 1, index + 1 + request.afterContext).map((item) => item.text)),
+            beforeContext: Object.freeze(beforeContext),
+            afterContext: Object.freeze(afterContext),
           }));
           returnedRows += 1;
           returnedBytes += rowBytes;
+        } else {
+          matchingLines += 1;
+          occurrences += spans.length;
         }
       }
       const qualifies = request.output === "count" ||
@@ -1527,7 +1609,9 @@ export class MindBrowseService {
   async readFiles(
     actor: ActorContext,
     query: unknown,
+    signal?: AbortSignal,
   ): Promise<Readonly<ReadFilesResult>> {
+    const deadlineAt = Date.now() + FILE_OPERATION_WALL_CLOCK_BUDGET_MS;
     const request = normalizeReadFilesRequest(query);
     const cursor = await this.#fileOperationCursor(request.cursor, "read");
     const selector = cursor !== null && !request.hasRevisionSelector
@@ -1563,7 +1647,17 @@ export class MindBrowseService {
     let requestOffset = cursor?.fileOffset ?? 0;
     let continuationByte = cursor?.lineOffset ?? 0;
     let incomplete = false;
+    let incompleteReason: ReadFilesResult["incompleteReason"] = null;
     for (; requestOffset < request.requests.length; requestOffset += 1, continuationByte = 0) {
+      const budgetState = fileOperationBudgetState(signal, deadlineAt);
+      if (budgetState === "aborted") {
+        throw new MindBrowseFailure("file_operation_budget_exhausted", "File operation was aborted.", true);
+      }
+      if (budgetState === "deadline") {
+        incomplete = true;
+        incompleteReason = "time_budget";
+        break;
+      }
       const selection = request.requests[requestOffset]!;
       const entry = envelope.manifest.entries.find((candidate) => candidate.path === selection.path);
       if (entry === undefined) {
@@ -1575,11 +1669,15 @@ export class MindBrowseService {
         continue;
       }
       const loaded = selection.mode === "head"
-        ? await this.#loadTextFileHead(
+        ? await loadTextFileHead(
+            this.#objects,
             envelope.revision.spaceId,
             envelope.manifest.format,
             entry,
             selection.count,
+            signal,
+            deadlineAt,
+            () => this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry),
           )
         : await this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry);
       if (loaded.kind === "error") {
@@ -1636,6 +1734,7 @@ export class MindBrowseService {
       const remaining = request.maxOutputBytes - returnedBytes;
       if (remaining < MIN_FETCH_BYTE_BUDGET && start < end) {
         incomplete = true;
+        incompleteReason = "response_budget";
         break;
       }
       const pageEnd = safeUtf8PageEnd(loaded.file.bytes, start, end, remaining);
@@ -1659,6 +1758,7 @@ export class MindBrowseService {
       if (pageEnd < end) {
         continuationByte = pageEnd;
         incomplete = true;
+        incompleteReason = "response_budget";
         break;
       }
     }
@@ -1687,7 +1787,7 @@ export class MindBrowseService {
       items: Object.freeze(items),
       returnedBytes,
       incomplete,
-      incompleteReason: incomplete ? "response_budget" : null,
+      incompleteReason,
       nextCursor,
     });
   }
@@ -1950,100 +2050,6 @@ export class MindBrowseService {
         kind: "error",
         error: Object.freeze({ code: "unsupported_text_encoding", retryable: false }),
       });
-    }
-  }
-
-  async #loadTextFileHead(
-    spaceId: SpaceId,
-    manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
-    entry: Readonly<RevisionManifestEntry>,
-    lineCount: number,
-  ): Promise<Readonly<
-    | { readonly kind: "file"; readonly file: Readonly<ExactTextFile>; readonly complete: boolean }
-    | { readonly kind: "error"; readonly error: FileOperationItemError }
-  >> {
-    if (entry.kind === "opaque" && !isTextMediaType(entry.mediaType)) {
-      return Object.freeze({
-        kind: "error",
-        error: Object.freeze({ code: "file_not_text", retryable: false }),
-      });
-    }
-    if (entry.size > MAX_TEXT_BUNDLE_FILE_BYTES) {
-      return Object.freeze({
-        kind: "error",
-        error: Object.freeze({ code: "file_scan_limit_exceeded", retryable: false }),
-      });
-    }
-    let opened: Readonly<OpenedBundleFileObject | OpenedSpaceCanonicalObject> | null = null;
-    try {
-      if (
-        entry.kind === "markdown" &&
-        (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
-        "openSpaceCanonicalObject" in this.#objects &&
-        typeof (this.#objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject === "function"
-      ) {
-        opened = await (this.#objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject!(
-          "markdown",
-          spaceId,
-          entry.sha256,
-        );
-      } else if (entry.kind === "opaque" && "openBundleFile" in this.#objects) {
-        opened = await (this.#objects as BundleFileObjectStore).openBundleFile(spaceId, entry.sha256);
-      }
-    } catch (error) {
-      if (error instanceof ObjectStoreFailure) {
-        throw new MindBrowseFailure(
-          "revision_integrity_failure",
-          "The exact revision file failed integrity verification.",
-        );
-      }
-      throw error;
-    }
-    if (opened === null) {
-      const loaded = await this.#loadTextFile(spaceId, manifestFormat, entry);
-      if (loaded.kind === "error") return loaded;
-      const end = headEndByte(loaded.file.bytes, lineCount, true)!;
-      const bytes = loaded.file.bytes.slice(0, end);
-      return Object.freeze({
-        kind: "file",
-        file: Object.freeze({
-          entry,
-          bytes,
-          text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-        }),
-        complete: end === entry.size,
-      });
-    }
-    if (
-      opened.sha256 !== entry.sha256 || opened.mediaType !== entry.mediaType ||
-      opened.size !== entry.size
-    ) {
-      await opened.body.cancel("metadata mismatch").catch(() => undefined);
-      throw new MindBrowseFailure(
-        "revision_integrity_failure",
-        "The exact revision file failed integrity verification.",
-      );
-    }
-    try {
-      const partial = await readHeadBytes(opened.body, entry.size, lineCount);
-      if (
-        partial.complete &&
-        (await this.#objects.calculateSha256(partial.bytes)) !== entry.sha256
-      ) throw new Error("digest mismatch");
-      return Object.freeze({
-        kind: "file",
-        file: Object.freeze({
-          entry,
-          bytes: partial.bytes,
-          text: new TextDecoder("utf-8", { fatal: true }).decode(partial.bytes),
-        }),
-        complete: partial.complete,
-      });
-    } catch {
-      throw new MindBrowseFailure(
-        "revision_integrity_failure",
-        "The exact revision file failed integrity verification.",
-      );
     }
   }
 

@@ -736,7 +736,7 @@ test("BundleFile listing returns metadata only, verifies preview bytes, and stay
   assert.deepEqual(current.files.map((file) => file.path), ["assets/current.zip"]);
 });
 
-test("file operations compose over one exact mixed-file revision with bounded continuations", async (t) => {
+test("differential file operations compose over one exact mixed-file revision with bounded continuations", async (t) => {
   const env = harness();
   const owner = await createAccount(env, 31, "File Operation Owner");
   const mind = await createMind(env, owner, "file-operation-fixture");
@@ -942,6 +942,41 @@ test("file operations compose over one exact mixed-file revision with bounded co
   assert.equal(regexCount.files[0].occurrences, 2);
   assert.equal(regexCount.files[0].count, 2);
   assert.equal(regexCount.countUnit, "occurrences");
+  const localRegex = execFileSync(
+    "rg",
+    ["--json", "-e", "(needle|café)", "notes/plain.txt"],
+    { cwd: oracleRoot, encoding: "utf8" },
+  ).trim().split("\n").map((line) => JSON.parse(line)).filter((row) => row.type === "match");
+  assert.equal(regexCount.files[0].matchingLines, localRegex.length);
+  assert.equal(
+    regexCount.files[0].occurrences,
+    localRegex.reduce((sum, row) => sum + row.data.submatches.length, 0),
+  );
+  const comparedPaths = ["notes/plain.txt", "logs/crlf.log", "code/example.ts", "notes/empty.txt"];
+  const filesWithMatches = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    paths: comparedPaths,
+    patterns: ["needle"],
+    output: "files_with_matches",
+  });
+  const localFilesWithMatches = execFileSync(
+    "rg",
+    ["--files-with-matches", "--fixed-strings", "needle", ...comparedPaths],
+    { cwd: oracleRoot, encoding: "utf8" },
+  ).trim().split("\n").filter(Boolean).sort();
+  assert.deepEqual(filesWithMatches.files.map(({ path }) => path), localFilesWithMatches);
+  const filesWithoutMatch = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    paths: comparedPaths,
+    patterns: ["needle"],
+    output: "files_without_match",
+  });
+  const localFilesWithoutMatch = execFileSync(
+    "rg",
+    ["--files-without-match", "--fixed-strings", "needle", ...comparedPaths],
+    { cwd: oracleRoot, encoding: "utf8" },
+  ).trim().split("\n").filter(Boolean).sort();
+  assert.deepEqual(filesWithoutMatch.files.map(({ path }) => path), localFilesWithoutMatch);
   const literalRegexSyntax = await env.browse.grepFiles(actor(owner.principalId), {
     mind: mind.handle,
     paths: ["notes/plain.txt"],
@@ -1099,6 +1134,107 @@ test("file operations compose over one exact mixed-file revision with bounded co
   });
   assert.equal(invalidBoundary.items[0].kind, "error");
   assert.equal(invalidBoundary.items[0].error.code, "utf8_boundary_required");
+});
+
+test("file-operation budgets always advance or fail explicitly and abort a stalled head stream", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 32, "File Budget Owner");
+  const mind = await createMind(env, owner, "file-budget-fixture");
+  const oversized = encoder.encode(`{"needle":"${"x".repeat((16 * 1024 * 1024) + 1)}"}\n`);
+  const revisionId = await commitMixedFiles(env, owner, mind, fixtureFiles(), [
+    { path: "data/oversized.json", mediaType: "application/json", bytes: oversized },
+    { path: "notes/paged.txt", mediaType: "text/plain", bytes: encoder.encode("needle\nneedlez\n") },
+    { path: "notes/stalled.txt", mediaType: "text/plain", bytes: encoder.encode("needle\ntail\n") },
+  ], "Seed budget progress fixture");
+
+  const listed = await env.browse.listFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId },
+    paths: ["data/oversized.json"],
+    selectMetadataFields: ["metadata.needle"],
+  });
+  assert.equal(listed.incomplete, false);
+  assert.equal(listed.nextCursor, null);
+  assert.equal(listed.files[0].metadataStatus, "unsupported");
+
+  const oversizedGrep = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId },
+    paths: ["data/oversized.json"],
+    patterns: ["needle"],
+  });
+  assert.equal(oversizedGrep.incomplete, false);
+  assert.equal(oversizedGrep.nextCursor, null);
+  assert.deepEqual(oversizedGrep.errors, [{
+    path: "data/oversized.json",
+    error: { code: "file_scan_limit_exceeded", retryable: false },
+  }]);
+
+  const firstGrep = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId },
+    paths: ["notes/paged.txt"],
+    patterns: ["needle"],
+    maxOutputBytes: 10,
+  });
+  assert.equal(firstGrep.files[0].matchingLines, 1);
+  assert.equal(firstGrep.files[0].occurrences, 1);
+  assert.equal(firstGrep.files[0].matches.length, 1);
+  assert.equal(firstGrep.incompleteReason, "response_budget");
+  assert.ok(firstGrep.nextCursor);
+  const secondGrep = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId },
+    paths: ["notes/paged.txt"],
+    patterns: ["needle"],
+    maxOutputBytes: 10,
+    cursor: firstGrep.nextCursor,
+  });
+  assert.equal(secondGrep.files[0].matchingLines, 1);
+  assert.equal(secondGrep.files[0].occurrences, 1);
+  assert.equal(secondGrep.files[0].matches[0].text, "needlez");
+  assert.equal(secondGrep.nextCursor, null);
+
+  await assert.rejects(
+    env.browse.grepFiles(actor(owner.principalId), {
+      mind: mind.handle,
+      revisionSelector: { kind: "revision", revisionId },
+      paths: ["notes/paged.txt"],
+      patterns: ["needle"],
+      maxOutputBytes: 4,
+    }),
+    expectFailure("file_operation_budget_exhausted"),
+  );
+
+  let streamCanceled = false;
+  const stalledObjects = {
+    ...env.observedObjects,
+    openBundleFile: async (spaceId, sha256) => {
+      const object = await env.objects.getBundleFile(spaceId, sha256);
+      if (object === null) return null;
+      return {
+        ...object,
+        body: new ReadableStream({
+          cancel() { streamCanceled = true; },
+        }),
+      };
+    },
+  };
+  const stalledBrowse = new MindBrowseService({
+    store: env.metadata,
+    objects: stalledObjects,
+    host: HOST,
+    locators: env.locators,
+  });
+  const controller = new AbortController();
+  const stalledRead = stalledBrowse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId },
+    requests: [{ path: "notes/stalled.txt", mode: "head", count: 1 }],
+  }, controller.signal);
+  setTimeout(() => controller.abort(), 10);
+  await assert.rejects(stalledRead, expectFailure("file_operation_budget_exhausted"));
+  assert.equal(streamCanceled, true);
 });
 
 test("entry and continuation locators stay on one exact revision across a HEAD move", async () => {

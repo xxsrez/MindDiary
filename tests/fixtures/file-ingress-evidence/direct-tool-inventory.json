@@ -60,7 +60,7 @@
       "name": "grep_files",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:43b131cc6c6907647383e0d8e62301f35fc151ce0646fcf215bd62534738543f",
-      "output_schema_sha256": "sha256:9f236958b0b198ab83ea0669eb612be11d823d0035fd4dc0d341476b6df4c144"
+      "output_schema_sha256": "sha256:39ae4dc297d7dec44fa210c4c05cdd49a076907649ba76fa84c7122d1d9d3b84"
     },
     {
       "name": "list_bundle_files",
@@ -71,8 +71,8 @@
     {
       "name": "list_files",
       "source": "mind-diary-hosted-mcp-tools-list",
-      "input_schema_sha256": "sha256:78f6fd66393a077f94babb3332d390a59888459d0c077e5eb5c7fa49f8459127",
-      "output_schema_sha256": "sha256:1129d39aa5a6dee6c3140bae31f4d8c093606ef033200c46d327d0ff173e0a50"
+      "input_schema_sha256": "sha256:a8f4ec65e8306f28665ccabbb810961114f09d45c3b169afd06ddba6a372e6b2",
+      "output_schema_sha256": "sha256:a84747a91001ba72124d878fb5aa0807a93889468c6b19a8e4697b89de37c262"
     },
     {
       "name": "list_minds",
@@ -90,7 +90,7 @@
       "name": "read_files",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:777c83a50e07c5ac130db2d44829d571b64764282039b196d849316bf98453be",
-      "output_schema_sha256": "sha256:0c152f29bf4ff14808d57408f2f03b32739d51f59966338f89b24b6fe73522c9"
+      "output_schema_sha256": "sha256:57f33b9b0e232660369a83748565dcc839c65b15522a80a57ea830a777bb8d28"
     },
     {
       "name": "reconcile_changeset",

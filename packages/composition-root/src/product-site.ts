@@ -1079,15 +1079,14 @@ export async function createProductSiteRuntime(
     listBundleFiles: (...args: Parameters<MindBrowseService["listBundleFiles"]>) =>
       metadata.withConsistentRead((store) =>
         contentReadServices(store).browse.listBundleFiles(...args)),
+    // File operations may materialize multiple objects. Keep their final ACL
+    // check on the live store instead of pinning it to the initial D1 snapshot.
     listFiles: (...args: Parameters<MindBrowseService["listFiles"]>) =>
-      metadata.withConsistentRead((store) =>
-        contentReadServices(store).browse.listFiles(...args)),
+      contentReadServices(metadata).browse.listFiles(...args),
     grepFiles: (...args: Parameters<MindBrowseService["grepFiles"]>) =>
-      metadata.withConsistentRead((store) =>
-        contentReadServices(store).browse.grepFiles(...args)),
+      contentReadServices(metadata).browse.grepFiles(...args),
     readFiles: (...args: Parameters<MindBrowseService["readFiles"]>) =>
-      metadata.withConsistentRead((store) =>
-        contentReadServices(store).browse.readFiles(...args)),
+      contentReadServices(metadata).browse.readFiles(...args),
     fetch: (...args: Parameters<MindBrowseService["fetch"]>) =>
       metadata.withConsistentRead((store) =>
         contentReadServices(store).browse.fetch(...args)),

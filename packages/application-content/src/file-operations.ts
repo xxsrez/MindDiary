@@ -1,9 +1,22 @@
 import { RE2JS } from "re2js";
 
-import type {
-  RevisionId,
-  RevisionManifestEntry,
-  Sha256Digest,
+import {
+  ObjectStoreFailure,
+  type BundleFileObjectStore,
+  type ObjectStore,
+  type OpenedBundleFileObject,
+  type OpenedSpaceCanonicalObject,
+  type SpaceCanonicalObjectStore,
+} from "@mind-diary/application-ports";
+
+import {
+  REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
+  type CanonicalRevisionEnvelope,
+  type RevisionId,
+  type RevisionManifestEntry,
+  type Sha256Digest,
+  type SpaceId,
 } from "@mind-diary/domain";
 
 import type {
@@ -21,6 +34,7 @@ export const MAX_GREP_SCAN_BYTES = 16 * 1024 * 1024;
 export const MAX_METADATA_SCAN_BYTES = 4 * 1024 * 1024;
 export const MAX_FILE_SELECTOR_PATHS = 100;
 export const MAX_READ_FILE_REQUESTS = 32;
+export const FILE_OPERATION_WALL_CLOCK_BUDGET_MS = 15_000;
 
 const MIN_OUTPUT_BYTE_BUDGET = 4;
 const MAX_CURSOR_CHARACTERS = 8 * 1024;
@@ -55,8 +69,9 @@ export interface ListFilesResult {
     | { readonly kind: "distinct"; readonly field: string; readonly values: readonly unknown[] }
   >;
   readonly scanned: Readonly<{ readonly files: number; readonly bytes: number }>;
+  readonly returnedBytes: number;
   readonly incomplete: boolean;
-  readonly incompleteReason: "page_limit" | "scan_budget" | null;
+  readonly incompleteReason: "page_limit" | "scan_budget" | "response_budget" | "time_budget" | null;
   readonly nextCursor: string | null;
 }
 
@@ -111,7 +126,7 @@ export interface GrepFilesResult {
   readonly scanned: Readonly<{ readonly files: number; readonly bytes: number }>;
   readonly returned: Readonly<{ readonly rows: number; readonly bytes: number }>;
   readonly incomplete: boolean;
-  readonly incompleteReason: "page_limit" | "scan_budget" | "response_budget" | null;
+  readonly incompleteReason: "page_limit" | "scan_budget" | "response_budget" | "time_budget" | null;
   readonly nextCursor: string | null;
 }
 
@@ -137,7 +152,7 @@ export interface ReadFilesResult {
   >[];
   readonly returnedBytes: number;
   readonly incomplete: boolean;
-  readonly incompleteReason: "response_budget" | null;
+  readonly incompleteReason: "response_budget" | "time_budget" | null;
   readonly nextCursor: string | null;
 }
 
@@ -168,6 +183,7 @@ export interface NormalizedListFilesRequest {
   >;
   readonly cursor: string | null;
   readonly limit: number;
+  readonly maxOutputBytes: number;
 }
 
 export interface NormalizedGrepFilesRequest {
@@ -217,6 +233,29 @@ export interface TextLine {
   readonly startByte: number;
   readonly endByte: number;
   readonly endWithTerminatorByte: number;
+}
+
+export class FileOperationBudgetExceeded extends Error {
+  readonly reason: "aborted" | "deadline";
+
+  constructor(reason: "aborted" | "deadline") {
+    super(reason === "aborted" ? "File operation was aborted." : "File operation deadline was reached.");
+    this.name = "FileOperationBudgetExceeded";
+    this.reason = reason;
+  }
+}
+
+export function fileOperationBudgetState(
+  signal: AbortSignal | undefined,
+  deadlineAt: number,
+): "aborted" | "deadline" | null {
+  if (signal?.aborted === true) return "aborted";
+  return Date.now() >= deadlineAt ? "deadline" : null;
+}
+
+export function requireFileOperationBudget(signal: AbortSignal | undefined, deadlineAt: number): void {
+  const state = fileOperationBudgetState(signal, deadlineAt);
+  if (state !== null) throw new FileOperationBudgetExceeded(state);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -400,7 +439,7 @@ function validateMetadataFilter(value: unknown, depth = 0, leaves = { count: 0 }
 
 export function normalizeListFilesRequest(value: unknown): Readonly<NormalizedListFilesRequest> {
   if (!isRecord(value) || !Object.hasOwn(value, "mind")) throw new MindBrowseFailure("invalid_file_operation", "List files request is invalid.");
-  const allowed = new Set(["mind", "revisionSelector", ...selectorKeys(), "where", "selectMetadataFields", "sort", "aggregate", "cursor", "limit"]);
+  const allowed = new Set(["mind", "revisionSelector", ...selectorKeys(), "where", "selectMetadataFields", "sort", "aggregate", "cursor", "limit", "maxOutputBytes"]);
   if (!Object.keys(value).every((key) => allowed.has(key))) throw new MindBrowseFailure("invalid_file_operation", "List files request is invalid.");
   if (value.where !== undefined) validateMetadataFilter(value.where);
   const selectMetadataFields = value.selectMetadataFields === undefined ? [] : normalizeStringArray(value.selectMetadataFields, { maxItems: 32, maxCharacters: 256 });
@@ -420,7 +459,8 @@ export function normalizeListFilesRequest(value: unknown): Readonly<NormalizedLi
     hasRevisionSelector: Object.hasOwn(value, "revisionSelector"), selector: normalizeFileSelector(value),
     where: value.where, selectMetadataFields: Object.freeze(selectMetadataFields),
     sort: Object.freeze((sortValue as ReadonlyArray<Record<string, unknown>>).map((item) => Object.freeze({ field: item.field as string, direction: item.direction as "asc" | "desc" }))),
-    aggregate, cursor: normalizeCursor(value.cursor), limit: normalizePageLimit(value.limit) });
+    aggregate, cursor: normalizeCursor(value.cursor), limit: normalizePageLimit(value.limit),
+    maxOutputBytes: normalizeOutputBudget(value.maxOutputBytes) });
 }
 
 function unsupportedRegex(pattern: string): boolean {
@@ -527,11 +567,41 @@ export function headEndByte(bytes: Uint8Array, lineCount: number, complete: bool
   return complete ? bytes.byteLength : null;
 }
 
-export async function readHeadBytes(body: ReadableStream<Uint8Array>, expectedSize: number, lineCount: number): Promise<Readonly<{ bytes: Uint8Array; complete: boolean }>> {
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+  deadlineAt: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  requireFileOperationBudget(signal, deadlineAt);
+  const remaining = Math.max(1, deadlineAt - Date.now());
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortListener: (() => void) | undefined;
+  const budget = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new FileOperationBudgetExceeded("deadline")), remaining);
+    if (signal !== undefined) {
+      abortListener = () => reject(new FileOperationBudgetExceeded("aborted"));
+      signal.addEventListener("abort", abortListener, { once: true });
+    }
+  });
+  try {
+    return await Promise.race([reader.read(), budget]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (signal !== undefined && abortListener !== undefined) signal.removeEventListener("abort", abortListener);
+  }
+}
+
+export async function readHeadBytes(
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number,
+  lineCount: number,
+  signal?: AbortSignal,
+  deadlineAt = Date.now() + FILE_OPERATION_WALL_CLOCK_BUDGET_MS,
+): Promise<Readonly<{ bytes: Uint8Array; complete: boolean }>> {
   const reader = body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
   try {
     while (true) {
-      const next = await reader.read();
+      const next = await readStreamChunk(reader, signal, deadlineAt);
       if (next.done) {
         if (size !== expectedSize) throw new Error("stream size mismatch");
         const bytes = joinedBytes(chunks, size);
@@ -546,7 +616,83 @@ export async function readHeadBytes(body: ReadableStream<Uint8Array>, expectedSi
         return Object.freeze({ bytes: bytes.slice(0, end), complete: end === expectedSize });
       }
     }
+  } catch (error) {
+    await reader.cancel("file operation interrupted").catch(() => undefined);
+    throw error;
   } finally { reader.releaseLock(); }
+}
+
+export async function loadTextFileHead(
+  objects: ObjectStore,
+  spaceId: SpaceId,
+  manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
+  entry: Readonly<RevisionManifestEntry>,
+  lineCount: number,
+  signal: AbortSignal | undefined,
+  deadlineAt: number,
+  loadFull: () => Promise<Readonly<
+    | { readonly kind: "file"; readonly file: Readonly<ExactTextFile> }
+    | { readonly kind: "error"; readonly error: FileOperationItemError }
+  >>,
+): Promise<Readonly<
+  | { readonly kind: "file"; readonly file: Readonly<ExactTextFile>; readonly complete: boolean }
+  | { readonly kind: "error"; readonly error: FileOperationItemError }
+>> {
+  if (entry.kind === "opaque" && !isTextMediaType(entry.mediaType)) {
+    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_not_text", retryable: false }) });
+  }
+  if (entry.size > MAX_TEXT_BUNDLE_FILE_BYTES) {
+    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_scan_limit_exceeded", retryable: false }) });
+  }
+  let opened: Readonly<OpenedBundleFileObject | OpenedSpaceCanonicalObject> | null = null;
+  try {
+    if (entry.kind === "markdown" &&
+      (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
+      "openSpaceCanonicalObject" in objects &&
+      typeof (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject === "function") {
+      opened = await (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject!("markdown", spaceId, entry.sha256);
+    } else if (entry.kind === "opaque" && "openBundleFile" in objects) {
+      opened = await (objects as BundleFileObjectStore).openBundleFile(spaceId, entry.sha256);
+    }
+  } catch (error) {
+    if (error instanceof ObjectStoreFailure) {
+      throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+    }
+    throw error;
+  }
+  if (opened === null) {
+    const loaded = await loadFull();
+    if (loaded.kind === "error") return loaded;
+    const end = headEndByte(loaded.file.bytes, lineCount, true)!;
+    const bytes = loaded.file.bytes.slice(0, end);
+    return Object.freeze({
+      kind: "file",
+      file: Object.freeze({ entry, bytes, text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) }),
+      complete: end === entry.size,
+    });
+  }
+  if (opened.sha256 !== entry.sha256 || opened.mediaType !== entry.mediaType || opened.size !== entry.size) {
+    await opened.body.cancel("metadata mismatch").catch(() => undefined);
+    throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+  }
+  try {
+    const partial = await readHeadBytes(opened.body, entry.size, lineCount, signal, deadlineAt);
+    if (partial.complete && (await objects.calculateSha256(partial.bytes)) !== entry.sha256) throw new Error("digest mismatch");
+    return Object.freeze({
+      kind: "file",
+      file: Object.freeze({ entry, bytes: partial.bytes, text: new TextDecoder("utf-8", { fatal: true }).decode(partial.bytes) }),
+      complete: partial.complete,
+    });
+  } catch (error) {
+    if (error instanceof FileOperationBudgetExceeded) {
+      throw new MindBrowseFailure(
+        "file_operation_budget_exhausted",
+        error.reason === "aborted" ? "File operation was aborted." : "File operation deadline was reached.",
+        true,
+      );
+    }
+    throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+  }
 }
 
 export function jsonValue(value: unknown, depth = 0): unknown {
@@ -596,7 +742,7 @@ export function scalarAfter(value: string, index: number): string | undefined { 
 export function fileOperationRequestValue(operation: "list" | "grep" | "read", request: Readonly<NormalizedListFilesRequest | NormalizedGrepFilesRequest | NormalizedReadFilesRequest>): unknown {
   if (operation === "list") {
     const value = request as Readonly<NormalizedListFilesRequest>;
-    return { operation, selector: value.selector, where: value.where ?? null, selectMetadataFields: value.selectMetadataFields, sort: value.sort, aggregate: value.aggregate, limit: value.limit };
+    return { operation, selector: value.selector, where: value.where ?? null, selectMetadataFields: value.selectMetadataFields, sort: value.sort, aggregate: value.aggregate, limit: value.limit, maxOutputBytes: value.maxOutputBytes };
   }
   if (operation === "grep") {
     const value = request as Readonly<NormalizedGrepFilesRequest>;

@@ -468,23 +468,25 @@ const METADATA_FILTER_LEAF_SCHEMA = Object.freeze({
     value: Object.freeze({}),
   }),
 });
-const METADATA_FILTER_SCHEMA = Object.freeze({
-  oneOf: Object.freeze([
-    METADATA_FILTER_LEAF_SCHEMA,
-    Object.freeze({
-      type: "object",
-      additionalProperties: false,
-      required: Object.freeze(["all"]),
-      properties: Object.freeze({ all: Object.freeze({ type: "array", minItems: 1, maxItems: 16, items: METADATA_FILTER_LEAF_SCHEMA }) }),
-    }),
-    Object.freeze({
-      type: "object",
-      additionalProperties: false,
-      required: Object.freeze(["any"]),
-      properties: Object.freeze({ any: Object.freeze({ type: "array", minItems: 1, maxItems: 16, items: METADATA_FILTER_LEAF_SCHEMA }) }),
-    }),
-  ]),
-});
+function metadataFilterSchema(depth: number): Readonly<Record<string, unknown>> {
+  if (depth === 0) return METADATA_FILTER_LEAF_SCHEMA;
+  const child = metadataFilterSchema(depth - 1);
+  return Object.freeze({
+    oneOf: Object.freeze([
+      METADATA_FILTER_LEAF_SCHEMA,
+      ...["all", "any"].map((operator) => Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze([operator]),
+        properties: Object.freeze({
+          [operator]: Object.freeze({ type: "array", minItems: 1, maxItems: 16, items: child }),
+        }),
+      })),
+    ]),
+  });
+}
+
+const METADATA_FILTER_SCHEMA = metadataFilterSchema(4);
 const LIST_FILES_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
@@ -511,6 +513,7 @@ const LIST_FILES_INPUT_SCHEMA = strictInputSchema(
     }),
     cursor: OPAQUE_ID_SCHEMA,
     limit: PAGE_LIMIT_SCHEMA,
+    max_output_bytes: Object.freeze({ type: "integer", minimum: 4, maximum: 1_048_576 }),
   },
   ["mind"],
 );
@@ -866,7 +869,7 @@ const LIST_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
   additionalProperties: false,
   required: Object.freeze([
     "mind", "resolved_revision", "files", "aggregate", "scanned",
-    "incomplete", "incomplete_reason", "next_cursor",
+    "returned_bytes", "incomplete", "incomplete_reason", "next_cursor",
   ]),
   properties: Object.freeze({
     mind: MIND_DESCRIPTOR_SCHEMA,
@@ -874,8 +877,9 @@ const LIST_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
     files: Object.freeze({ type: "array", items: FILE_DESCRIPTOR_SCHEMA }),
     aggregate: Object.freeze({ type: "object" }),
     scanned: Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["files", "bytes"]), properties: Object.freeze({ files: Object.freeze({ type: "integer", minimum: 0 }), bytes: Object.freeze({ type: "integer", minimum: 0 }) }) }),
+    returned_bytes: Object.freeze({ type: "integer", minimum: 0 }),
     incomplete: Object.freeze({ type: "boolean" }),
-    incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["page_limit", "scan_budget", null]) }),
+    incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["page_limit", "scan_budget", "response_budget", "time_budget", null]) }),
     next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
   }),
 }));
@@ -896,7 +900,7 @@ const GREP_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
     scanned: Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["files", "bytes"]), properties: Object.freeze({ files: Object.freeze({ type: "integer", minimum: 0 }), bytes: Object.freeze({ type: "integer", minimum: 0 }) }) }),
     returned: Object.freeze({ type: "object", additionalProperties: false, required: Object.freeze(["rows", "bytes"]), properties: Object.freeze({ rows: Object.freeze({ type: "integer", minimum: 0 }), bytes: Object.freeze({ type: "integer", minimum: 0 }) }) }),
     incomplete: Object.freeze({ type: "boolean" }),
-    incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["page_limit", "scan_budget", "response_budget", null]) }),
+    incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["page_limit", "scan_budget", "response_budget", "time_budget", null]) }),
     next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
   }),
 }));
@@ -913,7 +917,7 @@ const READ_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
     items: Object.freeze({ type: "array", items: Object.freeze({ type: "object" }) }),
     returned_bytes: Object.freeze({ type: "integer", minimum: 0 }),
     incomplete: Object.freeze({ type: "boolean" }),
-    incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["response_budget", null]) }),
+    incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["response_budget", "time_budget", null]) }),
     next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
   }),
 }));

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   BACKGROUND_APPLICATION_BOUNDARY,
@@ -92,4 +93,17 @@ test("MCP contract exposes only custom Mind-aware content tools", () => {
 
 test("background contract never grants authority from a serialized job", () => {
   assert.equal(BACKGROUND_APPLICATION_BOUNDARY.authorityFromJobPayload, false);
+});
+
+test("multi-object file reads keep their final authorization on fresh metadata", () => {
+  const source = readFileSync(
+    new URL("../../packages/composition-root/src/product-site.ts", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf("listFiles: (...args");
+  const end = source.indexOf("fetch: (...args", start);
+  assert.ok(start >= 0 && end > start);
+  const fileOperations = source.slice(start, end);
+  assert.doesNotMatch(fileOperations, /withConsistentRead/u);
+  assert.match(fileOperations, /contentReadServices\(metadata\)/u);
 });
