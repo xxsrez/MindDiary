@@ -62,7 +62,7 @@ Runner последовательно:
 2. в отдельном временном `CODEX_HOME` устанавливает fresh Marketplace/plugin и
    получает фактические HEAD/tree, plugin snapshot/version, MCP resolution и
    Codex client/version, не меняя shared OAuth direct-plugin profile; для
-   Codex 0.150.1 установленный HTTP server обязан иметь
+   Codex 0.153.4 установленный HTTP server обязан иметь
    `auth_status: o_auth`, что означает доступный OAuth flow, но не выполненный
    вход и не наличие сохранённой credential;
 3. исполняет frozen OAuth, personal-token, historical target-state, Product
@@ -76,9 +76,9 @@ Runner последовательно:
 
 Receipt `mind-diary/settings-connections-local-evidence/v1` фиксирует exact
 candidate, plugin/client/toolchain/source hashes, закрытые local assertions и
-три разных каталога: default Product Site write `17`, read-only `16` и только
-для verified native route полный `18`. Shared OAuth direct-plugin full-write
-profile остаётся отдельным intentional `18`-tool contract.
+три разных каталога: default Product Site write `21`, read-only `20` и только
+для verified native route полный `22`. Shared OAuth direct-plugin full-write
+profile остаётся отдельным intentional `21`-tool contract.
 Он всегда содержит:
 
 ```json

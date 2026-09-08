@@ -84,12 +84,12 @@ function localReceipt() {
       plugin_version: "0.1.0",
       plugin_snapshot_sha256: marked("3"),
       client: "codex-cli",
-      client_version: "0.150.1",
+      client_version: "0.153.4",
       routes: ["/api/mcp", "/api/mcp/2025-11-25"],
       catalog_profiles: {
-        default_product_site_write: 17,
-        read_only: 16,
-        verified_native: 18,
+        default_product_site_write: 21,
+        read_only: 20,
+        verified_native: 22,
       },
     },
     toolchain: {
@@ -235,7 +235,7 @@ function browserReadback(pool = poolReadback()) {
     local_receipt_sha256: localReceipt().artifact_sha256,
     plugin_version: "0.1.0",
     client: "codex-cli",
-    client_version: "0.150.1",
+    client_version: "0.153.4",
     observed_at_utc: "2026-08-28T01:05:00.000Z",
     run_fingerprint: marked("9"),
     actor_fingerprints: {

@@ -35,12 +35,12 @@ function plugin() {
     plugin_version: "0.1.0",
     plugin_snapshot_sha256: digest("f"),
     client: "codex-cli",
-    client_version: "0.150.1",
+    client_version: "0.153.4",
     routes: ["/api/mcp", "/api/mcp/2025-11-25"],
     catalog_profiles: {
-      default_product_site_write: 18,
-      read_only: 17,
-      verified_native: 19,
+      default_product_site_write: 21,
+      read_only: 20,
+      verified_native: 22,
     },
   };
 }
@@ -96,9 +96,9 @@ test("MD-358 local gate CLI accepts only exact candidate, private output and opt
 
 test("MD-358 owns the current default, read-only, and verified-native catalog profiles", () => {
   assert.deepEqual(verifySettingsConnectionsCatalogProfiles(), {
-    default_product_site_write: 18,
-    read_only: 17,
-    verified_native: 19,
+    default_product_site_write: 21,
+    read_only: 20,
+    verified_native: 22,
   });
 });
 
@@ -111,11 +111,11 @@ test("MD-358 local receipt pins plugin, client, browser and runtime while hosted
   assert.equal(value.acceptance, "local-deterministic-only");
   assert.equal(value.deployment_id, null);
   assert.equal(value.plugin.plugin_version, "0.1.0");
-  assert.equal(value.plugin.client_version, "0.150.1");
+  assert.equal(value.plugin.client_version, "0.153.4");
   assert.deepEqual(value.plugin.catalog_profiles, {
-    default_product_site_write: 18,
-    read_only: 17,
-    verified_native: 19,
+    default_product_site_write: 21,
+    read_only: 20,
+    verified_native: 22,
   });
   assert.deepEqual(value.runtime_suites.map(({ path }) => path), SETTINGS_CONNECTIONS_RUNTIME_SUITES);
   assert.deepEqual(value.unresolved_hosted_rows, [

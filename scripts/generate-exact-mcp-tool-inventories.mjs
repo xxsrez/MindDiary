@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
 import { MCP_TOOL_DEFINITIONS } from "../packages/adapter-mcp/dist/index.js";
 import { canonical } from "./lib/multi-principal-probe-core.mjs";
@@ -11,6 +11,10 @@ const SCHEMA = "mind-diary/file-ingress-hosted-tool-inventory/v1";
 
 function hash(value) {
   return `sha256:${createHash("sha256").update(canonical(value)).digest("hex")}`;
+}
+
+function referenceHash(value) {
+  return createHash("sha256").update(canonical(value)).digest("hex");
 }
 
 function inventory(definitions) {
@@ -29,6 +33,21 @@ function inventory(definitions) {
 const hosted = inventory(MCP_TOOL_DEFINITIONS);
 const direct = inventory(MCP_TOOL_DEFINITIONS.filter(({ name }) =>
   name !== "open_bundle_file_picker" && name !== "stage_bundle_file"));
+const registryUrl = new URL(
+  "../tests/fixtures/file-ingress-evidence/registry.json",
+  import.meta.url,
+);
+const registry = JSON.parse(await readFile(registryUrl, "utf8"));
+const inventoryHashes = new Map([
+  ["tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json", referenceHash(hosted)],
+  ["tests/fixtures/file-ingress-evidence/direct-tool-inventory.json", referenceHash(direct)],
+]);
+for (const profile of registry.client_profiles ?? []) {
+  const reference = profile.tool_inventory;
+  if (reference !== null && inventoryHashes.has(reference?.path)) {
+    reference.sha256 = inventoryHashes.get(reference.path);
+  }
+}
 
 await Promise.all([
   writeFile(
@@ -39,4 +58,5 @@ await Promise.all([
     new URL("../tests/fixtures/file-ingress-evidence/direct-tool-inventory.json", import.meta.url),
     `${JSON.stringify(direct, null, 2)}\n`,
   ),
+  writeFile(registryUrl, `${JSON.stringify(registry, null, 2)}\n`),
 ]);

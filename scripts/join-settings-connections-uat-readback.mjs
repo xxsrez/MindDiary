@@ -93,9 +93,9 @@ function validateLocalReceipt(value, expected) {
     !SHA.test(value.plugin.marketplace_tree_sha ?? "") ||
     !SHA256.test(value.plugin.plugin_snapshot_sha256 ?? "") ||
     canonical(value.plugin.routes) !== canonical(["/api/mcp", "/api/mcp/2025-11-25"]) ||
-    value.plugin.catalog_profiles?.default_product_site_write !== 17 ||
-    value.plugin.catalog_profiles?.read_only !== 16 ||
-    value.plugin.catalog_profiles?.verified_native !== 18
+    value.plugin.catalog_profiles?.default_product_site_write !== 21 ||
+    value.plugin.catalog_profiles?.read_only !== 20 ||
+    value.plugin.catalog_profiles?.verified_native !== 22
   ) fail("invalid_local_receipt");
   exactKeys(value.plugin, [
     "artifact_sha256", "marketplace_candidate_sha", "marketplace_tree_sha", "plugin_version",

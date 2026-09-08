@@ -70,15 +70,15 @@ clean worktree до и после проб. Он последовательно 
 - synthetic multi-principal probe через normal product bootstrap;
 - OAuth direct-plugin probe с fresh/read/write/revoke/reconnect и personal-token
   regression;
-- fresh Codex 0.150.1 profile обязан разрешить установленный HTTP server как
+- fresh Codex 0.153.4 profile обязан разрешить установленный HTTP server как
   OAuth-capable (`auth_status: o_auth`) без автоматического входа или сохранённой
   credential; прежняя строка `not_logged_in` считается несовместимой проекцией,
   а не доказательством более безопасного состояния;
-- constructor-only synthetic verified-native profile для exact 18-tool
+- constructor-only synthetic verified-native profile для exact 22-tool
   modern/compat catalogs; его fail-closed fetcher не читает bytes и не является
   hosted route evidence;
 - credential target contract и persisted-state migration tests;
-- exact direct modern/compat 17-tool catalog, который не рекламирует
+- exact direct modern/compat 21-tool catalog, который не рекламирует
   MCP Apps picker или unverified native stage, retired binding tools и moved
   export tests;
 - stale HEAD и wrong Mind zero-side-effect assertions.

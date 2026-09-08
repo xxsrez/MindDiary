@@ -514,7 +514,7 @@ export function validateFileIngressEvidenceConfig(
     "invalid_client_profile_registry",
   );
   assert(
-    profiles.get("codex-modern-2026-07-28")?.client_version === "0.150.1" &&
+    profiles.get("codex-modern-2026-07-28")?.client_version === "0.153.4" &&
       profiles.get("codex-modern-2026-07-28")?.protocol_profile === "2026-07-28" &&
       profiles.get("codex-modern-2026-07-28")?.transport_route === "/api/mcp" &&
       profiles.get("codex-modern-2026-07-28")?.artifact_contract.kind ===
@@ -522,7 +522,7 @@ export function validateFileIngressEvidenceConfig(
     "invalid_client_profile_registry",
   );
   assert(
-    profiles.get("codex-compat-2025-11-25")?.client_version === "0.150.1" &&
+    profiles.get("codex-compat-2025-11-25")?.client_version === "0.153.4" &&
       profiles.get("codex-compat-2025-11-25")?.protocol_profile === "2025-11-25" &&
       profiles.get("codex-compat-2025-11-25")?.transport_route ===
         "/api/mcp/2025-11-25",

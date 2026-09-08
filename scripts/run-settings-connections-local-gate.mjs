@@ -197,9 +197,9 @@ function validatePluginObservation(value, candidate) {
     value.fresh_context?.marketplace_added !== true ||
     value.fresh_context?.plugin_installed !== true ||
     value.fresh_context?.mcp_resolved !== true ||
-    value.catalog_profiles?.default_product_site_write !== 17 ||
-    value.catalog_profiles?.read_only !== 16 ||
-    value.catalog_profiles?.verified_native !== 18 ||
+    value.catalog_profiles?.default_product_site_write !== 21 ||
+    value.catalog_profiles?.read_only !== 20 ||
+    value.catalog_profiles?.verified_native !== 22 ||
     value.cleanup?.temporary_codex_home_removed !== true ||
     !/^sha256:[0-9a-f]{64}$/u.test(value.artifact_sha256 ?? "")
   ) fail("invalid_plugin_observation");

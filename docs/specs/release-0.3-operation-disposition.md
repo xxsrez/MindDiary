@@ -263,13 +263,13 @@ Compatibility `2025-11-25`:
 | `initialize` | change | Keep isolated negotiation; update instructions and advertised tool capability |
 | `notifications/initialized` | keep | `202` for exact notification |
 | `ping` | keep | Empty successful result |
-| `tools/list` | change | Same 17-tool direct projection; no legacy-only authority or Apps file picker |
+| `tools/list` | change | Same 21-tool direct projection; no legacy-only authority or Apps file picker |
 | `tools/call` | change | Same target schemas and authorization |
 | `resources/templates/list`, `resources/list`, `resources/read` | remove | Preserve compatibility `Method not found`; resources are not silently widened in this profile |
 | `server/discover` | remove | Preserve compatibility `Method not found` |
 
 MCP Apps `/api/mcp/apps` uses the same modern `2026-07-28` lifecycle, publishes
-the complete 18-tool catalog, and additionally serves the exact static
+the complete 23-tool catalog, and additionally serves the exact static
 `ui://mind-diary/file-ingress/v1.html` resource. `stage_bundle_file` remains
 app-only through `_meta.ui.visibility`; its provider file object and full stage
 result are not projected into model-visible `structuredContent`. После stage

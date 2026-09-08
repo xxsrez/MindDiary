@@ -81,7 +81,7 @@
       "environment": "hosted_uat",
       "client_class": "codex",
       "client_name": "codex-cli",
-      "client_version": "0.150.1",
+      "client_version": "0.153.4",
       "protocol_profile": "2026-07-28",
       "transport_route": "/api/mcp",
       "source_kinds": [
@@ -98,7 +98,7 @@
       },
       "tool_inventory": {
         "path": "tests/fixtures/file-ingress-evidence/direct-tool-inventory.json",
-        "sha256": "8dc0c568fa40758c019bfcf6f2a192b8656938bdc8a43ff378f1ea26c6ce233a"
+        "sha256": "e1c53e09e1adefa16e098788ca300106060e8a63cd13824d468ff5c7f256d2d3"
       },
       "resource_inventory": null
     },
@@ -107,7 +107,7 @@
       "environment": "hosted_uat",
       "client_class": "codex",
       "client_name": "codex-cli",
-      "client_version": "0.150.1",
+      "client_version": "0.153.4",
       "protocol_profile": "2025-11-25",
       "transport_route": "/api/mcp/2025-11-25",
       "source_kinds": [
@@ -120,15 +120,15 @@
         "authority": "pinned_repository",
         "identity": {
           "plugin_id": "mind-diary@srez-marketplace",
-          "plugin_version": "0.1.0+codex.20260826190538",
-          "plugin_snapshot_sha256": "sha256:cfef907235e16bb70d46f238d52f2c77e2b06084a1d87ae70811131a1d7b65cc",
-          "marketplace_candidate_sha": "425745892e538845087ba6cdb06509c578880899",
-          "marketplace_tree_sha": "cb17638d8309e34794a4afa402d0124e68fccaff"
+          "plugin_version": "0.1.0+codex.20260908115000",
+          "plugin_snapshot_sha256": "sha256:caf3e84bd52e9693626d47b6234e1a9589234b8fa07ca3d8676b69394ba591a5",
+          "marketplace_candidate_sha": "ecf9c6b06dca12fee4f546caab1f99941681e109",
+          "marketplace_tree_sha": "68acb29c1dfd2647fd04f3872d581a3b960f8828"
         }
       },
       "tool_inventory": {
         "path": "tests/fixtures/file-ingress-evidence/direct-tool-inventory.json",
-        "sha256": "8dc0c568fa40758c019bfcf6f2a192b8656938bdc8a43ff378f1ea26c6ce233a"
+        "sha256": "e1c53e09e1adefa16e098788ca300106060e8a63cd13824d468ff5c7f256d2d3"
       },
       "resource_inventory": null
     },
@@ -150,7 +150,7 @@
       },
       "tool_inventory": {
         "path": "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
-        "sha256": "80f456057d50bb6c3b4583ef49b5e9afb9bffd16dad782b7c6ad5698c103704b"
+        "sha256": "d7f6d351f09031c3c44e450d459cdef03c38b74f996d78d9661a1807fe888027"
       },
       "resource_inventory": {
         "path": "tests/fixtures/file-ingress-evidence/apps-resource-inventory.json",
