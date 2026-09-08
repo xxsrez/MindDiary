@@ -153,6 +153,7 @@ function harness() {
               previous_revision_id: previous,
               revision: { revision_id: head, revision_number: commits + 1 },
               index_status: "queued",
+              replayed: false,
             },
             `Committed revision ${head}.`,
           );

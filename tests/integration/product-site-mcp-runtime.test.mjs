@@ -2678,9 +2678,27 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     previousRevisionId,
   );
   assert.equal(committedBody.result.structuredContent.data.index_status, "queued");
+  assert.equal(committedBody.result.structuredContent.data.replayed, false);
   const committedIndexWork = scheduled.findLast((work) => work.kind === "revision_index");
   assert.ok(committedIndexWork);
   await runtime.recoverBackground();
+
+  const scheduledCountBeforeReplay = scheduled.length;
+  const replay = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0", id: "commit-replay-after-index", method: "tools/call",
+    params: { name: "commit_changeset", arguments: {
+      mind: "/me", expected_revision: previousRevisionId,
+      idempotency_key: "commit:product-runtime-e2e",
+      summary: "Prove production transaction authorization",
+      operations: [{ type: "create_file", path: "concepts/runtime-proof.md",
+        text: "---\ntype: Reference\n---\n\nRuntime authorization proof.\n" }],
+    } },
+  });
+  const replayData = (await replay.json()).result.structuredContent.data;
+  assert.equal(replayData.replayed, true);
+  assert.equal(replayData.index_status, "ready");
+  assert.equal(replayData.revision.revision_id, committedBody.result.structuredContent.data.revision.revision_id);
+  assert.equal(scheduled.length, scheduledCountBeforeReplay);
 
   const listedAfterCommit = await legacyMcp(runtime, secret, {
     jsonrpc: "2.0",

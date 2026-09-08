@@ -594,3 +594,25 @@ No open question permits a fallback that leaks provider IDs/URLs, local paths or
 bytes into the portable application contract, weakens BundleFile
 authorization/streaming/download containment, or claims a local/native
 capability without evidence.
+
+## Проверенное локальное скачивание
+
+`download_bundle_file` в packaged local companion принимает exact одноразовый
+`download_url` из hosted `get_bundle_file_download`, `display_filename`,
+`expected_size` и `expected_sha256` из того же descriptor. Допустим только
+HTTPS route `/api/bundle-download/{secret}` текущего закреплённого UAT origin,
+без credentials, query, fragment и redirects. Cookies и bearer не передаются.
+
+Поток ограничен 256 MiB и ожидаемым размером плюс один байт; SHA-256 и exact
+byte size проверяются до выдачи результата. Файл создаётся эксклюзивно в новом
+private temporary directory; существующие файлы не перезаписываются. Успех
+возвращает только local `path`, `size`, `sha256`. Ошибка удаляет частичный
+файл и каталог; успешный файл сохраняется после завершения companion.
+Capability URL не попадает в ответ или error message. После transport failure
+нужен свежий hosted grant, так как предыдущий мог быть consumed.
+
+Ошибки downloader: `invalid_download_url`, `file_download_unavailable`,
+`local_download_failed`, `bundle_file_size_mismatch`,
+`bundle_file_digest_mismatch`, `bundle_file_size_limit_exceeded`,
+`invalid_bundle_file_name`, `invalid_request`, `local_companion_cancelled`.
+Это отдельное локальное скачивание, не изменение ingress/hosted authorization.

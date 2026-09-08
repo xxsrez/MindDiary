@@ -2796,9 +2796,16 @@ Success:
   "mind": {},
   "previous_revision_id": "rev_current",
   "revision": {},
-  "index_status": "queued"
+  "index_status": "queued",
+  "replayed": false
 }
 ```
+
+`index_status` отражает фактическое состояние индекса exact returned revision:
+`missing | queued | ready | failed`. `replayed: true` означает возврат ранее
+committed результата по тому же idempotency key: новая revision и повторное
+планирование commit effects не создаются. Статус читается заново и может
+измениться после ответа; он не гарантирует готовность поиска.
 
 Stale HEAD возвращает tool execution error `revision_conflict` с
 `details.current_revision`. Никаких objects/revision, достижимых из HEAD, не

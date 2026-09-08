@@ -1072,7 +1072,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
           sourceReferences,
         });
         if (result.kind === "committed") {
-          await this.#dependencies.scheduleCommitEffects?.();
+          if (!result.replayed) await this.#dependencies.scheduleCommitEffects?.();
           const committedInfo = await this.#dependencies.discovery.getMindInfo(
             request.actor,
             input.mind,
@@ -1083,7 +1083,8 @@ export class ProductMcpContentApplication implements McpContentApplication {
               mind: committedInfo.mind,
               previousRevisionId: result.previousRevisionId,
               revision: committedInfo.resolvedRevision,
-              indexStatus: "queued",
+              indexStatus: committedInfo.indexStatus.status,
+              replayed: result.replayed,
             }),
             "Committed one immutable Mind revision.",
           );

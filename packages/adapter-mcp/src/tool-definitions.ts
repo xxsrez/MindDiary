@@ -1426,12 +1426,14 @@ const COMMIT_CHANGESET_OUTPUT_SCHEMA = toolOutputSchema(
       "previous_revision_id",
       "revision",
       "index_status",
+      "replayed",
     ]),
     properties: Object.freeze({
       mind: Object.freeze({ type: "object" }),
       previous_revision_id: Object.freeze({ type: Object.freeze(["string", "null"]) }),
       revision: REVISION_DESCRIPTOR_SCHEMA,
-      index_status: Object.freeze({ const: "queued" }),
+      index_status: Object.freeze({ enum: Object.freeze(["missing", "queued", "ready", "failed"]) }),
+      replayed: Object.freeze({ type: "boolean" }),
     }),
   }),
 );
