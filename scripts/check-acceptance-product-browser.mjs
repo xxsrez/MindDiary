@@ -142,6 +142,8 @@ try {
     await page.getByRole("navigation", { name: "Settings sections" })
       .getByRole("link", { name: "Advanced MCP", exact: true }).click();
     await page.waitForLoadState("domcontentloaded");
+    phase = "token_form_disclosure";
+    await page.locator("#new-token > summary").click();
     phase = "token_form_ready";
     const form = page.locator("[data-token-form]");
     await form.waitFor();
