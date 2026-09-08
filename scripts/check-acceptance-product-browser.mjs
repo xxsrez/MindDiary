@@ -139,7 +139,8 @@ try {
     phase = "token_connections_navigation";
     await page.goto(origin + "/settings/connections", { waitUntil: "domcontentloaded" });
     phase = "token_advanced_link";
-    await page.getByRole("main").getByRole("link", { name: "Advanced MCP", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings sections" })
+      .getByRole("link", { name: "Advanced MCP", exact: true }).click();
     await page.waitForLoadState("domcontentloaded");
     phase = "token_form_ready";
     const form = page.locator("[data-token-form]");
