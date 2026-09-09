@@ -12,7 +12,7 @@ import {
   verifyPerformanceScenarioCredentialBindings,
 } from "./lib/performance-gate.mjs";
 import { verifyPerformanceProfileReadbackReceipt } from "./lib/performance-profile-readback.mjs";
-import { assertSuccessfulPerformanceResponse } from "./lib/performance-request.mjs";
+import { assertSuccessfulPerformanceResponse, PerformanceResponseError } from "./lib/performance-request.mjs";
 import { verifyPerformanceTelemetryCaptureReceipt } from "./lib/performance-telemetry-capture.mjs";
 
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -84,7 +84,7 @@ async function timedFetch(targetUrl, definition, correlationKey) {
   const bytes = await response.arrayBuffer();
   const elapsed = Math.max(0, performance.now() - startedAt);
   if (bytes.byteLength > MAX_RESPONSE_BYTES) {
-    throw new Error(`performance response rejected: response_too_large:${definition.id}`);
+    throw new PerformanceResponseError("response_too_large", definition.id);
   }
   assertSuccessfulPerformanceResponse(definition, {
     status: response.status,
@@ -93,13 +93,13 @@ async function timedFetch(targetUrl, definition, correlationKey) {
   });
   const requestId = response.headers.get("x-mind-diary-request-id");
   if (!/^(?:req|request)[_-][A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u.test(requestId ?? "")) {
-    throw new Error(`performance response rejected: request_id_missing:${definition.id}`);
+    throw new PerformanceResponseError("request_id_missing", definition.id);
   }
   if (
     response.headers.get("x-mind-diary-performance-correlation-id") !==
     benchmarkCorrelationId
   ) {
-    throw new Error(`performance response rejected: correlation_echo_mismatch:${definition.id}`);
+    throw new PerformanceResponseError("correlation_echo_mismatch", definition.id);
   }
   return Object.freeze({
     elapsed_ms: elapsed,
