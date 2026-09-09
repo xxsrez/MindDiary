@@ -13,6 +13,7 @@ import { ACCEPTANCE_ASSERTIONS, acceptanceDigest, createAcceptanceComponent } fr
 
 import { observeAcceptanceClock, createAcceptanceClockCalibration } from "./lib/acceptance-clock-calibration.mjs";
 import { waitForAcceptanceTelemetry } from "./lib/acceptance-telemetry-barrier.mjs";
+import { acceptancePerformanceFailureDiagnostic } from "./lib/acceptance-performance-failure.mjs";
 
 let phase = "configuration";
 process.once("uncaughtException", () => { console.error(JSON.stringify({ status: "failed", phase })); process.exit(1); });
@@ -87,7 +88,8 @@ if (action === "cleanup") {
   } catch (error) {
     const known = ["provider_telemetry_barrier_timeout", "performance_collection_deadline_exceeded", "foreign_telemetry_journal", "invalid_telemetry_journal"];
     const failure = { schema: "mind-diary/performance-sampling-failure/v1", phase,
-      code: known.includes(error.message) ? error.message : "sampling_failed", cleanup: "pending" };
+      code: known.includes(error.message) ? error.message : "sampling_failed",
+      diagnostic: acceptancePerformanceFailureDiagnostic(error), cleanup: "pending" };
     await write("performance-sampling-failure.json", failure);
     try { await client.cleanup(); failure.cleanup = "completed"; }
     catch { failure.cleanup = "failed"; }
