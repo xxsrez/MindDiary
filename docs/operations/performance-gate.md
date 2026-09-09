@@ -4,6 +4,15 @@
 Repository runner реализован; этот документ не утверждает, что UAT receipt уже
 получен.
 
+Применимость с 2026-09-09: это специализированный строгий benchmark, а не
+обязательная часть каждого UAT release. Выбор запуска определяет
+[профиль revision 9](ship-work-release-profile.md#обычный-uat-release-соразмерная-приёмка).
+Приведённые ниже blocking budgets блокируют выбранную performance acceptance,
+но не превращают обычную функциональную задачу в performance-проект.
+Не запускать замеры без конкретного требования или наблюдаемого существенного
+ухудшения. Если benchmark запущен, его samples, thresholds и failed результат
+не подменяются; исключение из scope не означает успешный benchmark.
+
 ## Назначение и граница
 
 Gate блокирует UAT acceptance при regressions authenticated home и MCP read

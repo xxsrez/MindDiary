@@ -6,6 +6,13 @@
 `ship-work-release`. Слова «должен», «запрещено» и «обязательно» задают
 нормативное поведение.
 
+Уточнение для Mind Diary от 2026-09-09: объём проверок обычного UAT run
+определяет [профиль revision 9](../operations/ship-work-release-profile.md#обычный-uat-release-соразмерная-приёмка).
+Он заменяет в этом проекте прежнюю безусловную полноту gate/smoke/evidence
+matrix. Ниже сохраняется полный execution contract, а не обязательный список
+всех проверок для каждого cut. Authority, exact artifact, честность результатов
+и cleanup этим исключением не ослабляются.
+
 ## 1. Назначение и принципы
 
 `ship-work-release` доставляет bounded work scope с acceptance-driven

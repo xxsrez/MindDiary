@@ -220,9 +220,10 @@ delivery profile и ADR-0008/ADR-0009
   Не смешивайте lifecycle двух версий и не заявляйте поддержку без conformance
   tests на конкретном adapter/client pair.
 - `dev` — полный локальный запуск приложения на `localhost` с изолированными
-  local/test данными. Перед UAT release нужно проверить на нём все применимые
-  web/control, persistence и MCP flows; локальный smoke не является hosted
-  evidence.
+  local/test данными. Перед UAT release проверяйте затронутые сценарии по
+  соразмерному плану из delivery profile revision 9; весь набор web/control,
+  persistence и MCP flows каждый раз не требуется. Локальный smoke не является
+  hosted evidence.
 - `UAT` (`User Acceptance Testing`) — текущая prod-like тестовая OpenAI Site
   среда Mind Diary для web/admin UI, application core, persistence и Streamable
   HTTP MCP. Она предназначена для регулярной проверки release candidates в
@@ -257,8 +258,12 @@ delivery profile и ADR-0008/ADR-0009
 ## Релизный контракт
 
 - Без явного слова `production` обычный release означает UAT release: targeted
-  checks, exact candidate, полный gate, project-profile dev smoke, configured
-  remote/CI, publish в UAT target и declared live evidence.
+  checks, exact candidate, соразмерный project-profile smoke, configured
+  remote/CI, publish в UAT target и read-back изменённого поведения. Полный gate
+  и расширенные матрицы не обязательны для каждого cut: применимость определяет
+  раздел «Обычный UAT release» в delivery profile revision 9. Он заменяет
+  прежние безусловные требования полноты в delivery docs/ADR для текущих runs;
+  безопасность, точность evidence и запрет Production сохраняются.
 - Отдельное пользовательское разрешение на каждый UAT release не требуется.
   Если hosted verification полезна для текущей задачи, агент самостоятельно
   выбирает разумный момент для UAT cut, избегает избыточно частых публикаций и
@@ -302,8 +307,10 @@ delivery profile и ADR-0008/ADR-0009
   включает clean build, unit/integration/conformance, fixtures, architecture,
   docs и secrets, поэтому не запускайте те же subcommands перед ним повторно.
   В изолированной feature lane выполняйте только явно переданные targeted
-  checks и `git diff --check`; один полный gate выполняется для exact batch
-  cutoff перед dev/UAT boundary. Не называйте эти contract tests live
+  checks и `git diff --check`; полный gate выбирается для широкого риска или
+  явного запроса по delivery profile, а не автоматически на каждом dev/UAT
+  boundary. Применимый exact-candidate CI результат не дублируйте локально.
+  Не называйте эти contract tests live
   Sites/MCP compatibility.
 - После появления OKF fixtures валидируйте весь выбранный bundle, а не только
   `wiki/`, официальным или эквивалентным строгим validator.
