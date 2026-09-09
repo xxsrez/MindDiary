@@ -50,7 +50,9 @@ try {
   for (const name of allowed) assert.ok(catalog.some(t => t.name === name));
   receipt.catalog_sha256 = createHash("sha256").update(JSON.stringify(catalog)).digest("hex");
   const directory = join(client.directory, "journey"); await mkdir(directory, { mode: 0o700 });
-  server = new AcceptanceModelServer({ directory, maxTokens: 30000, maxCalls: 10,
+  // Token accounting is cumulative across calls and includes the installed skill
+  // and tool schemas on each turn; four reads can exceed 30k without long output.
+  server = new AcceptanceModelServer({ directory, maxTokens: 100000, maxCalls: 6,
     onTrace: event => appendFile(join(directory, "events.jsonl"), JSON.stringify(event) + "\n", { mode: 0o600 }),
     onTool: async (name, args) => {
       assert.ok(allowed.includes(name));
@@ -79,6 +81,8 @@ try {
 } catch (error) {
   receipt.status = "failed";
   receipt.failure = error.name;
+  if (["model_token_budget_exceeded", "model_tool_budget_exceeded", "model_turn_failed", "model_event_timeout"].includes(error.message)) receipt.failure_code = error.message;
+  receipt.usage = server?.usage;
   process.exitCode = 1;
 } finally {
   server?.close();
