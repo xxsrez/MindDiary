@@ -22,6 +22,7 @@ import type {
   ObjectCleanupNamespace,
 } from "@mind-diary/application-ports";
 import type {
+  CanonicalRevisionEnvelope,
   JobId,
   OutboxMessageId,
   PrincipalId,
@@ -268,6 +269,23 @@ export interface ExactRevisionMaterializer {
     spaceId: SpaceId,
     revisionId: RevisionId,
   ): Promise<Readonly<ExactRevisionMaterialization>>;
+  /** Optional selective reader used to reject opaque entries before object bytes are loaded. */
+  readRevisionEnvelope?(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope>>;
+  readRevisionFile?(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    path: string,
+  ): Promise<Readonly<{
+    readonly kind: "markdown" | "opaque";
+    readonly path: string;
+    readonly mediaType: string;
+    readonly sha256: Sha256Digest;
+    readonly size: number;
+    readonly text?: string;
+  }> | null>;
 }
 
 export interface UnreachableObjectCollector {
@@ -412,25 +430,14 @@ export class RevisionIndexJobHandler {
         : Object.freeze({ kind: "not_available" });
     }
     try {
-      const materialized = await this.#revisions.materialize(
-        target.spaceId,
-        target.revisionId,
-      );
-      if (
-        materialized.envelope.revision.spaceId !== target.spaceId ||
-        materialized.envelope.revision.revisionId !== target.revisionId
-      ) {
-        throw new ExactRevisionMismatchError();
-      }
+      const documents = typeof this.#revisions.readRevisionEnvelope === "function" &&
+          typeof this.#revisions.readRevisionFile === "function"
+        ? await this.#readIndexableFiles(target.spaceId, target.revisionId)
+        : await this.#materializeIndexableFiles(target.spaceId, target.revisionId);
       await this.#index.replaceExactRevision({
         spaceId: target.spaceId,
         revisionId: target.revisionId,
-        documents: materialized.files
-          .filter(
-            (file): file is typeof file & { readonly text: string } =>
-              file.kind !== "opaque" && typeof file.text === "string",
-          )
-          .map((file) => Object.freeze({ path: file.path, text: file.text })),
+        documents,
       });
       const completed = await this.#work.completeIndexJob(
         request.jobId,
@@ -471,6 +478,55 @@ export class RevisionIndexJobHandler {
         ? Object.freeze({ kind: "failed", failureCode })
         : Object.freeze({ kind: "not_available" });
     }
+  }
+
+  async #readIndexableFiles(spaceId: SpaceId, revisionId: RevisionId) {
+    const readEnvelope = this.#revisions.readRevisionEnvelope;
+    const readFile = this.#revisions.readRevisionFile;
+    if (typeof readEnvelope !== "function" || typeof readFile !== "function") {
+      throw new TypeError("selective revision reader is incomplete");
+    }
+    const envelope = await readEnvelope.call(this.#revisions, spaceId, revisionId);
+    if (
+      envelope.revision.spaceId !== spaceId ||
+      envelope.revision.revisionId !== revisionId
+    ) {
+      throw new ExactRevisionMismatchError();
+    }
+    const documents = [];
+    for (const entry of envelope.manifest.entries) {
+      if (entry.kind !== "markdown") continue;
+      const file = await readFile.call(this.#revisions, spaceId, revisionId, entry.path);
+      if (
+        file === null ||
+        file.kind !== "markdown" ||
+        file.path !== entry.path ||
+        file.sha256 !== entry.sha256 ||
+        file.mediaType !== entry.mediaType ||
+        file.size !== entry.size ||
+        typeof file.text !== "string"
+      ) {
+        throw new ExactRevisionMismatchError();
+      }
+      documents.push(Object.freeze({ path: file.path, text: file.text }));
+    }
+    return documents;
+  }
+
+  async #materializeIndexableFiles(spaceId: SpaceId, revisionId: RevisionId) {
+    const materialized = await this.#revisions.materialize(spaceId, revisionId);
+    if (
+      materialized.envelope.revision.spaceId !== spaceId ||
+      materialized.envelope.revision.revisionId !== revisionId
+    ) {
+      throw new ExactRevisionMismatchError();
+    }
+    return materialized.files
+      .filter(
+        (file): file is typeof file & { readonly text: string } =>
+          file.kind !== "opaque" && typeof file.text === "string",
+      )
+      .map((file) => Object.freeze({ path: file.path, text: file.text }));
   }
 }
 

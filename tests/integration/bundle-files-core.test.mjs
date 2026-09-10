@@ -589,6 +589,131 @@ test("staging contains spoofed types and atomically consumes a binding-pinned re
   );
 });
 
+test("indexing selects exact Markdown entries before reading large mixed-bundle objects", async () => {
+  const env = await harness();
+  const largeOpaqueBytes = new Uint8Array(8 * 1024 * 1024);
+  largeOpaqueBytes.set(PNG.subarray(0, 8));
+  const staged = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "large-archive.bin",
+    claimedMediaType: "application/octet-stream",
+    bytes: largeOpaqueBytes,
+    idempotencyKey: "stage-large-index-exclusion",
+  });
+  assert.equal(staged.kind, "staged");
+
+  const revisionIds = ["revision_large_mixed", "revision_large_mixed_deleted"];
+  const commits = new ChangesetCommitService({
+    authorizer: env.authorizer,
+    metadata: env.metadata,
+    revisions: env.revisions,
+    objects: env.objects,
+    clock: { now: () => LATER },
+    revisionIds: { nextRevisionId: () => revisionIds.shift() },
+  });
+  const mixed = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit-large-index-exclusion",
+    summary: "Add indexable note and large opaque archive",
+    operations: [
+      {
+        type: "create_file",
+        path: "concepts/temporary-index-note.md",
+        text: "---\ntype: Reference\ntitle: Temporary index note\n---\n\n# Temporary index note\n",
+      },
+      {
+        type: "create_bundle_file",
+        path: "assets/large-archive.bin",
+        staged_file_id: staged.record.stagedFileId,
+      },
+    ],
+  });
+  assert.equal(mixed.kind, "committed");
+  assert.equal(
+    mixed.envelope.manifest.entries
+      .filter((entry) => entry.kind === "opaque")
+      .reduce((bytes, entry) => bytes + entry.size, 0),
+    largeOpaqueBytes.byteLength,
+  );
+  const deleted = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: "revision_large_mixed",
+    idempotencyKey: "commit-large-index-deletion",
+    summary: "Remove indexable note and large opaque archive",
+    operations: [
+      { type: "delete_file", path: "concepts/temporary-index-note.md" },
+      { type: "delete_bundle_file", path: "assets/large-archive.bin" },
+    ],
+  });
+  assert.equal(deleted.kind, "committed");
+
+  let materializeCalls = 0;
+  const readCalls = [];
+  const selectiveRevisions = {
+    async materialize(...args) {
+      materializeCalls += 1;
+      return env.revisions.materialize(...args);
+    },
+    readRevisionEnvelope: (...args) => env.revisions.readRevisionEnvelope(...args),
+    async readRevisionFile(spaceId, revisionId, path) {
+      readCalls.push({ revisionId, path });
+      assert.notEqual(path, "assets/large-archive.bin");
+      return env.revisions.readRevisionFile(spaceId, revisionId, path);
+    },
+  };
+  const index = new InMemoryExactRevisionSearchIndex();
+  const indexing = new RevisionIndexJobHandler({
+    work: env.metadata,
+    revisions: selectiveRevisions,
+    index,
+    clock: { now: () => LATER },
+  });
+  for (const revisionId of ["revision_large_mixed", "revision_large_mixed_deleted"]) {
+    assert.deepEqual(await indexing.handle({
+      actor: {
+        kind: "service",
+        serviceId: "large-bundle-index-test",
+        deploymentCapabilities: CAPABILITIES,
+        requestId: `request_${revisionId}`,
+        occurredAtUtc: LATER,
+      },
+      jobId: `index_job_${revisionId}`,
+    }), { kind: "completed" });
+  }
+  assert.equal(materializeCalls, 0);
+  assert.equal(
+    readCalls.some((call) => call.path === "assets/large-archive.bin"),
+    false,
+  );
+  const indexedMixed = await index.readExactRevision(
+    MINDS.ordinary.spaceId,
+    "revision_large_mixed",
+  );
+  assert.equal(indexedMixed.kind, "ready");
+  assert.equal(
+    indexedMixed.documents.some((document) =>
+      document.path === "concepts/temporary-index-note.md"),
+    true,
+  );
+  const indexedDeleted = await index.readExactRevision(
+    MINDS.ordinary.spaceId,
+    "revision_large_mixed_deleted",
+  );
+  assert.equal(indexedDeleted.kind, "ready");
+  assert.equal(
+    indexedDeleted.documents.some((document) =>
+      document.path === "concepts/temporary-index-note.md"),
+    false,
+  );
+});
+
 test("server-generated stream uses shared quarantine and records safe provenance", async () => {
   const env = await harness();
   const ingress = new GeneratedArtifactIngressService({ staging: env.staging });
