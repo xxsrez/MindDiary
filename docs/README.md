@@ -293,6 +293,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 - [Release 0.4: приёмка коннектора из Codex, 2026-09-10](reports/2026-09-10-release-0.4-codex-connector-acceptance.md)
   — exact-candidate live chain, изолированный write/recovery receipt и короткие
   сценарии отдельной host-приёмки в ChatGPT.
+- [Release 0.4: приёмка внутри ChatGPT, 2026-09-10](reports/2026-09-10-release-0.4-chatgpt-host-acceptance.md)
+  — фактический выбор Mind, container PDF/ZIP, one-use grant, достоверность
+  ответа и восстановление после ошибки без обязательного skill.
 
 - [Состояние OKF на 2026-08-30](reports/2026-08-30-okf-status.md) — повторный
   аудит отдельного официального repository, exact spec revision/hash,
