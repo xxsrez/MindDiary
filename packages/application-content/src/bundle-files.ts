@@ -149,6 +149,14 @@ const EXTENSIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "application/epub+zip": Object.freeze([".epub"]),
   "audio/ogg": Object.freeze([".ogg", ".opus"]),
   "audio/opus": Object.freeze([".opus"]),
+  "text/plain": Object.freeze([".txt", ".text", ".log"]),
+  "text/csv": Object.freeze([".csv"]),
+  "text/tab-separated-values": Object.freeze([".tsv"]),
+  "application/json": Object.freeze([".json"]),
+  "application/x-ndjson": Object.freeze([".jsonl", ".ndjson"]),
+  "application/yaml": Object.freeze([".yaml", ".yml"]),
+  "application/x-yaml": Object.freeze([".yaml", ".yml"]),
+  "application/xml": Object.freeze([".xml"]),
   "text/html": Object.freeze([".html", ".htm"]),
   "application/x-ipynb+json": Object.freeze([".ipynb"]),
 });
@@ -159,10 +167,49 @@ const ZIP_CONTAINER_MEDIA_TYPES = new Set<BundleFileMediaType>([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 ]);
-const EXTENSION_ADVISORY_MEDIA_TYPES = new Set<BundleFileMediaType>([
-  "text/html",
-  "application/x-ipynb+json",
-]);
+const TEXT_EXTENSION_MEDIA_TYPES = Object.freeze([
+  [".txt", "text/plain"] as const,
+  [".text", "text/plain"] as const,
+  [".log", "text/plain"] as const,
+  [".csv", "text/csv"] as const,
+  [".tsv", "text/tab-separated-values"] as const,
+  [".json", "application/json"] as const,
+  [".jsonl", "application/x-ndjson"] as const,
+  [".ndjson", "application/x-ndjson"] as const,
+  [".yaml", "application/yaml"] as const,
+  [".yml", "application/yaml"] as const,
+  [".xml", "application/xml"] as const,
+  [".html", "text/html"] as const,
+  [".htm", "text/html"] as const,
+  [".ipynb", "application/x-ipynb+json"] as const,
+]) satisfies Readonly<readonly (readonly [string, BundleFileMediaType])[]>;
+const DISALLOWED_TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
+const TEXT_VALIDATION_CHUNK_BYTES = 64 * 1_024;
+
+class SafeUtf8TextValidator {
+  readonly #decoder = new TextDecoder("utf-8", { fatal: true });
+  #valid = true;
+
+  write(bytes: Uint8Array): void {
+    if (!this.#valid) return;
+    try {
+      if (DISALLOWED_TEXT_CONTROL.test(this.#decoder.decode(bytes, { stream: true }))) {
+        this.#valid = false;
+      }
+    } catch {
+      this.#valid = false;
+    }
+  }
+
+  finish(): boolean {
+    if (!this.#valid) return false;
+    try {
+      return !DISALLOWED_TEXT_CONTROL.test(this.#decoder.decode());
+    } catch {
+      return false;
+    }
+  }
+}
 
 function startsWith(bytes: Uint8Array, signature: readonly number[]): boolean {
   return signature.every((value, index) => bytes[index] === value);
@@ -228,19 +275,57 @@ function extensionMatches(name: string, mediaType: BundleFileMediaType): boolean
   return EXTENSIONS[mediaType]?.some((extension) => lower.endsWith(extension)) ?? false;
 }
 
+function textMediaTypeFromFilename(name: string): BundleFileMediaType | null {
+  const lower = name.toLocaleLowerCase("en-US");
+  return TEXT_EXTENSION_MEDIA_TYPES.find(([suffix]) => lower.endsWith(suffix))?.[1] ?? null;
+}
+
+function isTextMediaTypeHint(mediaType: BundleFileMediaType): boolean {
+  return mediaType.startsWith("text/") ||
+    mediaType === "application/json" ||
+    mediaType === "application/x-ndjson" ||
+    mediaType === "application/yaml" ||
+    mediaType === "application/x-yaml" ||
+    mediaType === "application/xml" ||
+    mediaType.endsWith("+json") || mediaType.endsWith("+xml");
+}
+
+function isTextClassificationCandidate(
+  claimed: string | undefined,
+  displayFilename: string,
+): boolean {
+  if (textMediaTypeFromFilename(displayFilename) !== null) return true;
+  return claimed !== undefined && isTextMediaTypeHint(bundleFileMediaType(claimed));
+}
+
+function safeUtf8Text(bytes: Uint8Array): boolean {
+  const validator = new SafeUtf8TextValidator();
+  for (let offset = 0; offset < bytes.byteLength; offset += TEXT_VALIDATION_CHUNK_BYTES) {
+    validator.write(bytes.subarray(offset, offset + TEXT_VALIDATION_CHUNK_BYTES));
+  }
+  return validator.finish();
+}
+
 function canonicalDetectedMedia(
   detected: BundleFileMediaType | null,
   claimed: string | undefined,
   displayFilename: string,
+  safeText: boolean,
 ): BundleFileMediaType {
   const fallback = "application/octet-stream";
   const advisory = claimed === undefined ? null : bundleFileMediaType(claimed);
   const advisoryKnown = advisory !== null && advisory !== fallback &&
     extensionMatches(displayFilename, advisory);
   if (detected === null) {
-    return advisoryKnown && EXTENSION_ADVISORY_MEDIA_TYPES.has(advisory)
-      ? advisory
-      : fallback;
+    if (safeText) {
+      const filenameMediaType = textMediaTypeFromFilename(displayFilename);
+      if (
+        filenameMediaType !== null &&
+        (advisory === null || advisory === fallback || isTextMediaTypeHint(advisory))
+      ) return filenameMediaType;
+      if (advisory !== null && isTextMediaTypeHint(advisory)) return advisory;
+    }
+    return fallback;
   }
   if (detected === "application/zip") {
     if (advisoryKnown && ZIP_CONTAINER_MEDIA_TYPES.has(advisory)) return advisory;
@@ -596,6 +681,7 @@ export class BundleFileStagingService {
       detectBundleFileMediaType(bytes),
       claimedMediaType,
       displayFilename,
+      isTextClassificationCandidate(claimedMediaType, displayFilename) && safeUtf8Text(bytes),
     );
     if (expectedMediaType !== undefined && expectedMediaType !== detected) {
       return invalid("bundle_file_media_mismatch");
@@ -991,10 +1077,13 @@ export class BundleFileStagingService {
 
     try {
       const digest = new IncrementalSha256();
-      const signature = new Uint8Array(12);
+      const signature = new Uint8Array(512);
       let signatureSize = 0;
       let size = 0;
       let failure: StageBundleFileStreamResult | null = null;
+      const textValidator = isTextClassificationCandidate(claimedMediaType, displayFilename)
+        ? new SafeUtf8TextValidator()
+        : null;
       for await (const chunk of request.stream) {
         if (request.signal?.aborted) {
           failure = Object.freeze({ kind: "stream_invalid", code: "stream_cancelled" });
@@ -1019,6 +1108,7 @@ export class BundleFileStagingService {
           signature.set(chunk.subarray(0, copied), signatureSize);
           signatureSize += copied;
         }
+        textValidator?.write(chunk);
         size += chunk.byteLength;
         digest.update(chunk);
         await upload.write(chunk);
@@ -1030,6 +1120,7 @@ export class BundleFileStagingService {
           code: "stream_cancelled",
         }));
       }
+      const safeText = textValidator?.finish() ?? false;
 
       const sha256 = digest.digest();
       if (expectedSize !== undefined && expectedSize !== size) {
@@ -1048,6 +1139,7 @@ export class BundleFileStagingService {
         detectBundleFileMediaType(signature.subarray(0, signatureSize)),
         claimedMediaType,
         displayFilename,
+        safeText,
       );
       if (expectedMediaType !== undefined && expectedMediaType !== detected) {
         return await streamFailure(invalid("bundle_file_media_mismatch"));

@@ -525,7 +525,8 @@ export function normalizeReadFilesRequest(value: unknown): Readonly<NormalizedRe
 
 export function isTextMediaType(mediaType: string): boolean {
   return mediaType.startsWith("text/") || mediaType === "application/json" || mediaType === "application/yaml" ||
-    mediaType === "application/x-yaml" || mediaType === "application/xml" || mediaType.endsWith("+json") || mediaType.endsWith("+xml");
+    mediaType === "application/x-yaml" || mediaType === "application/x-ndjson" ||
+    mediaType === "application/xml" || mediaType.endsWith("+json") || mediaType.endsWith("+xml");
 }
 
 export function splitTextLines(text: string): readonly Readonly<TextLine>[] {

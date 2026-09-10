@@ -842,6 +842,11 @@ test("differential file operations compose over one exact mixed-file revision wi
       bytes: encoder.encode("team: product\nrank: 1\n"),
     },
     {
+      path: "data/routes.csv",
+      mediaType: "text/csv",
+      bytes: encoder.encode("route_id,route_short_name\n1,Airport\n2,Funchal\n"),
+    },
+    {
       path: "notes/plain.txt",
       mediaType: "text/plain",
       bytes: encoder.encode("first line\nneedle café 🧠\nlast line\n"),
@@ -1003,6 +1008,35 @@ test("differential file operations compose over one exact mixed-file revision wi
     path: "assets/manual.pdf",
     error: { code: "file_not_text", retryable: false },
   }]);
+  const importedText = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId: exactRevision },
+    paths: ["data/profile.json", "data/routes.csv", "notes/plain.txt"],
+    patterns: ["runtime", "Airport", "café"],
+    syntax: "literal",
+    output: "matches",
+    limit: 10,
+  });
+  assert.deepEqual(importedText.files.map((file) => file.path), [
+    "data/profile.json",
+    "data/routes.csv",
+    "notes/plain.txt",
+  ]);
+  assert.deepEqual(importedText.errors, []);
+  const importedRead = await env.browse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId: exactRevision },
+    requests: [
+      { path: "data/profile.json", mode: "whole" },
+      { path: "data/routes.csv", mode: "lines", startLine: 2, endLine: 2 },
+      { path: "notes/plain.txt", mode: "lines", startLine: 2, endLine: 2 },
+    ],
+  });
+  assert.deepEqual(importedRead.items.map((item) => item.file.text), [
+    '{"team":"runtime","rank":2,"enabled":true}\n',
+    "1,Airport\n",
+    "needle café 🧠\n",
+  ]);
   const localGrep = execFileSync(
     "rg",
     ["--json", "--fixed-strings", "-e", "needle", "-e", "café", "notes/plain.txt"],

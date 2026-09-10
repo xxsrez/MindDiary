@@ -612,6 +612,54 @@ test("server-generated stream uses shared quarantine and records safe provenance
   );
 });
 
+test("text ingress validates complete UTF-8 across stream chunks before assigning text media", async () => {
+  const env = await harness();
+  const csv = new TextEncoder().encode("stop_id,stop_name\n1,Funchal\n2,Câmara de Lobos\n");
+  const split = csv.indexOf(0xc3) + 1;
+  const staged = await env.staging.stageStream({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "stops.csv",
+    claimedMediaType: "application/octet-stream",
+    idempotencyKey: "stage-streaming-utf8-csv",
+    sourceKind: "local_path",
+    maxBytes: csv.byteLength,
+    stream: (async function* () {
+      yield csv.subarray(0, split);
+      yield csv.subarray(split);
+    })(),
+  });
+  assert.equal(staged.kind, "staged");
+  assert.equal(staged.record.mediaType, "text/csv");
+  assert.deepEqual(
+    (await env.objects.getStagedBundleFile(staged.record.stagedFileId))?.bytes,
+    csv,
+  );
+
+  const invalidUtf8 = Uint8Array.from([0x72, 0x6f, 0x77, 0x0a, 0xc3, 0x28]);
+  const binary = await env.staging.stageStream({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "invalid.csv",
+    claimedMediaType: "text/csv",
+    idempotencyKey: "stage-streaming-invalid-utf8-csv",
+    sourceKind: "local_path",
+    maxBytes: invalidUtf8.byteLength,
+    stream: (async function* () {
+      yield invalidUtf8.subarray(0, 5);
+      yield invalidUtf8.subarray(5);
+    })(),
+  });
+  assert.equal(binary.kind, "staged");
+  assert.equal(binary.record.mediaType, "application/octet-stream");
+  assert.deepEqual(
+    (await env.objects.getStagedBundleFile(binary.record.stagedFileId))?.bytes,
+    invalidUtf8,
+  );
+});
+
 test("streaming stage forwards an exact authorized source size to object storage", async () => {
   const env = await harness();
   const objects = streamingProbeObjectStore();
@@ -781,8 +829,9 @@ test("arbitrary opaque formats stage and commit atomically with bounded safe med
     ["assets/book.epub", "application/epub+zip", Uint8Array.from([...ZIP, 2]), "application/epub+zip"],
     ["assets/audio.opus", "audio/ogg", new TextEncoder().encode("OggS\0OpusHead"), "audio/ogg"],
     ["assets/page.html", "text/html; charset=UTF-8", new TextEncoder().encode("<!doctype html><p>opaque</p>"), "text/html"],
-    ["assets/table.csv", "text/csv", new TextEncoder().encode("name,value\nalpha,1\n"), "application/octet-stream"],
-    ["assets/data.json", "application/json", new TextEncoder().encode("{\"value\":1}"), "application/octet-stream"],
+    ["assets/table.csv", "application/octet-stream", new TextEncoder().encode("name,value\nalpha,1\n"), "text/csv"],
+    ["assets/routes.txt", "application/octet-stream", new TextEncoder().encode("route_id,route_short_name\n1,Airport\n"), "text/plain"],
+    ["assets/data.json", "application/octet-stream", new TextEncoder().encode("{\"value\":1}"), "application/json"],
     ["assets/notebook.ipynb", "application/x-ipynb+json", new TextEncoder().encode("{\"cells\":[]}"), "application/x-ipynb+json"],
     ["assets/archive.zip", "application/zip", ZIP, "application/zip"],
     ["assets/unknown.custom", "application/x-mind-diary-test", Uint8Array.of(0, 1, 2, 3), "application/octet-stream"],
@@ -802,10 +851,11 @@ test("arbitrary opaque formats stage and commit atomically with bounded safe med
     assert.equal(result.record.mediaType, expectedMediaType, path);
     staged.push({ path, bytes, result });
   }
-  for (const [displayFilename, claimedMediaType, bytes] of [
-    ["missing.html", undefined, new TextEncoder().encode("<!doctype html>")],
-    ["invalid.html", "text/html\r\nx-injected: yes", new TextEncoder().encode("<!doctype html>")],
-    ["conflict.html", "text/html", PNG],
+  for (const [displayFilename, claimedMediaType, bytes, expectedMediaType] of [
+    ["missing.html", undefined, new TextEncoder().encode("<!doctype html>"), "text/html"],
+    ["invalid.html", "text/html\r\nx-injected: yes", new TextEncoder().encode("<!doctype html>"), "text/html"],
+    ["conflict.html", "text/html", PNG, "application/octet-stream"],
+    ["control.csv", "text/csv", Uint8Array.of(0x61, 0x2c, 0x62, 0x0a, 0x00), "application/octet-stream"],
   ]) {
     const fallback = await env.staging.stage({
       actor: env.currentActor,
@@ -817,7 +867,7 @@ test("arbitrary opaque formats stage and commit atomically with bounded safe med
       idempotencyKey: `stage-advisory-fallback-${displayFilename}`,
     });
     assert.equal(fallback.kind, "staged", displayFilename);
-    assert.equal(fallback.record.mediaType, "application/octet-stream", displayFilename);
+    assert.equal(fallback.record.mediaType, expectedMediaType, displayFilename);
   }
 
   const commits = new ChangesetCommitService({

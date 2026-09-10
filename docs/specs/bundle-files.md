@@ -5,6 +5,7 @@
 Release 0.3 principal-owned staging amendment принят 2026-08-30 в
 [ADR-0024](../decisions/0024-principal-mind-usage-modes-and-automatic-save.md)
 и [Mind usage contract](mind-usage-modes.md).
+Release 0.4 UTF-8 text-ingress amendment принят 2026-09-10 ниже.
 `normative_status: accepted`; `implementation_status: legacy_bounded_local`;
 `principal_usage_staging_status: implemented_repository`.
 Текущий repository baseline из MD-247/MD-248/MD-249 реализует manifest v1/v2/v3,
@@ -220,12 +221,42 @@ invalid или conflicting evidence нормализуется в exact
 не становятся authority. `bundle_file_media_mismatch` может быть quality
 diagnostic, но не storage failure.
 
+### Release 0.4 UTF-8 text ingress
+
+CSV, JSON, JSON Lines, TXT, TSV, YAML, XML, HTML и Jupyter notebook остаются
+`kind: opaque`: manifest, immutable history, digest и exact bytes не меняются.
+При staging service может сохранить их canonical text media type, чтобы
+`list_files`, `grep_files` и `read_files` применяли общий exact-revision text
+workflow без отдельного parser или index.
+
+Text classification требует одновременно:
+
+- полного успешного UTF-8 decode с fatal error policy;
+- отсутствия NUL, DEL и C0 controls, кроме TAB, LF и CR;
+- text MIME hint либо известного text filename suffix. Для обычных browser/file
+  ingress `application/octet-stream` считается отсутствием text MIME hint и
+  допускает вывод по suffix только после проверки всех bytes.
+
+Known suffix задаёт canonical media type: `.txt`/`.log` — `text/plain`,
+`.csv` — `text/csv`, `.tsv` — `text/tab-separated-values`, `.json` —
+`application/json`, `.jsonl`/`.ndjson` — `application/x-ndjson`,
+`.yaml`/`.yml` — `application/yaml`, `.xml` — `application/xml`, `.html`/`.htm`
+— `text/html`, `.ipynb` — `application/x-ipynb+json`. Если suffix отсутствует,
+успешно проверенный canonical text MIME hint сохраняется как media type.
+Conflicting binary signature имеет приоритет и даёт
+`application/octet-stream`. Extension или declared MIME без проверки всего
+content никогда не классифицируют arbitrary bytes как text. Обычный и
+streaming staging применяют одинаковое правило; streaming decoder переносит
+UTF-8 state между chunks и завершает fatal validation только на EOF.
+
 | Example | Canonical/advisory media | Storage | Serving |
 |---|---|---|---|
 | DOCX | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` or fallback | opaque, exact bytes | download-only |
 | HEIC | `image/heic` or fallback | opaque, exact bytes | download-only |
 | EPUB | `application/epub+zip` or fallback | opaque, exact bytes | download-only; never extracted |
 | OPUS | `audio/ogg`, `audio/opus` or fallback | opaque, exact bytes | download-only |
+| CSV / TXT | content-validated text media or fallback | opaque, exact bytes | exact-revision text operations or download |
+| JSON / JSON Lines | content-validated JSON media or fallback | opaque, exact bytes | exact-revision text operations or download |
 | HTML | `text/html` or fallback | opaque, exact bytes | download-only; never rendered |
 | Jupyter notebook | `application/x-ipynb+json` or fallback | opaque, exact bytes | download-only; never executed |
 | ZIP | `application/zip` or fallback | opaque, exact bytes | download-only; never extracted |
