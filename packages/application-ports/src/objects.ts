@@ -242,6 +242,7 @@ export interface StagedBundleFileUploadRequest {
 export interface BundleFileObjectMetadata {
   readonly spaceId: SpaceId;
   readonly sha256: Sha256Digest;
+  /** Storage hint only; the exact revision manifest owns the served media type. */
   readonly mediaType: BundleFileMediaType;
   readonly size: number;
   readonly createdAt: UtcInstant;

@@ -221,6 +221,14 @@ invalid или conflicting evidence нормализуется в exact
 не становятся authority. `bundle_file_media_mismatch` может быть quality
 diagnostic, но не storage failure.
 
+Canonical bytes внутри одного Mind дедуплицируются по SHA-256 независимо от
+`media_type`. Media type принадлежит entry конкретной immutable revision, а не
+content-addressed object: новая revision может уточнить классификацию тех же
+exact bytes, не меняя digest и не ломая прежнюю историю. Object-store content
+type остаётся storage hint и не участвует в проверке revision; чтение, export и
+serving берут media type из exact manifest и отдельно проверяют Space, digest,
+size и bytes.
+
 ### Release 0.4 UTF-8 text ingress
 
 CSV, JSON, JSON Lines, TXT, TSV, YAML, XML, HTML и Jupyter notebook остаются

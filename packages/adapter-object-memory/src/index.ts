@@ -392,10 +392,7 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     const key = `${request.spaceId}:${digest}`;
     const existing = this.#bundleFiles.get(key);
     if (existing) {
-      if (
-        existing.mediaType !== request.mediaType ||
-        !bytesEqual(existing.bytes, bytes)
-      ) {
+      if (!bytesEqual(existing.bytes, bytes)) {
         throw new ObjectStoreIntegrityError(
           "digest_collision",
           "different Space-scoped BundleFile bytes resolved to one digest",

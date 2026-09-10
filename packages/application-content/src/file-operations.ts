@@ -672,7 +672,11 @@ export async function loadTextFileHead(
       complete: end === entry.size,
     });
   }
-  if (opened.sha256 !== entry.sha256 || opened.mediaType !== entry.mediaType || opened.size !== entry.size) {
+  if (
+    opened.sha256 !== entry.sha256 ||
+    (entry.kind === "markdown" && opened.mediaType !== entry.mediaType) ||
+    opened.size !== entry.size
+  ) {
     await opened.body.cancel("metadata mismatch").catch(() => undefined);
     throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
   }

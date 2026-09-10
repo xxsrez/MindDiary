@@ -700,7 +700,6 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       const existingBytes = await bodyBytes(existing);
       if (
         metadata.sha256 !== digest ||
-        metadata.mediaType !== request.mediaType ||
         !bytesEqual(existingBytes, bytes)
       ) throw new ObjectStoreFailure("digest_collision", "BundleFile object collision");
       if ((existing.customMetadata?.state ?? ACTIVE_STATE) === DELETE_STATE) continue;
@@ -709,7 +708,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         : metadata.protectedAt;
       if (protectedAt !== metadata.protectedAt) {
         const updated = await this.#bucket.put(key, existingBytes, {
-          httpMetadata: { contentType: request.mediaType },
+          httpMetadata: { contentType: metadata.mediaType },
           customMetadata: this.#bundleCustomMetadata({ ...metadata, protectedAt }),
           onlyIf: { etagMatches: existing.etag },
         });
@@ -1061,13 +1060,13 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         const metadata = this.#bundleMetadata(existing);
         if (
           metadata.spaceId !== request.spaceId || metadata.sha256 !== request.sha256 ||
-          metadata.mediaType !== request.mediaType || metadata.size !== request.size
+          metadata.size !== request.size
         ) throw new ObjectStoreFailure("digest_collision", "BundleFile object collision");
         if (compareUtc(request.createdAt, metadata.protectedAt) <= 0) {
           return Object.freeze({ object: metadata, status: "already_exists" });
         }
         const updated = await this.#bucket.put(canonicalKey, bodyStream(existing), {
-          httpMetadata: { contentType: request.mediaType },
+          httpMetadata: { contentType: metadata.mediaType },
           customMetadata: this.#bundleCustomMetadata({
             ...metadata,
             protectedAt: request.createdAt,

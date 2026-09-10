@@ -420,7 +420,7 @@ export class MindValidationService {
         }
         if (
           opened === null || opened.sha256 !== entry.sha256 ||
-          opened.mediaType !== entry.mediaType || opened.size !== entry.size ||
+          opened.size !== entry.size ||
           !(await verifyOpaqueBody(opened.body, entry.size, entry.sha256))
         ) throw new MindValidationFailure(
           "revision_integrity_failure",

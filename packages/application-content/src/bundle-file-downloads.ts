@@ -513,7 +513,7 @@ export class BundleFileDownloadService {
       try {
         const preview = await this.#objects.openBundleFile(info.mind.mindId, entry.sha256);
         if (preview !== null) {
-          if (preview.mediaType !== entry.mediaType || preview.size !== entry.size) {
+          if (preview.size !== entry.size) {
             await preview.body.cancel().catch(() => undefined);
           } else {
             inlineEligible = await inspectSafeRasterPreview(
@@ -659,7 +659,7 @@ export class BundleFileDownloadService {
     } catch {
       return Object.freeze({ kind: "not_found" });
     }
-    if (object === null || object.mediaType !== grant.mediaType || object.size !== grant.size) {
+    if (object === null || object.size !== grant.size) {
       return Object.freeze({ kind: "not_found" });
     }
     const verification = await verifyBody(
@@ -672,8 +672,7 @@ export class BundleFileDownloadService {
 
     const responseObject = await this.#objects.openBundleFile(grant.spaceId, grant.sha256);
     if (
-      responseObject === null || responseObject.mediaType !== grant.mediaType ||
-      responseObject.size !== grant.size
+      responseObject === null || responseObject.size !== grant.size
     ) {
       await responseObject?.body.cancel().catch(() => undefined);
       return Object.freeze({ kind: "not_found" });

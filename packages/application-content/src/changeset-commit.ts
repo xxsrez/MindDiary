@@ -734,7 +734,7 @@ export class ChangesetCommitService {
       });
       const promoted = await this.#objects.openBundleFile(request.spaceId, file.sha256);
       if (
-        promoted === null || promoted.mediaType !== file.mediaType ||
+        promoted === null || promoted.sha256 !== file.sha256 ||
         promoted.size !== file.size ||
         !(await verifiedStagedStream(promoted.body, file.size, file.sha256))
       ) return invalid(
@@ -745,9 +745,9 @@ export class ChangesetCommitService {
       entries.push({
         kind: "opaque" as const,
         path: file.path,
-        sha256: put.object.sha256,
-        mediaType: put.object.mediaType,
-        size: put.object.size,
+        sha256: file.sha256,
+        mediaType: file.mediaType,
+        size: file.size,
       });
     }
     const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V4);

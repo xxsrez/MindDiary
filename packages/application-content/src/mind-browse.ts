@@ -2064,7 +2064,7 @@ export class MindBrowseService {
         throw error;
       }
       if (
-        object === null || object.sha256 !== entry.sha256 || object.mediaType !== entry.mediaType ||
+        object === null || object.sha256 !== entry.sha256 ||
         object.size !== entry.size || object.bytes.byteLength !== entry.size ||
         (await this.#objects.calculateSha256(object.bytes)) !== entry.sha256
       ) {
@@ -2363,7 +2363,7 @@ export class MindBrowseService {
         entry.sha256,
       );
       if (object === null) return false;
-      if (object.mediaType !== entry.mediaType || object.size !== entry.size) {
+      if (object.size !== entry.size) {
         await object.body.cancel().catch(() => undefined);
         return false;
       }

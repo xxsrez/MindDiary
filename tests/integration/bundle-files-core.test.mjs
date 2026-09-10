@@ -1035,6 +1035,94 @@ test("arbitrary opaque formats stage and commit atomically with bounded safe med
   }
 });
 
+test("a new revision can refine media type while reusing the same canonical bytes", async () => {
+  const env = await harness();
+  const bytes = new TextEncoder().encode("route_id,route_short_name\n1,Airport\n");
+  const stagedOpaque = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "routes.bin",
+    claimedMediaType: "application/octet-stream",
+    bytes,
+    idempotencyKey: "stage-routes-as-opaque",
+  });
+  assert.equal(stagedOpaque.kind, "staged");
+  assert.equal(stagedOpaque.record.mediaType, "application/octet-stream");
+
+  const revisionIds = ["revision_routes_opaque", "revision_routes_text"];
+  const commits = new ChangesetCommitService({
+    authorizer: env.authorizer,
+    metadata: env.metadata,
+    revisions: env.revisions,
+    objects: env.objects,
+    clock: { now: () => LATER },
+    revisionIds: { nextRevisionId: () => revisionIds.shift() },
+  });
+  const initial = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit-routes-as-opaque",
+    summary: "Store routes with the original opaque classification",
+    operations: [{
+      type: "create_bundle_file",
+      path: "data/routes.csv",
+      staged_file_id: stagedOpaque.record.stagedFileId,
+    }],
+  });
+  assert.equal(initial.kind, "committed");
+
+  const stagedText = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "routes.csv",
+    claimedMediaType: "text/csv",
+    bytes,
+    idempotencyKey: "stage-routes-as-text",
+  });
+  assert.equal(stagedText.kind, "staged");
+  assert.equal(stagedText.record.sha256, stagedOpaque.record.sha256);
+  assert.equal(stagedText.record.mediaType, "text/csv");
+
+  const refined = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: initial.envelope.revision.revisionId,
+    idempotencyKey: "commit-routes-as-text",
+    summary: "Refine routes media classification",
+    operations: [{
+      type: "replace_bundle_file",
+      path: "data/routes.csv",
+      staged_file_id: stagedText.record.stagedFileId,
+    }],
+  });
+  assert.equal(refined.kind, "committed");
+
+  const historical = await env.revisions.materialize(
+    MINDS.ordinary.spaceId,
+    initial.envelope.revision.revisionId,
+  );
+  const current = await env.revisions.materialize(
+    MINDS.ordinary.spaceId,
+    refined.envelope.revision.revisionId,
+  );
+  const historicalEntry = historical.files.find(({ path }) => path === "data/routes.csv");
+  const currentEntry = current.files.find(({ path }) => path === "data/routes.csv");
+  assert.equal(historicalEntry.mediaType, "application/octet-stream");
+  assert.equal(currentEntry.mediaType, "text/csv");
+  assert.equal(historicalEntry.sha256, currentEntry.sha256);
+  assert.deepEqual(historicalEntry.bytes, bytes);
+  assert.deepEqual(currentEntry.bytes, bytes);
+  assert.equal(
+    (await env.objects.getBundleFile(MINDS.ordinary.spaceId, currentEntry.sha256)).mediaType,
+    "application/octet-stream",
+  );
+});
+
 test("Markdown BundleFile references validate the atomic resulting revision", async () => {
   const env = await harness();
   const staged = await env.staging.stage({
@@ -1857,6 +1945,14 @@ test("opaque canonical dedupe is isolated by Space and Sites reconstructs staged
     mediaType: "image/png",
     createdAt: FIXED_NOW,
   });
+  const memoryReclassified = await memory.putBundleFile({
+    spaceId: "space_one",
+    bytes: PNG,
+    mediaType: "application/octet-stream",
+    createdAt: OBJECT_REFRESH,
+  });
+  assert.equal(memoryReclassified.status, "already_exists");
+  assert.equal(memoryReclassified.object.mediaType, "image/png");
   await memory.putBundleFile({
     spaceId: "space_two",
     bytes: PNG,
@@ -1898,13 +1994,32 @@ test("opaque canonical dedupe is isolated by Space and Sites reconstructs staged
     (await sitesObjects.getBundleFile("space_sites", sitesPut.object.sha256)).bytes,
     PNG,
   );
+  await sitesObjects.putStagedBundleFile({
+    stagedFileId: "staged_sites_reclassification",
+    bindingOwnerId: BINDING_OWNER_ID,
+    spaceId: "space_sites",
+    bytes: PNG,
+    createdAt: FIXED_NOW,
+  });
+  const promotedReclassification = await sitesObjects.promoteStagedBundleFile({
+    stagedFileId: "staged_sites_reclassification",
+    bindingOwnerId: BINDING_OWNER_ID,
+    spaceId: "space_sites",
+    sha256: sitesPut.object.sha256,
+    size: PNG.byteLength,
+    mediaType: "application/octet-stream",
+    createdAt: FIXED_NOW,
+  });
+  assert.equal(promotedReclassification.status, "already_exists");
+  assert.equal(promotedReclassification.object.mediaType, "image/png");
   const refreshed = await sitesObjects.putBundleFile({
     spaceId: "space_sites",
     bytes: PNG,
-    mediaType: "image/png",
+    mediaType: "application/octet-stream",
     createdAt: OBJECT_REFRESH,
   });
   assert.equal(refreshed.status, "already_exists");
+  assert.equal(refreshed.object.mediaType, "image/png");
   assert.equal(refreshed.object.protectedAt, OBJECT_REFRESH);
   assert.equal((await sitesObjects.listBundleFileObjects({
     createdBefore: "2026-08-07T12:30:00.000Z",

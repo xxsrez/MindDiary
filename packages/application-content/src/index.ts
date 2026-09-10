@@ -779,7 +779,7 @@ export class CanonicalRevisionCoordinator {
       }
       if (
         object.sha256 !== entry.sha256 ||
-        object.mediaType !== entry.mediaType ||
+        (entry.kind === "markdown" && object.mediaType !== entry.mediaType) ||
         object.size !== entry.size ||
         object.bytes.byteLength !== entry.size
       ) {
@@ -897,7 +897,8 @@ export class CanonicalRevisionCoordinator {
       );
     }
     if (
-      object.sha256 !== entry.sha256 || object.mediaType !== entry.mediaType ||
+      object.sha256 !== entry.sha256 ||
+      (entry.kind === "markdown" && object.mediaType !== entry.mediaType) ||
       object.size !== entry.size || object.bytes.byteLength !== entry.size
     ) throw new CanonicalRevisionError(
       "object_integrity_failure",
@@ -949,7 +950,7 @@ export class CanonicalRevisionCoordinator {
       const opened = await this.#objects.openBundleFile(spaceId, entry.sha256);
       if (
         opened === null || opened.sha256 !== entry.sha256 ||
-        opened.mediaType !== entry.mediaType || opened.size !== entry.size
+        opened.size !== entry.size
       ) throw new CanonicalRevisionError(
         "object_integrity_failure",
         `committed object metadata differs for ${JSON.stringify(entry.path)}`,
