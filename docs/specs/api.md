@@ -2508,7 +2508,8 @@ secret-bearing path.
   inclusive 256 MiB limit before ready publication. Size/SHA mismatch,
   interruption or overrun leaves no ready staged object.
 - One consumer holds a renewable short lease while streaming. A completed or
-  rejected intent cannot be PUT again; a transport interruption releases the
+  definitively rejected intent cannot be PUT again. A transport interruption or
+  retryable staging quota/soft-capacity/fairness/accounting result releases the
   claim so the exact immutable snapshot may retry before expiry.
 - `GET` returns `pending`, the privacy-safe verified `staged_file_ref` receipt,
   or a closed rejection. The local companion performs GET before PUT and GET
@@ -2521,7 +2522,10 @@ secret-bearing path.
   `capacity_hard_limit`, `capacity_fairness_limit`,
   `capacity_accounting_untrusted` and `staging_quota_exceeded` unchanged through
   immediate PUT errors, durable GET reconciliation and the companion client;
-  soft/untrusted capacity outcomes remain retryable.
+  staging quota plus soft/fairness/untrusted capacity outcomes remain retryable.
+  When `expected_size` is present, stream admission reserves that exact byte
+  count and uses it for the 4 MiB heavy threshold; only an unknown size reserves
+  the full transport ceiling.
 
 Only path-free intent metadata is durable in the dedicated D1 store. Expired
 records are deleted in bounded batches of at most 100 after the 24-hour safety
@@ -2572,6 +2576,13 @@ an unknown PUT with GET. Success returns the hosted verified `staged_file`
 receipt and consumes the local ref. Only a retryable or unknown transport
 outcome retains the same ref for exact retry; success, expiry, mutation or a
 definitive rejection closes and invalidates it.
+
+For more than one file the caller keeps a target path/size/SHA-256 progress
+ledger, uploads sequentially within one Mind, and commits completed batches of
+at most 20 BundleFile operations / 256 MiB staged bytes. Heavy files above 4 MiB
+are not uploaded concurrently in the same Mind. Each successful batch is read
+back from its exact revision before the next; later failure is reported as
+partial success rather than rolling back or restaging confirmed files.
 
 Directory, glob, traversal, final symlink, special file, oversize and changed
 bytes fail with typed path-free errors. The path, descriptor, source bytes,

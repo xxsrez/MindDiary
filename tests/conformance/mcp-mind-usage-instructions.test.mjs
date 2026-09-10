@@ -38,6 +38,9 @@ test("central MCP guidance describes the complete principal Mind usage policy", 
     assert.match(MCP_AGENT_INSTRUCTIONS, fragment);
   }
   assert.match(MCP_AGENT_INSTRUCTIONS, /Multiple relevant enabled Minds may be read sequentially/u);
+  assert.match(MCP_AGENT_INSTRUCTIONS, /at most 20 BundleFile operations and 256 MiB/u);
+  assert.match(MCP_AGENT_INSTRUCTIONS, /Do not run heavy uploads over 4 MiB concurrently/u);
+  assert.match(MCP_AGENT_INSTRUCTIONS, /Report committed, pending, failed, and unknown files separately/u);
   assert.doesNotMatch(MCP_AGENT_INSTRUCTIONS, /capture_knowledge/u);
 });
 

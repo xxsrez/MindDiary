@@ -389,11 +389,7 @@ test("size/digest failures, interruption, replay, wrong binding/Mind, revoke and
     ["size", "expected_size_mismatch"],
     ["digest", "expected_sha256_mismatch"],
     ["oversize", "stream_size_limit_exceeded"],
-    ["capacity-soft", "capacity_soft_limit"],
     ["capacity-hard", "capacity_hard_limit"],
-    ["capacity-fairness", "capacity_fairness_limit"],
-    ["capacity-untrusted", "capacity_accounting_untrusted"],
-    ["quota", "outstanding_staged_byte_limit_exceeded"],
   ]) {
     mode = failureMode;
     const failed = await createIntent(env, { idempotency_key: `failure-${failureMode}` });
@@ -407,6 +403,38 @@ test("size/digest failures, interruption, replay, wrong binding/Mind, revoke and
       capability: failed.uploadCapability,
       requestId: `status_${failureMode}`,
     }), { kind: "rejected", code: rejectionCode });
+  }
+
+  for (const [failureMode, failureCode] of [
+    ["capacity-soft", "capacity_soft_limit"],
+    ["capacity-fairness", "capacity_fairness_limit"],
+    ["capacity-untrusted", "capacity_accounting_untrusted"],
+    ["quota", "outstanding_staged_byte_limit_exceeded"],
+  ]) {
+    mode = failureMode;
+    const retryable = await createIntent(env, {
+      idempotency_key: `retryable-${failureMode}`,
+    });
+    assert.equal(retryable.kind, "ready");
+    assert.deepEqual(await env.service.upload({
+      capability: retryable.uploadCapability,
+      requestId: `request_retryable_${failureMode}`,
+      stream: (async function* () {})(),
+    }), { kind: "invalid", code: failureCode });
+    assert.equal((await env.service.status({
+      capability: retryable.uploadCapability,
+      requestId: `status_retryable_${failureMode}`,
+    })).kind, "pending");
+    mode = `recovered-${failureMode}`;
+    assert.equal((await env.service.upload({
+      capability: retryable.uploadCapability,
+      requestId: `request_recovered_${failureMode}`,
+      stream: (async function* () {})(),
+    })).kind, "staged");
+    assert.equal((await env.service.status({
+      capability: retryable.uploadCapability,
+      requestId: `status_recovered_${failureMode}`,
+    })).kind, "staged");
   }
 
   env.setNow("2026-08-25T12:11:00.000Z");

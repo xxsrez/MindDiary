@@ -269,6 +269,37 @@ test("unknown transport outcome retains the same ref for exact reconcile/retry",
   assert.equal(env.file.closed, 1);
 });
 
+test("retryable staging admission retains the exact prepared ref", async () => {
+  for (const code of [
+    "staging_quota_exceeded",
+    "capacity_soft_limit",
+    "capacity_fairness_limit",
+    "capacity_accounting_untrusted",
+  ]) {
+    let attempt = 0;
+    const env = harness({
+      transport: {
+        async upload(request) {
+          attempt += 1;
+          if (attempt === 1) throw new LocalCompanionHostedFailure(code);
+          for await (const _chunk of request.stream) { /* drain */ }
+          return staged({ replayed: true });
+        },
+      },
+    });
+    assert.equal((await prepare(env)).kind, "prepared");
+    assert.deepEqual(await env.companion.upload_prepared_file({
+      local_file_ref: REF,
+      upload_url: URL,
+    }), { kind: "invalid", code, retryable: true });
+    assert.equal((await env.companion.upload_prepared_file({
+      local_file_ref: REF,
+      upload_url: URL,
+    })).kind, "staged");
+    assert.equal(env.file.closed, 1);
+  }
+});
+
 test("definitive rejection and expiry invalidate the process-local ref", async (t) => {
   await t.test("definitive", async () => {
     const env = harness({

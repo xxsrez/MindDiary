@@ -999,9 +999,11 @@ export class BundleFileStagingService {
 
     const createdAt = this.#clock.now();
     const stagedFileId = this.#ids.nextStagedBundleFileId();
-    // The reservation is conservative because the final digest/size are only
-    // known after the source has been consumed. It is reduced atomically when
-    // the verified staged record is created.
+    // A verified producer may supply an exact source size before streaming.
+    // Reserve that value instead of the transport ceiling so a small upload is
+    // not incorrectly classified as a heavy 256 MiB operation. Sources without
+    // an exact size keep the conservative ceiling reservation.
+    const reservedBytes = expectedSize ?? request.maxBytes;
     const reservationOperationRef = `stream:${stagedFileId}`;
     const reservationId = capacityReservationId(
       "stage",
@@ -1017,11 +1019,11 @@ export class BundleFileStagingService {
       idempotencyKey,
       requested: Object.freeze({
         physicalCanonicalBytes: 0,
-        temporaryBytes: request.maxBytes,
+        temporaryBytes: reservedBytes,
         d1MetadataBytes: 512,
       }),
       bulk: true,
-      heavy: request.maxBytes > 4_194_304,
+      heavy: reservedBytes > 4_194_304,
       createdAt,
     });
     if (admission.kind === "rejected") {

@@ -626,9 +626,15 @@ export class LocalFileUploadIntentService {
       });
     }
 
-    const retryable = result.kind === "stream_invalid" &&
-      (result.code === "stream_cancelled" ||
-        result.code === "stream_transport_unavailable");
+    const retryable = result.kind === "stream_invalid"
+      ? result.code === "stream_cancelled" ||
+        result.code === "stream_transport_unavailable"
+      : result.kind === "invalid" && (
+        result.code === "outstanding_staged_byte_limit_exceeded" ||
+        result.code === "capacity_soft_limit" ||
+        result.code === "capacity_fairness_limit" ||
+        result.code === "capacity_accounting_untrusted"
+      );
     if (retryable) {
       await this.#intents.releaseLocalFileUploadIntent({
         intentId: record.intentId,

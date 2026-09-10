@@ -236,6 +236,15 @@ limits are evaluated against both Markdown and BundleFile entries; a lower
 specific limit wins. Every opaque upload/promotion/download/export is chunked;
 capacity accounting never requires reading the full object into memory.
 
+Streaming stage admission uses exact verified `expected_size` when the source
+provides it and falls back to the 256 MiB transport ceiling only when size is
+unknown. Heavy classification uses the same reserved byte count, so a small
+local/workspace file does not consume the one-heavy-operation-per-Mind lane.
+Staging quota, soft capacity, fairness and accounting-untrusted rejections are
+retryable without changing the prepared source or intent; hard capacity remains
+terminal. Multi-file callers stage and commit sequential bounded batches within
+the limits above and preserve explicit per-file partial progress.
+
 For each capacity, states are exact:
 
 - below `70%`: normal;

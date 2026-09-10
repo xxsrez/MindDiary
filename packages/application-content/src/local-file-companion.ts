@@ -112,7 +112,11 @@ export class LocalCompanionHostedFailure extends Error {
 
   constructor(
     readonly code: LocalCompanionHostedFailureCode,
-    readonly retryable = code === "file_ingress_transport_unavailable",
+    readonly retryable = code === "file_ingress_transport_unavailable" ||
+      code === "staging_quota_exceeded" ||
+      code === "capacity_soft_limit" ||
+      code === "capacity_fairness_limit" ||
+      code === "capacity_accounting_untrusted",
     readonly unknownOutcome = false,
   ) {
     super("The hosted file upload operation did not complete.");

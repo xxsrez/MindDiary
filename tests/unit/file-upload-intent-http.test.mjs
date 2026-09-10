@@ -134,15 +134,15 @@ test("HTTP failures are typed and never echo private exceptions, capability, pat
   assert.match(body, /file_ingress_transport_unavailable/u);
   assert.doesNotMatch(body, /Users|private|brain|bearer|mdupload|bytes/iu);
 
-  for (const [result, status, code] of [
+  for (const [result, status, code, retryable = false] of [
     [{ kind: "invalid", code: "expected_size_mismatch" }, 422, "bundle_file_size_mismatch"],
     [{ kind: "invalid", code: "expected_sha256_mismatch" }, 422, "bundle_file_digest_mismatch"],
     [{ kind: "stream_invalid", code: "stream_size_limit_exceeded" }, 413, "bundle_file_size_limit_exceeded"],
-    [{ kind: "invalid", code: "capacity_soft_limit" }, 429, "capacity_soft_limit"],
+    [{ kind: "invalid", code: "capacity_soft_limit" }, 429, "capacity_soft_limit", true],
     [{ kind: "invalid", code: "capacity_hard_limit" }, 429, "capacity_hard_limit"],
-    [{ kind: "invalid", code: "capacity_fairness_limit" }, 429, "capacity_fairness_limit"],
-    [{ kind: "invalid", code: "capacity_accounting_untrusted" }, 429, "capacity_accounting_untrusted"],
-    [{ kind: "invalid", code: "outstanding_staged_byte_limit_exceeded" }, 422, "staging_quota_exceeded"],
+    [{ kind: "invalid", code: "capacity_fairness_limit" }, 429, "capacity_fairness_limit", true],
+    [{ kind: "invalid", code: "capacity_accounting_untrusted" }, 429, "capacity_accounting_untrusted", true],
+    [{ kind: "invalid", code: "outstanding_staged_byte_limit_exceeded" }, 422, "staging_quota_exceeded", true],
   ]) {
     const env = handler({ upload: result });
     const failure = await env.handler(new Request(URL, {
@@ -151,7 +151,9 @@ test("HTTP failures are typed and never echo private exceptions, capability, pat
       body: new Uint8Array(),
     }));
     assert.equal(failure.status, status);
-    assert.equal((await failure.json()).error.code, code);
+    const error = (await failure.json()).error;
+    assert.equal(error.code, code);
+    assert.equal(error.retryable, retryable);
   }
   const rejected = handler({
     status: { kind: "rejected", code: "expected_sha256_mismatch" },
@@ -189,9 +191,9 @@ test("companion client preserves typed capacity failures from PUT and GET reconc
   for (const [code, status, retryable] of [
     ["capacity_soft_limit", 429, true],
     ["capacity_hard_limit", 429, false],
-    ["capacity_fairness_limit", 429, false],
+    ["capacity_fairness_limit", 429, true],
     ["capacity_accounting_untrusted", 429, true],
-    ["staging_quota_exceeded", 422, false],
+    ["staging_quota_exceeded", 422, true],
   ]) {
     let calls = 0;
     const client = createHostedFileUploadIntentClient({

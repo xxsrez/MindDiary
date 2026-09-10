@@ -255,6 +255,7 @@ function stageFailure(
       429,
       result.code,
       result.code === "capacity_soft_limit" ||
+        result.code === "capacity_fairness_limit" ||
         result.code === "capacity_accounting_untrusted",
     );
   }
@@ -267,7 +268,11 @@ function stageFailure(
         : result.code === "outstanding_staged_byte_limit_exceeded"
           ? "staging_quota_exceeded"
           : result.code;
-  return problem(422, code);
+  return problem(
+    422,
+    code,
+    result.code === "outstanding_staged_byte_limit_exceeded",
+  );
 }
 
 /**
@@ -391,6 +396,8 @@ function hostedRejectionRetryable(
   code: HostedFileUploadIntentRejectionCode,
 ): boolean {
   return code === "capacity_soft_limit" ||
+    code === "capacity_fairness_limit" ||
+    code === "staging_quota_exceeded" ||
     code === "capacity_accounting_untrusted";
 }
 
@@ -589,8 +596,9 @@ function responseFailure(
   if (definitive.has(code)) {
     return new HostedFileUploadIntentClientFailure(
       code as HostedFileUploadIntentClientFailure["code"],
-      code === "capacity_soft_limit" ||
-        code === "capacity_accounting_untrusted",
+      hostedRejectionRetryable(
+        code as HostedFileUploadIntentRejectionCode,
+      ),
     );
   }
   return new HostedFileUploadIntentClientFailure(

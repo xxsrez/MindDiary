@@ -816,6 +816,10 @@ test("streaming stage forwards an exact authorized source size to object storage
   });
   assert.equal(result.kind, "staged");
   assert.equal(requestedExpectedSize, PNG.byteLength);
+  const reservation = (await env.metadata.listCapacityReservationsForTest())
+    .find((item) => item.reservationId === result.record.capacityReservationId);
+  assert.equal(reservation.requested.temporaryBytes, PNG.byteLength);
+  assert.equal(reservation.heavy, false);
 });
 
 test("streaming stage accepts exact 256 MiB and rejects byte 268435457 without buffering", async () => {

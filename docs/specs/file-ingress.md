@@ -477,6 +477,36 @@ inventory; hosted response cannot observe it. Readability of one path is proven
 only by that local `prepare_local_file` call. MD-325 joins those two facts with
 the hosted adapter/binding and exact disk/workspace journeys.
 
+### Release 0.4 bounded multi-file workflow
+
+Массовая загрузка остаётся композицией существующих single-file ingress и
+atomic `commit_changeset`, а не новым неограниченным server upload. Для каждого
+источника caller сохраняет локальный progress ledger из target path, exact size,
+SHA-256 и состояния `pending | staged | committed | failed | unknown`. В одном
+Mind staging идёт последовательно bounded batches: не более 20 BundleFile
+operations и 268,435,456 staged bytes на один commit. Uploads больше 4 MiB не
+запускаются параллельно в одном Mind из-за invariant одной active heavy
+operation.
+
+Поток с известным `expected_size` резервирует именно этот размер; общий
+256-MiB transport ceiling используется только когда точный размер неизвестен.
+Поэтому маленький verified local/workspace source не получает ложную heavy
+classification. `staging_quota_exceeded`, `capacity_soft_limit`,
+`capacity_fairness_limit` и `capacity_accounting_untrusted` до чтения либо
+публикации bytes являются retryable: intent claim освобождается, process-local
+prepared ref сохраняется, а exact unchanged operation можно повторить после
+завершения конкурирующей heavy operation или commit/cleanup предыдущего batch.
+Hard limit, invalid bytes/metadata, expiry и authorization drift остаются
+terminal для этого intent.
+
+Каждый завершённый batch commit использует fresh HEAD CAS. Conflict не
+consume-ит staged refs: caller перечитывает HEAD, пересобирает тот же логический
+batch и не restage-ит уже verified bytes. Unknown commit сначала проходит
+`reconcile_changeset` с exact original payload. После success caller читает
+exact revision, сверяет path/size/SHA-256 и только тогда отмечает элементы
+`committed`. Последующий отказ не маскирует уже committed batches: итог отдельно
+показывает committed, pending, failed и unknown source entries.
+
 ## Errors, privacy and audit
 
 Stable errors are split by boundary:
@@ -489,6 +519,7 @@ Stable errors are split by boundary:
 | Retained descriptor no longer matches the verified snapshot | `local_companion_file_changed` | Wait for writes to finish and prepare the exact file again with a new logical intent |
 | Prepared process-local reference expired | `local_companion_ref_expired` | Prepare the exact file again; an expired ref never selects or reopens a path implicitly |
 | Bounded source transport temporarily fails | `file_ingress_transport_unavailable` | Retry exact request/key while source TTL permits; do not alter payload |
+| Temporary staging quota or admission contention | `staging_quota_exceeded` / `capacity_soft_limit` / `capacity_fairness_limit` / `capacity_accounting_untrusted` | Preserve the exact prepared ref and intent; reconcile and retry only after the competing operation or prior batch clears |
 | Upload intent expired/consumed or changed | `file_ingress_intent_expired` / `file_ingress_intent_conflict` | Create a new intent/key for a new operation; never replay changed bytes |
 | Size/path/digest/static policy fails | Existing `bundle_file_*`, `invalid_bundle_file_name` | No canonical object or revision is published |
 | Advisory MIME is missing, unknown, invalid or conflicts | `bundle_file_media_mismatch` diagnostic + `application/octet-stream` | Storage continues; serving remains download-only. An internal route that supplies an exact expected MIME receipt instead rejects a detected mismatch before object promotion |
