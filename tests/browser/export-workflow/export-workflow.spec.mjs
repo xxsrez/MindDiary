@@ -160,3 +160,14 @@ test("checksum mismatch never produces a browser download", async ({ page }) => 
   await expect(page.locator("[data-export-download-status]")).toContainText("Archive not saved");
   expect(downloads).toBe(0);
 });
+
+test("failed export distinguishes a safe integrity result from a generic transport error", async ({ page }) => {
+  await reset("failed_integrity");
+  await page.goto(`${origin}/research-notes`);
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.locator("[data-export-job-state]")).toHaveText("Failed");
+  await expect(page.locator("[data-export-status]")).toHaveText(
+    "The exact revision failed integrity verification. No archive was published.",
+  );
+  await expect(page.locator("[data-export-receipt]")).toBeHidden();
+});

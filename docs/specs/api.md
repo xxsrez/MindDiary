@@ -2703,7 +2703,22 @@ one-use grant, default 5 minutes and maximum 10:
   "file": {},
   "download_url": "https://current-host/api/bundle-download/opaque-secret",
   "download_expires_at": "2026-08-22T16:05:00Z",
-  "disposition": "attachment"
+  "disposition": "attachment",
+  "retrieval": {
+    "method": "https_get",
+    "executor": "client_or_same_host_trusted_download_companion",
+    "execution_boundary": "originating_mcp_client_host",
+    "one_use": true,
+    "redirect_policy": "reject",
+    "verify": [
+      "content_type",
+      "content_length",
+      "etag",
+      "content_disposition",
+      "sha256"
+    ],
+    "failure_code_on_policy_block": "client_transport_unsupported"
+  }
 }
 ```
 
@@ -2713,6 +2728,14 @@ before bytes. Only freshly verified PNG/JPEG/GIF/WebP may be inline; every
 other media type and every `application/octet-stream` is attachment. Response uses exact
 `Content-Type`/`Content-Length`/digest ETag, safe RFC 5987 filename,
 `no-store`, `nosniff`, `no-referrer` and same-origin resource policy.
+The originating MCP client or a purpose-built trusted download companion on the
+same host performs the single HTTPS GET, rejects redirects and verifies every
+field named by `retrieval.verify` against this exact result before exposing or
+saving the file. It never transfers the grant URL into a model prompt,
+interactive browser, remote execution container or arbitrary connector. URL
+admission rejected by the allowed executor's host before any HTTP request is
+reported locally as `client_transport_unsupported`, not as a server defect or a
+successful download.
 
 ### `commit_changeset`
 

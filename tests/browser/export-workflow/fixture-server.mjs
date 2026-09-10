@@ -130,6 +130,18 @@ const server = createServer(async (request, response) => {
       if (mode === "expired") {
         return json(response, 200, { ok: true, data: { job: { ...job, status: "expired" } } });
       }
+      if (mode === "failed_integrity") {
+        return json(response, 200, {
+          ok: true,
+          data: {
+            job: {
+              ...job,
+              status: "failed",
+              last_failure_code: "revision_integrity_failure",
+            },
+          },
+        });
+      }
       const count = (polls.get(job.job_id) ?? 0) + 1;
       polls.set(job.job_id, count);
       if (count < 2) {

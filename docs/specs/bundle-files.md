@@ -428,6 +428,17 @@ lifecycle. Download reauthorizes again immediately before reading bytes;
 membership revoke, public/unlisted → private, token revoke/expiry, whole-Mind
 delete, grant expiry or integrity mismatch fails closed.
 
+The result also carries a closed machine-readable retrieval contract. The
+originating MCP client or a purpose-built trusted download companion on the same
+client host MUST perform one direct HTTPS GET, reject redirects, and verify
+`Content-Type`, `Content-Length`, digest `ETag`, `Content-Disposition`, and the
+SHA-256 of the received bytes against the same exact-revision file descriptor.
+It MUST NOT transfer the grant URL to a model prompt, interactive browser,
+remote execution container, or arbitrary connector. If the allowed executor's
+host rejects URL admission before an HTTP request is made, the client reports
+`client_transport_unsupported`; that outcome is neither a server download
+failure nor evidence that the bytes were obtained.
+
 Successful bytes use exact `Content-Type`, `Content-Length`, `ETag` from SHA-256,
 `Cache-Control: no-store`, `Pragma: no-cache`,
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and

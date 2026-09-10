@@ -781,7 +781,7 @@ const GET_BUNDLE_FILE_DOWNLOAD_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
   type: "object",
   additionalProperties: false,
   required: Object.freeze([
-    "mind", "resolved_revision", "file", "download_url", "download_expires_at", "disposition",
+    "mind", "resolved_revision", "file", "download_url", "download_expires_at", "disposition", "retrieval",
   ]),
   properties: Object.freeze({
     mind: MIND_DESCRIPTOR_SCHEMA,
@@ -790,6 +790,37 @@ const GET_BUNDLE_FILE_DOWNLOAD_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
     download_url: Object.freeze({ type: "string", format: "uri" }),
     download_expires_at: Object.freeze({ type: "string", format: "date-time" }),
     disposition: Object.freeze({ type: "string", enum: Object.freeze(["inline", "attachment"]) }),
+    retrieval: Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze([
+        "method",
+        "executor",
+        "execution_boundary",
+        "one_use",
+        "redirect_policy",
+        "verify",
+        "failure_code_on_policy_block",
+      ]),
+      properties: Object.freeze({
+        method: Object.freeze({ const: "https_get" }),
+        executor: Object.freeze({ const: "client_or_same_host_trusted_download_companion" }),
+        execution_boundary: Object.freeze({ const: "originating_mcp_client_host" }),
+        one_use: Object.freeze({ const: true }),
+        redirect_policy: Object.freeze({ const: "reject" }),
+        verify: Object.freeze({
+          type: "array",
+          const: Object.freeze([
+            "content_type",
+            "content_length",
+            "etag",
+            "content_disposition",
+            "sha256",
+          ]),
+        }),
+        failure_code_on_policy_block: Object.freeze({ const: "client_transport_unsupported" }),
+      }),
+    }),
   }),
 }));
 
@@ -1912,7 +1943,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     name: "get_bundle_file_download",
     title: "Create a one-use BundleFile download",
     description:
-      "Create one short-lived one-use exact-revision download grant after current token, principal usage mode, and Mind access checks. The tool returns no bytes; keep the response-only URL out of logs and prompts.",
+      "Create one short-lived one-use exact-revision download grant after current token, principal usage mode, and Mind access checks. The originating MCP client or a purpose-built trusted download companion on the same client host must perform the single HTTPS GET, reject redirects, and verify the declared response metadata and SHA-256. Never transfer the URL to a model prompt, interactive browser, remote execution container, or arbitrary connector. If the allowed executor's host blocks URL admission before the request, report client_transport_unsupported rather than a server failure or successful download. The tool returns no bytes; keep the response-only URL out of logs and prompts.",
     inputSchema: GET_BUNDLE_FILE_DOWNLOAD_INPUT_SCHEMA,
     outputSchema: GET_BUNDLE_FILE_DOWNLOAD_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,

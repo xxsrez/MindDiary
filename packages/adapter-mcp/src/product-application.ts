@@ -166,6 +166,22 @@ function snakeFileOperationOutput(value: unknown): unknown {
   });
 }
 
+const BUNDLE_FILE_DOWNLOAD_RETRIEVAL = Object.freeze({
+  method: "https_get",
+  executor: "client_or_same_host_trusted_download_companion",
+  executionBoundary: "originating_mcp_client_host",
+  oneUse: true,
+  redirectPolicy: "reject",
+  verify: Object.freeze([
+    "content_type",
+    "content_length",
+    "etag",
+    "content_disposition",
+    "sha256",
+  ]),
+  failureCodeOnPolicyBlock: "client_transport_unsupported",
+});
+
 function camelListFilesInput(
   value: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
@@ -1162,11 +1178,13 @@ export class ProductMcpContentApplication implements McpContentApplication {
           "Reconciled the existing staged BundleFile.",
         );
       }
-      case "get_bundle_file_download":
+      case "get_bundle_file_download": {
+        const grant = await this.#dependencies.bundleFileDownloads.issue(request.actor, input);
         return createMcpToolSuccessResult(
-          snakeOutput(await this.#dependencies.bundleFileDownloads.issue(request.actor, input)),
+          snakeOutput({ ...grant, retrieval: BUNDLE_FILE_DOWNLOAD_RETRIEVAL }),
           "Created a one-use BundleFile download.",
         );
+      }
       case "commit_changeset": {
         if (!validChangesetInput(input)) {
           return createMcpToolErrorResult(

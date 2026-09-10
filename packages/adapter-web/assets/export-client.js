@@ -41,6 +41,14 @@
   };
   const say = (message) => { if (status) status.textContent = message; };
   const sayDownload = (message) => { if (downloadStatus) downloadStatus.textContent = message; };
+  const failureMessage = (code) => ({
+    revision_not_found: "The exact revision no longer exists. Start another export from a revision you can still read.",
+    revision_integrity_failure: "The exact revision failed integrity verification. No archive was published.",
+    okf_validation_failed: "The exact revision failed OKF validation. No archive was published.",
+    archive_limit_exceeded: "The exact revision exceeds the supported deterministic ZIP limits. No partial archive was published.",
+    export_profile_required: "This revision contains attachments. Start another export with All canonical files.",
+    export_access_denied: "Current access no longer permits this export. No archive was published.",
+  })[code] ?? "The export build failed. Current content was not changed and no partial archive was published.";
   const storageKey = "mind-diary:export:v1:" + encodeURIComponent(mindRef);
   let saved = null;
   let busy = false;
@@ -227,7 +235,9 @@
       }
       resetReceipt();
       showJob(job.revision_id, job.status === "expired" ? "Expired" : "Failed");
-      say(job.status === "expired" ? "This export expired. Start a fresh export for the same exact revision." : "The export did not complete. Current content was not changed.");
+      say(job.status === "expired"
+        ? "This export expired. Start a fresh export for the same exact revision."
+        : failureMessage(job.last_failure_code));
       shown(checkButton, false);
       shown(newButton, true);
     } catch (error) {
@@ -358,6 +368,8 @@
         if (profileInput) profileInput.value = "MD-BUNDLE-ZIP-1";
         profileInput?.focus();
         say("This revision contains attachments. Use the full bundle profile; nothing was silently omitted.");
+      } else if (typeof error?.code === "string" && error.code.startsWith("capacity_")) {
+        say("A heavy operation is still active for this Mind. Wait, then submit this exact start again; do not start another export.");
       } else {
         say("The start result could not be confirmed. Submit again to reuse the same idempotent request; do not choose Start another.");
       }

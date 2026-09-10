@@ -175,6 +175,39 @@ test("publishes strict native-file staging metadata and mixed commit operations"
     JSON.stringify(download.outputSchema.properties.data.properties.file),
     /bytes|provider|object_key/iu,
   );
+  const retrievalSchema = download.outputSchema.properties.data.properties.retrieval;
+  assert.deepEqual(retrievalSchema.required, [
+    "method",
+    "executor",
+    "execution_boundary",
+    "one_use",
+    "redirect_policy",
+    "verify",
+    "failure_code_on_policy_block",
+  ]);
+  assert.equal(retrievalSchema.additionalProperties, false);
+  assert.equal(retrievalSchema.properties.method.const, "https_get");
+  assert.equal(
+    retrievalSchema.properties.executor.const,
+    "client_or_same_host_trusted_download_companion",
+  );
+  assert.equal(
+    retrievalSchema.properties.execution_boundary.const,
+    "originating_mcp_client_host",
+  );
+  assert.equal(retrievalSchema.properties.one_use.const, true);
+  assert.equal(retrievalSchema.properties.redirect_policy.const, "reject");
+  assert.deepEqual(retrievalSchema.properties.verify.const, [
+    "content_type",
+    "content_length",
+    "etag",
+    "content_disposition",
+    "sha256",
+  ]);
+  assert.equal(
+    retrievalSchema.properties.failure_code_on_policy_block.const,
+    "client_transport_unsupported",
+  );
 
   const commit = MCP_TOOL_DEFINITIONS.find(({ name }) => name === "commit_changeset");
   assert.deepEqual(
@@ -556,6 +589,21 @@ test("product adapter terminates provider metadata and returns only verified sta
     /\/api\/bundle-download\/one-use-secret$/u,
   );
   assert.equal(download.structuredContent.data.file.inline_eligible, true);
+  assert.deepEqual(download.structuredContent.data.retrieval, {
+    method: "https_get",
+    executor: "client_or_same_host_trusted_download_companion",
+    execution_boundary: "originating_mcp_client_host",
+    one_use: true,
+    redirect_policy: "reject",
+    verify: [
+      "content_type",
+      "content_length",
+      "etag",
+      "content_disposition",
+      "sha256",
+    ],
+    failure_code_on_policy_block: "client_transport_unsupported",
+  });
   assert.doesNotMatch(
     JSON.stringify(download.structuredContent.data.file),
     /bytes|provider|object_key/iu,

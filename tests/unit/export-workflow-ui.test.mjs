@@ -52,5 +52,8 @@ test("browser workflow persists no receipt secret and verifies exact bytes befor
   assert.match(client, /credentials: "same-origin"/);
   assert.match(client, /polling < 8/);
   assert.match(client, /export_profile_required/);
+  assert.match(client, /revision_integrity_failure/);
+  assert.match(client, /No archive was published/);
+  assert.match(client, /error\.code\.startsWith\("capacity_"\)/);
   assert.match(client, /Recovered the existing export without creating a duplicate/);
 });
