@@ -9,7 +9,8 @@
 > Перенос извлечённых Personal сведений к другим читателям требует прямой просьбы.
 > Полный контракт — [режимы использования Mind](mind-usage-modes.md).
 
-Статус: accepted historical Release 0.1/0.2 contract, обновлено 2026-08-28.
+Статус: accepted historical Release 0.1/0.2 contract и Release 0.4 optional-skill
+boundary, обновлено 2026-09-10.
 OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation
 реализованы. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package с OAuth
@@ -34,6 +35,28 @@ carrier релиза 0.1 уточнён
 релизов как as-built evidence. Он не является целевой картой product authority
 Release 0.3 и не переносит исторические binding/export tools в будущий Content
 MCP.
+
+## Optional skill boundary Release 0.4
+
+Базовый hosted MCP workflow не зависит от skill: tool descriptions и schemas
+самодостаточно задают `list_minds`, bounded discovery/read, exact-revision file
+operations, history, validation, changeset commit и reconciliation. Отсутствие
+skill не является основанием просить пользователя установить его до обычного
+content call.
+
+Marketplace skill остаётся optional advanced guidance. Его entrypoint — thin
+router с общими authority/privacy boundaries. Отдельный portable reference
+содержит только provenance-sensitive multi-Mind preservation и incremental
+typed OKF transfer на hosted tools. Инструкции bundled macOS local companion
+вынесены в другой reference и загружаются только когда текущий Codex host
+действительно публикует соответствующие local tools.
+
+Portable reference предназначен для отдельного сравнительного теста
+skill-assisted и no-skill поведения. Его наличие не заявляет поддержку skill
+installation в ChatGPT Web, native file transport на другом host или
+переносимость macOS companion. Базовую корректность без skill доказывают
+server-side tool descriptions и независимый no-skill MCP journey; сложные
+workflow проверяются отдельно на exact Marketplace package.
 
 ## Product authority Release 0.3
 
