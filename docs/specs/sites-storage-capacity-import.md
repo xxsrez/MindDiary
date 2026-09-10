@@ -423,6 +423,11 @@ reopens it. It never rebases or partially imports automatically.
   reader-visible.
 - Export is exact-revision, asynchronous and streaming/batched into R2; archive
   bytes never enter JSON-RPC or whole Worker memory.
+- Один export job открывает request-scoped exact-revision session: canonical
+  manifest читается и проверяется один раз, после чего оба deterministic ZIP
+  прохода повторно открывают только указанные в нём content objects и каждый
+  раз сверяют их metadata, размер и SHA-256. Session не переживает job attempt
+  и не является межзапросным manifest cache.
 - Download URLs are short-lived response-only bearer material, reauthorized
   before bytes and never durable/logged.
 - GC is mark/refcount assisted but treats committed manifests, active staging,

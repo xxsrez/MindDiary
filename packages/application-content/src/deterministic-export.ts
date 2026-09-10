@@ -90,6 +90,10 @@ export interface ExactRevisionMaterializer {
 }
 
 export interface ExactRevisionStreamReader {
+  openRevisionSession?(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<ExactRevisionStreamSession>>;
   readRevisionEnvelope(
     spaceId: SpaceId,
     revisionId: RevisionId,
@@ -102,6 +106,18 @@ export interface ExactRevisionStreamReader {
   openRevisionFile(
     spaceId: SpaceId,
     revisionId: RevisionId,
+    path: string,
+  ): Promise<Readonly<Omit<ExportMaterializedRevisionFile, "bytes"> & {
+    readonly body: ReadableStream<Uint8Array>;
+  }> | null>;
+}
+
+export interface ExactRevisionStreamSession {
+  readonly envelope: Readonly<CanonicalRevisionEnvelope>;
+  readRevisionFile(
+    path: string,
+  ): Promise<Readonly<ExportMaterializedRevisionFile> | null>;
+  openRevisionFile(
     path: string,
   ): Promise<Readonly<Omit<ExportMaterializedRevisionFile, "bytes"> & {
     readonly body: ReadableStream<Uint8Array>;
@@ -712,11 +728,20 @@ export class DeterministicOkfExportService {
 
     const parsed = parseRequest(request);
     let envelope: Readonly<CanonicalRevisionEnvelope>;
+    let session: Readonly<ExactRevisionStreamSession> | null = null;
     try {
-      envelope = await this.#streamReader.readRevisionEnvelope(
-        parsed.spaceId,
-        parsed.revisionId,
-      );
+      if (this.#streamReader.openRevisionSession !== undefined) {
+        session = await this.#streamReader.openRevisionSession(
+          parsed.spaceId,
+          parsed.revisionId,
+        );
+        envelope = session.envelope;
+      } else {
+        envelope = await this.#streamReader.readRevisionEnvelope(
+          parsed.spaceId,
+          parsed.revisionId,
+        );
+      }
     } catch (error) {
       mapMaterializationFailure(error);
     }
@@ -823,8 +848,18 @@ export class DeterministicOkfExportService {
       }
       const inspected = entry.generatedBytes === null
         ? entry.kind === "markdown"
-          ? await this.#inspectBoundedMarkdownFile(parsed.spaceId, parsed.revisionId, entry)
-          : await this.#inspectStreamedFile(parsed.spaceId, parsed.revisionId, entry)
+          ? await this.#inspectBoundedMarkdownFile(
+              parsed.spaceId,
+              parsed.revisionId,
+              entry,
+              session,
+            )
+          : await this.#inspectStreamedFile(
+              parsed.spaceId,
+              parsed.revisionId,
+              entry,
+              session,
+            )
         : Object.freeze({
             crc32: calculateCrc32(entry.generatedBytes),
             markdownBytes: entry.generatedBytes,
@@ -896,7 +931,13 @@ export class DeterministicOkfExportService {
           await emit(entry.generatedBytes.subarray(offset, offset + EXPORT_STREAM_CHUNK_BYTES));
         }
       } else {
-        await this.#emitStreamedFile(parsed.spaceId, parsed.revisionId, entry, emit);
+        await this.#emitStreamedFile(
+          parsed.spaceId,
+          parsed.revisionId,
+          entry,
+          emit,
+          session,
+        );
       }
     }
     for (const entry of streamedEntries) await emit(streamedCentralHeader(entry));
@@ -929,6 +970,7 @@ export class DeterministicOkfExportService {
       sha256: Sha256Digest;
       size: number;
     }>,
+    session: Readonly<ExactRevisionStreamSession> | null,
   ): Promise<Readonly<Omit<ExportMaterializedRevisionFile, "bytes"> & {
     readonly body: ReadableStream<Uint8Array>;
   }>> {
@@ -940,7 +982,9 @@ export class DeterministicOkfExportService {
     }
     let file: Awaited<ReturnType<ExactRevisionStreamReader["openRevisionFile"]>>;
     try {
-      file = await this.#streamReader.openRevisionFile(spaceId, revisionId, entry.path);
+      file = session === null
+        ? await this.#streamReader.openRevisionFile(spaceId, revisionId, entry.path)
+        : await session.openRevisionFile(entry.path);
     } catch (error) {
       mapMaterializationFailure(error);
     }
@@ -962,8 +1006,9 @@ export class DeterministicOkfExportService {
     spaceId: SpaceId,
     revisionId: RevisionId,
     entry: Readonly<Pick<StreamedZipEntry, "path" | "kind" | "mediaType" | "sha256" | "size">>,
+    session: Readonly<ExactRevisionStreamSession> | null,
   ): Promise<Readonly<{ crc32: number; markdownBytes: Uint8Array | null }>> {
-    const file = await this.#openStreamedFile(spaceId, revisionId, entry);
+    const file = await this.#openStreamedFile(spaceId, revisionId, entry, session);
     const reader = file.body.getReader();
     const sha = new IncrementalSha256();
     const crc = new IncrementalCrc32();
@@ -993,6 +1038,7 @@ export class DeterministicOkfExportService {
     spaceId: SpaceId,
     revisionId: RevisionId,
     entry: Readonly<Pick<StreamedZipEntry, "path" | "kind" | "mediaType" | "sha256" | "size">>,
+    session: Readonly<ExactRevisionStreamSession> | null,
   ): Promise<Readonly<{ crc32: number; markdownBytes: Uint8Array }>> {
     if (this.#streamReader === null || entry.size > MAX_EXPORT_MARKDOWN_FILE_BYTES) {
       throw new OkfExportError(
@@ -1002,7 +1048,9 @@ export class DeterministicOkfExportService {
     }
     let file: Awaited<ReturnType<ExactRevisionStreamReader["readRevisionFile"]>>;
     try {
-      file = await this.#streamReader.readRevisionFile(spaceId, revisionId, entry.path);
+      file = session === null
+        ? await this.#streamReader.readRevisionFile(spaceId, revisionId, entry.path)
+        : await session.readRevisionFile(entry.path);
     } catch (error) {
       mapMaterializationFailure(error);
     }
@@ -1035,8 +1083,9 @@ export class DeterministicOkfExportService {
     revisionId: RevisionId,
     entry: Readonly<Pick<StreamedZipEntry, "path" | "kind" | "mediaType" | "sha256" | "size">>,
     emit: (chunk: Uint8Array) => Promise<void>,
+    session: Readonly<ExactRevisionStreamSession> | null,
   ): Promise<void> {
-    const file = await this.#openStreamedFile(spaceId, revisionId, entry);
+    const file = await this.#openStreamedFile(spaceId, revisionId, entry, session);
     const reader = file.body.getReader();
     const sha = new IncrementalSha256();
     let size = 0;

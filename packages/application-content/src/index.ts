@@ -39,11 +39,13 @@ import {
   type MindBindingOwnerId,
   type RevisionAuthorReference,
   type RevisionId,
+  type RevisionManifestEntry,
   type Sha256Digest,
   type SpaceId,
   type UtcInstant,
 } from "@mind-diary/domain";
 import type { OkfBundleFixture } from "@mind-diary/okf-codec";
+import type { ExactRevisionStreamSession } from "./deterministic-export.js";
 
 export * from "./mind-discovery.js";
 export * from "./mind-browse.js";
@@ -838,7 +840,38 @@ export class CanonicalRevisionCoordinator {
   ): Promise<Readonly<MaterializedRevisionFile> | null> {
     const envelope = await this.#readVerifiedEnvelope(spaceId, revisionId);
     const entry = envelope.manifest.entries.find((candidate) => candidate.path === path);
-    if (!entry) return null;
+    return entry === undefined
+      ? null
+      : this.#readVerifiedRevisionEntry(spaceId, envelope, entry);
+  }
+
+  async openRevisionSession(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<ExactRevisionStreamSession>> {
+    const envelope = await this.#readVerifiedEnvelope(spaceId, revisionId);
+    return Object.freeze({
+      envelope,
+      readRevisionFile: async (path: string) => {
+        const entry = envelope.manifest.entries.find((candidate) => candidate.path === path);
+        return entry === undefined
+          ? null
+          : this.#readVerifiedRevisionEntry(spaceId, envelope, entry);
+      },
+      openRevisionFile: async (path: string) => {
+        const entry = envelope.manifest.entries.find((candidate) => candidate.path === path);
+        return entry === undefined
+          ? null
+          : this.#openVerifiedRevisionEntry(spaceId, envelope, entry);
+      },
+    });
+  }
+
+  async #readVerifiedRevisionEntry(
+    spaceId: SpaceId,
+    envelope: Readonly<CanonicalRevisionEnvelope>,
+    entry: Readonly<RevisionManifestEntry>,
+  ): Promise<Readonly<MaterializedRevisionFile>> {
     let object;
     try {
       object = entry.kind === "markdown"
@@ -852,7 +885,7 @@ export class CanonicalRevisionCoordinator {
       if (error instanceof ObjectStoreFailure && error.code === "object_tampered") {
         throw new CanonicalRevisionError(
           "object_integrity_failure",
-          `committed object failed integrity verification for ${JSON.stringify(path)}`,
+          `committed object failed integrity verification for ${JSON.stringify(entry.path)}`,
         );
       }
       throw error;
@@ -860,7 +893,7 @@ export class CanonicalRevisionCoordinator {
     if (!object) {
       throw new CanonicalRevisionError(
         "object_not_found",
-        `committed object is missing for ${JSON.stringify(path)}`,
+        `committed object is missing for ${JSON.stringify(entry.path)}`,
       );
     }
     if (
@@ -868,13 +901,13 @@ export class CanonicalRevisionCoordinator {
       object.size !== entry.size || object.bytes.byteLength !== entry.size
     ) throw new CanonicalRevisionError(
       "object_integrity_failure",
-      `committed object metadata differs for ${JSON.stringify(path)}`,
+      `committed object metadata differs for ${JSON.stringify(entry.path)}`,
     );
     const bytes = new Uint8Array(object.bytes);
     return entry.kind === "markdown"
       ? Object.freeze({
           kind: "markdown" as const,
-          path,
+          path: entry.path,
           mediaType: entry.mediaType,
           sha256: entry.sha256,
           size: entry.size,
@@ -883,7 +916,7 @@ export class CanonicalRevisionCoordinator {
         })
       : Object.freeze({
           kind: "opaque" as const,
-          path,
+          path: entry.path,
           mediaType: entry.mediaType,
           sha256: entry.sha256,
           size: entry.size,
@@ -900,7 +933,18 @@ export class CanonicalRevisionCoordinator {
   }> | null> {
     const envelope = await this.#readVerifiedEnvelope(spaceId, revisionId);
     const entry = envelope.manifest.entries.find((candidate) => candidate.path === path);
-    if (entry === undefined) return null;
+    return entry === undefined
+      ? null
+      : this.#openVerifiedRevisionEntry(spaceId, envelope, entry);
+  }
+
+  async #openVerifiedRevisionEntry(
+    spaceId: SpaceId,
+    envelope: Readonly<CanonicalRevisionEnvelope>,
+    entry: Readonly<RevisionManifestEntry>,
+  ): Promise<Readonly<Omit<MaterializedRevisionFile, "bytes" | "text"> & {
+    readonly body: ReadableStream<Uint8Array>;
+  }>> {
     if (entry.kind === "opaque") {
       const opened = await this.#objects.openBundleFile(spaceId, entry.sha256);
       if (
@@ -908,22 +952,27 @@ export class CanonicalRevisionCoordinator {
         opened.mediaType !== entry.mediaType || opened.size !== entry.size
       ) throw new CanonicalRevisionError(
         "object_integrity_failure",
-        `committed object metadata differs for ${JSON.stringify(path)}`,
+        `committed object metadata differs for ${JSON.stringify(entry.path)}`,
       );
       return Object.freeze({
         kind: "opaque" as const,
-        path,
+        path: entry.path,
         mediaType: entry.mediaType,
         sha256: entry.sha256,
         size: entry.size,
         body: opened.body,
       });
     }
-    const materialized = await this.readRevisionFile(spaceId, revisionId, path);
-    if (materialized === null || materialized.kind !== "markdown") return null;
+    const materialized = await this.#readVerifiedRevisionEntry(spaceId, envelope, entry);
+    if (materialized.kind !== "markdown") {
+      throw new CanonicalRevisionError(
+        "object_integrity_failure",
+        `committed object kind differs for ${JSON.stringify(entry.path)}`,
+      );
+    }
     return Object.freeze({
       kind: "markdown" as const,
-      path,
+      path: entry.path,
       mediaType: materialized.mediaType,
       sha256: materialized.sha256,
       size: materialized.size,

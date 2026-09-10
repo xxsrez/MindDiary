@@ -91,6 +91,40 @@ test("selected exact revision stays byte-identical after HEAD movement", async (
   assert.equal((await revisions.listRevisions(MINDS.ordinary.spaceId)).length, 2);
 });
 
+test("streamed export verifies revision metadata once for all file reads", async () => {
+  const { revisions, coordinator, exports } = harness();
+  await coordinator.commit(
+    commitRequest({
+      revisionId: REVISIONS.initial.revisionId,
+      expectedRevisionId: null,
+      committedAt: REVISIONS.initial.committedAt,
+      files: CANONICAL_REVISION_FILES,
+    }),
+  );
+  const originalReadRevision = revisions.readRevision.bind(revisions);
+  let revisionReads = 0;
+  revisions.readRevision = async (...args) => {
+    revisionReads += 1;
+    return originalReadRevision(...args);
+  };
+  const chunks = [];
+
+  const streamed = await exports.writeExactRevision({
+    spaceId: MINDS.ordinary.spaceId,
+    revisionId: REVISIONS.initial.revisionId,
+  }, {
+    async write(chunk) {
+      chunks.push(new Uint8Array(chunk));
+    },
+  });
+
+  assert.equal(revisionReads, 1);
+  assert.equal(
+    chunks.reduce((size, chunk) => size + chunk.byteLength, 0),
+    streamed.size,
+  );
+});
+
 test("missing or corrupt exact revision maps to stable export failures without state mutation", async () => {
   const { objects, revisions, coordinator, exports } = harness();
   const committed = await coordinator.commit(

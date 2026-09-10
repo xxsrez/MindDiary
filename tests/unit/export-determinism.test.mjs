@@ -216,6 +216,119 @@ test("streamed exact export is byte-identical while reading only one immutable f
   assert.ok(maxChunk <= 1_048_576);
 });
 
+test("streamed export reuses one verified revision session for every file pass", async () => {
+  const digest = new InMemoryObjectStore();
+  const markdown = file("concepts/source.md", "---\ntype: Reference\n---\n\n# Source\n");
+  const opaqueBytes = Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
+  const files = [
+    {
+      ...markdown,
+      kind: "markdown",
+      sha256: await digest.calculateSha256(markdown.bytes),
+    },
+    {
+      kind: "opaque",
+      path: "assets/source.pdf",
+      mediaType: "application/pdf",
+      sha256: await digest.calculateSha256(opaqueBytes),
+      size: opaqueBytes.byteLength,
+      bytes: opaqueBytes,
+    },
+  ];
+  const envelope = {
+    revision: { spaceId: SPACE_ID, revisionId: REVISION_ID },
+    manifest: { entries: files.map(({ bytes: _bytes, ...entry }) => entry) },
+  };
+  let sessionCalls = 0;
+  let legacyEnvelopeCalls = 0;
+  let legacyFileCalls = 0;
+  const sessionReads = [];
+  const sessionOpens = [];
+  const selectedFile = (path) => files.find((entry) => entry.path === path);
+  const openFile = async (path) => {
+    const selected = selectedFile(path);
+    if (selected === undefined) return null;
+    const { bytes, ...metadata } = selected;
+    return {
+      ...metadata,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(bytes));
+          controller.close();
+        },
+      }),
+    };
+  };
+  const materializer = {
+    async materialize() {
+      return { envelope, files };
+    },
+    async openRevisionSession() {
+      sessionCalls += 1;
+      return {
+        envelope,
+        async readRevisionFile(path) {
+          sessionReads.push(path);
+          const selected = selectedFile(path);
+          return selected === undefined
+            ? null
+            : { ...selected, bytes: new Uint8Array(selected.bytes) };
+        },
+        async openRevisionFile(path) {
+          sessionOpens.push(path);
+          return openFile(path);
+        },
+      };
+    },
+    async readRevisionEnvelope() {
+      legacyEnvelopeCalls += 1;
+      return envelope;
+    },
+    async readRevisionFile() {
+      legacyFileCalls += 1;
+      return null;
+    },
+    async openRevisionFile() {
+      legacyFileCalls += 1;
+      return null;
+    },
+  };
+  const service = new DeterministicOkfExportService({ materializer, digest });
+  const bounded = await service.exportExactRevision({
+    spaceId: SPACE_ID,
+    revisionId: REVISION_ID,
+    profile: "MD-BUNDLE-ZIP-1",
+  });
+  const chunks = [];
+  const streamed = await service.writeExactRevision({
+    spaceId: SPACE_ID,
+    revisionId: REVISION_ID,
+    profile: "MD-BUNDLE-ZIP-1",
+  }, {
+    async write(chunk) {
+      chunks.push(new Uint8Array(chunk));
+    },
+  });
+  const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  assert.deepEqual(bytes, bounded.bytes);
+  assert.equal(streamed.sha256, bounded.sha256);
+  assert.equal(sessionCalls, 1);
+  assert.equal(legacyEnvelopeCalls, 0);
+  assert.equal(legacyFileCalls, 0);
+  assert.deepEqual(sessionReads, ["concepts/source.md"]);
+  assert.deepEqual(sessionOpens, [
+    "assets/source.pdf",
+    "assets/source.pdf",
+    "concepts/source.md",
+  ]);
+});
+
 test("streamed export keeps one contract-bounded Markdown file and never concatenates stream chunks", async () => {
   const source = await readFile(
     new URL("../../packages/application-content/src/deterministic-export.ts", import.meta.url),
