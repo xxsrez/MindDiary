@@ -480,7 +480,7 @@ Pilot-ready Product Site использует один authenticated navigation 
 | `/settings/connections/{connection_ref}` | safe connection detail, readable Minds, optional writable Mind и revoke |
 | `/settings/developer/mcp` | Advanced personal tokens, config, diagnostics и bounded token history |
 | `/settings/mcp` | compatibility entrypoint в `/settings/developer/mcp` |
-| `/help/codex` | три шага Codex onboarding, write step-up и safe recovery |
+| `/help/codex` | Connect to ChatGPT: инструкции Codex Desktop, Codex CLI и ChatGPT, read-only check и safe recovery |
 | `/help` | общий pilot help, environment и support boundaries |
 | `/internal/operators/users` | hidden read-only UAT principal/activity directory; non-operator получает exact `404` |
 

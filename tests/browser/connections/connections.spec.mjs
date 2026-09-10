@@ -208,7 +208,7 @@ for (const definition of fixtureDefinitions) {
       await page.goto(`${fixture.origin}/help/codex`);
       await expect(page.getByRole("heading", {
         level: 1,
-        name: "Use Mind Diary with Codex",
+        name: "Connect to ChatGPT",
       })).toBeVisible();
       await expect(page.getByRole("heading", { level: 2, name: "Install Mind Diary" })).toBeVisible();
       await expect(page.getByRole("heading", {
@@ -221,7 +221,7 @@ for (const definition of fixtureDefinitions) {
       await expect(page.getByText("one account-wide choice is shared by every Connection and personal token", { exact: false })).toBeVisible();
       await expect(page.locator("main")).not.toContainText(/writable target|attach at least one Mind|bind|unbind/iu);
       const accessibilityTree = await page.locator("main").ariaSnapshot();
-      expect(accessibilityTree).toContain('heading "Use Mind Diary with Codex"');
+      expect(accessibilityTree).toContain('heading "Connect to ChatGPT"');
       expect(accessibilityTree).toContain('link "Connections"');
       await expectNoHorizontalOverflow(page);
     });
@@ -288,12 +288,12 @@ test("ordinary Connections and Help never load personal-token history or diagnos
   expect(requested.some((path) => path.startsWith("/api/v1/mcp-tokens"))).toBe(false);
   expect(requested.some((path) => path === "/api/mcp" || path.startsWith("/api/mcp/")))
     .toBe(false);
-  await expect(page.locator("body")).not.toContainText(/content:(?:read|write)/u);
+  await expect(page.locator("#codex-client-desktop-panel")).not.toContainText(/content:(?:read|write)/u);
   await expect(page.locator("body")).not.toContainText(/Modern MCP|Compatibility MCP/u);
   await context.close();
 });
 
-test("Codex guide switches Desktop and CLI paths by keyboard and copies exact current inputs", async ({
+test("Connection guide switches all three clients by keyboard and copies exact current inputs", async ({
   browser,
 }) => {
   const fixture = fixtures.find((candidate) => candidate.count === 1);
@@ -304,8 +304,8 @@ test("Codex guide switches Desktop and CLI paths by keyboard and copies exact cu
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/help/codex`);
 
-  const desktop = page.getByRole("tab", { name: "Desktop" });
-  const cli = page.getByRole("tab", { name: "CLI" });
+  const desktop = page.getByRole("tab", { name: "Codex Desktop" });
+  const cli = page.getByRole("tab", { name: "Codex CLI" });
   const desktopPanel = page.locator("#codex-client-desktop-panel");
   const cliPanel = page.locator("#codex-client-cli-panel");
   await expect(desktop).toHaveAttribute("aria-selected", "true");
@@ -345,9 +345,27 @@ test("Codex guide switches Desktop and CLI paths by keyboard and copies exact cu
     .toHaveAttribute("href", "/me#first-result-title");
 
   const accessibilityTree = await page.locator("main").ariaSnapshot();
-  expect(accessibilityTree).toContain('tablist "Choose a Codex setup path"');
-  expect(accessibilityTree).toContain('tab "Desktop"');
-  expect(accessibilityTree).toContain('tab "CLI" [selected]');
+  expect(accessibilityTree).toContain('tablist "Choose your client"');
+  expect(accessibilityTree).toContain('tab "Codex Desktop"');
+  expect(accessibilityTree).toContain('tab "Codex CLI" [selected]');
+  await cli.focus();
+  await page.keyboard.press("ArrowRight");
+  const chatgpt = page.getByRole("tab", { name: "ChatGPT", exact: true });
+  const chatgptPanel = page.locator("#codex-client-chatgpt-panel");
+  await expect(chatgpt).toBeFocused();
+  await expect(chatgptPanel).toBeVisible();
+  await expect(cliPanel).toBeHidden();
+  await page.getByRole("button", { name: "Copy MCP server URL" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "https://mind-diary.example.invalid/api/mcp/2025-11-25",
+  );
+  await expect(chatgptPanel).toContainText("OIDC enabled");
+  await expect(chatgptPanel).toContainText("Sign in to Mind Diary before connecting");
+  await chatgpt.focus();
+  await page.keyboard.press("Home");
+  await expect(desktopPanel).toBeVisible();
+  await expect(chatgptPanel).toBeHidden();
+
   await expectNoHorizontalOverflow(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoHorizontalOverflow(page);

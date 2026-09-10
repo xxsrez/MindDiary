@@ -120,7 +120,7 @@ server session:
 │ Invitations          │ compact row                                 │
 │                      │ compact row                                 │
 │                      │ …                                           │
-│ Help with Codex?     │                                             │
+│ Connect to ChatGPT?     │                                             │
 │ Settings             │                                             │
 └──────────────────────┴─────────────────────────────────────────────┘
 ```
@@ -131,7 +131,7 @@ service-managed handle. Display name Personal Mind не используется
 label. Brand открывает `/`; отдельный `Home` item не добавляется.
 
 `Settings` закреплён последним item в нижней части rail и открывает
-`/settings/account`. Optional `Help with Codex` идёт непосредственно перед
+`/settings/account`. Optional `Connect to ChatGPT` идёт непосредственно перед
 Settings только когда canonical `/help/codex` присутствует в candidate;
 отсутствие Help не сдвигает Settings с нижнего края. Connection и Advanced MCP pages принадлежат Settings и
 используют contextual navigation внутри content, а не отдельные primary items.
@@ -173,7 +173,7 @@ Open drawer:
 │ Public Minds          │             │
 │ Invitations           │             │
 │                       │             │
-│ Help with Codex?      │             │
+│ Connect to ChatGPT?      │             │
 │ Settings              │             │
 └───────────────────────┴─────────────┘
 ```
@@ -199,7 +199,7 @@ navigation.
 | `/settings/connections/{connection_ref}` | `Settings` | `Connections` | Detail наследует parent current state. |
 | `/settings/developer/mcp` | `Settings` | `Advanced MCP` | Protocol details остаются только здесь. |
 | `/settings/mcp` | session-dependent | — | Authenticated `GET`/`HEAD` получает `308` на `/settings/developer/mcp`; signed-out request остаётся распознанным UI route и получает общий route-agnostic sign-in shell без target data. |
-| `/help/codex` | `Help with Codex` | — | Optional utility item; не child Settings. |
+| `/help/codex` | `Connect to ChatGPT` | — | Optional utility item; не child Settings. |
 | `/help` | none | — | Footer/deep-link route; не расширяет primary IA. |
 | unknown/reserved/unauthorized | none | — | Safe not-found/forbidden без target metadata. |
 
@@ -221,7 +221,7 @@ endpoint details и redacted diagnostics остаются внутри `Advanced
 token behavior или diagnostic semantics и не показывает credential, endpoint,
 scope, binding ID либо другой protocol internal в обычной navigation/copy.
 
-`Help with Codex` остаётся optional utility item непосредственно перед
+`Connect to ChatGPT` остаётся optional utility item непосредственно перед
 `Settings`, а не четвёртым Settings child. Если canonical `/help/codex`
 присутствует в candidate, ссылка на него строится из статического registered
 shell и доступна на ordinary pages, Connections empty/loading/ready/error и

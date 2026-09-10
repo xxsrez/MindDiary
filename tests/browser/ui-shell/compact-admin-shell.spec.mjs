@@ -255,7 +255,7 @@ acceptance("IA-NAV-01", "wide route map keeps Personal first and Settings pinned
     ["/minds", "primary", "Minds", null],
     ["/public", "primary", "Public Minds", null],
     ["/invitations", "primary", "Invitations", null],
-    ["/help/codex", "utility", "Help with Codex", null],
+    ["/help/codex", "utility", "Connect to ChatGPT", null],
     ["/help", null, null, null],
     ["/settings/account", "utility", "Settings", "Account"],
     ["/settings/connections", "utility", "Settings", "Connections"],

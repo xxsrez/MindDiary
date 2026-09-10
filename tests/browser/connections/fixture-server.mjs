@@ -261,7 +261,7 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === "/help/codex" && method === "GET") {
       send(response, 200, "text/html; charset=utf-8", withFixtureMeta(
-        renderCodexHelpPageDocument("Browser Fixture"),
+        renderCodexHelpPageDocument("Browser Fixture", "https://mind-diary.example.invalid"),
       ));
       return;
     }

@@ -193,7 +193,7 @@ export function renderMindDiaryAuthenticatedHeader(
       <a href="/invitations" data-ia-nav-item="invitations"${activeAttribute(activeNavigation, "invitations")}><span aria-hidden="true">✉</span> Invitations</a>
     </nav>
     <nav class="md-navigation md-navigation--utility" aria-label="Utility" data-ia-nav="utility">
-      <a href="${MIND_DIARY_CODEX_HELP_ROUTE}" data-ia-nav-item="help" data-ia-codex-help-link${activeAttribute(activeNavigation, "help")}><span aria-hidden="true">?</span> Help with Codex</a>
+      <a href="${MIND_DIARY_CODEX_HELP_ROUTE}" data-ia-nav-item="help" data-ia-codex-help-link${activeAttribute(activeNavigation, "help")}><span aria-hidden="true">?</span> Connect to ChatGPT</a>
       <a href="${MIND_DIARY_SETTINGS_ENTRY_ROUTE}" data-ia-nav-item="settings" data-ia-settings-item${settingsCurrentAttribute}><span aria-hidden="true">⚙</span> Settings</a>
     </nav>
   </aside>

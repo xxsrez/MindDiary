@@ -127,7 +127,7 @@ export async function productUiDocument(input: {
   const session = await readSession();
 
   if (input.pathname === "/help/codex") {
-    return withCsrfMeta(renderCodexHelpPageDocument(session.displayName), input.csrfToken);
+    return withCsrfMeta(renderCodexHelpPageDocument(session.displayName, input.siteOrigin), input.csrfToken);
   }
 
   if (input.pathname === "/settings/connections") {

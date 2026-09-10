@@ -35,9 +35,10 @@ disposition существующих operations — MD-337; route/UI redesign в
 
 В основной flow не попадают MCP endpoint, OAuth protocol mechanics
 (DCR/PKCE), scopes, grant/token/binding identifiers, personal-token archive и
-automatic capture. `/help/codex` один раз называет пользовательский lifecycle
-signal `OAuth on first use`, чтобы отделить установленный plugin от ещё не
-созданной connection, но не объясняет протокол. Эти детали не нужны для ответа
+automatic capture. Codex-разделы `/help/codex` отделяют установленный plugin
+от ещё не созданной connection. Исключение — раздел ручной настройки ChatGPT:
+он показывает необходимые для формы Server URL, DCR, scopes и OIDC,
+поскольку пользователь должен указать их сам. Эти детали не нужны для ответа
 на пользовательские вопросы «что подключено», «что можно читать», «куда можно
 записывать» и «как отключить доступ».
 
@@ -58,12 +59,26 @@ shell, что остальные распознанные UI routes. Он не �
 
 ## Canonical `/help/codex` guide
 
-Guide сохраняет три top-level шага `Install Mind Diary` → `Authenticate for
+Codex-разделы guide сохраняют три top-level шага `Install Mind Diary` → `Authenticate for
 reading` → `Choose readable Minds and start`. Над ними находится один
-keyboard-accessible switch между `Desktop` и `CLI`; выбранный path меняет
-только инструкции внутри тех же трёх шагов. Без JavaScript оба path остаются
+keyboard-accessible switch между `Codex Desktop`, `Codex CLI` и `ChatGPT`; выбранный path меняет
+инструкции выбранного клиента; ChatGPT имеет собственные три шага. Без JavaScript все три path остаются
 читаемыми, а при активном script switch использует tab semantics, включая
 Arrow/Home/End navigation и связанный tabpanel.
+
+Пользовательское название страницы и utility link — `Connect to ChatGPT`;
+существующий URL `/help/codex` сохраняется для совместимости ссылок.
+ChatGPT path содержит отдельные инструкции: сначала войти в текущий Mind Diary
+Site, включить нужные Minds, затем открыть ChatGPT Plugins → Create app
+(при необходимости включить Developer mode в Security and login). Указать
+название Mind Diary UAT, compatibility MCP URL текущего Site и OAuth. В Advanced
+OAuth settings выбрать DCR, canonical resource `/api/mcp`, только `content:read`
+для первого подключения и отключить OIDC: discovery alias не означает OIDC.
+После Connect проверить Connected и выполнить Refresh при пустом Actions,
+затем выбрать plugin в новом чате и выполнить read-only smoke.
+Ошибка `Sign in to Mind Diary before connecting` требует входа в Site в том же
+браузере и обновления OAuth-вкладки. Инструкция не обещает проверенную работу
+mobile или записи: для записи требуется отдельный `content:write` consent.
 
 Desktop path показывает проверяемый текущий flow:
 

@@ -977,7 +977,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /Authenticate for reading/);
   assert.match(codexHelpHtml, /Srez Marketplace/);
   assert.match(codexHelpHtml, /Mind Diary UAT/);
-  assert.match(codexHelpHtml, /OAuth-on-first-use/);
+  assert.match(codexHelpHtml, /data-codex-client-tab="chatgpt"/);
   assert.match(codexHelpHtml, /https:\/\/github\.com\/xxsrez\/marketplace/);
   assert.match(codexHelpHtml, /codex plugin marketplace add xxsrez\/marketplace/);
   assert.match(codexHelpHtml, /codex plugin add mind-diary@srez-marketplace/);
@@ -996,7 +996,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /href="\/settings\/developer\/mcp">Advanced MCP/);
   assert.doesNotMatch(
     codexHelpHtml,
-    /MIND_DIARY_TOKEN|api\/mcp|client secret|PKCE|DCR|content:read|binding_version|write_binding_id/i,
+    /MIND_DIARY_TOKEN|PKCE|binding_version|write_binding_id/i,
   );
   assert.doesNotMatch(codexHelpHtml, /attach at least one Mind|select, switch, or clear this target/u);
 

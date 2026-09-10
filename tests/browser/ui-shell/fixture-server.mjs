@@ -123,7 +123,7 @@ const routePages = new Map([
   ["/settings/connections", ["connections", "Connections"]],
   ["/settings/connections/conn_v1_fixture", ["connections", "Fixture connection"]],
   ["/settings/developer/mcp", ["tokens", "Advanced MCP"]],
-  ["/help/codex", ["help", "Use Mind Diary with Codex"]],
+  ["/help/codex", ["help", "Connect to ChatGPT"]],
   ["/help", ["help", "Help and accessibility"]],
   ["/shared-research", ["minds", "Shared Research"]],
   ["/fixture-missing", ["minds", "Page unavailable"]],
