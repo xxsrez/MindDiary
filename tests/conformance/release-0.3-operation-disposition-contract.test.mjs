@@ -767,13 +767,13 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "d6a3f3facddef3f98cb2ba80452857bca1b608be",
+      gitBlob: "d5329f14e3ee9bc96a2f30db9c83a0c281a833b6",
     },
     {
       surface: "plugin-label",
       role: "shared-label-source",
       path: "packages/adapter-web/src/ui-shell.ts",
-      gitBlob: "722f8c86b2e892b1144d62feb5439fbe57fac935",
+      gitBlob: "fff06172183356335baf34ad9be96db631b29b41",
     },
   ];
   for (const expected of expectations) {
@@ -853,7 +853,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "d6a3f3facddef3f98cb2ba80452857bca1b608be",
+        gitBlob: "d5329f14e3ee9bc96a2f30db9c83a0c281a833b6",
       }],
     },
     {
@@ -882,7 +882,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "shared-label-source",
         path: "packages/adapter-web/src/ui-shell.ts",
-        gitBlob: "722f8c86b2e892b1144d62feb5439fbe57fac935",
+        gitBlob: "fff06172183356335baf34ad9be96db631b29b41",
       }],
     },
   ]);
