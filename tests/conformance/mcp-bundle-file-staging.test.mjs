@@ -219,12 +219,17 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   assert.match(commit.description, /Report committed, pending, failed and unknown files separately/u);
   assert.deepEqual(
     commit.inputSchema.properties.operations.items.oneOf
-      .slice(-3)
+      .slice(-4)
       .map((variant) => variant.properties.type.const),
-    ["create_bundle_file", "replace_bundle_file", "delete_bundle_file"],
+    [
+      "create_bundle_file",
+      "replace_bundle_file",
+      "delete_bundle_file",
+      "reclassify_bundle_file",
+    ],
   );
   assert.equal(
-    commit.inputSchema.properties.operations.items.oneOf.at(-3)
+    commit.inputSchema.properties.operations.items.oneOf.at(-4)
       .properties.staged_file_ref.type,
     "string",
   );

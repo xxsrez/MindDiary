@@ -411,6 +411,24 @@ ref and expiry; changed bytes/metadata returns `idempotency_conflict`.
 { "type": "delete_bundle_file", "path": "attachments/map.png", "expected_sha256": "sha256:..." }
 ```
 
+Если уже committed canonical bytes были сохранены с консервативным
+`application/octet-stream`, их можно переклассифицировать без повторной
+загрузки:
+
+```json
+{ "type": "reclassify_bundle_file", "path": "data/routes.csv", "media_type": "text/csv", "expected_sha256": "sha256:..." }
+```
+
+Операция не принимает bytes, не меняет path, digest или size и применима только
+к существующему BundleFile exact current HEAD с текущим
+`application/octet-stream`. До commit service заново читает
+канонический объект, проверяет его digest и size и тем же authoritative
+sniffing, что используется при staging, подтверждает `media_type` по полному
+содержимому и расширению path. Несовпадение fail closed; HEAD не меняется.
+Успех создаёт новую immutable revision с уточнённым media type, а исторические
+revision сохраняют прежнюю классификацию. Такая операция не создаёт staged или
+temporary bytes и не считается heavy capacity write.
+
 The same authorization, exact binding generation, full-bundle validation,
 idempotency and HEAD CAS fence Markdown and opaque operations. After MD-304,
 success creates one v4 revision and marks every referenced staged ref `consumed` in the same

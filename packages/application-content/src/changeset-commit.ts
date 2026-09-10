@@ -326,6 +326,13 @@ function canonicalOperation(operation: Readonly<ChangesetOperation>): object {
           ? {}
           : { expected_sha256: operation.expected_sha256 }),
       };
+    case "reclassify_bundle_file":
+      return {
+        type: operation.type,
+        path: operation.path,
+        media_type: operation.media_type,
+        expected_sha256: operation.expected_sha256,
+      };
   }
 }
 

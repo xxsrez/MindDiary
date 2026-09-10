@@ -338,6 +338,23 @@ function canonicalDetectedMedia(
   return detected;
 }
 
+/**
+ * Authoritative full-byte BundleFile classification shared by staging and
+ * metadata-only reclassification of already committed canonical bytes.
+ */
+export function classifyBundleFileMediaType(
+  bytes: Uint8Array,
+  displayFilename: string,
+  claimedMediaType?: string,
+): BundleFileMediaType {
+  return canonicalDetectedMedia(
+    detectBundleFileMediaType(bytes),
+    claimedMediaType,
+    displayFilename,
+    isTextClassificationCandidate(claimedMediaType, displayFilename) && safeUtf8Text(bytes),
+  );
+}
+
 type StageInvalid = Extract<StageBundleFileResult, { readonly kind: "invalid" }>;
 
 type ValidatedStageRequest = Readonly<{
@@ -677,11 +694,10 @@ export class BundleFileStagingService {
     if (bytes.byteLength > BUNDLE_FILE_LIMITS.maxFileBytes) {
       return Object.freeze({ kind: "invalid", code: "file_size_limit_exceeded" });
     }
-    const detected = canonicalDetectedMedia(
-      detectBundleFileMediaType(bytes),
-      claimedMediaType,
+    const detected = classifyBundleFileMediaType(
+      bytes,
       displayFilename,
-      isTextClassificationCandidate(claimedMediaType, displayFilename) && safeUtf8Text(bytes),
+      claimedMediaType,
     );
     if (expectedMediaType !== undefined && expectedMediaType !== detected) {
       return invalid("bundle_file_media_mismatch");

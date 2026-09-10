@@ -1038,6 +1038,7 @@ test("arbitrary opaque formats stage and commit atomically with bounded safe med
 test("a new revision can refine media type while reusing the same canonical bytes", async () => {
   const env = await harness();
   const bytes = new TextEncoder().encode("route_id,route_short_name\n1,Airport\n");
+  const invalidTextBytes = Uint8Array.of(0xff, 0xfe, 0x00, 0x41);
   const stagedOpaque = await env.staging.stage({
     actor: env.currentActor,
     spaceId: MINDS.ordinary.spaceId,
@@ -1049,6 +1050,16 @@ test("a new revision can refine media type while reusing the same canonical byte
   });
   assert.equal(stagedOpaque.kind, "staged");
   assert.equal(stagedOpaque.record.mediaType, "application/octet-stream");
+  const stagedInvalidText = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "raw.bin",
+    claimedMediaType: "application/octet-stream",
+    bytes: invalidTextBytes,
+    idempotencyKey: "stage-invalid-text-as-opaque",
+  });
+  assert.equal(stagedInvalidText.kind, "staged");
 
   const revisionIds = ["revision_routes_opaque", "revision_routes_text"];
   const commits = new ChangesetCommitService({
@@ -1066,26 +1077,56 @@ test("a new revision can refine media type while reusing the same canonical byte
     expectedRevisionId: REVISIONS.initial.revisionId,
     idempotencyKey: "commit-routes-as-opaque",
     summary: "Store routes with the original opaque classification",
-    operations: [{
-      type: "create_bundle_file",
-      path: "data/routes.csv",
-      staged_file_id: stagedOpaque.record.stagedFileId,
-    }],
+    operations: [
+      {
+        type: "create_bundle_file",
+        path: "data/routes.csv",
+        staged_file_id: stagedOpaque.record.stagedFileId,
+      },
+      {
+        type: "create_bundle_file",
+        path: "data/raw.txt",
+        staged_file_id: stagedInvalidText.record.stagedFileId,
+      },
+    ],
   });
   assert.equal(initial.kind, "committed");
 
-  const stagedText = await env.staging.stage({
+  const invalidUtf8 = await commits.commit({
     actor: env.currentActor,
     spaceId: MINDS.ordinary.spaceId,
     writeBindingId: WRITE_BINDING_ID,
-    displayFilename: "routes.csv",
-    claimedMediaType: "text/csv",
-    bytes,
-    idempotencyKey: "stage-routes-as-text",
+    expectedRevisionId: initial.envelope.revision.revisionId,
+    idempotencyKey: "reject-invalid-text-reclassification",
+    summary: "Must not reclassify invalid UTF-8 bytes as text",
+    operations: [{
+      type: "reclassify_bundle_file",
+      path: "data/raw.txt",
+      media_type: "text/plain",
+      expected_sha256: stagedInvalidText.record.sha256,
+    }],
   });
-  assert.equal(stagedText.kind, "staged");
-  assert.equal(stagedText.record.sha256, stagedOpaque.record.sha256);
-  assert.equal(stagedText.record.mediaType, "text/csv");
+  assert.equal(invalidUtf8.kind, "invalid");
+  assert.equal(invalidUtf8.error.code, "bundle_file_media_mismatch");
+  assert.equal(await env.metadata.readHead(MINDS.ordinary.spaceId), initial.envelope.revision.revisionId);
+
+  const wrongMedia = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: initial.envelope.revision.revisionId,
+    idempotencyKey: "reject-route-json-reclassification",
+    summary: "Must not reclassify CSV bytes as JSON",
+    operations: [{
+      type: "reclassify_bundle_file",
+      path: "data/routes.csv",
+      media_type: "application/json",
+      expected_sha256: stagedOpaque.record.sha256,
+    }],
+  });
+  assert.equal(wrongMedia.kind, "invalid");
+  assert.equal(wrongMedia.error.code, "bundle_file_media_mismatch");
+  assert.equal(await env.metadata.readHead(MINDS.ordinary.spaceId), initial.envelope.revision.revisionId);
 
   const refined = await commits.commit({
     actor: env.currentActor,
@@ -1095,9 +1136,10 @@ test("a new revision can refine media type while reusing the same canonical byte
     idempotencyKey: "commit-routes-as-text",
     summary: "Refine routes media classification",
     operations: [{
-      type: "replace_bundle_file",
+      type: "reclassify_bundle_file",
       path: "data/routes.csv",
-      staged_file_id: stagedText.record.stagedFileId,
+      media_type: "text/csv",
+      expected_sha256: stagedOpaque.record.sha256,
     }],
   });
   assert.equal(refined.kind, "committed");

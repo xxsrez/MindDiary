@@ -2822,6 +2822,23 @@ Input:
 
 ```json
 {
+  "type": "reclassify_bundle_file",
+  "path": "data/routes.csv",
+  "media_type": "text/csv",
+  "expected_sha256": "sha256:..."
+}
+```
+
+`reclassify_bundle_file` не принимает новые bytes и требует, чтобы current HEAD
+entry имел `application/octet-stream`. Service читает exact canonical object
+current HEAD, повторно проверяет digest/size и допускает новый
+`media_type` только если full-byte authoritative sniffing и path extension дают
+тот же результат. Commit меняет только media type в новой immutable revision;
+историческая revision и canonical bytes не изменяются. Любое несовпадение
+оставляет HEAD прежним.
+
+```json
+{
   "type": "replace_index",
   "path": "index.md",
   "text": "# Index\n\n* [API](concepts/api.md) - API contract.\n",

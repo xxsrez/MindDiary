@@ -241,10 +241,11 @@ function canonicalCommitOperations(value: unknown): unknown {
   return Object.freeze(value.map((item) => {
     if (item === null || typeof item !== "object" || Array.isArray(item)) return item;
     const operation = item as Readonly<Record<string, unknown>>;
-    const { expectedSha256, stagedFileRef, ...rest } = operation;
+    const { expectedSha256, stagedFileRef, mediaType, ...rest } = operation;
     return Object.freeze({
       ...rest,
       ...(stagedFileRef === undefined ? {} : { staged_file_id: stagedFileRef }),
+      ...(mediaType === undefined ? {} : { media_type: mediaType }),
       ...(expectedSha256 === undefined ? {} : { expected_sha256: expectedSha256 }),
     });
   }));

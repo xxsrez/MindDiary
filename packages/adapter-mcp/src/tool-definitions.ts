@@ -1766,6 +1766,17 @@ const CHANGESET_OPERATION_SCHEMA = Object.freeze({
         expected_sha256: SHA256_SCHEMA,
       }),
     }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["type", "path", "media_type", "expected_sha256"]),
+      properties: Object.freeze({
+        type: Object.freeze({ const: "reclassify_bundle_file" }),
+        path: NON_EMPTY_STRING_SCHEMA,
+        media_type: NON_EMPTY_STRING_SCHEMA,
+        expected_sha256: SHA256_SCHEMA,
+      }),
+    }),
   ]),
 });
 

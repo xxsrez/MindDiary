@@ -11,7 +11,7 @@
     {
       "name": "commit_changeset",
       "source": "mind-diary-hosted-mcp-tools-list",
-      "input_schema_sha256": "sha256:3fa9f04c7114f43db4a14cc6234e719066a904d2b3e80915245d3a3848b550fa",
+      "input_schema_sha256": "sha256:288e4b11f5714b463945c023065b291169d7c9417c59b25cc28d44b05060ce59",
       "output_schema_sha256": "sha256:7e0172fd7d54250cebcd1a4130657c8ee6aa7dc0da3972d93a5b1e64ae935847"
     },
     {
@@ -95,7 +95,7 @@
     {
       "name": "reconcile_changeset",
       "source": "mind-diary-hosted-mcp-tools-list",
-      "input_schema_sha256": "sha256:3fa9f04c7114f43db4a14cc6234e719066a904d2b3e80915245d3a3848b550fa",
+      "input_schema_sha256": "sha256:288e4b11f5714b463945c023065b291169d7c9417c59b25cc28d44b05060ce59",
       "output_schema_sha256": "sha256:254b54b404fb832aba9e3bbd58aa43d4f9a83896ee302567d846f1fa21aaa650"
     },
     {

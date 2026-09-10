@@ -241,6 +241,7 @@ test("publishes strict commit schemas and truthful annotations", () => {
       "create_bundle_file",
       "replace_bundle_file",
       "delete_bundle_file",
+      "reclassify_bundle_file",
     ],
   );
   assert.deepEqual(commit.annotations, {

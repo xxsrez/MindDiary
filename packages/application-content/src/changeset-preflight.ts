@@ -10,6 +10,7 @@ import type {
 import {
   MARKDOWN_MEDIA_TYPE,
   RevisionEnvelopeError,
+  bundleFileMediaType,
   canonicalMarkdownPath,
   canonicalBundleFilePath,
   sha256Digest,
@@ -32,6 +33,7 @@ import {
 } from "@mind-diary/okf-codec";
 import type { DeltaRevisionReader, HeadRevisionReader } from "./index.js";
 import { analyzeBundleFileReferences } from "./bundle-file-references.js";
+import { classifyBundleFileMediaType } from "./bundle-files.js";
 import { materializeLogEntry } from "./reserved-content.js";
 
 export interface CreateFileOperation {
@@ -86,6 +88,13 @@ export interface DeleteBundleFileOperation {
   readonly expected_sha256?: string;
 }
 
+export interface ReclassifyBundleFileOperation {
+  readonly type: "reclassify_bundle_file";
+  readonly path: string;
+  readonly media_type: BundleFileMediaType;
+  readonly expected_sha256: Sha256Digest;
+}
+
 export type ChangesetOperation =
   | CreateFileOperation
   | ReplaceFileOperation
@@ -94,7 +103,8 @@ export type ChangesetOperation =
   | AddLogEntryOperation
   | CreateBundleFileOperation
   | ReplaceBundleFileOperation
-  | DeleteBundleFileOperation;
+  | DeleteBundleFileOperation
+  | ReclassifyBundleFileOperation;
 
 export interface ChangesetPreflightLimits {
   readonly maxOperations: number;
@@ -170,6 +180,7 @@ export type ChangesetValidationCode =
   | "staged_bundle_file_not_verified"
   | "staged_bundle_file_expired"
   | "staged_bundle_file_usage_mismatch"
+  | "bundle_file_media_mismatch"
   | "retained_bundle_file_quota_exceeded"
   | "capacity_accounting_untrusted"
   | "capacity_soft_limit"
@@ -434,6 +445,27 @@ function stagedFileId(
   return value as StagedBundleFileId;
 }
 
+function requestedBundleFileMediaType(
+  value: unknown,
+  operationIndex: number,
+  path: string,
+): BundleFileMediaType | Extract<ChangesetPreflightResult, { readonly kind: "invalid" }> {
+  if (typeof value !== "string") {
+    return invalid("invalid_operation", "media_type must be a canonical MIME essence", {
+      operationIndex,
+      path,
+    });
+  }
+  const mediaType = bundleFileMediaType(value);
+  if (mediaType !== value || mediaType === "application/octet-stream") {
+    return invalid("invalid_operation", "media_type must be a canonical detected MIME essence", {
+      operationIndex,
+      path,
+    });
+  }
+  return mediaType;
+}
+
 function checkedText(
   value: unknown,
   operationIndex: number,
@@ -531,7 +563,8 @@ function validateOperationsAgainstLimits(
     const bundleOperation =
       candidate.type === "create_bundle_file" ||
       candidate.type === "replace_bundle_file" ||
-      candidate.type === "delete_bundle_file";
+      candidate.type === "delete_bundle_file" ||
+      candidate.type === "reclassify_bundle_file";
     if (bundleOperation && ++bundleOperationCount > limits.maxBundleFileOperations) {
       return invalid(
         "bundle_file_operation_limit_exceeded",
@@ -760,6 +793,30 @@ function validateOperationsAgainstLimits(
         path,
         ...(digest === null ? {} : { expected_sha256: digest }),
       });
+    } else if (candidate.type === "reclassify_bundle_file") {
+      if (!hasExactKeys(candidate, ["type", "path", "media_type", "expected_sha256"])) {
+        return invalid("invalid_operation", "reclassify_bundle_file fields are invalid", {
+          operationIndex: index,
+          path,
+        });
+      }
+      const mediaType = requestedBundleFileMediaType(candidate.media_type, index, path);
+      if (typeof mediaType !== "string") return mediaType;
+      const digest = expectedDigest(candidate.expected_sha256, index, path);
+      if (typeof digest === "object" && digest !== null && "kind" in digest) return digest;
+      if (digest === null) {
+        return invalid("invalid_operation", "reclassify_bundle_file requires expected_sha256", {
+          operationIndex: index,
+          path,
+        });
+      }
+      totalBytes += ENCODER.encode(mediaType).byteLength;
+      operation = Object.freeze({
+        type: "reclassify_bundle_file",
+        path,
+        media_type: mediaType,
+        expected_sha256: digest,
+      });
     } else {
       return invalid("invalid_operation", "operation type is not supported", {
         operationIndex: index,
@@ -795,7 +852,8 @@ function digestMatches(
     | DeleteFileOperation
     | ReplaceIndexOperation
     | ReplaceBundleFileOperation
-    | DeleteBundleFileOperation,
+    | DeleteBundleFileOperation
+    | ReclassifyBundleFileOperation,
   file: WorkingRevisionFile,
 ): boolean {
   return operation.expected_sha256 === undefined || operation.expected_sha256 === file.sha256;
@@ -1141,6 +1199,59 @@ export class ChangesetPreflightService {
           });
         }
         working.delete(operation.path);
+      } else if (operation.type === "reclassify_bundle_file") {
+        if (!current || current.kind !== "opaque") {
+          return invalid("file_not_found", "reclassify BundleFile target does not exist", {
+            operationIndex: index,
+            path: operation.path,
+          });
+        }
+        if (current.mediaType !== "application/octet-stream") {
+          return invalid(
+            "invalid_operation",
+            "reclassify BundleFile target must currently be application/octet-stream",
+            { operationIndex: index, path: operation.path },
+          );
+        }
+        if (!digestMatches(operation, current)) {
+          return invalid("file_digest_mismatch", "reclassify BundleFile digest changed", {
+            operationIndex: index,
+            path: operation.path,
+          });
+        }
+        const loaded = deltaReader !== null && currentRevisionId !== null
+          ? await deltaReader.readRevisionFile(
+              request.spaceId,
+              currentRevisionId,
+              operation.path,
+            )
+          : head?.files.find((file) => file.path === operation.path) ?? null;
+        if (
+          !loaded || loaded.kind !== "opaque" || loaded.sha256 !== current.sha256 ||
+          loaded.size !== current.size || loaded.bytes.byteLength !== current.size
+        ) {
+          return invalid("bundle_file_media_mismatch", "exact BundleFile bytes cannot be verified", {
+            operationIndex: index,
+            path: operation.path,
+          });
+        }
+        const detected = classifyBundleFileMediaType(
+          loaded.bytes,
+          operation.path,
+          operation.media_type,
+        );
+        if (detected !== operation.media_type) {
+          return invalid(
+            "bundle_file_media_mismatch",
+            "requested BundleFile media type does not match its exact bytes and path",
+            { operationIndex: index, path: operation.path },
+          );
+        }
+        working.set(operation.path, Object.freeze({
+          ...current,
+          mediaType: detected,
+          stagedFileId: null,
+        }));
       }
     }
 
@@ -1153,7 +1264,8 @@ export class ChangesetPreflightService {
     const fullReferenceScan = operationSet.operations.some((operation) =>
       operation.type === "create_bundle_file" ||
       operation.type === "replace_bundle_file" ||
-      operation.type === "delete_bundle_file"
+      operation.type === "delete_bundle_file" ||
+      operation.type === "reclassify_bundle_file"
     );
     if (
       deltaReader !== null &&
