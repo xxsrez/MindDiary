@@ -661,6 +661,31 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
               );
             return Object.freeze(revisions);
           },
+          findActiveOrRecoverableExportJob: async (
+            request: Parameters<
+              ExportStartTransaction["findActiveOrRecoverableExportJob"]
+            >[0],
+          ) => {
+            const now = Date.parse(request.now);
+            const candidates = [...exportJobs.values()]
+              .filter((job) =>
+                job.requestedByPrincipalId === request.requestedByPrincipalId &&
+                job.spaceId === request.spaceId &&
+                job.revisionId === request.revisionId &&
+                (job.profile ?? "MD-OKF-ZIP-1") === request.profile &&
+                Date.parse(job.expiresAt) > now &&
+                (
+                  job.state === "running" ||
+                  ((job.state === "queued" || job.state === "failed") &&
+                    Date.parse(job.availableAt) <= now)
+                )
+              )
+              .sort((left, right) =>
+                Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
+                compareUnicodeScalarValues(String(right.jobId), String(left.jobId)),
+              );
+            return candidates[0] === undefined ? null : cloneExportJob(candidates[0]);
+          },
           readExportJob: async (jobId: JobId) => {
             const job = exportJobs.get(jobId);
             return job ? cloneExportJob(job) : null;

@@ -167,7 +167,13 @@ test("failed export distinguishes a safe integrity result from a generic transpo
   await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.locator("[data-export-job-state]")).toHaveText("Failed");
   await expect(page.locator("[data-export-status]")).toHaveText(
-    "The exact revision failed integrity verification. No archive was published.",
+    "The exact revision failed integrity verification. No archive was published. Submit Start export to retry this exact job.",
   );
   await expect(page.locator("[data-export-receipt]")).toBeHidden();
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect.poll(() => state()).toMatchObject({
+    startRequests: 2,
+    uniqueStartKeys: 1,
+    uniqueJobs: 1,
+  });
 });

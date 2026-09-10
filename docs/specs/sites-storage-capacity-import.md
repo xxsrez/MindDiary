@@ -275,6 +275,13 @@ cancel and expiry move reservation to cleanup-pending; a persisted cursor
 reclaims temporary bytes before final release. Unknown outcome reconciles exact
 state before retry.
 
+Для export transient `failed` job сохраняет reservation до bounded retry или
+expiry. Повтор exact selector/profile тем же principal восстанавливает этот job
+даже после утраты первоначального client key: новый namespace завершается тем же
+job result, а background work планируется повторно без второй reservation.
+Несовпадающий export и любая другая heavy operation продолжают получать обычный
+`capacity_fairness_limit`.
+
 ## Sites-only Markdown import profile
 
 Workflow: `plan -> reserve -> stage batches -> validate -> commit -> finalize`.

@@ -253,6 +253,39 @@ test("start_export atomically fixes principal, Space, exact revision and one dur
   assert.equal((await env.metadata.listExportJobsForTest()).length, 1);
 });
 
+test("a fresh start key recovers the same due failed export instead of losing its capacity reservation", async () => {
+  const env = await harness({ jobIds: ["export_recover_a", "export_recover_b"] });
+  const service = env.application();
+  const first = await service.start(startRequest(env.actor, "export-original-key"));
+  assert.equal(first.kind, "started");
+  const claimed = await env.metadata.claimExportJob(
+    first.job.jobId,
+    FIXED_NOW,
+    at(2_000),
+  );
+  assert.equal(claimed.kind, "claimed");
+  assert.equal(await env.metadata.failExportJob(
+    first.job.jobId,
+    claimed.job.version,
+    "transient_storage_failure",
+    at(500),
+    at(1_000),
+  ), true);
+
+  env.clock.set(at(1_000));
+  const recovered = await service.start(startRequest(env.actor, "export-recovery-key"));
+  assert.equal(recovered.kind, "started");
+  assert.equal(recovered.replayed, true);
+  assert.equal(recovered.job.jobId, first.job.jobId);
+  assert.equal(recovered.job.status, "failed");
+  assert.equal((await env.metadata.listExportJobsForTest()).length, 1);
+  assert.equal((await env.metadata.listCapacityReservationsForTest()).length, 1);
+
+  const replay = await service.start(startRequest(env.actor, "export-recovery-key"));
+  assert.equal(replay.kind, "started");
+  assert.equal(replay.job.jobId, first.job.jobId);
+});
+
 test("concurrent start retries produce one job and selector failures leave no partial state", async () => {
   const env = await harness({ jobIds: ["export_race_a", "export_race_b"] });
   const service = env.application();

@@ -235,9 +235,16 @@
       }
       resetReceipt();
       showJob(job.revision_id, job.status === "expired" ? "Expired" : "Failed");
-      say(job.status === "expired"
-        ? "This export expired. Start a fresh export for the same exact revision."
-        : failureMessage(job.last_failure_code));
+      if (job.status === "expired") {
+        say("This export expired. Start a fresh export for the same exact revision.");
+      } else {
+        // Keep the exact selector, profile and idempotency key, but make the
+        // next submit call start_export again so the failed durable job is
+        // rescheduled instead of merely re-reading its terminal status.
+        saved = { ...saved, jobId: null };
+        writeStored();
+        say(failureMessage(job.last_failure_code) + " Submit Start export to retry this exact job.");
+      }
       shown(checkButton, false);
       shown(newButton, true);
     } catch (error) {

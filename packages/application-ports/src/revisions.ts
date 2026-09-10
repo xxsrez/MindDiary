@@ -151,6 +151,13 @@ export interface ExportStartTransaction
   listRevisions(
     spaceId: SpaceId,
   ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
+  findActiveOrRecoverableExportJob(request: Readonly<{
+    requestedByPrincipalId: PrincipalId;
+    spaceId: SpaceId;
+    revisionId: RevisionId;
+    profile: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
+    now: UtcInstant;
+  }>): Promise<Readonly<ExportJob> | null>;
   readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null>;
   createExportJob(job: Readonly<ExportJob>): Promise<CreateExportJobResult>;
 }

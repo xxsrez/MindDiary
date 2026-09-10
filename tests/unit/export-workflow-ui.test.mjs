@@ -56,4 +56,6 @@ test("browser workflow persists no receipt secret and verifies exact bytes befor
   assert.match(client, /No archive was published/);
   assert.match(client, /error\.code\.startsWith\("capacity_"\)/);
   assert.match(client, /Recovered the existing export without creating a duplicate/);
+  assert.match(client, /saved = \{ \.\.\.saved, jobId: null \}/);
+  assert.match(client, /Submit Start export to retry this exact job/);
 });

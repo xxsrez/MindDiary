@@ -451,6 +451,36 @@ export class ExportJobApplicationService {
         );
       }
       const revisionId = envelope.revision.revisionId;
+      const recoverable = await transaction.findActiveOrRecoverableExportJob({
+        requestedByPrincipalId: actor.principalId,
+        spaceId: request.spaceId,
+        revisionId,
+        profile: parsed.profile,
+        now: createdAt,
+      });
+      if (recoverable !== null) {
+        const completed = await transaction.completeIdempotency({
+          namespace,
+          canonicalRequestHash,
+          result: Object.freeze({
+            kind: "start_export",
+            jobId: recoverable.jobId,
+            revisionId,
+          }),
+          completedAt: createdAt,
+        });
+        if (completed.kind !== "completed") {
+          throw new ExportJobInvariantError(
+            "invalid_idempotency_state",
+            "start_export recovery idempotency changed inside its transaction",
+          );
+        }
+        return Object.freeze({
+          kind: "started",
+          job: safeStatus(recoverable),
+          replayed: true,
+        });
+      }
       const estimatedArchiveBytes = envelope.manifest.entries.reduce(
         (total, entry) => total + entry.size + ENCODER.encode(entry.path).byteLength + 256,
         65_536,

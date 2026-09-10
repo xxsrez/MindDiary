@@ -3106,6 +3106,14 @@ Neither profile includes ACL, memberships, service identity, staging, audit or
 tokens. Builders run before background job/download-grant layer; implementation
 of builder alone does not prove asynchronous authorization or download.
 
+Если exact actor + Mind + revision + profile уже имеют `queued`, `running` или
+доступный для retry `failed` job, новый start key атомарно привязывается к этому
+же job и возвращает `replayed: true`. Второй job и вторая capacity reservation
+не создаются. Это восстанавливает ambiguous/lost client state, но не смешивает
+другой revision/profile или другого principal. После `failed` first-party UI
+повторно отправляет тот же exact selector/profile/idempotency key, чтобы
+перезапланировать durable job; простой status read работу не запускает.
+
 ### Sites `GET /api/v1/export-jobs/{job_id}`
 
 Вход: только opaque `job_id` из path; query и body отсутствуют. Для
