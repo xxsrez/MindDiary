@@ -253,6 +253,28 @@ change file-read semantics. Plugin guidance uses:
 No arbitrary pipeline language, shell, SQL or server-side code execution is
 introduced. Client composition is explicit structured data between calls.
 
+### Самодостаточный агентский workflow Release 0.4
+
+Базовое чтение источников не зависит от установленного Mind Diary skill.
+Одинаковые central instructions modern discovery и compatibility initialize,
+а также краткие descriptions лениво загружаемых tools задают следующий
+обязательный маршрут:
+
+1. получить fresh enabled projection через `list_minds` и выбрать ровно один
+   релевантный Mind; `/me` никогда не является default или fallback;
+2. зафиксировать один exact revision и сузить набор файлов через `list_files`;
+3. найти релевантные строки через `grep_files` и прочитать необходимые точные
+   диапазоны через `read_files`;
+4. строить ответ по прочитанным bytes и сохранять provenance как минимум до
+   exact Mind, revision и path, а не выдавать имя, snippet или ranking за
+   подтверждение содержания.
+
+`search_index_unavailable` не разрешает выбрать другой Mind, перейти на HEAD
+или остановить доступное canonical чтение. Агент продолжает на той же exact
+revision через `browse_entries`/`list_files`/`grep_files`/`read_files`.
+Instructions и descriptions объясняют composition, но не меняют серверные
+usage, scope, ACL, revision и response-budget checks.
+
 ## Проверка
 
 Synthetic corpus includes Markdown frontmatter, JSON, YAML, plain text, code,

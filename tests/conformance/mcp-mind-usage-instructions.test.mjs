@@ -10,6 +10,13 @@ import {
 test("central MCP guidance describes the complete principal Mind usage policy", () => {
   for (const fragment of [
     /list_minds/u,
+    /narrow files with list_files/u,
+    /locate evidence with grep_files/u,
+    /read the necessary exact ranges with read_files/u,
+    /Mind name, metadata summary, search snippet, or ranking is not proof/u,
+    /Never default or fall back to \/me/u,
+    /search_index_unavailable/u,
+    /canonical browse_entries, list_files, grep_files, and read_files/u,
     /Read Personal Mind without a description only when the current user directly asks/u,
     /ordinary enabled Mind when the user names it|topic genuinely matches its description/u,
     /routing_profile=personal_default/u,
@@ -49,7 +56,13 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
     "description_based",
   ]);
   assert.match(reads.get("search").description, /implicit cross-Mind search/iu);
+  assert.match(reads.get("search").description, /search_index_unavailable/u);
   assert.match(reads.get("fetch").description, /enabled Mind/u);
+  assert.match(reads.get("list_minds").description, /never default or fall back to \/me/iu);
+  assert.match(reads.get("list_minds").description, /list_files, grep_files, and read_files/u);
+  assert.match(reads.get("list_files").description, /After list_minds/u);
+  assert.match(reads.get("grep_files").description, /then use read_files/u);
+  assert.match(reads.get("read_files").description, /Mind, revision, and path provenance/u);
 
   const writes = new Map(
     MCP_COMMIT_EXPORT_TOOL_DEFINITIONS.map((definition) => [definition.name, definition]),

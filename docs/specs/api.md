@@ -1616,7 +1616,7 @@ Discovery result:
         "version": "0.1.0"
       }
     },
-    "instructions": "Choose exactly one Mind for every content operation; use list_minds before working with content.",
+    "instructions": "Start with list_minds, choose exactly one relevant Mind and immutable revision, then use list_files, grep_files, and read_files for source-backed answers. Never default or fall back to /me. If the semantic index is unavailable, keep the same exact revision and use canonical file operations. Preserve exact Mind, revision, and path provenance.",
     "ttlMs": 60000,
     "cacheScope": "private"
   }
