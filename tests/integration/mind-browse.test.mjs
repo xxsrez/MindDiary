@@ -1261,9 +1261,14 @@ test("file-operation budgets always advance or fail explicitly and abort a stall
   const env = harness();
   const owner = await createAccount(env, 32, "File Budget Owner");
   const mind = await createMind(env, owner, "file-budget-fixture");
-  const oversized = encoder.encode(`{"needle":"${"x".repeat((16 * 1024 * 1024) + 1)}"}\n`);
+  const lateRow = "trip-late,25:10:00,25:10:00,stop-9000\n";
+  const largeText = encoder.encode(
+    `trip_id,arrival_time,departure_time,stop_id\n${"x".repeat(17 * 1024 * 1024)}\n${lateRow}`,
+  );
+  const oversized = encoder.encode(`{"needle":"${"x".repeat((32 * 1024 * 1024) + 1)}"}\n`);
   const revisionId = await commitMixedFiles(env, owner, mind, fixtureFiles(), [
     { path: "data/oversized.json", mediaType: "application/json", bytes: oversized },
+    { path: "data/stop_times.txt", mediaType: "text/plain", bytes: largeText },
     { path: "notes/paged.txt", mediaType: "text/plain", bytes: encoder.encode("needle\nneedlez\n") },
     { path: "notes/stalled.txt", mediaType: "text/plain", bytes: encoder.encode("needle\ntail\n") },
   ], "Seed budget progress fixture");
@@ -1290,6 +1295,75 @@ test("file-operation budgets always advance or fail explicitly and abort a stall
     path: "data/oversized.json",
     error: { code: "file_scan_limit_exceeded", retryable: false },
   }]);
+
+  const largeGrep = await env.browse.grepFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId },
+    paths: ["data/stop_times.txt"],
+    patterns: ["trip-late"],
+    maxOutputBytes: 128,
+  });
+  assert.equal(largeGrep.resolvedRevision.revisionId, revisionId);
+  assert.equal(largeGrep.incomplete, false);
+  assert.equal(largeGrep.scanned.bytes, largeText.byteLength);
+  assert.equal(largeGrep.files[0].matches[0].lineNumber, 3);
+  assert.equal(largeGrep.files[0].matches[0].text, lateRow.trimEnd());
+  const lateRowStart = largeText.byteLength - encoder.encode(lateRow).byteLength;
+  const largeRange = await env.browse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId },
+    requests: [{
+      path: "data/stop_times.txt",
+      mode: "bytes",
+      startByte: lateRowStart,
+      endByte: largeText.byteLength,
+    }],
+    maxOutputBytes: 128,
+  });
+  assert.equal(largeRange.items[0].file.text, lateRow);
+  assert.deepEqual(largeRange.items[0].file.byteRange, {
+    start: lateRowStart,
+    end: largeText.byteLength,
+    total: largeText.byteLength,
+  });
+  const largeHead = await env.browse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId },
+    requests: [{ path: "data/stop_times.txt", mode: "head", count: 1 }],
+  });
+  assert.equal(
+    largeHead.items[0].file.text,
+    "trip_id,arrival_time,departure_time,stop_id\n",
+  );
+  assert.equal(largeHead.items[0].file.lineRange.total, null);
+
+  const largeWholeFirst = await env.browse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    requests: [{ path: "data/stop_times.txt", mode: "whole" }],
+    maxOutputBytes: 64,
+  });
+  assert.equal(largeWholeFirst.resolvedRevision.revisionId, revisionId);
+  assert.equal(largeWholeFirst.incompleteReason, "response_budget");
+  assert.ok(largeWholeFirst.nextCursor);
+  await commitMixedFiles(
+    env,
+    owner,
+    mind,
+    fixtureFiles("NEW_HEAD_BODY", "NEW_HEAD_BODY"),
+    [],
+    "Move HEAD after large-text cursor issuance",
+  );
+  const largeWholeSecond = await env.browse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    requests: [{ path: "data/stop_times.txt", mode: "whole" }],
+    cursor: largeWholeFirst.nextCursor,
+    maxOutputBytes: 64,
+  });
+  assert.equal(largeWholeSecond.resolvedRevision.revisionId, revisionId);
+  assert.equal(
+    largeWholeSecond.items[0].file.byteRange.start,
+    largeWholeFirst.items[0].file.byteRange.end,
+  );
 
   const firstGrep = await env.browse.grepFiles(actor(owner.principalId), {
     mind: mind.handle,

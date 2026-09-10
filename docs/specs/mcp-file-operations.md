@@ -1,7 +1,7 @@
 # Универсальные файловые операции Content MCP
 
 Статус: accepted, 2026-09-08. Нормативный контракт MD-409 для реализации
-MD-414–MD-418.
+MD-414–MD-418; Release 0.4 large-text amendment принят 2026-09-10 ниже.
 
 ## Причинный вывод
 
@@ -56,17 +56,42 @@ text/*
 application/json
 application/yaml
 application/x-yaml
+application/x-ndjson
 application/xml
 application/*+json
 application/*+xml
 ```
 
-Файл должен быть valid UTF-8 и иметь размер не больше 4 MiB для одной file
+Файл должен быть valid UTF-8 и иметь размер не больше 32 MiB для одной file
 operation. MIME остаётся advisory admission metadata, но здесь служит explicit
-consumer selection; `application/octet-stream` не sniff-ится как text. Binary,
-unsupported media, invalid UTF-8 и oversized text возвращаются отдельным
-per-item status и не попадают в model context. Файл не исполняется, не
-распаковывается, не транскрибируется и не преобразуется.
+consumer selection; ingress content proof и canonical media assignment заданы
+в [BundleFile specification](bundle-files.md), а `application/octet-stream`
+на чтении повторно не sniff-ится как text. Binary, unsupported media, invalid
+UTF-8 и oversized text возвращаются отдельным per-item status и не попадают в
+model context. Файл не исполняется, не распаковывается, не транскрибируется и
+не преобразуется.
+
+### Release 0.4 bounded large-text amendment
+
+`grep_files` и `read_files` допускают exact-revision text BundleFile до 32 MiB,
+чтобы CSV/TXT datasets порядка 12–20 MiB были доступны без изменения
+канонических bytes или подготовленного derivative. Application materializes не
+больше одного такого файла в пределах call; 32 MiB — жёсткий input/scan bound,
+а не новый response budget. `read_files` возвращает только requested
+line/byte range и обрезает его по прежнему максимуму 1 MiB; `whole` также
+страничный и не вкладывает весь крупный файл в один JSON-RPC response.
+
+`grep_files` фиксирует exact revision до object read, ограничивает суммарный
+scan страницы 32 MiB и выдаёт continuation на точной строке при row, response
+или time boundary. Следующий call повторно проверяет usage/ACL, request hash,
+manifest hash и exact revision. Поэтому рекомендуемый путь для крупного файла:
+сначала `grep_files` по exact path, затем `read_files` по возвращённым line или
+byte coordinates. `head` сохраняет отдельную оптимизацию: читает object stream
+только до требуемой line boundary и отменяет tail.
+
+Structured metadata parsing остаётся независимо ограничен 4 MiB. Крупный
+JSON/YAML получает `metadata_status=unsupported` и не удерживает
+`list_files` cursor на неизменной позиции.
 
 Line splitting распознаёт `LF`, `CRLF` и последний line без terminator.
 Returned `text` сохраняет исходные bytes и line endings внутри выбранного
@@ -186,8 +211,8 @@ Server constants:
 | Boundary | Value |
 |---|---:|
 | manifest entries per revision | existing 10,000 |
-| one text BundleFile scan/read | 4 MiB |
-| bytes scanned per `grep_files` page | 16 MiB |
+| one text BundleFile scan/read | 32 MiB |
+| bytes scanned per `grep_files` page | 32 MiB |
 | bytes parsed for `list_files` metadata per page | 4 MiB |
 | paths in one exact selector | 100 |
 | read requests per `read_files` call | 32 |
@@ -279,7 +304,8 @@ usage, scope, ACL, revision и response-budget checks.
 
 Synthetic corpus includes Markdown frontmatter, JSON, YAML, plain text, code,
 logs, empty files, Unicode and special path characters, LF/CRLF, a long line,
-invalid UTF-8, unsupported binary and a text file above the operation limit.
+valid 12–20 MiB text, invalid UTF-8, unsupported binary and a text file above
+the operation limit.
 Differential runner executes the common subset against pinned
 `ripgrep 15.2.0` plus byte/line reference readers and the MCP application over
 the same immutable bytes. It compares exact ordered paths, match lines/spans,

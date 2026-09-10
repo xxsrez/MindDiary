@@ -1245,7 +1245,7 @@ export class MindBrowseService {
       referencedFields.some((field) => !manifestFields.has(field));
     const metadataSort = request.sort.some((item) => !manifestFields.has(item.field));
     if (metadataSort && selected.reduce((sum, entry) => sum + (
-      entry.size <= MAX_TEXT_BUNDLE_FILE_BYTES &&
+      entry.size <= MAX_METADATA_SCAN_BYTES &&
       (entry.kind === "markdown" || isTextMediaType(entry.mediaType))
         ? entry.size
         : 0
@@ -1281,7 +1281,7 @@ export class MindBrowseService {
       let metadataStatus: FileMetadataStatus = "not_requested";
       let metadata: Readonly<Record<string, unknown>> | null = null;
       if (metadataNeeded) {
-        if (entry.size > MAX_TEXT_BUNDLE_FILE_BYTES ||
+        if (entry.size > MAX_METADATA_SCAN_BYTES ||
           (entry.kind === "opaque" && !isTextMediaType(entry.mediaType))) {
           metadataStatus = "unsupported";
         } else if (scannedBytes + entry.size > MAX_METADATA_SCAN_BYTES) {
