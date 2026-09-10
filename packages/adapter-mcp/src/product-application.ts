@@ -103,6 +103,69 @@ function snakeOutput(value: unknown): unknown {
   return mapKeys(value, toSnakeKey);
 }
 
+const FILE_OPERATION_RECOVERY = Object.freeze({
+  file_not_found: Object.freeze({
+    action: "refresh_file_list",
+    retry_policy: "after_refresh",
+  }),
+  file_not_text: Object.freeze({
+    action: "use_bundle_file_download",
+    retry_policy: "manual_alternative",
+  }),
+  unsupported_text_encoding: Object.freeze({
+    action: "use_bundle_file_download",
+    retry_policy: "manual_alternative",
+  }),
+  file_scan_limit_exceeded: Object.freeze({
+    action: "use_bundle_file_download",
+    retry_policy: "manual_alternative",
+  }),
+  range_out_of_bounds: Object.freeze({
+    action: "correct_range",
+    retry_policy: "after_correction",
+  }),
+  utf8_boundary_required: Object.freeze({
+    action: "align_utf8_boundary",
+    retry_policy: "after_correction",
+  }),
+} as const);
+
+function fileOperationErrorWithRecovery(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  const error = value as Readonly<Record<string, unknown>>;
+  const recovery = typeof error.code === "string"
+    ? FILE_OPERATION_RECOVERY[error.code as keyof typeof FILE_OPERATION_RECOVERY]
+    : undefined;
+  return recovery === undefined ? value : Object.freeze({ ...error, recovery });
+}
+
+function snakeFileOperationOutput(value: unknown): unknown {
+  const output = snakeOutput(value);
+  if (output === null || typeof output !== "object" || Array.isArray(output)) return output;
+  const record = output as Readonly<Record<string, unknown>>;
+  const errors = Array.isArray(record.errors)
+    ? Object.freeze(record.errors.map((item) => {
+        if (item === null || typeof item !== "object" || Array.isArray(item)) return item;
+        const row = item as Readonly<Record<string, unknown>>;
+        return Object.freeze({ ...row, error: fileOperationErrorWithRecovery(row.error) });
+      }))
+    : record.errors;
+  const items = Array.isArray(record.items)
+    ? Object.freeze(record.items.map((item) => {
+        if (item === null || typeof item !== "object" || Array.isArray(item)) return item;
+        const row = item as Readonly<Record<string, unknown>>;
+        return row.kind === "error"
+          ? Object.freeze({ ...row, error: fileOperationErrorWithRecovery(row.error) })
+          : row;
+      }))
+    : record.items;
+  return Object.freeze({
+    ...record,
+    ...(errors === undefined ? {} : { errors }),
+    ...(items === undefined ? {} : { items }),
+  });
+}
+
 function camelListFilesInput(
   value: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
@@ -868,9 +931,13 @@ export class ProductMcpContentApplication implements McpContentApplication {
           await this.#dependencies.browse.listFiles(request.actor, input, request.signal),
         );
       case "grep_files":
-        return snakeOutput(await this.#dependencies.browse.grepFiles(request.actor, input, request.signal));
+        return snakeFileOperationOutput(
+          await this.#dependencies.browse.grepFiles(request.actor, input, request.signal),
+        );
       case "read_files":
-        return snakeOutput(await this.#dependencies.browse.readFiles(request.actor, input, request.signal));
+        return snakeFileOperationOutput(
+          await this.#dependencies.browse.readFiles(request.actor, input, request.signal),
+        );
       case "list_bundle_files": {
         const result = await this.#dependencies.browse.listBundleFiles(request.actor, input);
         return snakeOutput({

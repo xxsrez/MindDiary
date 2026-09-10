@@ -4384,10 +4384,32 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   });
   assert.equal(unavailableSearch.status, 200);
   const unavailableSearchBody = await unavailableSearch.json();
-  assert.equal(unavailableSearchBody.result.isError, true);
-  assert.equal(
-    unavailableSearchBody.result.structuredContent.error.code,
-    "search_index_unavailable",
+  assert.equal(unavailableSearchBody.result.isError, false);
+  assert.match(
+    unavailableSearchBody.result.structuredContent.error.request_id,
+    /^request_/u,
+  );
+  assert.deepEqual(
+    {
+      ...unavailableSearchBody.result.structuredContent.error,
+      request_id: "request_opaque",
+    },
+    {
+      code: "search_index_unavailable",
+      message: "Search is unavailable for the exact requested revision; continue with list_files, grep_files, and read_files for the same Mind and revision.",
+      retryable: true,
+      request_id: "request_opaque",
+      details: {
+        category: "service_state",
+        state: "index_unavailable",
+        recovery: {
+          action: "use_file_workflow_same_revision",
+          retry_policy: "bounded",
+          preserve: ["mind", "revision"],
+          tools: ["list_files", "grep_files", "read_files"],
+        },
+      },
+    },
   );
   assert.equal(JSON.stringify(unavailableSearchBody).includes(recoveryMarker), false);
 

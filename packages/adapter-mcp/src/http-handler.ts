@@ -623,7 +623,7 @@ function readFailureMessage(code: string): string {
     case "bundle_file_not_found":
       return "BundleFile was not found.";
     case "search_index_unavailable":
-      return "Search is unavailable for the exact requested revision.";
+      return "Search is unavailable for the exact requested revision; continue with list_files, grep_files, and read_files for the same Mind and revision.";
     case "discovery_unavailable":
       return "Mind discovery is unavailable.";
     case "revision_integrity_failure":
@@ -659,7 +659,7 @@ function readFailureMessage(code: string): string {
     case "invalid_query":
       return "The query is invalid.";
     case "invalid_file_operation":
-      return "The file operation arguments are invalid.";
+      return "The file operation arguments are invalid; correct them before retrying.";
     case "invalid_glob":
       return "The file glob is invalid.";
     case "invalid_metadata_filter":
@@ -676,6 +676,73 @@ function readFailureMessage(code: string): string {
     default:
       return "The tool arguments are invalid.";
   }
+}
+
+const VALIDATION_READ_FAILURES = new Set([
+  "invalid_cursor",
+  "invalid_limit",
+  "invalid_path",
+  "invalid_fetch_budget",
+  "invalid_mind_selector",
+  "invalid_revision_selector",
+  "invalid_query",
+  "invalid_file_operation",
+  "invalid_glob",
+  "invalid_metadata_filter",
+  "invalid_sort",
+  "unsupported_pattern",
+  "file_operation_cursor_invalid",
+]);
+
+function readFailureDetails(
+  code: string,
+  retryable: boolean,
+): Readonly<Record<string, unknown>> | undefined {
+  if (code === "search_index_unavailable") {
+    return Object.freeze({
+      category: "service_state",
+      state: "index_unavailable",
+      recovery: Object.freeze({
+        action: "use_file_workflow_same_revision",
+        retry_policy: "bounded",
+        preserve: Object.freeze(["mind", "revision"]),
+        tools: Object.freeze(["list_files", "grep_files", "read_files"]),
+      }),
+    });
+  }
+  if (VALIDATION_READ_FAILURES.has(code)) {
+    return Object.freeze({
+      category: "validation",
+      state: "request_rejected",
+      recovery: Object.freeze({
+        action: "correct_arguments",
+        retry_policy: "after_correction",
+      }),
+    });
+  }
+  if (code === "file_operation_budget_exhausted") {
+    return Object.freeze({
+      category: "resource_limit",
+      state: "budget_exhausted",
+      recovery: Object.freeze({
+        action: retryable ? "retry_same_request" : "reduce_response_scope",
+        retry_policy: retryable ? "bounded" : "after_correction",
+        preserve: Object.freeze(["mind", "revision"]),
+      }),
+    });
+  }
+  if (code === "bundle_file_not_found") {
+    return Object.freeze({
+      category: "content_state",
+      state: "file_unavailable",
+      recovery: Object.freeze({
+        action: "refresh_file_list",
+        retry_policy: "after_refresh",
+        preserve: Object.freeze(["mind", "revision"]),
+      }),
+    });
+  }
+  return undefined;
 }
 
 function safeReadToolFailure(error: unknown): SafeReadToolFailure | null {
@@ -695,13 +762,14 @@ function safeReadToolFailure(error: unknown): SafeReadToolFailure | null {
     "retryable" in error
       ? error.retryable === true
       : error.code === "discovery_unavailable";
+  const details = error.code === "credential_access_upgrade_required"
+    ? CREDENTIAL_ACCESS_UPGRADE_DETAILS
+    : readFailureDetails(error.code, retryable);
   return Object.freeze({
     code: error.code,
     message: readFailureMessage(error.code),
     retryable,
-    ...(error.code === "credential_access_upgrade_required"
-      ? { details: CREDENTIAL_ACCESS_UPGRADE_DETAILS }
-      : {}),
+    ...(details === undefined ? {} : { details }),
   });
 }
 
@@ -718,6 +786,31 @@ function toolError(
   return jsonRpcResult(
     id,
     createMcpToolErrorResult(requestId, code, message, retryable, details, meta),
+    format,
+  );
+}
+
+function recoverableToolState(
+  id: string | number | undefined,
+  requestId: McpRequestId,
+  code: string,
+  message: string,
+  format: McpResponseFormat,
+  retryable: boolean,
+  details?: Readonly<Record<string, unknown>>,
+): Response {
+  return jsonRpcResult(
+    id,
+    Object.freeze({
+      ...createMcpToolErrorResult(
+        requestId,
+        code,
+        message,
+        retryable,
+        details,
+      ),
+      isError: false,
+    }),
     format,
   );
 }
@@ -1641,16 +1734,26 @@ export function createMcpHttpHandlerAtEndpoint(
           );
           return response;
         }
-        const response = toolError(
-          rpc.id,
-          requestId,
-          safeFailure.code,
-          safeFailure.message,
-          responseFormat,
-          safeFailure.retryable,
-          undefined,
-          safeFailure.details,
-        );
+        const response = safeFailure.code === "search_index_unavailable"
+          ? recoverableToolState(
+              rpc.id,
+              requestId,
+              safeFailure.code,
+              safeFailure.message,
+              responseFormat,
+              safeFailure.retryable,
+              safeFailure.details,
+            )
+          : toolError(
+              rpc.id,
+              requestId,
+              safeFailure.code,
+              safeFailure.message,
+              responseFormat,
+              safeFailure.retryable,
+              undefined,
+              safeFailure.details,
+            );
         await safeLog(
           dependencies.logger,
           request,

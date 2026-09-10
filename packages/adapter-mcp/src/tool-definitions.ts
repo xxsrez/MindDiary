@@ -169,7 +169,41 @@ const APPLICATION_ERROR_SCHEMA = Object.freeze({
     message: NON_EMPTY_STRING_SCHEMA,
     retryable: Object.freeze({ type: "boolean" }),
     request_id: NON_EMPTY_STRING_SCHEMA,
-    details: Object.freeze({ type: "object" }),
+    details: Object.freeze({
+      type: "object",
+      properties: Object.freeze({
+        category: Object.freeze({
+          enum: Object.freeze([
+            "validation", "service_state", "content_state", "resource_limit",
+          ]),
+        }),
+        state: NON_EMPTY_STRING_SCHEMA,
+        recovery: Object.freeze({
+          type: "object",
+          additionalProperties: false,
+          required: Object.freeze(["action", "retry_policy"]),
+          properties: Object.freeze({
+            action: NON_EMPTY_STRING_SCHEMA,
+            retry_policy: Object.freeze({
+              enum: Object.freeze([
+                "none", "bounded", "after_correction", "after_refresh",
+                "manual_alternative",
+              ]),
+            }),
+            preserve: Object.freeze({
+              type: "array",
+              uniqueItems: true,
+              items: Object.freeze({ enum: Object.freeze(["mind", "revision"]) }),
+            }),
+            tools: Object.freeze({
+              type: "array",
+              uniqueItems: true,
+              items: NON_EMPTY_STRING_SCHEMA,
+            }),
+          }),
+        }),
+      }),
+    }),
   }),
 });
 
@@ -838,13 +872,27 @@ const FETCH_OUTPUT_SCHEMA = toolOutputSchema(
 const FILE_OPERATION_ITEM_ERROR_SCHEMA = Object.freeze({
   type: "object",
   additionalProperties: false,
-  required: Object.freeze(["code", "retryable"]),
+  required: Object.freeze(["code", "retryable", "recovery"]),
   properties: Object.freeze({
     code: Object.freeze({ enum: Object.freeze([
       "file_not_found", "file_not_text", "unsupported_text_encoding",
       "file_scan_limit_exceeded", "range_out_of_bounds", "utf8_boundary_required",
     ]) }),
     retryable: Object.freeze({ const: false }),
+    recovery: Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["action", "retry_policy"]),
+      properties: Object.freeze({
+        action: Object.freeze({ enum: Object.freeze([
+          "refresh_file_list", "use_bundle_file_download", "correct_range",
+          "align_utf8_boundary",
+        ]) }),
+        retry_policy: Object.freeze({ enum: Object.freeze([
+          "after_refresh", "manual_alternative", "after_correction",
+        ]) }),
+      }),
+    }),
   }),
 });
 const FILE_DESCRIPTOR_SCHEMA = Object.freeze({
@@ -906,6 +954,78 @@ const GREP_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
     next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
   }),
 }));
+const BYTE_RANGE_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["start", "end", "total"]),
+  properties: Object.freeze({
+    start: Object.freeze({ type: "integer", minimum: 0 }),
+    end: Object.freeze({ type: "integer", minimum: 0 }),
+    total: Object.freeze({ type: "integer", minimum: 0 }),
+  }),
+});
+const LINE_RANGE_SCHEMA = Object.freeze({
+  type: Object.freeze(["object", "null"]),
+  additionalProperties: false,
+  required: Object.freeze(["start", "end", "total"]),
+  properties: Object.freeze({
+    start: Object.freeze({ type: "integer", minimum: 0 }),
+    end: Object.freeze({ type: "integer", minimum: 0 }),
+    total: Object.freeze({ type: Object.freeze(["integer", "null"]), minimum: 0 }),
+  }),
+});
+const NEXT_RANGE_SCHEMA = Object.freeze({
+  type: Object.freeze(["object", "null"]),
+  additionalProperties: false,
+  required: Object.freeze(["start_byte", "end_byte"]),
+  properties: Object.freeze({
+    start_byte: Object.freeze({ type: "integer", minimum: 0 }),
+    end_byte: Object.freeze({ type: "integer", minimum: 1 }),
+  }),
+});
+const READ_FILE_RESULT_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "path", "kind", "media_type", "sha256", "revision_id", "text",
+    "byte_range", "line_range", "truncated", "next_range",
+  ]),
+  properties: Object.freeze({
+    path: FILE_PATH_SCHEMA,
+    kind: Object.freeze({ enum: Object.freeze(["markdown", "opaque"]) }),
+    media_type: NON_EMPTY_STRING_SCHEMA,
+    sha256: SHA256_SCHEMA,
+    revision_id: OPAQUE_ID_SCHEMA,
+    text: Object.freeze({ type: "string" }),
+    byte_range: BYTE_RANGE_SCHEMA,
+    line_range: LINE_RANGE_SCHEMA,
+    truncated: Object.freeze({ type: "boolean" }),
+    next_range: NEXT_RANGE_SCHEMA,
+  }),
+});
+const READ_FILE_ITEM_SCHEMA = Object.freeze({
+  oneOf: Object.freeze([
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["kind", "file"]),
+      properties: Object.freeze({
+        kind: Object.freeze({ const: "file" }),
+        file: READ_FILE_RESULT_SCHEMA,
+      }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["kind", "path", "error"]),
+      properties: Object.freeze({
+        kind: Object.freeze({ const: "error" }),
+        path: FILE_PATH_SCHEMA,
+        error: FILE_OPERATION_ITEM_ERROR_SCHEMA,
+      }),
+    }),
+  ]),
+});
 const READ_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
   type: "object",
   additionalProperties: false,
@@ -916,7 +1036,7 @@ const READ_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
   properties: Object.freeze({
     mind: MIND_DESCRIPTOR_SCHEMA,
     resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
-    items: Object.freeze({ type: "array", items: Object.freeze({ type: "object" }) }),
+    items: Object.freeze({ type: "array", items: READ_FILE_ITEM_SCHEMA }),
     returned_bytes: Object.freeze({ type: "integer", minimum: 0 }),
     incomplete: Object.freeze({ type: "boolean" }),
     incomplete_reason: Object.freeze({ type: Object.freeze(["string", "null"]), enum: Object.freeze(["response_budget", "time_budget", null]) }),
@@ -1110,7 +1230,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
     name: "grep_files",
     title: "Search exact-revision file content",
     description:
-      "After list_files narrows paths, run bounded literal or safe single-line regex matching over selected UTF-8 files in the same enabled Mind and exact immutable revision, then use read_files for the necessary source ranges. Results preserve path, line, byte-span and pattern provenance and never use semantic search or hidden corpus expansion.",
+      "After list_files narrows paths, run bounded literal or safe single-line regex matching over selected UTF-8 files in the same enabled Mind and exact immutable revision, then use read_files for the necessary source ranges. before_context and after_context accept only integers from 0 through 3. Results preserve path, line, byte-span and pattern provenance; per-file errors include a machine-readable recovery action and never use semantic search or hidden corpus expansion.",
     inputSchema: GREP_FILES_INPUT_SCHEMA,
     outputSchema: GREP_FILES_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,
@@ -1120,7 +1240,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
     name: "read_files",
     title: "Read exact file ranges",
     description:
-      "Read the source bytes needed for an answer from one to 32 exact paths in the same enabled Mind and immutable revision selected by list_minds/list_files, using whole, head, tail, line, or UTF-8 byte ranges. Preserve exact Mind, revision, and path provenance; metadata or search snippets alone are not proof. Response limits yield an opaque continuation fixed to the manifest and original request.",
+      "Read the source bytes needed for an answer from one to 32 exact paths in the same enabled Mind and immutable revision selected by list_minds/list_files, using whole, head, tail, line, or UTF-8 byte ranges. Preserve exact Mind, revision, and path provenance; metadata or search snippets alone are not proof. Per-file errors include a machine-readable recovery action instead of advising an unchanged retry. Response limits yield an opaque continuation fixed to the manifest and original request.",
     inputSchema: READ_FILES_INPUT_SCHEMA,
     outputSchema: READ_FILES_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,

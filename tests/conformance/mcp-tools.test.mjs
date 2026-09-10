@@ -3,12 +3,14 @@ import test from "node:test";
 
 import {
   BundleFileDownloadFailure,
+  MindBrowseFailure,
   MindSearchFailure,
 } from "../../packages/application-content/dist/index.js";
 import {
   MCP_CONTENT_TOOLS,
   MCP_READ_TOOL_DEFINITIONS,
   MCP_TOOL_DEFINITIONS,
+  ProductMcpContentApplication,
   createMcpHttpHandler,
 } from "../../packages/adapter-mcp/dist/index.js";
 
@@ -114,6 +116,15 @@ function harness() {
             "search_index_unavailable",
             "private-query from mind_secret leaked from an index exception",
             true,
+          );
+        }
+        if (
+          request.name === "grep_files" &&
+          request.arguments.after_context === 4
+        ) {
+          throw new MindBrowseFailure(
+            "invalid_file_operation",
+            "after_context exceeded the private implementation limit",
           );
         }
         if (
@@ -253,6 +264,75 @@ test("schemas require one explicit Mind and one revision selector shape", () => 
     nestedFilter = allGroup.properties.all.items;
   }
   assert.deepEqual(nestedFilter.required, ["field", "op"]);
+
+  const grep = definitions.get("grep_files");
+  for (const field of ["before_context", "after_context"]) {
+    assert.equal(grep.inputSchema.properties[field].minimum, 0);
+    assert.equal(grep.inputSchema.properties[field].maximum, 3);
+  }
+  assert.match(grep.description, /0 through 3/iu);
+  const grepItemError = grep.outputSchema.properties.data.properties.errors
+    .items.properties.error;
+  assert.ok(grepItemError.required.includes("recovery"));
+  assert.deepEqual(
+    grepItemError.properties.recovery.properties.retry_policy.enum,
+    ["after_refresh", "manual_alternative", "after_correction"],
+  );
+  const readError = definitions.get("read_files").outputSchema.properties.data
+    .properties.items.items.oneOf.find(
+      (variant) => variant.properties?.kind?.const === "error",
+    ).properties.error;
+  assert.ok(readError.required.includes("recovery"));
+});
+
+test("file-operation wrappers attach bounded recovery without changing product codes", async () => {
+  const application = new ProductMcpContentApplication({
+    browse: {
+      async grepFiles() {
+        return {
+          errors: [{
+            path: "assets/data.bin",
+            error: { code: "file_not_text", retryable: false },
+          }],
+        };
+      },
+      async readFiles() {
+        return {
+          items: [{
+            kind: "error",
+            path: "notes.txt",
+            error: { code: "range_out_of_bounds", retryable: false },
+          }],
+        };
+      },
+    },
+  });
+  const grepped = await application.executeToolCall({
+    actor: actor(),
+    name: "grep_files",
+    arguments: {},
+  });
+  assert.deepEqual(grepped.errors[0].error, {
+    code: "file_not_text",
+    retryable: false,
+    recovery: {
+      action: "use_bundle_file_download",
+      retry_policy: "manual_alternative",
+    },
+  });
+  const read = await application.executeToolCall({
+    actor: actor(),
+    name: "read_files",
+    arguments: {},
+  });
+  assert.deepEqual(read.items[0].error, {
+    code: "range_out_of_bounds",
+    retryable: false,
+    recovery: {
+      action: "correct_range",
+      retry_policy: "after_correction",
+    },
+  });
 });
 
 test("tools/list ignores provider order, duplicates, and undeclared tools", async () => {
@@ -332,12 +412,22 @@ test("known read failures map to stable retryable errors without private text", 
     }),
   );
   const result = await rpcResult(response);
-  assert.equal(result.isError, true);
+  assert.equal(result.isError, false);
   assert.deepEqual(result.structuredContent.error, {
     code: "search_index_unavailable",
-    message: "Search is unavailable for the exact requested revision.",
+    message: "Search is unavailable for the exact requested revision; continue with list_files, grep_files, and read_files for the same Mind and revision.",
     retryable: true,
     request_id: "request_read_tools_1",
+    details: {
+      category: "service_state",
+      state: "index_unavailable",
+      recovery: {
+        action: "use_file_workflow_same_revision",
+        retry_policy: "bounded",
+        preserve: ["mind", "revision"],
+        tools: ["list_files", "grep_files", "read_files"],
+      },
+    },
   });
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes("private-query"), false);
@@ -345,9 +435,38 @@ test("known read failures map to stable retryable errors without private text", 
   assert.deepEqual(result.content, [
     {
       type: "text",
-      text: "Search is unavailable for the exact requested revision.",
+      text: "Search is unavailable for the exact requested revision; continue with list_files, grep_files, and read_files for the same Mind and revision.",
     },
   ]);
+});
+
+test("invalid grep context stays a non-retryable product validation result", async () => {
+  const fixture = harness();
+  const result = await rpcResult(await fixture.send(rpc("tools/call", {
+    name: "grep_files",
+    arguments: {
+      mind: "research-notes",
+      revision_selector: { kind: "revision", revision_id: "rev_exact" },
+      patterns: ["known"],
+      after_context: 4,
+    },
+  })));
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.structuredContent.error, {
+    code: "invalid_file_operation",
+    message: "The file operation arguments are invalid; correct them before retrying.",
+    retryable: false,
+    request_id: "request_read_tools_1",
+    details: {
+      category: "validation",
+      state: "request_rejected",
+      recovery: {
+        action: "correct_arguments",
+        retry_policy: "after_correction",
+      },
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(result), /INVALID_ARGUMENT|private implementation/iu);
 });
 
 test("authorization denial is generic and never reaches read execution", async () => {
@@ -386,6 +505,16 @@ test("download-grant application failures stay structured and privacy-safe", asy
     message: "BundleFile was not found.",
     retryable: false,
     request_id: "request_read_tools_1",
+    details: {
+      category: "content_state",
+      state: "file_unavailable",
+      recovery: {
+        action: "refresh_file_list",
+        retry_policy: "after_refresh",
+        preserve: ["mind", "revision"],
+      },
+    },
   });
   assert.doesNotMatch(JSON.stringify(result), /private object|provider diagnostic/iu);
+  assert.doesNotMatch(JSON.stringify(result), /https?:\/\/|download_url|token|secret/iu);
 });

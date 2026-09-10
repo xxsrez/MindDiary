@@ -481,6 +481,36 @@ Application-layer error имеет стабильный machine code:
 используется только в случаях, прямо отделённых в разделе
 [MCP protocol и application errors](#mcp-protocol-и-application-errors).
 
+MCP application outcome всегда остаётся успешным transport response
+`tools/call` с `result.structuredContent.ok=false` и точным product `code`.
+Validation, content и authorization failures имеют `isError=true`; connector
+может дополнительно пометить такой вызов своим внешним `INVALID_ARGUMENT`, но
+product code остаётся источником истины. Временный
+`search_index_unavailable` возвращается как completed state-result с
+`isError=false`, чтобы provider wrapper не смешивал корректный запрос и
+неготовое состояние индекса. Для outcomes, где агенту нужен следующий шаг,
+`details` содержит стабильную подсказку:
+
+```json
+{
+  "category": "service_state",
+  "state": "index_unavailable",
+  "recovery": {
+    "action": "use_file_workflow_same_revision",
+    "retry_policy": "bounded",
+    "preserve": ["mind", "revision"],
+    "tools": ["list_files", "grep_files", "read_files"]
+  }
+}
+```
+
+`retryable=true` означает только, что тот же корректный request может позднее
+успеть без изменения payload. Это не разрешение на бесконечный retry. Для
+`search_index_unavailable` агент сразу продолжает canonical file workflow на
+том же Mind и revision; повтор search допустим только ограниченно. Validation
+errors имеют `retryable=false`, `category=validation`,
+`state=request_rejected` и `recovery.action=correct_arguments`.
+
 Базовая taxonomy:
 
 | Code | Смысл |

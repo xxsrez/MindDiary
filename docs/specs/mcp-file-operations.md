@@ -227,6 +227,13 @@ successfully complete. Unsupported text file and per-path failures remain in
 `items[].error`; target-level invalid request, authorization, revision
 integrity and cursor failure remain tool errors.
 
+Значение `before_context` или `after_context` вне закрытого диапазона `0..3`
+не запускает поиск. Connector schema validator вправе отклонить такой вызов до
+server execution своим `INVALID_ARGUMENT`; server-side validation возвращает
+top-level `invalid_file_operation` с `retryable=false` и
+`recovery.action=correct_arguments`. В обоих случаях это validation, а не
+состояние сервиса.
+
 Deadline имеет `incomplete_reason=time_budget`, если уже существует безопасная
 позиция продолжения. Abort входящего MCP request и deadline во время зависшего
 object stream отменяют reader и возвращают retryable
@@ -249,6 +256,24 @@ utf8_boundary_required
 file_operation_cursor_invalid
 file_operation_budget_exhausted
 ```
+
+Per-file error дополнительно содержит обязательную machine-readable
+`recovery` и не советует повторять неизменённый неисправимый запрос:
+
+| Code | `recovery.action` | `retry_policy` |
+|---|---|---|
+| `file_not_found` | `refresh_file_list` | `after_refresh` |
+| `file_not_text` | `use_bundle_file_download` | `manual_alternative` |
+| `unsupported_text_encoding` | `use_bundle_file_download` | `manual_alternative` |
+| `file_scan_limit_exceeded` | `use_bundle_file_download` | `manual_alternative` |
+| `range_out_of_bounds` | `correct_range` | `after_correction` |
+| `utf8_boundary_required` | `align_utf8_boundary` | `after_correction` |
+
+One-use download URL остаётся секретной capability. Expired, consumed,
+unknown и foreign URL на data-plane одинаково отвечают generic `not_found` и
+не попадают в MCP diagnostics. Новый grant запрашивается через
+`get_bundle_file_download` по всё ещё авторизованным exact Mind, revision и
+path; старый URL никогда не повторяется и не логируется.
 
 ## Authorization и privacy
 
