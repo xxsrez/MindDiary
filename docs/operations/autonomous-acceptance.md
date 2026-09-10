@@ -27,6 +27,23 @@ product handler. Обязательные outcomes текущей задачи �
 `passed`, старые failures не удаляются. Приёмка выбранного scope в отчёте и
 успешный полный `join-acceptance-suite` — разные утверждения.
 
+## Изоляция данных acceptance-run
+
+В этом harness Personal write означает запись только в
+`run-owned-personal-mind` disposable test principal, созданного самим run. Это
+не разрешение писать в Personal Mind существующего пользователя. Обычные
+мутации выполняются в `run-owned-ordinary-mind` того же изолированного run;
+все создаваемые accounts, Minds, credentials, objects и indexes имеют run
+ownership и входят в cleanup journal.
+
+До setup controller получает полную baseline inventory, а после cleanup
+сравнивает с ней итоговую inventory целиком. Успех возможен только при точном
+совпадении; прерванный cleanup возобновляется по durable journal. Любой
+`existing-user-mind` остаётся read-only и не может использоваться как fixture
+или cleanup target. Публичные receipts не содержат приватные имена или bodies.
+Общая граница закреплена в
+`tests/fixtures/uat-smoke-data-isolation/contract.v1.json`.
+
 ## Применимость платформенных проверок
 
 Управляющий запуск фиксирует exact base/candidate SHA, выбранные Task Manager

@@ -1,0 +1,46 @@
+{
+  "$schema": "mind-diary/uat-smoke-data-isolation/v1",
+  "version": 1,
+  "policySource": "docs/operations/ship-work-release-profile.md",
+  "autonomousAcceptanceSource": "docs/operations/autonomous-acceptance.md",
+  "targetClasses": {
+    "existing-user-mind": {
+      "read": "allowed-with-current-authorization",
+      "mutation": "forbidden",
+      "cleanup": "forbidden"
+    },
+    "run-owned-ordinary-mind": {
+      "read": "allowed-with-current-authorization",
+      "mutation": "allowed",
+      "principal": "isolated-test-principal",
+      "runMarker": "required",
+      "baseline": "complete-inventory-before-first-mutation",
+      "cleanup": "delete-run-owned-state-and-restore-exact-baseline"
+    },
+    "run-owned-personal-mind": {
+      "read": "allowed-with-current-authorization",
+      "mutation": "conditional-personal-behavior-scope-only",
+      "principal": "disposable-isolated-test-principal",
+      "runMarker": "required",
+      "baseline": "complete-inventory-before-first-mutation",
+      "cleanup": "delete-entire-run-owned-principal-personal-history-and-restore-exact-baseline"
+    }
+  },
+  "unknownState": {
+    "mutatingCleanup": "forbidden",
+    "action": "stop-and-inventory"
+  },
+  "publicMutationReceipt": {
+    "contentBodies": "forbidden",
+    "privateMindNames": "forbidden",
+    "requiredFields": [
+      "run_id",
+      "target_class",
+      "baseline_inventory_sha256_before",
+      "baseline_inventory_sha256_after",
+      "cleanup_status"
+    ],
+    "passingCleanupStatus": "baseline_restored",
+    "requireEqualInventoryHashes": true
+  }
+}

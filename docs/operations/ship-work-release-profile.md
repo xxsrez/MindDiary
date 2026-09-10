@@ -1,6 +1,6 @@
 # Профиль `ship-work-release` для Mind Diary
 
-Статус: accepted project configuration, revision 9, 2026-09-09.
+Статус: accepted project configuration, revision 10, 2026-09-10.
 
 ## Обычный UAT release: соразмерная приёмка
 
@@ -33,6 +33,35 @@
 5. Завершить приёмку, когда обязательный outcome доказан. Сохранить точные
    версии, выполненные проверки, переиспользованные результаты и оставшиеся
    ограничения. Не запускать дополнительные проверки «для уверенности».
+
+### Изоляция smoke-данных
+
+Существующий пользовательский Mind, включая Personal `/me`, относится к классу
+`existing-user-mind`: обычная smoke-проверка может только читать его в пределах
+текущего доступа. Запись, удаление и «временное» восстановление HEAD в таком
+Mind запрещены. Неизвестный объект нельзя считать тестовым по содержимому и
+удалять для cleanup.
+
+Любая smoke-проверка с записью использует `run-owned-ordinary-mind`, созданный
+для конкретного run у изолированного тестового principal. До первой записи
+фиксируется полная baseline inventory; каждый создаваемый principal, Mind,
+credential, object и index получает run marker. Cleanup удаляет только
+run-owned state и считается успешным лишь при точном совпадении итоговой
+inventory с baseline.
+
+Если проверяется именно Personal write behavior, допустим только
+`run-owned-personal-mind` нового disposable principal внутри изолированной
+acceptance environment. Cleanup обязан удалить весь этот principal вместе с
+его Personal Mind и историей и подтвердить точное восстановление baseline.
+При отсутствии такого lifecycle hosted Personal write помечается непроверенным;
+его нельзя заменять записью в Personal Mind существующего пользователя.
+
+Публичный receipt мутационной проверки содержит `run_id`, `target_class`,
+`baseline_inventory_sha256_before`, `baseline_inventory_sha256_after` и
+`cleanup_status`. Имена приватных Minds и bodies не публикуются. Passing
+допускается только при `cleanup_status=baseline_restored` и равных hashes.
+Машиночитаемая граница закреплена в
+`tests/fixtures/uat-smoke-data-isolation/contract.v1.json`.
 
 ### Когда расширять проверку
 

@@ -287,6 +287,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 - [Проверка интерфейса и скорости UAT, 2026-09-05](reports/2026-09-05-ui-performance.md)
 - [Файловые операции: evidence MD-418, 2026-09-09](reports/2026-09-09-file-operations-acceptance.md)
   — обход основных экранов, измерения загрузки и диагностика встроенного браузера.
+- [Изоляция smoke-данных и инвентаризация Personal Mind, 2026-09-10](reports/2026-09-10-personal-smoke-data-inventory.md)
+  — privacy-safe перечень синтетических объектов, причина загрязнения и
+  варианты очистки без выполненного удаления.
 
 - [Состояние OKF на 2026-08-30](reports/2026-08-30-okf-status.md) — повторный
   аудит отдельного официального repository, exact spec revision/hash,
