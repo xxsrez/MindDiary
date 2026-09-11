@@ -340,6 +340,8 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
   — исторический repository candidate, впоследствии интегрированный в
   deployment, который теперь классифицируется как UAT.
 
+- [ChatGPT: приоритет Mind Diary и очистка экспериментов](reports/2026-09-11-chatgpt-guide-and-cleanup.md) — два обычных Chat, read-only evidence и UAT153.
+
 ## Статусы и проверяемые claims
 
 Тип документа (`specification`, `ADR`, `guide`, `runbook`, `report`) описывает
