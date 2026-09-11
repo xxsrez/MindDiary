@@ -152,13 +152,19 @@ async function createAccount(env, index, displayName) {
   );
 }
 
-async function createMind(env, owner, handle, name = handle) {
+async function createMind(
+  env,
+  owner,
+  handle,
+  name = handle,
+  description = `Durable knowledge for ${name}`,
+) {
   return env.ordinary.createSpaceWithOwner(
     actor(owner.principalId, `request_create_${handle}`),
     {
       name,
       handle,
-      description: `Durable knowledge for ${name}`,
+      description,
       idempotencyKey: `create-${handle}`,
     },
   );
@@ -231,6 +237,12 @@ async function setUsage(env, principalId, spaceId, usageMode, expectedUsageVersi
     expectedUsageVersion,
     idempotencyKey: key,
   });
+}
+
+function usageEntry(result, spaceId) {
+  const entry = result.state.entries.find((candidate) => candidate.spaceId === spaceId);
+  assert.ok(entry);
+  return entry;
 }
 
 function mcpDiscovery(store = null) {
@@ -578,10 +590,19 @@ test("mismatched resolved metadata cannot redirect a descriptor to another space
   assert.equal(mind.handle, "source-space");
 });
 
-test("MCP discovery exposes optional Personal description and projects both independent writable mounts", async () => {
+test("MCP discovery projects every independent writable mount and optional descriptions", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Usage Owner");
   const enabled = await createMind(env, owner, "enabled-notes", "Enabled Notes");
+  const projects = await createMind(env, owner, "project-notes", "Project Notes");
+  const decisions = await createMind(env, owner, "decision-notes", "Decision Notes");
+  const directOnly = await createMind(
+    env,
+    owner,
+    "direct-only",
+    "Direct Only",
+    null,
+  );
   const disabled = await createMind(env, owner, "disabled-notes", "Disabled Notes");
   const profile = await env.metadata.readPersonalMindProfile(owner.principalId);
   assert.ok(profile);
@@ -602,21 +623,25 @@ test("MCP discovery exposes optional Personal description and projects both inde
     )).kind,
     "applied",
   );
-  const writable = await setUsage(
-    env,
-    owner.principalId,
-    enabled.mindId,
-    "read_write",
-    1,
-    "enable-ordinary-write",
-  );
-  assert.equal(writable.kind, "applied");
+  const ordinaryWriteResults = [];
+  for (const [index, mind] of [enabled, projects, decisions, directOnly].entries()) {
+    const result = await setUsage(
+      env,
+      owner.principalId,
+      mind.mindId,
+      "read_write",
+      index + 1,
+      `enable-ordinary-write-${index + 1}`,
+    );
+    assert.equal(result.kind, "applied");
+    ordinaryWriteResults.push(result);
+  }
   const personalWritable = await setUsage(
     env,
     owner.principalId,
     owner.personalMind.mindId,
     "read_write",
-    2,
+    5,
     "enable-personal-write-independently",
   );
   assert.equal(personalWritable.kind, "applied");
@@ -625,7 +650,14 @@ test("MCP discovery exposes optional Personal description and projects both inde
     { id: "token_usage_read", scopes: ["content:read"] },
     { id: "token_usage_write", scopes: ["content:read", "content:write"] },
   ]) {
-    for (const spaceId of [owner.personalMind.mindId, enabled.mindId, disabled.mindId]) {
+    for (const spaceId of [
+      owner.personalMind.mindId,
+      enabled.mindId,
+      projects.mindId,
+      decisions.mindId,
+      directOnly.mindId,
+      disabled.mindId,
+    ]) {
       await authorizeMcpMind(env, owner.principalId, spaceId, token.id, token.scopes, {
         role: "owner",
       });
@@ -635,26 +667,43 @@ test("MCP discovery exposes optional Personal description and projects both inde
   const discovery = mcpDiscovery(env.metadata);
   const readActor = mcpActor(owner.principalId, "token_usage_read");
   const listed = await discovery.listMinds(readActor, { limit: 10 });
-  assert.deepEqual(listed.minds.map(({ route }) => route), ["/me", "/enabled-notes"]);
+  assert.deepEqual(listed.minds.map(({ route }) => route), [
+    "/me",
+    "/decision-notes",
+    "/direct-only",
+    "/enabled-notes",
+    "/project-notes",
+  ]);
+  assert.equal(listed.minds.every(({ usageMode }) => usageMode === "read_write"), true);
+  assert.equal(listed.minds.every(({ effective }) => effective.canWrite === false), true);
+  assert.equal(listed.minds.filter(({ isPersonal }) => !isPersonal).length, 4);
+  assert.equal(listed.minds.find(({ route }) => route === "/direct-only")?.description, null);
   assert.equal(listed.minds[0].description, "Private durable working preferences");
   assert.equal(listed.minds[0].routingProfile, "personal_default");
   assert.equal(listed.minds[0].usageMode, "read_write");
   assert.deepEqual(listed.minds[0].effective, { canRead: true, canWrite: false });
   assert.deepEqual(listed.minds[0].writableMount, {
     active: true,
-    generation: personalWritable.state.personalWriteGeneration.generationId,
+    generation: usageEntry(
+      personalWritable,
+      owner.personalMind.mindId,
+    ).writeGeneration.generationId,
   });
-  assert.equal(listed.minds[0].settingsVersion, 3);
+  assert.equal(listed.minds[0].settingsVersion, 6);
 
-  const enabledDescriptor = listed.minds[1];
+  const enabledDescriptor = listed.minds.find(({ route }) => route === "/enabled-notes");
+  assert.ok(enabledDescriptor);
   assert.equal(enabledDescriptor.description, "Durable knowledge for Enabled Notes");
   assert.equal(enabledDescriptor.routingProfile, "description_based");
   assert.equal(enabledDescriptor.usageMode, "read_write");
   assert.deepEqual(enabledDescriptor.effective, { canRead: true, canWrite: false });
-  assert.equal(enabledDescriptor.settingsVersion, 3);
+  assert.equal(enabledDescriptor.settingsVersion, 6);
   assert.deepEqual(enabledDescriptor.writableMount, {
     active: true,
-    generation: writable.state.ordinaryWriteGeneration.generationId,
+    generation: usageEntry(
+      ordinaryWriteResults[0],
+      enabled.mindId,
+    ).writeGeneration.generationId,
   });
   assert.equal(enabledDescriptor.contentCapabilities, undefined);
 
@@ -687,7 +736,7 @@ test("MCP discovery exposes optional Personal description and projects both inde
   });
   assert.equal(
     personalWriteDescriptor.writableMount.generation,
-    personalWritable.state.personalWriteGeneration.generationId,
+    usageEntry(personalWritable, owner.personalMind.mindId).writeGeneration.generationId,
   );
 
   for (const selector of ["disabled-notes", "missing-notes"]) {
@@ -711,7 +760,7 @@ test("MCP discovery exposes optional Personal description and projects both inde
       owner.principalId,
       disabled.mindId,
       "read",
-      3,
+      6,
       "enable-disabled-as-read-only",
     )).kind,
     "applied",
@@ -730,7 +779,7 @@ test("MCP discovery exposes optional Personal description and projects both inde
   assert.equal(readOnlyInfo.mind.routingProfile, "description_based");
   assert.equal(readOnlyInfo.mind.usageMode, "read");
   assert.deepEqual(readOnlyInfo.mind.effective, { canRead: true, canWrite: false });
-  assert.equal(readOnlyInfo.mind.settingsVersion, 4);
+  assert.equal(readOnlyInfo.mind.settingsVersion, 7);
   assert.deepEqual(readOnlyInfo.mind.writableMount, {
     active: false,
     generation: null,
@@ -842,7 +891,7 @@ test("malformed principal usage state fails closed before descriptor projection"
       if (property === "readPrincipalMindUsage") {
         return async () => ({
           ...applied.state,
-          ordinaryWriteGeneration: null,
+          entries: [...applied.state.entries, applied.state.entries[0]],
         });
       }
       const value = Reflect.get(target, property, target);

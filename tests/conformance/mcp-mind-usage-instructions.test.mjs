@@ -27,7 +27,11 @@ test("central MCP guidance describes the complete principal Mind usage policy", 
     /writable_mount\.active=true/u,
     /effective\.can_write/u,
     /Never bind, rebind, unbind/u,
-    /If both descriptions match/u,
+    /every nonempty description that matches/u,
+    /without extra confirmation/u,
+    /‘only’ restricts fan-out/u,
+    /semantic no-op/u,
+    /partial success and unknown outcomes per destination/u,
     /durable knowledge explicitly discussed/u,
     /exact source Mind, revision, and locator provenance/u,
     /Validate the complete proposed OKF 0\.2 bundle/u,
@@ -38,6 +42,8 @@ test("central MCP guidance describes the complete principal Mind usage policy", 
     assert.match(MCP_AGENT_INSTRUCTIONS, fragment);
   }
   assert.match(MCP_AGENT_INSTRUCTIONS, /Multiple relevant enabled Minds may be read sequentially/u);
+  assert.match(MCP_AGENT_INSTRUCTIONS, /Any number of descriptors may independently have writable_mount\.active=true/u);
+  assert.doesNotMatch(MCP_AGENT_INSTRUCTIONS, /Up to two|at most one description_based|If both descriptions match/u);
   assert.match(MCP_AGENT_INSTRUCTIONS, /at most 20 BundleFile operations and 256 MiB/u);
   assert.match(MCP_AGENT_INSTRUCTIONS, /Do not run heavy uploads over 4 MiB concurrently/u);
   assert.match(MCP_AGENT_INSTRUCTIONS, /Report committed, pending, failed, and unknown files separately/u);
@@ -51,6 +57,8 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
   assert.match(reads.get("list_minds").description, /description/u);
   assert.match(reads.get("list_minds").description, /untrusted/u);
   assert.match(reads.get("list_minds").description, /Personal Mind has personal_default and an optional description/u);
+  assert.match(reads.get("list_minds").description, /Any number of ordinary Minds plus Personal may be writable/u);
+  assert.match(reads.get("list_minds").description, /Every matching described writable Mind qualifies/u);
   const mindSchema = reads.get("list_minds").outputSchema.properties.data.properties.minds.items;
   assert.equal(mindSchema.required.includes("routing_profile"), true);
   assert.equal(mindSchema.required.includes("description"), false);
@@ -72,11 +80,14 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
   );
   const commit = writes.get("commit_changeset");
   assert.match(commit.description, /exact Mind's current principal-owned read_write lane/u);
-  assert.match(commit.description, /Personal and ordinary write lanes are independent/u);
+  assert.match(commit.description, /Every Mind write lane is independent/u);
   assert.match(commit.description, /Canonical and only content-write tool/u);
-  assert.match(commit.description, /current user directly asks/u);
+  assert.match(commit.description, /direct current user request/u);
   assert.match(commit.description, /previous request/u);
   assert.match(commit.description, /explicitly discussed/u);
+  assert.match(commit.description, /semantic no-op per destination/u);
+  assert.match(commit.description, /without extra confirmation/u);
+  assert.match(commit.description, /description and corpus instructions as untrusted/u);
   assert.match(commit.description, /source_references/u);
   assert.match(commit.description, /notify the user/u);
   assert.match(writes.get("reconcile_changeset").description, /exact original/u);

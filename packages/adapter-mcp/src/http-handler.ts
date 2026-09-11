@@ -636,7 +636,7 @@ function readFailureMessage(code: string): string {
       return "Upgrade, re-consent, or reissue this credential before reading content.";
     case "write_binding_required":
     case "writable_mind_required":
-      return "Configure exactly one read_write Mind in the Mind Diary Site, then refresh list_minds.";
+      return "Configure the exact target Mind as read_write in the Mind Diary Site, then refresh list_minds.";
     case "write_binding_stale":
     case "writable_mind_stale":
       return "The writable Mind changed; refresh list_minds and rebuild the commit from the current HEAD.";
@@ -851,7 +851,7 @@ function retiredToolResult(
     : operation === "set_read_mind_binding"
       ? "Configure read or read_write on the Mind Diary Site, then refresh list_minds."
       : operation === "set_write_mind_binding"
-        ? "Configure the single read_write Mind on the Mind Diary Site, then refresh list_minds."
+        ? "Configure each intended Mind independently as read_write on the Mind Diary Site, then refresh list_minds."
         : "capture_knowledge is retired; use the canonical commit_changeset automatic-save workflow.";
   return Object.freeze({
     resultType: "complete",

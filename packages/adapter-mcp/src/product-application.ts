@@ -524,7 +524,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
   ) {
     const messages = Object.freeze({
       writable_mind_required:
-        "Configure one read_write Mind in the Site settings before writing.",
+        "Configure this exact Mind as read_write in the Site settings before writing.",
       writable_mind_stale:
         "The principal's writable Mind changed or is no longer available; refresh list_minds.",
     });
@@ -1252,7 +1252,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
             request.actor.requestId,
             code,
             code === "writable_mind_required"
-              ? "Configure one read_write Mind on the Mind Diary Site, then refresh list_minds."
+              ? "Configure this exact Mind as read_write on the Mind Diary Site, then refresh list_minds."
               : "The writable Mind changed or lost authority; refresh list_minds and rebuild from the current HEAD.",
             result.kind === "denied" && result.decision.retryable,
           );
@@ -1335,7 +1335,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
             request.actor.requestId,
             code,
             code === "writable_mind_required"
-              ? "Configure one read_write Mind on the Mind Diary Site, then refresh list_minds."
+              ? "Configure this exact Mind as read_write on the Mind Diary Site, then refresh list_minds."
               : "The writable Mind changed or lost authority; refresh list_minds before reconciliation.",
             result.kind === "denied" && result.decision.retryable,
           );

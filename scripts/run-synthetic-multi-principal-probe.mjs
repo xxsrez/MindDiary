@@ -459,9 +459,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   );
   if (initialUsage !== null && (
     initialUsage.usageVersion !== 0 ||
-    initialUsage.entries.length !== 0 ||
-    initialUsage.ordinaryWriteGeneration !== null ||
-    initialUsage.personalWriteGeneration !== null
+    initialUsage.entries.length !== 0
   )) fail("initial_binding_state_not_empty");
   assertions.add("bindings.initial-empty");
 
@@ -1010,8 +1008,10 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   );
   if (
     restartedUsage === null ||
-    restartedUsage.ordinaryWriteGeneration?.spaceId !== restartedParticipant.mind_id ||
-    restartedUsage.personalWriteGeneration?.spaceId !== participantIds.mind ||
+    !restartedUsage.entries.find((entry) =>
+      entry.spaceId === restartedParticipant.mind_id)?.writeGeneration ||
+    !restartedUsage.entries.find((entry) =>
+      entry.spaceId === participantIds.mind)?.writeGeneration ||
     restartedUsage.entries.filter((entry) => entry.usageMode === "read_write").length !== 2
   ) fail("restart_binding_state_changed");
   assertions.add("bindings.restart-persistence");
@@ -1108,8 +1108,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (
     usageAfterMindDelete === null ||
     usageAfterMindDelete.entries.some((entry) => entry.spaceId === restartedParticipant.mind_id) ||
-    usageAfterMindDelete.ordinaryWriteGeneration !== null ||
-    usageAfterMindDelete.personalWriteGeneration?.spaceId !== participantIds.mind
+    !usageAfterMindDelete.entries.find((entry) =>
+      entry.spaceId === participantIds.mind)?.writeGeneration
   ) fail("mind_delete_did_not_invalidate_bindings");
   assertions.add("bindings.mind-delete-invalidates-target");
   const credentialInspection = await createSitesMetadataStore(database);
@@ -1146,8 +1146,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     revokedParticipantUsage === null ||
     revokedParticipantUsage.usageVersion !== usageAfterMindDelete.usageVersion ||
     revokedParticipantUsage.entries.length !== usageAfterMindDelete.entries.length ||
-    revokedParticipantUsage.ordinaryWriteGeneration !== null ||
-    revokedParticipantUsage.personalWriteGeneration?.spaceId !== participantIds.mind
+    !revokedParticipantUsage.entries.find((entry) =>
+      entry.spaceId === participantIds.mind)?.writeGeneration
   ) fail("target_owner_revoke_state_mismatch", {
     hasUsage: revokedParticipantUsage !== null,
     usageVersion: revokedParticipantUsage?.usageVersion ?? null,

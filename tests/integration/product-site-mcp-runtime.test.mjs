@@ -2153,7 +2153,7 @@ test("durable Product Site controls account-wide Mind usage with CAS, shared cre
   const emptyHtml = await emptyPage.text();
   assert.match(emptyHtml, /Web usage token/u);
   assert.match(emptyHtml, /Account-wide Mind modes/u);
-  assert.match(emptyHtml, /does not own a separate Mind choice/u);
+  assert.match(emptyHtml, /does not own separate Mind choices/u);
   assert.match(emptyHtml, /Manage Mind modes/u);
   assert.doesNotMatch(emptyHtml, /data-target-version|Writable target|Automatic knowledge capture/u);
 

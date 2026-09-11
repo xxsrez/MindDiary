@@ -247,16 +247,17 @@ test("installed skill principal-owned Mind usage policy is complete and fail-clo
   const policy = [
     "Start each relevant workflow with fresh `list_minds`",
     "Personal Mind has `routing_profile=personal_default` and an optional description",
-    "When the current user names Personal Mind or asks to read or use My Mind",
+    "When the current user names an exact Mind",
     "Otherwise select only the readable Mind or Minds whose descriptions genuinely fit",
-    "For Personal Mind without a description, write only when the current user directly asks in this conversation",
-    "If both descriptions match, save in both Minds independently",
-    "consider every newly discussed piece of durable knowledge for automatic preservation",
+    "For any `read_write` Mind without a description, write only when the current user directly asks in this conversation",
+    "`only` restricts fan-out to the named Mind or Minds",
+    "For every newly discussed piece of durable knowledge, consider automatic preservation",
+    "Save in every matching Mind independently",
     "No extra confirmation is needed for a qualifying save",
-    "pass optional `source_references` with the exact enabled source Mind",
+    "Preserve exact `source_references` when one Mind supplies content saved elsewhere",
     "Fetch a targeted existing Memory before deciding whether the result is a create, update, explicit delete or semantic no-op",
     "Validate the complete proposed OKF 0.2 bundle before commit",
-    "call `reconcile_changeset` with the exact original full request",
+    "call `reconcile_changeset` with the exact original full request and idempotency key",
     "Briefly tell the user what was created, updated or removed",
   ].join("\n");
   assert.equal(assertMindUsageSkillPolicy(policy), true);

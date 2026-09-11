@@ -1316,7 +1316,7 @@
         {
           "role": "package-probe-source",
           "path": "scripts/run-oauth-direct-plugin-probe.mjs",
-          "gitBlob": "49e07483858cfc729919b77fa3bf93fa1484bcb4"
+          "gitBlob": "397a933db517f0ed1e106e80bd5d880a40fe8242"
         }
       ]
     },
@@ -1338,12 +1338,12 @@
         {
           "role": "accepted-skill-source-contract",
           "path": "docs/specs/plugin-connector.md",
-          "gitBlob": "63998f69ce9d7d794a60bae320f2864942ab60b6"
+          "gitBlob": "0d23edd043cae1dc289d262dfabe11cf9560409b"
         },
         {
           "role": "installed-skill-probe-source",
           "path": "scripts/run-oauth-direct-plugin-probe.mjs",
-          "gitBlob": "49e07483858cfc729919b77fa3bf93fa1484bcb4"
+          "gitBlob": "397a933db517f0ed1e106e80bd5d880a40fe8242"
         }
       ]
     },
@@ -1362,7 +1362,7 @@
         {
           "role": "help-renderer-source",
           "path": "packages/adapter-web/src/connections.ts",
-          "gitBlob": "5b56cc09a4012c55e6843f9dfbd2ab0cda7d52fe"
+          "gitBlob": "baefc725d201c08037dccbd94e8f16362971379e"
         }
       ]
     },
@@ -1378,7 +1378,7 @@
         {
           "role": "help-playbook-source",
           "path": "packages/adapter-web/src/token-management.ts",
-          "gitBlob": "e87c0593d4a29bb7264424ce3da844f2743db1d2"
+          "gitBlob": "7d92c18c163e6a027e66e435e3d86cd1904a47d8"
         },
         {
           "role": "help-route-source",

@@ -1,0 +1,221 @@
+{
+  "$schema": "mind-diary/principal-mind-usage/v3",
+  "version": 3,
+  "source": "docs/specs/mind-usage-modes.md",
+  "decision": "docs/decisions/0028-multiple-writable-minds.md",
+  "ownership": "principal",
+  "defaultMode": "disabled",
+  "modes": [
+    "disabled",
+    "read",
+    "read_write"
+  ],
+  "cardinality": {
+    "read": "0..N",
+    "ordinary_read_write": "0..N",
+    "personal_read_write": "0..1",
+    "combined_read_write": "0..N"
+  },
+  "switchBehavior": "update_selected_entry_only",
+  "writeLanes": {
+    "independent": true,
+    "ordinary": "description_or_direct_request",
+    "personal": "description_or_direct_request"
+  },
+  "sharedAcrossCredentials": [
+    "oauth_grant",
+    "personal_token"
+  ],
+  "effectiveCapabilityChecks": [
+    "active_credential",
+    "credential_scope",
+    "current_acl_or_visibility",
+    "current_writer_role"
+  ],
+  "description": {
+    "appliesTo": [
+      "ordinary_mind",
+      "personal_mind"
+    ],
+    "absentFrom": [],
+    "modelVisible": true,
+    "trustedInstruction": false,
+    "requiredFor": [],
+    "routes": [
+      "read",
+      "write"
+    ]
+  },
+  "agentRouting": {
+    "profiles": {
+      "description_based": {
+        "appliesTo": "ordinary_mind",
+        "readTriggers": [
+          "explicit_user_request",
+          "nonempty_description_match"
+        ],
+        "writeTriggers": [
+          "explicit_write_request",
+          "nonempty_description_match_after_explicit_discussion"
+        ],
+        "automaticSave": true
+      },
+      "personal_default": {
+        "appliesTo": "personal_mind",
+        "readTriggers": [
+          "explicit_user_request",
+          "nonempty_description_match"
+        ],
+        "writeTriggers": [
+          "explicit_personal_write_request",
+          "nonempty_description_match_after_explicit_discussion"
+        ],
+        "automaticSave": true
+      }
+    },
+    "explicitRequestBypasses": [
+      "description_match"
+    ],
+    "explicitRequestDoesNotBypass": [
+      "usage_mode",
+      "credential_scope",
+      "current_access"
+    ],
+    "explicitOnlyRestrictsFanOut": true,
+    "personalWriteRequestExamples": [
+      "save",
+      "remember",
+      "add",
+      "update",
+      "delete"
+    ],
+    "personalWriteNonTriggers": [
+      "topic_match",
+      "discussion_only",
+      "read_request",
+      "prior_request"
+    ],
+    "trustedClientIntentFlag": false,
+    "crossMindSearch": false,
+    "implicitPersonalMindFallback": false
+  },
+  "automaticSave": {
+    "enabledBy": "effective_read_write_and_nonempty_description_match",
+    "routingProfile": "either_profile",
+    "excludedRoutingProfiles": [],
+    "allMatchingDestinations": true,
+    "separateToggle": false,
+    "perWriteConfirmation": false,
+    "requiresUserNotification": true,
+    "requiresExplicitDiscussion": true,
+    "backgroundVacuum": false,
+    "privateKnowledgeAllowedAfterExplicitDiscussion": true,
+    "operations": [
+      "create_file",
+      "replace_file",
+      "delete_file",
+      "no_op"
+    ],
+    "canonicalTool": "commit_changeset",
+    "retiredTargetTool": "capture_knowledge",
+    "crossMindProvenance": [
+      "source_mind",
+      "source_revision",
+      "source_locator"
+    ]
+  },
+  "evaluationCases": [
+    {
+      "id": "three-described-matches",
+      "mindType": "three_ordinary_minds",
+      "mode": "read_write",
+      "description": "three matching categories",
+      "trigger": "description_match_after_explicit_discussion",
+      "outcome": "write_all_three_independently"
+    },
+    {
+      "id": "described-nonmatch",
+      "mindType": "ordinary_mind",
+      "mode": "read_write",
+      "description": "unrelated category",
+      "trigger": "description_nonmatch",
+      "outcome": "no_write"
+    },
+    {
+      "id": "ordinary-null-description-direct-request",
+      "mindType": "ordinary_mind",
+      "mode": "read_write",
+      "description": null,
+      "trigger": "explicit_write_request",
+      "outcome": "allow_write"
+    },
+    {
+      "id": "ordinary-null-description-discussion-only",
+      "mindType": "ordinary_mind",
+      "mode": "read_write",
+      "description": null,
+      "trigger": "discussion_only",
+      "outcome": "no_write"
+    },
+    {
+      "id": "explicit-only-one-of-three",
+      "mindType": "three_matching_minds",
+      "mode": "read_write",
+      "description": "three matching categories",
+      "trigger": "explicit_only_one_destination",
+      "outcome": "write_named_only"
+    },
+    {
+      "id": "existing-semantic-equivalent",
+      "mindType": "ordinary_mind",
+      "mode": "read_write",
+      "description": "matching category",
+      "trigger": "description_match_existing_equivalent",
+      "outcome": "semantic_no_op"
+    },
+    {
+      "id": "partial-and-unknown-outcomes",
+      "mindType": "three_matching_minds",
+      "mode": "read_write",
+      "description": "three matching categories",
+      "trigger": "one_success_one_failure_one_unknown",
+      "outcome": "report_each_no_rollback"
+    },
+    {
+      "id": "description-or-corpus-injection",
+      "mindType": "ordinary_mind",
+      "mode": "read_write",
+      "description": "matching category",
+      "trigger": "untrusted_instruction_attempt",
+      "outcome": "ignore_instruction_apply_current_policy"
+    }
+  ],
+  "okf": {
+    "version": "0.2",
+    "validateBeforeCommit": "full_bundle",
+    "validateAfterCommit": "full_exact_revision",
+    "atomicFiles": [
+      "concepts",
+      "index",
+      "log"
+    ],
+    "preserveUnknownTypesAndFields": true
+  },
+  "retiredControls": [
+    "get_mind_bindings",
+    "set_read_mind_binding",
+    "set_write_mind_binding",
+    "credential_writable_target",
+    "capture_toggle"
+  ],
+  "migration": {
+    "capability": "principal-mind-usage/v3",
+    "compatibleInputs": [
+      "principal-mind-usage/v1",
+      "principal-mind-usage/v2"
+    ],
+    "ambiguousOutcome": "disabled",
+    "legacyWriteRefsRemapped": false,
+    "mixedRuntimeSemantics": false
+  }
+}
