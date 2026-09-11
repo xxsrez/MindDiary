@@ -1,16 +1,17 @@
 # Plugin и OAuth Mind Diary
 
-> **ADR-0025, 2026-09-05.** Mode задаёт разрешённые действия, nullable
-> description — темы автоматического использования Personal и ordinary Minds.
-> Personal без description используется только по прямой просьбе; с description
-> — по теме. При совпадении обоих descriptions читать и сохранять независимо
-> в оба с отдельным dedupe и сообщением о частичном результате. Узкая настройка
+> **ADR-0028, 2026-09-11; multi-Mind реализация и UAT ещё не подтверждены.**
+> Mode задаёт разрешённые действия, nullable description — темы автоматического
+> использования Personal и ordinary Minds. Любой enabled Mind без description
+> используется только по прямой просьбе; с description — по теме. Все
+> совпавшие `read_write` destinations читаются и сохраняются независимо с
+> отдельным dedupe и сообщением о частичном результате. Узкая настройка
 > тем Personal через MCP требует `personal:configure` и прямой просьбы о настройке.
 > Перенос извлечённых Personal сведений к другим читателям требует прямой просьбы.
 > Полный контракт — [режимы использования Mind](mind-usage-modes.md).
 
 Статус: accepted historical Release 0.1/0.2 contract и Release 0.4 optional-skill
-boundary, обновлено 2026-09-10.
+boundary, обновлено 2026-09-11.
 OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation
 реализованы. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package с OAuth
@@ -63,12 +64,12 @@ workflow проверяются отдельно на exact Marketplace package.
 - Site создаёт и показывает Connections, отзывает их, управляет principal-owned
   `disabled | read | read_write` mode на странице Mind, токенами и остальными
   account/Mind controls.
-- Plugin и Content MCP только discover-ят доступные Minds, читают, ищут,
-  открывают историю, выполняют standalone validation и ordinary content commit
-  в один exact target, уже выбранный пользователем через Site.
+- Plugin и Content MCP только discover-ят enabled Minds, читают, ищут,
+  открывают историю, выполняют standalone validation и отдельный content commit
+  в каждый exact `read_write` destination, настроенный пользователем через Site.
 - Read не требует обязательного onboarding attach или mutable read binding:
   доступные Minds выводятся из текущей identity, ACL и visibility при каждом
-  вызове. Plugin не выбирает и не переключает writable target.
+  вызове. Plugin не меняет usage modes и не добавляет destinations.
 - Import/export lifecycle, membership, visibility, token management и
   destructive account/Mind actions не публикуются как Content MCP tools.
   Replace/delete файлов внутри exact content commit остаются content
@@ -158,7 +159,7 @@ Diary доступной после обновления каталога. Он�
 | Installation | `AVAILABLE` + `ON_USE` | то же поведение |
 | OAuth | authorization code + PKCE, DCR | тот же protocol profile, но Mind Diary scopes и identity rules |
 | Data authorization | internal Task Manager user | internal immutable Mind Diary `principal_id` |
-| Tool surface | task operations | fresh principal-owned enabled projection + exact selected `read_write` lane: `0..1` ordinary and independently Personal `/me` |
+| Tool surface | task operations | fresh principal-owned enabled projection + per-Mind generations для `0..N` ordinary `read_write` и independently Personal `/me` |
 
 Не следует механически копировать из Task Manager:
 

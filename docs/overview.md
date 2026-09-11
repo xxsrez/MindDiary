@@ -1,19 +1,19 @@
 # Обзор Mind Diary
 
-> **Принятая поправка ADR-0025, 2026-09-05; реализована и принята в UAT127, MD-394/399 Done 2026-09-06.
-> Границы составной приёмки — в [отчёте](reports/2026-09-05-personal-description-routing.md).**
+> **Принятая multi-Mind поправка ADR-0028, 2026-09-11; реализация и UAT ещё не подтверждены.**
 > `usage_mode` определяет разрешённые действия, description — темы.
 > Personal `/me` получает опциональное description, настраиваемое через узкую
 > MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
-> Без description Personal читается/изменяется только по прямой просьбе;
-> с description используется автоматически по теме в пределах `read | read_write`.
-> Один ordinary writable Mind и Personal независимы; при совпадении обоих
-> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> Без description любой enabled Mind читается/изменяется только по прямой
+> просьбе; с description используется автоматически по теме в пределах
+> `read | read_write`. Несколько ordinary Minds и Personal могут независимо
+> иметь `read_write`; при нескольких совпадениях выполняются отдельные
+> reads/commits, без фоновой синхронизации
 > и неявного раскрытия Personal в shared Mind. Полный контракт —
 > [режимы использования Mind](specs/mind-usage-modes.md). Historical sections ниже не
 > переопределяют этот target и не доказывают его реализацию.
 
-Статус: proposal, обновлено 2026-08-27. Product behavior первого прототипа
+Статус: proposal, обновлено 2026-09-11. Product behavior первого прототипа
 принято; Product Site реализован, развёрнут как single-principal UAT в OpenAI
 Sites и прошёл
 authenticated web/control, persistence-after-redeploy и обязательные Codex MCP
@@ -205,8 +205,8 @@ schemas, persistence или deployment:
 
 | Поверхность | Единственная ответственность |
 |---|---|
-| **Sites web control plane** | Account и profile; создание и metadata Minds; visibility, invitations, memberships, roles и ownership; Connections; выбор единственного writable Mind для connection/credential; выпуск и revoke tokens; import/export workflows и их status/download; destructive lifecycle account, Mind, connection и credential. |
-| **Content MCP / Codex plugin** | Discovery разрешённых Minds; browse/search/fetch exact content; history и standalone validation; один ordinary atomic content commit в заранее разрешённый exact target. |
+| **Sites web control plane** | Account и profile; создание и metadata Minds; visibility, invitations, memberships, roles и ownership; Connections; principal-owned mode каждого Mind; выпуск и revoke tokens; import/export workflows и их status/download; destructive lifecycle account, Mind, connection и credential. |
+| **Content MCP / Codex plugin** | Discovery enabled Minds; browse/search/fetch exact content; history и standalone validation; отдельный atomic content commit в каждый exact enabled `read_write` destination. |
 
 Read path не требует обязательного onboarding шага «прикрепить Mind»: агент
 discover-ит разрешённые Minds и явно выбирает один Mind/revision в каждом read,
@@ -214,9 +214,8 @@ discover-ит разрешённые Minds и явно выбирает один
 fresh/upgraded credential profile; pending legacy credential до explicit
 upgrade/re-consent/reissue fail closed с non-disclosing
 `credential_access_upgrade_required` и не получает ACL-derived список Minds.
-Выбор, switch и clear writable target
-выполняются только на Site; corpus, prompt и MCP tools не могут изменить этот
-target. Bulk import/export и административные destructive actions также не
+Mode каждого Mind изменяется только на Site; corpus, prompt и content MCP tools
+не могут изменить destination set. Bulk import/export и административные destructive actions также не
 являются content MCP capabilities.
 
 Standalone validation означает явную проверку выбранного Mind/revision через
@@ -229,7 +228,7 @@ content surface. Проверка staged bytes и bundle перед Site import 
 Replace/delete внутри exact-target content commit остаются content semantics:
 они создают новую immutable revision под ACL, scope, validation, idempotency и
 HEAD CAS. Они не дают MCP полномочий удалить account/Mind, изменить metadata,
-visibility, участников, Connection, token, writable target или управлять
+visibility, участников, Connection, token, usage mode или управлять
 import/export lifecycle.
 
 Exact disposition существующих REST/MCP operations принадлежит MD-337, а
@@ -305,12 +304,12 @@ OAuth connection показывается через actor-owned opaque presenta
 4. Пользователь устанавливает direct MCP plugin и проходит OAuth при первом
    use либо выпускает named personal token для advanced setup; другие clients
    становятся supported только после отдельного conformance test.
-5. На Site пользователь управляет Connection, readable access projection и
-   выбирает единственный writable Mind; MCP не меняет этот выбор.
+5. На Site пользователь управляет Connection и независимо выбирает mode
+   каждого Mind; content MCP не меняет эти настройки.
 6. Агент discover-ит разрешённые Minds без обязательного read-attach шага,
    явно выбирает один Mind/revision и использует browse/search/fetch/history.
-7. Editor/Admin/Owner отправляет atomic changeset в server-approved exact
-   writable target с current HEAD revision.
+7. Editor/Admin/Owner отправляет отдельный atomic changeset в каждый
+   server-approved exact `read_write` destination с current HEAD revision.
 8. Server валидирует OKF и producer file contract, создаёт immutable revision, CAS-продвигает HEAD,
    пишет audit event и запускает rebuild derived index.
 9. Public/unlisted readers сразу видят новую HEAD; historical selector остаётся

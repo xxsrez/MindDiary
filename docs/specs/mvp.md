@@ -1,18 +1,19 @@
 # Спецификация первого прототипа
 
-> **Принятая целевая поправка ADR-0025, 2026-09-05; ещё не реализована.**
+> **Принятая multi-Mind поправка ADR-0028, 2026-09-11; ещё не реализована.**
 > `usage_mode` определяет разрешённые действия, description — темы.
 > Personal `/me` получает опциональное description, настраиваемое через узкую
 > MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
-> Без description Personal читается/изменяется только по прямой просьбе;
-> с description используется автоматически по теме в пределах `read | read_write`.
-> Один ordinary writable Mind и Personal независимы; при совпадении обоих
-> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> Без description любой enabled Mind читается/изменяется только по прямой
+> просьбе; с description используется автоматически по теме в пределах
+> `read | read_write`. Несколько ordinary Minds и Personal могут независимо
+> иметь `read_write`; при нескольких совпадениях выполняются отдельные
+> reads/commits, без фоновой синхронизации
 > и неявного раскрытия Personal в shared Mind. Полный контракт —
 > [режимы использования Mind](mind-usage-modes.md). Historical sections ниже не
 > переопределяют этот target и не доказывают его реализацию.
 
-Статус: proposal, обновлено 2026-08-27. Product requirements ниже приняты;
+Статус: proposal, обновлено 2026-09-11. Product requirements ниже приняты;
 Product Site и direct route/compatibility repair реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Обязательные authenticated web/control,
 persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
@@ -65,14 +66,14 @@ Markdown-first Release 0.1.
 Release 0.3 принимает следующую не пересекающуюся authority boundary:
 
 - Sites web control plane единолично управляет account, Minds metadata,
-  visibility, invitations/memberships/ownership, Connections, writable target,
+  visibility, invitations/memberships/ownership, Connections, mode каждого Mind,
   tokens, import/export workflows и administrative destructive actions;
 - Content MCP discover-ит разрешённые Minds, читает/search-ит explicit
   Mind/revision, показывает history, выполняет standalone validation и делает
-  ordinary atomic content commit только в server-approved exact writable
-  target;
-- read path не требует mandatory attach/read-binding onboarding, а MCP не
-  выбирает, не переключает и не очищает writable target;
+  отдельный atomic content commit только в каждый server-approved exact
+  `read_write` destination;
+- read path не требует mandatory attach/read-binding onboarding, а content MCP
+  не меняет usage modes и destination set;
 - current ACL/visibility read применяется только к fresh/upgraded credential;
   pending legacy credential до explicit upgrade/re-consent/reissue получает
   non-disclosing `credential_access_upgrade_required` и не discover-ит Minds;

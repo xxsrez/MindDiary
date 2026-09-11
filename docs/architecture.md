@@ -1,18 +1,19 @@
 # Архитектура Mind Diary
 
-> **Принятая поправка ADR-0025, 2026-09-05; реализована и опубликована в UAT, полная hosted-приёмка ещё не закрыта.**
+> **Принятая multi-Mind поправка ADR-0028, 2026-09-11; реализация и UAT ещё не подтверждены.**
 > `usage_mode` определяет разрешённые действия, description — темы.
 > Personal `/me` получает опциональное description, настраиваемое через узкую
 > MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
-> Без description Personal читается/изменяется только по прямой просьбе;
-> с description используется автоматически по теме в пределах `read | read_write`.
-> Один ordinary writable Mind и Personal независимы; при совпадении обоих
-> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> Без description любой enabled Mind читается/изменяется только по прямой
+> просьбе; с description используется автоматически по теме в пределах
+> `read | read_write`. Несколько ordinary Minds и Personal могут независимо
+> иметь `read_write`; при нескольких совпадениях выполняются отдельные
+> reads/commits, без фоновой синхронизации
 > и неявного раскрытия Personal в shared Mind. Полный контракт —
 > [режимы использования Mind](specs/mind-usage-modes.md). Historical sections ниже не
 > переопределяют этот target и не доказывают его реализацию.
 
-Статус: proposal, обновлено 2026-08-27. Product Site components, adapters,
+Статус: proposal, обновлено 2026-09-11. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Authenticated web/control,
 persistence-after-redeploy,
@@ -118,19 +119,20 @@ Release 0.3 принимает product boundary до изменения runtime:
 
 | Inbound surface | Владеет | Не владеет |
 |---|---|---|
-| Authenticated Sites Web | account/Mind metadata и lifecycle, visibility, memberships/ownership, Connections, writable-target selection, tokens, import/export orchestration и административные destructive actions | raw content browse/search/editor и model-driven content commit |
-| Content MCP | discovery, explicit-Mind browse/search/fetch/history/standalone validation и ordinary atomic commit в server-approved exact writable target | account/Mind/Connection/token control, writable-target mutation, import/export administration и whole-account/whole-Mind deletion |
+| Authenticated Sites Web | account/Mind metadata и lifecycle, visibility, memberships/ownership, Connections, principal-owned mode каждого Mind, tokens, import/export orchestration и административные destructive actions | raw content browse/search/editor и model-driven content commit |
+| Content MCP | discovery, explicit-Mind browse/search/fetch/history/standalone validation и отдельный atomic commit в каждый server-approved exact `read_write` destination | account/Mind/Connection/token control, usage-mode mutation, import/export administration и whole-account/whole-Mind deletion |
 
 MCP read path в target architecture не требует mutable read-attachment state:
 explicit Mind/revision selector и current ACL/visibility/scope достаточно.
 Перед ACL-derived discovery и read application проверяет credential profile:
 только fresh/upgraded profile продолжает операцию, а pending legacy profile
 fail closed с versioned `credential_access_upgrade_required` без Mind metadata.
-Site-selected writable target остаётся дополнительным server-side fence для
-commit. Replace/delete files внутри такого commit — versioned content
-semantics, а не control-plane access. Exact operation disposition принадлежит
-MD-337; representation, migration и compatibility existing bindings приняты в
-[MD-339 contract](specs/credential-write-target.md).
+Per-Mind principal usage generation остаётся дополнительным server-side fence
+для каждого commit. Несколько destinations означают несколько независимых
+transactions; replace/delete внутри них — versioned content semantics, а не
+control-plane access. Exact multi-Mind representation и migration приняты в
+[ADR-0028](decisions/0028-multiple-writable-minds.md); historical credential
+target compatibility остаётся в [MD-339 contract](specs/credential-write-target.md).
 
 Import-specific validation и финальная публикация import revision являются
 внутренними этапами одной Site-owned import operation, а не вторыми
@@ -469,10 +471,10 @@ Threat analysis, benchmark и rotation boundary зафиксированы в
 
 Default и server maximum expiry равны 90 дням. Server проверяет
 expiry/revocation, строит `ActorContext` и затем на каждом tool call заново
-проверяет current Mind access. Token bound к principal, не Mind, и владеет
-independent server-side credential target state. Он не даёт control-plane
-capabilities и не логируется. `content:write` включает `content:read`, но commit
-требует current singleton Site-selected target; write-only token не выпускается.
+проверяет current Mind access. Token bound к principal, не Mind, и не владеет
+destination state. Он не даёт control-plane capabilities и не логируется.
+`content:write` включает `content:read`, но каждый commit требует current
+per-Mind `read_write` generation; write-only token не выпускается.
 
 Codex configuration использует `bearer_token_env_var`. Для single-principal UAT Site
 отдельный `env_http_headers` передаёт `OAI-Sites-Authorization`, причём значение
@@ -511,18 +513,18 @@ non-destructive окно для проигравшего конкурентно�
 `invalid_grant` без нового bearer и перечитывает общий credential store.
 Поздний reuse старого token отзывает grant, всю family и active mirrors.
 
-Immutable OAuth grant, а не rotating access/refresh token и не chat ID, владеет
-credential target state. Refresh сохраняет state; revoke делает его unusable;
-reconnect создаёт новый owner с empty target. Personal token использует тот же
-application contract с immutable token record как owner. Полный contract — в
+Historical credential target state принадлежал immutable OAuth grant, а не
+rotating access/refresh token или chat ID. ADR-0028 не переносит его в новый
+grant: principal-owned modes существуют независимо от credential lifecycle.
+Historical contract сохранён в
 [credential target specification](specs/credential-write-target.md).
 
 Уже отозванный из-за replay grant не восстанавливается на месте. Recovery
-создаёт новый OAuth grant через native Codex reconnect, после чего fresh
-Site Connection показывает `Not selected`, и пользователь заново выбирает
-writable Mind. Current readable Minds вычисляются из ACL/visibility без attach.
-Это recovery от terminal revoke; обычный refresh rollover внутри active grant
-target не меняет.
+создаёт новый OAuth grant через native Codex reconnect. Principal-owned modes
+при этом не копируются в credential и не сбрасываются; fresh Connection только
+пересчитывает effective capability по новым scopes. Current readable Minds
+вычисляются из ACL/visibility без attach. Это recovery от terminal revoke;
+обычный refresh rollover также не меняет modes.
 
 Application core уже повторно проверяет current MCP token внутри ACL/CAS/commit
 transaction. Чтобы OAuth adapter не обходил эту boundary, каждому active OAuth
@@ -816,8 +818,8 @@ metadata, а не security boundary.
 
 Target Release 0.3 не относит read/write binding mutation и administrative
 export к authority Content MCP. MCP discover-ит разрешённые Minds, читает
-explicit target без attach и может commit-ить только в exact writable target,
-выбранный на Site. Fresh catalogs/schemas обоих protocol profiles не содержат
+explicit target без attach и может commit-ить отдельно в каждый exact enabled
+`read_write` destination, настроенный на Site. Fresh catalogs/schemas обоих protocol profiles не содержат
 `get_mind_bindings`, `set_read_mind_binding`, `set_write_mind_binding`,
 `start_export` или `get_export_status`. Exact cached binding names получают
 только versioned side-effect-free retired response до application boundary;

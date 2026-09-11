@@ -152,8 +152,10 @@ delivery profile и ADR-0008/ADR-0009
 - Один MCP connection аутентифицирует principal и проецирует только Minds с
   principal-owned режимом `read | read_write`, доступные по текущим ACL/
   visibility и scope. Настройка `disabled | read | read_write` одинакова для
-  всех OAuth grants/personal tokens principal; у principal не более одного
-  ordinary `read_write` Mind и независимый Personal write lane. Credential scope только сужает effective capability.
+  всех OAuth grants/personal tokens principal; у principal может быть несколько
+  independently writable ordinary Minds и собственный Personal `/me`.
+  Каждый `read_write` entry имеет отдельную generation, а credential scope
+  только сужает effective capability.
   Каждая content operation явно выбирает один Mind и одну revision; fallback на
   `/me`, bind/unbind и неявное смешивание corpus запрещены.
 - Первый прототип публикует custom Mind-aware MCP tools и не заявляет OpenAI
@@ -185,14 +187,14 @@ delivery profile и ADR-0008/ADR-0009
 - `unlisted` означает только отсутствие в каталоге, а не секретность URL.
   `space_handle` человекочитаем и не является access token; настоящая
   share-by-link capability потребует отдельного случайного секрета.
-- Целевой routing-контракт задают ADR-0025 и `docs/specs/mind-usage-modes.md`
-  (2026-09-05; реализация и приёмка опубликованы в UAT127, MD-399 Done; границы evidence — в отчёте 2026-09-05-personal-description-routing). `usage_mode`
+- Целевой routing-контракт задают ADR-0028 и `docs/specs/mind-usage-modes.md`
+  (2026-09-11; multi-Mind реализация и UAT ещё не подтверждены). `usage_mode`
   определяет разрешённые действия, nullable description — темы автоматического
-  чтения/записи. Personal без description используется только по прямой просьбе;
-  с description — по теме в пределах effective mode/scopes/ACL. Personal identity
-  не меняется, ordinary writable Mind остаётся максимум один. При совпадении
-  обоих descriptions агент читает оба и сохраняет обсуждённые новые долговечные
-  знания в оба независимыми commits; частичный успех сообщает, копии не синхронизирует.
+  чтения/записи. Любой enabled ordinary или Personal Mind без description
+  используется только по прямой просьбе; с description — по теме в пределах
+  effective mode/scopes/ACL. Несколько ordinary Minds и Personal могут
+  независимо иметь `read_write`; все совпавшие destinations получают
+  отдельные reads/commits, partial success сообщается, копии не синхронизируются.
   Personal description настраивается через отдельную узкую MCP metadata operation
   только по прямой просьбе о настройке, без изменения mode/scopes или другого Mind.
   Corpus/description недоверенны, background scanning запрещён; перенос извлечённых

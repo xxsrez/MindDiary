@@ -14,9 +14,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 Release 0.1/0.2 API, Connections и Mind bindings, а также ранний
 credential-scoped target Release 0.3 сохраняются как historical as-built;
 principal-owned replacement принят MD-373 в ADR-0024; Personal description
-и двойное тематическое использование приняты ADR-0025 (2026-09-05).
-Реализация опубликована в UAT; границы подтверждения и незакрытая приёмка —
-в [отчёте Personal description](reports/2026-09-05-personal-description-routing.md).
+принят ADR-0025. ADR-0028 (2026-09-11) заменяет singleton ordinary lane
+несколькими независимыми per-Mind generations; эта multi-Mind поправка ещё не
+реализована и не подтверждена в UAT.
 
 ## Начать отсюда
 
@@ -49,9 +49,10 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
    — измеримые desktop/mobile layouts, density/tokens, route/session states,
    privacy/destructive disclosures и machine-check mapping для MD-347.
 12. [Режимы использования Mind и автоматическое сохранение](specs/mind-usage-modes.md)
-   — целевой principal-owned `disabled | read | read_write`, единый writable
-   ordinary Mind плюс независимый Personal, тематические descriptions и
-   explicit-only Personal без description, discussed-only automatic save и fail-closed migration. Прежний
+   — целевой principal-owned `disabled | read | read_write`, независимые
+   per-Mind generations для нескольких ordinary Minds и Personal,
+   direct-request-only поведение без description, multi-destination automatic
+   save и fail-closed v1/v2 → v3 migration. Прежний
    [credential write target](specs/credential-write-target.md)
    и [Mind bindings](specs/mind-bindings.md) сохранены как historical evidence.
 13. [Границы реализации](specs/implementation-boundaries.md) — trusted
@@ -281,6 +282,10 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
   — приняты principal-owned `disabled | read | read_write`, один writable Mind,
   description routing ordinary Minds, `personal_default` с записью только по
   прямой просьбе и automatic discussed-only OKF save без binding/capture controls.
+- [ADR-0028: несколько независимо записываемых Minds](decisions/0028-multiple-writable-minds.md)
+  — singleton ordinary lane заменён per-Mind generations; несколько ordinary
+  Minds и Personal могут независимо иметь `read_write`, automatic и direct
+  destinations обрабатываются отдельными commits.
 
 ## Исследования
 

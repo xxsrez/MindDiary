@@ -1,13 +1,14 @@
 # REST и MCP API Mind Diary
 
-> **Принятая поправка ADR-0025, 2026-09-05; реализована и опубликована в UAT, полная hosted-приёмка ещё не закрыта.**
+> **Принятая multi-Mind поправка ADR-0028, 2026-09-11; реализация и UAT ещё не подтверждены.**
 > `usage_mode` определяет разрешённые действия, description — темы.
 > Personal `/me` получает опциональное description, настраиваемое через узкую
 > MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
-> Без description Personal читается/изменяется только по прямой просьбе;
-> с description используется автоматически по теме в пределах `read | read_write`.
-> Один ordinary writable Mind и Personal независимы; при совпадении обоих
-> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> Без description любой enabled Mind читается/изменяется только по прямой
+> просьбе; с description используется автоматически по теме в пределах
+> `read | read_write`. Несколько ordinary Minds и Personal могут независимо
+> иметь `read_write`; при нескольких совпадениях выполняются отдельные
+> reads/commits, без фоновой синхронизации
 > и неявного раскрытия Personal в shared Mind. Полный контракт —
 > [режимы использования Mind](mind-usage-modes.md). Historical sections ниже не
 > переопределяют этот target и не доказывают его реализацию.
@@ -19,7 +20,7 @@
 > [спецификации файловых операций](mcp-file-operations.md); historical catalog
 > ниже не ограничивает эту новую surface.
 
-Статус: proposal для верификации, обновлено 2026-08-27. Документ уточняет
+Статус: proposal для верификации, обновлено 2026-09-11. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
 Product API и direct MCP route/compatibility repair реализованы, развёрнуты как
 single-principal UAT в OpenAI Sites и проверены raw modern calls и реальным
@@ -239,11 +240,11 @@ diff:
 | Surface | Target authority |
 |---|---|
 | **First-party Sites control plane** | Account/Mind metadata and lifecycle, visibility, memberships/ownership, Connections, writable-target selection, token lifecycle, import/export orchestration/status/download и administrative destructive actions. |
-| **Content MCP** | Discovery, explicit-Mind browse/search/fetch/history/standalone validation и ordinary atomic content commit в server-approved exact target. No control operations or administrative export. |
+| **Content MCP** | Discovery, explicit-Mind browse/search/fetch/history/standalone validation и отдельный atomic content commit в каждый server-approved exact `read_write` destination. No control operations or administrative export. |
 
-Target read не требует mutable read binding/attach step. MCP не выбирает
-writable target; его commit только cross-check-ит server-approved target вместе
-с current ACL/scope/HEAD. Replace/delete в changeset остаются content semantics
+Target read не требует mutable read binding/attach step. Content MCP не меняет
+usage modes; каждый commit cross-check-ит server-approved per-Mind generation
+вместе с current ACL/scope/routing metadata/HEAD. Replace/delete в changeset остаются content semantics
 и не открывают account/Mind/credential lifecycle. Exact keep/move/retire
 решения заданы в
 [operation disposition](release-0.3-operation-disposition.md), а exact access
@@ -3502,6 +3503,65 @@ transport без нового принятого решения.
 - [OpenAI Codex: MCP](https://developers.openai.com/codex/mcp)
 - [Open Knowledge Format 0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
 
+
+### Multi-Mind usage v3 (ADR-0028)
+
+Authenticated `GET /api/v1/mind-usage` and
+`GET /api/v1/minds/{mind_ref}/usage` return exact
+`contract_version: "principal-mind-usage/v3"`, account-wide
+`usage_version` and one allowlisted item per visible Mind. Each item contains
+`mind_ref`, identity/routing profile, nullable `description`, configured
+`usage_mode`, effective read/write flags and:
+
+```json
+{
+  "writable_mount": {
+    "active": true,
+    "generation": "opaque-per-mind-generation"
+  }
+}
+```
+
+Any number of ordinary items and the Personal item may simultaneously have
+`usage_mode: "read_write"` and distinct active generations. Duplicate
+`mind_ref`, duplicate generation or a writable item without generation makes
+the whole projection invalid; clients fail closed and reload. Unknown contract
+version is never interpreted as v2.
+
+`PUT /api/v1/minds/{mind_ref}/usage` keeps the existing strict body:
+
+```json
+{
+  "usage_mode": "read_write",
+  "expected_usage_version": 7
+}
+```
+
+It requires current Sites identity, same-origin CSRF, `Idempotency-Key`,
+fresh account-wide CAS and current access. `read_write` requires writer role
+but does not require description. Mutation changes only the exact entry:
+enabling a second or third ordinary Mind does not demote any existing writable
+Mind. Exact-mode replay is a no-op. `disabled` removes the enabled entry.
+
+Changing description rotates only that Mind's active generation in the same
+metadata transaction; it does not change mode or another entry. The server
+accepts persisted v1/v2 only through the fail-closed migration in ADR-0028 and
+writes v3. A v2 runtime rejects v3 state; rollback must use a v3-aware artifact
+or pre-migration data.
+
+`list_minds` publishes each exact enabled destination independently. A
+content call still selects one Mind; several requested or automatic
+destinations therefore produce several separate calls/commits. For each commit
+the application pins the selected descriptor generation and rechecks current
+routing metadata, scope, role, ACL, exact HEAD, idempotency and full-bundle
+validation. Failure never redirects the payload to another Mind.
+
+Automatic routing considers all fresh `read_write` items with non-empty
+matching descriptions. A direct request considers all and only the exact
+enabled Minds named by the user; `description: null` is direct-only and “only
+A” excludes B even when B's description matches. Independent success, no-op,
+failure and unknown-outcome reconciliation are returned/reported per
+destination; no cross-Mind transaction or rollback is introduced.
 
 ### Compact Minds list agent usage (2026-09-05)
 

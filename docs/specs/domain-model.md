@@ -1,18 +1,19 @@
 # Доменная модель и доступ
 
-> **Принятая поправка ADR-0025, 2026-09-05; реализована и опубликована в UAT, полная hosted-приёмка ещё не закрыта.**
+> **Принятая multi-Mind поправка ADR-0028, 2026-09-11; реализация и UAT ещё не подтверждены.**
 > `usage_mode` определяет разрешённые действия, description — темы.
 > Personal `/me` получает опциональное description, настраиваемое через узкую
 > MCP metadata operation по прямой просьбе пользователя без изменения mode/scopes.
-> Без description Personal читается/изменяется только по прямой просьбе;
-> с description используется автоматически по теме в пределах `read | read_write`.
-> Один ordinary writable Mind и Personal независимы; при совпадении обоих
-> descriptions выполняются отдельные reads/commits, без фоновой синхронизации
+> Без description любой enabled Mind читается/изменяется только по прямой
+> просьбе; с description используется автоматически по теме в пределах
+> `read | read_write`. Несколько ordinary Minds и Personal могут независимо
+> иметь `read_write`; при нескольких совпадениях выполняются отдельные
+> reads/commits, без фоновой синхронизации
 > и неявного раскрытия Personal в shared Mind. Полный контракт —
 > [режимы использования Mind](mind-usage-modes.md). Historical sections ниже не
 > переопределяют этот target и не доказывают его реализацию.
 
-Статус: proposal, обновлено 2026-08-27. Product decisions первого прототипа
+Статус: proposal, обновлено 2026-09-11. Product decisions первого прототипа
 приняты для первого прототипа; format-neutral BundleFile amendment принят
 отдельно для Release 0.2. Точные wire schemas принадлежат
 [API specification](api.md); repository baseline уже содержит domain,
@@ -41,7 +42,7 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `VerifiedFileInput` | Adapter-produced bounded byte stream plus source kind, safe filename, advisory media evidence, size and SHA-256; provider IDs/URLs and local paths terminate at the adapter boundary. |
 | `staged_file_ref` | Historical 0.1/0.2 service-owned quarantined/verified locator pinned to owner, Space and write binding; it is consumed atomically by a BundleFile changeset and is not a provider/local locator. Target representation is defined by the MD-339 credential writable-target contract. |
 | `ImportSession` | Historical 0.1/0.2 private resumable Markdown-only staging aggregate, pinned to principal/write binding/Space/base revision/idempotency key; не revision и не reader-visible content. Target Site-owned import representation is outside MD-336. |
-| `Writable target` | Выбранный через Sites control plane единственный Mind, в который connection/credential может направить content commit; не membership, не token scope и не MCP-managed setting. Exact record/migration определены в [MD-339 contract](credential-write-target.md). |
+| `Mind usage entry` | Principal-owned `disabled | read | read_write` для exact Mind; каждый `read_write` entry имеет собственную generation. Это не membership, token scope или MCP-managed setting. Текущий multi-Mind contract определён в [режимах использования Mind](mind-usage-modes.md). |
 | `CapacityReservation` | Durable bounded budget for one admitted operation; consumed/released atomically with canonical transition or cleanup. |
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, а не обычные `KnowledgeEntry`. |
 | `SpaceMembership` | Принятая связь principal с обычным Mind, ролью и lifecycle state. |
@@ -91,14 +92,15 @@ flowchart LR
 Один principal может участвовать во многих ordinary Minds. Один MCP connection
 представляет principal, а не отдельный Mind. Historical Release 0.1 связывал
 OAuth grant либо personal token с independent binding set `0..N` read и `0..1`
-write. Release 0.3 сохраняет exact-target write invariant, но переносит выбор
-writable target исключительно в Sites control plane и убирает mandatory read
-binding из пользовательского read path. Exact replacement records, migration
-и wire compatibility определены в
-[credential writable-target contract](credential-write-target.md). Каждая content operation по-прежнему
+write. Release 0.3 убирает mandatory read binding из пользовательского read
+path. ADR-0028 заменяет credential singleton target principal-owned per-Mind
+usage entries: любое число ordinary Minds и Personal могут независимо иметь
+`read_write`. Exact records, migration и compatibility определены в
+[режимах использования Mind](mind-usage-modes.md). Каждая content operation по-прежнему
 явно выбирает ровно один Mind и одну revision. Token только аутентифицирует
 principal: он не выбирает Personal Mind или другой Mind. Read требует explicit
-selector, а commit дополнительно совпадает с Site-selected writable target;
+selector, а commit дополнительно совпадает с current generation exact
+`read_write` entry;
 неявного fallback на `/me` нет.
 
 ## Account и identity
@@ -170,7 +172,7 @@ space_id          # immutable opaque primary identity
 space_handle      # immutable в прототипе URL identity
 normalized_handle # server-derived uniqueness key
 name              # mutable, non-unique display name
-description       # ordinary-only nullable service metadata
+description       # nullable untrusted routing metadata
 metadata_version  # CAS для metadata/settings
 canonical_path    # derived /{space_handle}
 ```
@@ -207,11 +209,12 @@ Create возвращает одинаковое `handle_unavailable` для occ
 retired values. Это снижает usefulness availability probe, но глобальная
 уникальность всё равно не считается абсолютной защитой от inference.
 
-`description` задаёт краткое описание только обычного Mind и хранится рядом с
-его service metadata. Оно не является `Memory`, частью `OKFBundle`, content
-instruction, поисковым документом или входом модели. Personal Mind не имеет
-этого поля ни в descriptor, ни в durable record; попытка изменить его через
-ordinary-Mind command получает `personal_mind_operation_forbidden`.
+`description` задаёт темы и исключения routing и хранится рядом с service
+metadata Mind. Оно не является `Memory`, частью `OKFBundle`, поисковым
+документом или доверенной инструкцией. Ordinary description меняется через
+Sites metadata command; Personal description — только через узкую MCP
+configuration operation по прямой просьбе пользователя. Ordinary command для
+Personal по-прежнему получает `personal_mind_operation_forbidden`.
 
 На create и update server применяет один canonical normalization contract:
 
@@ -230,6 +233,8 @@ update не меняется. Один material update повышает `metadat
 один; повтор того же canonical payload возвращает прежний result, а normalized
 no-op не повышает version. Изменение service description не создаёт content
 revision, не меняет HEAD, ACL, visibility, membership или `access_version`.
+Для writable Mind оно в той же metadata transaction вращает только его
+per-Mind write generation, чтобы stale routing work не могло commit-иться.
 
 Менять `description` могут только текущие Admin и Owner обычного Mind. Оно
 возвращается только после обычного разрешения Mind и authorization: private
@@ -237,6 +242,9 @@ Mind не раскрывает его non-member, unlisted — только auth
 точному handle, public — также через current catalog. Historical revision
 selector не восстанавливает старое service description: descriptor всегда
 отражает текущую metadata, доступную после current authorization.
+Собственный Personal description читает и меняет только тот же principal через
+`personal:configure`; оно никогда не открывает membership/control-plane
+operation для обычного Mind.
 
 Reserved route Personal Mind:
 
@@ -248,7 +256,8 @@ Personal Mind также имеет внутренние `space_id` и service-m
 `space_handle`, но этот handle не показывается и не выбирается пользователем.
 `/me` всегда разрешается через authenticated `principal_id`. Display `name`
 Personal Mind автоматически следует за display name principal и не редактируется
-отдельно. Ordinary-only `description` у Personal Mind отсутствует.
+отдельно. Personal имеет nullable description; его `null` означает
+direct-request-only, а не отсутствие `read_write` capability.
 
 ## Personal Mind invariants
 
@@ -444,10 +453,11 @@ principal и scopes; Authorizer читает актуальное состоян
 вызове.
 
 Release 0.3 сохраняет fresh ACL/scope checks, но content read использует
-explicit Mind selector без обязательной read binding, а content commit
-дополнительно обязан совпасть с server-approved writable target, выбранным на
-Site. Точное представление этого target и переход с historical binding set
-задаёт [MD-339 contract](credential-write-target.md).
+explicit Mind selector без обязательной read binding. По ADR-0028 content
+commit дополнительно обязан совпасть с server-approved per-Mind `read_write`
+generation. Несколько destinations выполняются отдельными commits; точное
+представление и миграцию задают
+[режимы использования Mind](mind-usage-modes.md).
 
 Эта read authority включается только для fresh/upgraded credential profile.
 `pending_upgrade` и отсутствующий legacy profile fail closed до explicit
