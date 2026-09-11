@@ -199,6 +199,42 @@ test("restricted UAT installs one deterministic generated-source caller without 
   ));
   assert.equal(selected.status, 200, await selected.clone().text());
 
+  const createdOtherMind = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": "mind:generated-uat-other",
+      },
+      body: JSON.stringify({
+        name: "Generated UAT Other",
+        handle: "generated-uat-other",
+        description: null,
+      }),
+    },
+  ));
+  assert.equal(createdOtherMind.status, 200, await createdOtherMind.clone().text());
+  const selectedOther = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/generated-uat-other/usage`,
+    {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": "usage:generated-uat-other",
+      },
+      body: JSON.stringify({
+        usage_mode: "read_write",
+        expected_usage_version: 1,
+      }),
+    },
+  ));
+  assert.equal(selectedOther.status, 200, await selectedOther.clone().text());
+
   const capabilityResponse = await responseFrom(
     runtime,
     new Request(`${ORIGIN}${RESTRICTED_UAT_GENERATED_SOURCE_TEST_ROUTE}`),
@@ -237,6 +273,7 @@ test("restricted UAT installs one deterministic generated-source caller without 
       },
       body: JSON.stringify({
         action: "run_matrix",
+        mind_ref: "/generated-uat",
         personal_token_ref: personalTokenRef,
         run_id: "generated-uat-run-001",
       }),

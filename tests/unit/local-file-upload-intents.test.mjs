@@ -38,13 +38,20 @@ function actor(tokenId = AUTHORIZATION_RECORD_ID) {
 }
 
 function usageSnapshot(spaceId = SPACE, generationId = GENERATION) {
+  const generation = Object.freeze({
+    principalId: "principal_upload_intent",
+    spaceId,
+    generationId,
+  });
   return Object.freeze({
     principalId: "principal_upload_intent",
-    ordinaryWriteGeneration: Object.freeze({
+    entries: Object.freeze([Object.freeze({
       principalId: "principal_upload_intent",
       spaceId,
-      generationId,
-    }),
+      routingProfile: "description_based",
+      usageMode: "read_write",
+      writeGeneration: generation,
+    })]),
   });
 }
 
@@ -128,7 +135,8 @@ async function harness(options = {}) {
         return usage;
       },
       async validatePrincipalMindUsageWritePin(pin) {
-        const generation = usage?.ordinaryWriteGeneration;
+        const generation = usage?.entries.find((entry) =>
+          entry.spaceId === pin.spaceId)?.writeGeneration;
         return generation?.principalId === pin.principalId &&
           generation?.spaceId === pin.spaceId &&
           generation?.generationId === pin.generationId;

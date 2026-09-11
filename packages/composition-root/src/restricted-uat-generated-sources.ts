@@ -56,6 +56,7 @@ const RESTRICTED_UAT_GENERATED_SOURCE_SCHEMA =
   "mind-diary/restricted-uat-generated-source-test/v1";
 const RESTRICTED_UAT_GENERATED_RUN_ID =
   /^[A-Za-z0-9][A-Za-z0-9._:-]{7,63}$/u;
+const RESTRICTED_UAT_MIND_REF = /^\/[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const RESTRICTED_UAT_PERSONAL_TOKEN_REF = /^ptok_v1_[0-9a-f]{32}$/u;
 const UAT_BOUNDED_PNG_PREFIX = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -204,9 +205,11 @@ export function createRestrictedUatGeneratedSourceHandler(dependencies: Readonly
     const command = input as Readonly<Record<string, unknown>>;
     if (
       Object.keys(command).some((key) =>
-        !["action", "personal_token_ref", "run_id"].includes(key)
+        !["action", "mind_ref", "personal_token_ref", "run_id"].includes(key)
       ) ||
       command.action !== "run_matrix" ||
+      typeof command.mind_ref !== "string" ||
+      !RESTRICTED_UAT_MIND_REF.test(command.mind_ref) ||
       typeof command.personal_token_ref !== "string" ||
       !RESTRICTED_UAT_PERSONAL_TOKEN_REF.test(command.personal_token_ref) ||
       typeof command.run_id !== "string" ||
@@ -253,9 +256,16 @@ export function createRestrictedUatGeneratedSourceHandler(dependencies: Readonly
       entry.routingProfile === "description_based" &&
       entry.usageMode === "read_write"
     ) ?? [];
-    const usageEntry = writableOrdinaryEntries.length === 1
-      ? writableOrdinaryEntries[0] ?? null
-      : null;
+    const writableOrdinaryTargets = await Promise.all(
+      writableOrdinaryEntries.map(async (entry) => Object.freeze({
+        entry,
+        mind: await dependencies.metadata.readResolvedSpace(entry.spaceId),
+      })),
+    );
+    const requestedTarget = writableOrdinaryTargets.find(({ mind }) =>
+      mind !== null && `/${mind.canonicalHandle}` === command.mind_ref
+    ) ?? null;
+    const usageEntry = requestedTarget?.entry ?? null;
     const generation = usageEntry?.writeGeneration ?? null;
     if (
       generation === null ||
@@ -272,12 +282,12 @@ export function createRestrictedUatGeneratedSourceHandler(dependencies: Readonly
       return problem(
         409,
         "writable_target_required",
-        "The principal must have one current writable Mind.",
+        "The requested Mind must be a current writable Mind.",
       );
     }
 
-    const [mind, targetClassification, members, initialHead] = await Promise.all([
-      dependencies.metadata.readResolvedSpace(generation.spaceId),
+    const mind = requestedTarget?.mind ?? null;
+    const [targetClassification, members, initialHead] = await Promise.all([
       dependencies.metadata.classifyPersonalMindTarget({
         principalId,
         spaceId: generation.spaceId,

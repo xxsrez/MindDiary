@@ -206,35 +206,36 @@ function changes(path, title) {
 function principalMountedMetadata(metadata) {
   const mounted = new Map();
   let generation = 0;
+  const key = (principalId, spaceId) => `${principalId}\0${spaceId}`;
   const select = (principalId, spaceId) => {
     const generationId = `usage_generation_commit_${++generation}`;
-    mounted.set(principalId, Object.freeze({ principalId, spaceId, generationId }));
+    mounted.set(key(principalId, spaceId),
+      Object.freeze({ principalId, spaceId, generationId }));
     return generationId;
   };
   const ensure = (principalId, spaceId) => {
-    const current = mounted.get(principalId);
-    return current ?? Object.freeze({
-      principalId,
-      spaceId,
-      generationId: select(principalId, spaceId),
-    });
+    const current = mounted.get(key(principalId, spaceId));
+    if (current !== undefined) return current;
+    select(principalId, spaceId);
+    return mounted.get(key(principalId, spaceId));
   };
   const readUsage = async (principalId) => {
-    const current = mounted.get(principalId);
-    if (current === undefined) return null;
+    const current = [...mounted.values()].filter((entry) =>
+      entry.principalId === principalId);
+    if (current.length === 0) return null;
     return Object.freeze({
       principalId,
-      entries: Object.freeze([Object.freeze({
+      entries: Object.freeze(current.map((entry) => Object.freeze({
         principalId,
-        spaceId: current.spaceId,
+        spaceId: entry.spaceId,
+        routingProfile: "description_based",
         usageMode: "read_write",
-        writeGeneration: current,
-      })]),
-      ordinaryWriteGeneration: current,
+        writeGeneration: entry,
+      }))),
     });
   };
   const validatePin = async (pin) => {
-    const current = mounted.get(pin.principalId);
+    const current = mounted.get(key(pin.principalId, pin.spaceId));
     return current !== undefined &&
       current.spaceId === pin.spaceId &&
       current.generationId === pin.generationId;
@@ -256,7 +257,12 @@ function principalMountedMetadata(metadata) {
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  return Object.freeze({ store, select, ensure });
+  return Object.freeze({
+    store,
+    select,
+    ensure,
+    disable: (principalId, spaceId) => mounted.delete(key(principalId, spaceId)),
+  });
 }
 
 async function fixture() {
@@ -946,7 +952,7 @@ test("two Editors racing from one HEAD get one winner and one explicit conflict 
   );
 });
 
-test("concurrent writable Mind switch fences a prepared commit before revision, audit, or index effects", async () => {
+test("only a change to the exact writable Mind fences a prepared commit", async () => {
   const env = await fixture();
   const editor = actor(
     PRINCIPALS.editor.principalId,
@@ -961,7 +967,8 @@ test("concurrent writable Mind switch fences a prepared commit before revision, 
     MINDS.ordinary.spaceId,
   );
   const racedObjects = objectStoreWithFirstPutHook(env.objects, async () => {
-    const replacement = env.usage.select(editor.principalId, otherSpaceId);
+    env.usage.select(editor.principalId, otherSpaceId);
+    const replacement = env.usage.select(editor.principalId, MINDS.ordinary.spaceId);
     assert.notEqual(replacement, initialGeneration);
   });
   const raced = new ChangesetCommitService({
@@ -1033,7 +1040,7 @@ test("concurrent writable Mind switch fences a prepared commit before revision, 
     1,
   );
   env.usage.select(editor.principalId, otherSpaceId);
-  const staleReplay = await current.commit({
+  const unaffectedReplay = await current.commit({
     actor: editor,
     spaceId: MINDS.ordinary.spaceId,
     expectedRevisionId: REVISIONS.initial.revisionId,
@@ -1041,7 +1048,18 @@ test("concurrent writable Mind switch fences a prepared commit before revision, 
     summary: "Commit with current writable Mind",
     operations: changes("concepts/usage-current.md", "Usage current"),
   });
-  assert.equal(staleReplay.kind, "denied");
-  assert.equal(staleReplay.decision.code, "writable_mind_required");
+  assert.equal(unaffectedReplay.kind, "committed");
+  assert.equal(unaffectedReplay.replayed, true);
+  env.usage.disable(editor.principalId, MINDS.ordinary.spaceId);
+  const disabledReplay = await current.commit({
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit-with-current-usage-generation",
+    summary: "Commit with current writable Mind",
+    operations: changes("concepts/usage-current.md", "Usage current"),
+  });
+  assert.equal(disabledReplay.kind, "denied");
+  assert.equal(disabledReplay.decision.code, "writable_mind_required");
   assert.equal((await env.snapshot()).revisions.length, 2);
 });

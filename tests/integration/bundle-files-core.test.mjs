@@ -217,11 +217,17 @@ async function bindWrite(metadata) {
 function principalMountedMetadata(metadata) {
   const mountedState = Object.freeze({
     principalId: PRINCIPALS.editor.principalId,
-    ordinaryWriteGeneration: Object.freeze({
+    entries: Object.freeze([Object.freeze({
       principalId: PRINCIPALS.editor.principalId,
       spaceId: MINDS.ordinary.spaceId,
-      generationId: MOUNT_GENERATION_ID,
-    }),
+      routingProfile: "description_based",
+      usageMode: "read_write",
+      writeGeneration: Object.freeze({
+        principalId: PRINCIPALS.editor.principalId,
+        spaceId: MINDS.ordinary.spaceId,
+        generationId: MOUNT_GENERATION_ID,
+      }),
+    })]),
   });
   const readUsage = async (principalId) =>
     principalId === PRINCIPALS.editor.principalId ? mountedState : null;
@@ -321,6 +327,35 @@ test("staging capacity admission rejects before any temporary object write", asy
   });
   assert.deepEqual(result, { kind: "invalid", code: "capacity_hard_limit" });
   assert.equal(await env.objects.getStagedBundleFile("staged_bundle_1"), null);
+});
+
+test("a staged file for Mind A cannot be consumed by Mind B", async () => {
+  const env = await harness();
+  const staged = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    displayFilename: "mind-a.bin",
+    claimedMediaType: "application/octet-stream",
+    bytes: Uint8Array.of(1, 2, 3),
+    idempotencyKey: "stage-for-mind-a",
+  });
+  assert.equal(staged.kind, "staged");
+  const crossMind = await env.metadata.runContentCommitTransaction((transaction) =>
+    transaction.consumeStagedBundleFiles({
+      stagedFileIds: [staged.record.stagedFileId],
+      principalId: env.currentActor.principalId,
+      principalMindUsageGenerationId: MOUNT_GENERATION_ID,
+      spaceId: "space_other_writable_mind",
+      consumedAt: LATER,
+    }));
+  assert.deepEqual(crossMind, {
+    kind: "binding_mismatch",
+    stagedFileId: staged.record.stagedFileId,
+  });
+  assert.equal(
+    (await env.metadata.readStagedBundleFile(staged.record.stagedFileId))?.state,
+    "verified",
+  );
 });
 
 test("manifest v1 stays byte-stable while new mixed manifests use discriminated v2", () => {

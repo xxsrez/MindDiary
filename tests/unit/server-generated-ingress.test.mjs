@@ -26,14 +26,20 @@ const COMMON = {
   idempotencyKey: "server-generated:stage",
 };
 
-function currentUsage(overrides = {}) {
+function currentUsage({ writeGeneration = {
+  generationId: TARGET_GENERATION,
+  principalId: COMMON.actor.principalId,
+  spaceId: COMMON.spaceId,
+}, ...overrides } = {}) {
   return {
     principalId: COMMON.actor.principalId,
-    ordinaryWriteGeneration: {
-      generationId: TARGET_GENERATION,
+    entries: writeGeneration === null ? [] : [{
       principalId: COMMON.actor.principalId,
-      spaceId: COMMON.spaceId,
-    },
+      spaceId: writeGeneration.spaceId,
+      routingProfile: "description_based",
+      usageMode: "read_write",
+      writeGeneration,
+    }],
     ...overrides,
   };
 }
@@ -45,7 +51,8 @@ function usageReader(result = currentUsage(), reads = []) {
       return result;
     },
     async validatePrincipalMindUsageWritePin(pin) {
-      const generation = result?.ordinaryWriteGeneration;
+      const generation = result?.entries.find((entry) =>
+        entry.spaceId === pin.spaceId)?.writeGeneration;
       return generation?.generationId === pin.generationId &&
         generation?.principalId === pin.principalId &&
         generation?.spaceId === pin.spaceId;
@@ -167,9 +174,9 @@ test("the accepted producer lease and size ceiling are exact and cannot widen", 
 
 test("principal Mind mount is required and exact before producer acquisition", async () => {
   for (const [targetResult, code] of [
-    [currentUsage({ ordinaryWriteGeneration: null }), "writable_target_required"],
+    [currentUsage({ writeGeneration: null }), "writable_target_required"],
     [currentUsage({
-      ordinaryWriteGeneration: {
+      writeGeneration: {
         generationId: "target_generation_other",
         principalId: COMMON.actor.principalId,
         spaceId: "space_other",

@@ -50,11 +50,17 @@ function usageReader(spaceId = SPACE) {
       assert.equal(principalId, ACTOR.principalId);
       return {
         principalId: ACTOR.principalId,
-        ordinaryWriteGeneration: {
-          generationId: TARGET_GENERATION,
+        entries: [{
           principalId: ACTOR.principalId,
           spaceId,
-        },
+          routingProfile: "description_based",
+          usageMode: "read_write",
+          writeGeneration: {
+            generationId: TARGET_GENERATION,
+            principalId: ACTOR.principalId,
+            spaceId,
+          },
+        }],
       };
     },
     async validatePrincipalMindUsageWritePin(pin) {

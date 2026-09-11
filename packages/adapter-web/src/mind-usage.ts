@@ -36,7 +36,7 @@ export interface MindUsageUiItem {
 }
 
 export interface MindUsageUiProjection {
-  readonly contractVersion: "principal-mind-usage/v2";
+  readonly contractVersion: "principal-mind-usage/v3";
   readonly usageVersion: number;
   readonly items: readonly Readonly<MindUsageUiItem>[];
 }
@@ -98,7 +98,7 @@ function safeUsageState(value: unknown, principalId: string): Readonly<{
   const source = record(value);
   if (
     source?.principalId !== principalId ||
-    source.contractVersion !== "principal-mind-usage/v2" ||
+    source.contractVersion !== "principal-mind-usage/v3" ||
     !Number.isSafeInteger(source.usageVersion) ||
     Number(source.usageVersion) < 0 ||
     !Array.isArray(source.entries)
@@ -114,9 +114,6 @@ function safeUsageState(value: unknown, principalId: string): Readonly<{
     ) throw new TypeError("safe Mind usage state is unavailable");
     modes.set(spaceId, mode);
   }
-  if ([...modes.values()].filter((mode) => mode === "read_write").length > 2) {
-    throw new TypeError("safe Mind usage state is unavailable");
-  }
   return Object.freeze({ usageVersion: Number(source.usageVersion), modes });
 }
 
@@ -128,8 +125,7 @@ function projectionItem(
   mind: SafeMindDescriptor,
   usageMode: MindUsageUiMode,
 ): Readonly<MindUsageUiItem> {
-  const hasDescription = mind.description !== null && mind.description.trim().length > 0;
-  const canWrite = writerRole(mind.role) && (mind.isPersonal || hasDescription);
+  const canWrite = writerRole(mind.role);
   return Object.freeze({
     mindRef: mind.mindRef,
     name: mind.name,
@@ -146,7 +142,7 @@ function projectionItem(
     eligibility: Object.freeze({
       canRead: true as const,
       canWrite,
-      descriptionRequired: !mind.isPersonal && !hasDescription,
+      descriptionRequired: false,
     }),
   });
 }
@@ -208,7 +204,7 @@ export async function readMindUsageProjection(input: {
       ]);
   const usage = safeUsageState(await input.mindUsage.read(input.actor), input.actor.principalId);
   return Object.freeze({
-    contractVersion: "principal-mind-usage/v2" as const,
+    contractVersion: "principal-mind-usage/v3" as const,
     usageVersion: usage.usageVersion,
     items: Object.freeze(minds.map((mind) =>
       projectionItem(mind, usage.modes.get(mind.mindId) ?? "disabled"))),
@@ -235,7 +231,7 @@ async function readMindUsageProjectionIncluding(
     input.actor.principalId,
   );
   return Object.freeze({
-    contractVersion: "principal-mind-usage/v2" as const,
+    contractVersion: "principal-mind-usage/v3" as const,
     usageVersion: usage.usageVersion,
     items: Object.freeze(minds.map((listedMind) =>
       projectionItem(listedMind, usage.modes.get(listedMind.mindId) ?? "disabled"))),
