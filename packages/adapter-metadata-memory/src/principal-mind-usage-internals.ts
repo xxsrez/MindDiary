@@ -98,10 +98,6 @@ export async function refreshMindDescriptionGenerations(
       Object.freeze({ ...item, writeGeneration,
         entryVersion: version(item.entryVersion + 1), updatedAt: occurredAt }));
     owner.state = freezePrincipalMindUsageState({ ...current, entries, usageVersion,
-      ordinaryWriteGeneration: entry.routingProfile === "description_based"
-        && entry.usageMode === "read_write" ? writeGeneration : current.ordinaryWriteGeneration,
-      personalWriteGeneration: entry.routingProfile === "personal_default"
-        && entry.usageMode === "read_write" ? writeGeneration : current.personalWriteGeneration,
       updatedAt: occurredAt });
   }
 }
@@ -132,10 +128,9 @@ function validEntry(principalId: PrincipalId, value: unknown): value is MindUsag
         validInstant(entry.writeGeneration.selectedAt));
 }
 
-type LegacyPrincipalMindUsageState = Omit<
+type LegacyPrincipalMindUsageStateV1 = Omit<
   PrincipalMindUsageState,
-  "contractVersion" | "entries" | "ordinaryWriteGeneration" |
-    "personalWriteGeneration"
+  "contractVersion" | "entries"
 > & {
   readonly contractVersion: "principal-mind-usage/v1";
   readonly entries: readonly (Omit<MindUsageEntry, "routingProfile"> & {
@@ -144,10 +139,40 @@ type LegacyPrincipalMindUsageState = Omit<
   readonly activeWriteGeneration?: MindUsageEntry["writeGeneration"];
 };
 
+type LegacyPrincipalMindUsageStateV2 = Omit<
+  PrincipalMindUsageState,
+  "contractVersion"
+> & {
+  readonly contractVersion: "principal-mind-usage/v2";
+  readonly ordinaryWriteGeneration: MindUsageEntry["writeGeneration"];
+  readonly personalWriteGeneration: MindUsageEntry["writeGeneration"];
+};
+
+type LegacyPrincipalMindUsageState =
+  | LegacyPrincipalMindUsageStateV1
+  | LegacyPrincipalMindUsageStateV2;
+
+function sameGeneration(
+  left: MindUsageEntry["writeGeneration"],
+  right: MindUsageEntry["writeGeneration"],
+): boolean {
+  return left === null && right === null ||
+    left !== null && right !== null &&
+      left.generationId === right.generationId &&
+      left.principalId === right.principalId &&
+      left.spaceId === right.spaceId &&
+      left.generation === right.generation &&
+      left.selectedAt === right.selectedAt;
+}
+
 function migrateLegacyPrincipalMindUsageState(
-  raw: Readonly<LegacyPrincipalMindUsageState | PrincipalMindUsageState>,
+  raw: Readonly<LegacyPrincipalMindUsageState>,
   personalSpaceId: SpaceId | undefined,
 ): Readonly<PrincipalMindUsageState> {
+  if (
+    raw.contractVersion !== "principal-mind-usage/v1" &&
+    raw.contractVersion !== "principal-mind-usage/v2"
+  ) throw new TypeError("Principal Mind usage contract version is incompatible");
   const entries = raw.entries.map((entry) => {
     const routingProfile = entry.spaceId === personalSpaceId
       ? "personal_default" as const
@@ -159,22 +184,31 @@ function migrateLegacyPrincipalMindUsageState(
     ) throw new TypeError("Principal Mind usage routing profile is invalid");
     return Object.freeze({ ...entry, routingProfile });
   });
+  if (raw.contractVersion === "principal-mind-usage/v2") {
+    const ordinary = entries.filter((entry) =>
+      entry.routingProfile === "description_based" && entry.usageMode === "read_write"
+    );
+    const personal = entries.filter((entry) =>
+      entry.routingProfile === "personal_default" && entry.usageMode === "read_write"
+    );
+    if (
+      ordinary.length > 1 ||
+      personal.length > 1 ||
+      !sameGeneration(ordinary[0]?.writeGeneration ?? null, raw.ordinaryWriteGeneration) ||
+      !sameGeneration(personal[0]?.writeGeneration ?? null, raw.personalWriteGeneration)
+    ) throw new TypeError("Legacy Principal Mind usage write lane is invalid");
+  }
   return freezePrincipalMindUsageState({
-    ...raw,
+    principalId: raw.principalId,
     contractVersion: PRINCIPAL_MIND_USAGE_CONTRACT_VERSION,
+    usageVersion: raw.usageVersion,
     entries,
-    ordinaryWriteGeneration: entries.find((entry) =>
-      entry.routingProfile === "description_based" &&
-      entry.usageMode === "read_write"
-    )?.writeGeneration ?? null,
-    personalWriteGeneration: entries.find((entry) =>
-      entry.routingProfile === "personal_default" &&
-      entry.usageMode === "read_write"
-    )?.writeGeneration ?? null,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
   });
 }
 
-/** Upgrades persisted v1 singleton state into independent v2 write lanes. */
+/** Upgrades persisted v1/v2 singleton state into v3 per-Mind generations. */
 export function migrateLegacyPrincipalMindUsageOwners(
   owners: ReadonlyMap<PrincipalId, unknown>,
   personalBindings: PersonalBindingMap,
@@ -190,7 +224,7 @@ export function migrateLegacyPrincipalMindUsageOwners(
     }
     const personalSpaceId = personalBindings.get(principalId)?.spaceId;
     const state = migrateLegacyPrincipalMindUsageState(
-      owner.state as LegacyPrincipalMindUsageState | PrincipalMindUsageState,
+      owner.state as unknown as LegacyPrincipalMindUsageState,
       personalSpaceId,
     );
     const idempotency = new Map([...owner.idempotency].map(([key, record]) => [
@@ -200,8 +234,7 @@ export function migrateLegacyPrincipalMindUsageOwners(
         result: Object.freeze({
           ...record.result,
           state: migrateLegacyPrincipalMindUsageState(
-            record.result.state as LegacyPrincipalMindUsageState |
-              PrincipalMindUsageState,
+            record.result.state as unknown as LegacyPrincipalMindUsageState,
             personalSpaceId,
           ),
         }),
@@ -277,8 +310,8 @@ export function validPrincipalMindUsageOwnersSnapshot(
     }
     for (const generationId of owner.retiredGenerationIds) {
       if (!BOUNDED_OPAQUE_ID.test(generationId) ||
-        generationId === owner.state.ordinaryWriteGeneration?.generationId ||
-        generationId === owner.state.personalWriteGeneration?.generationId
+        owner.state.entries.some((entry) =>
+          entry.writeGeneration?.generationId === generationId)
       ) return false;
       const previousOwner = generationOwners.get(generationId);
       if (previousOwner !== undefined && previousOwner !== principalId) return false;
@@ -299,10 +332,9 @@ export function validPrincipalMindUsageOwnersSnapshot(
       } catch {
         return false;
       }
-      if (
-        !registerGeneration(principalId, replayState.ordinaryWriteGeneration) ||
-        !registerGeneration(principalId, replayState.personalWriteGeneration)
-      ) return false;
+      for (const entry of replayState.entries) {
+        if (!registerGeneration(principalId, entry.writeGeneration)) return false;
+      }
     }
   }
   return true;
@@ -437,7 +469,7 @@ export function migrateLegacyCredentialTargetsToPrincipalUsage(
     ) continue;
     const occurredAt = space.updatedAt;
     const generationId =
-      `pmu_migrated_v2:${principalId.length}:${principalId}:${spaceId.length}:${spaceId}` as
+      `pmu_migrated_v3:${principalId.length}:${principalId}:${spaceId.length}:${spaceId}` as
         PrincipalMindUsageGenerationId;
     const fresh = createFreshPrincipalMindUsageState({ principalId, occurredAt });
     const transition = setPrincipalMindUsageMode(fresh, {
@@ -482,14 +514,6 @@ export function purgePrincipalMindUsageForSpace(
       ...owner.state,
       usageVersion: mindUsageVersion(owner.state.usageVersion + 1),
       entries,
-      ordinaryWriteGeneration: entries.find((candidate) =>
-        candidate.routingProfile === "description_based" &&
-        candidate.usageMode === "read_write"
-      )?.writeGeneration ?? null,
-      personalWriteGeneration: entries.find((candidate) =>
-        candidate.routingProfile === "personal_default" &&
-        candidate.usageMode === "read_write"
-      )?.writeGeneration ?? null,
       updatedAt: occurredAt,
     });
   }

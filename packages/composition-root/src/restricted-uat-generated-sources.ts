@@ -249,10 +249,14 @@ export function createRestrictedUatGeneratedSourceHandler(dependencies: Readonly
 
     const bindingOwnerId = metadataToken.tokenId as unknown as MindBindingOwnerId;
     const usage = await dependencies.metadata.readPrincipalMindUsage(principalId);
-    const generation = usage?.ordinaryWriteGeneration ?? null;
-    const usageEntry = generation === null
-      ? null
-      : usage?.entries.find((entry) => entry.spaceId === generation.spaceId) ?? null;
+    const writableOrdinaryEntries = usage?.entries.filter((entry) =>
+      entry.routingProfile === "description_based" &&
+      entry.usageMode === "read_write"
+    ) ?? [];
+    const usageEntry = writableOrdinaryEntries.length === 1
+      ? writableOrdinaryEntries[0] ?? null
+      : null;
+    const generation = usageEntry?.writeGeneration ?? null;
     if (
       generation === null ||
       generation.principalId !== principalId ||

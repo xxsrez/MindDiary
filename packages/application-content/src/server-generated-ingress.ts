@@ -385,9 +385,10 @@ export class TrustedServerGeneratedIngressService {
     }
     const generation = principalMindUsageWriteGeneration(snapshot, spaceId);
     if (generation === null) {
-      const anotherLane = snapshot?.ordinaryWriteGeneration ??
-        snapshot?.personalWriteGeneration ?? null;
-      return writableTargetFailure(anotherLane === null
+      const anotherWritable = snapshot?.entries.some((entry) =>
+        entry.usageMode === "read_write"
+      ) ?? false;
+      return writableTargetFailure(!anotherWritable
         ? "writable_target_required"
         : "writable_target_mismatch");
     }

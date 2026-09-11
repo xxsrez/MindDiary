@@ -23,7 +23,7 @@ export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStor
         ) legacyCredentialWriteTargetUpgrades.set(ownerId, evidence);
       }
       return {
-        v: 4,
+        v: 5,
         spaces: new Map(this._spaces),
         revisionsById: new Map(this._revisionsById),
         objectReachabilityCounts: Object.freeze({

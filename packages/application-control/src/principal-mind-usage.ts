@@ -102,7 +102,7 @@ export class PrincipalMindUsageApplicationService {
 
     const canonicalRequestHash = await this.#digest.calculateSha256(
       ENCODER.encode(`${JSON.stringify({
-        contract: "principal-mind-usage/v2",
+        contract: "principal-mind-usage/v3",
         principal: principalId,
         mind: command.spaceId,
         mode: command.usageMode,

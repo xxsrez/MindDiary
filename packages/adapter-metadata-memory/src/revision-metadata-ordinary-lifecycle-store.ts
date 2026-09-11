@@ -309,15 +309,6 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
             ) {
               return Object.freeze({ kind: "forbidden" });
             }
-            if (
-              Object.prototype.hasOwnProperty.call(request, "description") &&
-              request.description === null &&
-              [...tx.principalMindUsageOwners.values()].some((owner) =>
-                owner.state.ordinaryWriteGeneration?.spaceId === request.spaceId)
-            ) {
-              return Object.freeze({ kind: "description_required_for_write" });
-            }
-
             const previous = tx.idempotencyRecords.get(idempotencyRecordKey);
             if (previous) {
               if (

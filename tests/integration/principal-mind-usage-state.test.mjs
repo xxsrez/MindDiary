@@ -5,7 +5,6 @@ import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memo
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
   AccountBootstrapService,
-  OrdinaryMindControlFailure,
   OrdinaryMindControlService,
   PersonalMindControlService,
   PrincipalMindUsageApplicationService,
@@ -131,6 +130,18 @@ async function setMode(env, mindId, usageMode, expectedUsageVersion, key, at = T
   });
 }
 
+function entryFor(state, mindId) {
+  const entry = state.entries.find((candidate) => candidate.spaceId === mindId);
+  assert.ok(entry, `Expected usage entry for ${mindId}`);
+  return entry;
+}
+
+function generationFor(state, mindId) {
+  const generation = entryFor(state, mindId).writeGeneration;
+  assert.ok(generation, `Expected write generation for ${mindId}`);
+  return generation;
+}
+
 async function selectLegacyCredentialTarget(
   metadata,
   principalId,
@@ -165,7 +176,7 @@ async function selectLegacyCredentialTarget(
   assert.equal(selected.kind, "applied");
 }
 
-test("principal usage starts disabled, supports arbitrary reads and atomically switches one writable Mind", async () => {
+test("principal usage starts disabled and preserves independent writable Minds", async () => {
   const env = await setup();
   assert.equal(await env.api.usage.read(actor(env.account.principalId, "read-empty")), null);
 
@@ -187,14 +198,14 @@ test("principal usage starts disabled, supports arbitrary reads and atomically s
     "first-writable",
   );
   assert.equal(firstWritable.kind, "applied");
-  const firstGeneration = firstWritable.state.ordinaryWriteGeneration.generationId;
+  const firstGeneration = generationFor(firstWritable.state, env.first.mindId).generationId;
   assert.equal(await env.metadata.validatePrincipalMindUsageWritePin({
     principalId: env.account.principalId,
     spaceId: env.first.mindId,
     generationId: firstGeneration,
   }), true);
 
-  const switched = await setMode(
+  const bothWritable = await setMode(
     env,
     env.second.mindId,
     "read_write",
@@ -202,23 +213,26 @@ test("principal usage starts disabled, supports arbitrary reads and atomically s
     "second-writable",
     T2,
   );
-  assert.equal(switched.kind, "applied");
-  assert.equal(switched.state.usageVersion, 3);
-  assert.equal(switched.state.entries.length, 2);
+  assert.equal(bothWritable.kind, "applied");
+  assert.equal(bothWritable.state.usageVersion, 3);
+  assert.equal(bothWritable.state.entries.length, 2);
   assert.equal(
-    switched.state.entries.find((entry) => entry.spaceId === env.first.mindId).usageMode,
-    "read",
-  );
-  assert.equal(
-    switched.state.entries.find((entry) => entry.spaceId === env.second.mindId).usageMode,
+    entryFor(bothWritable.state, env.first.mindId).usageMode,
     "read_write",
   );
-  assert.notEqual(switched.state.ordinaryWriteGeneration.generationId, firstGeneration);
+  assert.equal(
+    entryFor(bothWritable.state, env.second.mindId).usageMode,
+    "read_write",
+  );
+  assert.notEqual(
+    generationFor(bothWritable.state, env.second.mindId).generationId,
+    firstGeneration,
+  );
   assert.equal(await env.metadata.validatePrincipalMindUsageWritePin({
     principalId: env.account.principalId,
     spaceId: env.first.mindId,
     generationId: firstGeneration,
-  }), false);
+  }), true);
 
   const stale = await setMode(env, env.first.mindId, "disabled", 2, "stale-version");
   assert.equal(stale.kind, "usage_version_conflict");
@@ -232,14 +246,14 @@ test("principal usage starts disabled, supports arbitrary reads and atomically s
   );
   assert.equal(replay.kind, "applied");
   assert.equal(replay.replayed, true);
-  assert.deepEqual(replay.state, switched.state);
+  assert.deepEqual(replay.state, bothWritable.state);
 });
 
 test("usage survives restart, is shared independently of credentials, and retired generations never reactivate", async () => {
   const env = await setup();
   const writable = await setMode(env, env.first.mindId, "read_write", 0, "select");
   assert.equal(writable.kind, "applied");
-  const retiredGeneration = writable.state.ordinaryWriteGeneration.generationId;
+  const retiredGeneration = generationFor(writable.state, env.first.mindId).generationId;
   let metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(
     env.metadata.exportDurableSnapshot(),
   );
@@ -367,7 +381,7 @@ test("ACL loss disables the write pin without rewriting principal intent", async
   const pin = {
     principalId: editor.principalId,
     spaceId: env.first.mindId,
-    generationId: configured.state.ordinaryWriteGeneration.generationId,
+    generationId: generationFor(configured.state, env.first.mindId).generationId,
   };
   assert.equal(await env.metadata.validatePrincipalMindUsageWritePin(pin), true);
   assert.equal(await env.metadata.revokeOrdinaryMembershipForTest(
@@ -409,7 +423,7 @@ test("v2 migration transfers only one unambiguous described legacy target with a
   assert.equal(state.entries[0].spaceId, unambiguous.first.mindId);
   assert.equal(state.entries[0].usageMode, "read_write");
   assert.notEqual(
-    state.ordinaryWriteGeneration.generationId,
+    generationFor(state, unambiguous.first.mindId).generationId,
     "legacy_generation_legacy_oauth_one",
   );
 
@@ -464,7 +478,7 @@ test("v2 migration transfers only one unambiguous described legacy target with a
   );
 });
 
-test("writable mode requires description and active writer access", async () => {
+test("descriptionless ordinary Minds remain writable and client hints cannot spoof routing identity", async () => {
   const env = await setup();
   const noDescription = await env.api.ordinary.createSpaceWithOwner(
     actor(env.account.principalId, "request_create_empty", T0),
@@ -474,37 +488,47 @@ test("writable mode requires description and active writer access", async () => 
       idempotencyKey: "create-unclassified",
     },
   );
-  assert.equal(
-    (await setMode(env, noDescription.mindId, "read_write", 0, "empty-write")).kind,
-    "description_required",
+  const descriptionless = await setMode(
+    env,
+    noDescription.mindId,
+    "read_write",
+    0,
+    "empty-write",
   );
+  assert.equal(descriptionless.kind, "applied");
+  assert.equal(entryFor(descriptionless.state, noDescription.mindId).routingProfile,
+    "description_based");
   const spoofedPersonal = await env.api.usage.mutate({
     actor: actor(env.account.principalId, "request_spoofed_personal", T1),
     spaceId: noDescription.mindId,
     usageMode: "read_write",
-    expectedUsageVersion: 0,
+    expectedUsageVersion: 1,
     idempotencyKey: "spoofed-personal",
     isPersonal: true,
     route: "/me",
   });
-  assert.equal(spoofedPersonal.kind, "description_required");
-  assert.equal(
-    (await setMode(env, noDescription.mindId, "read", 0, "empty-read")).kind,
-    "applied",
-  );
+  assert.equal(spoofedPersonal.kind, "applied");
+  assert.equal(spoofedPersonal.changed, false);
+  assert.equal(entryFor(spoofedPersonal.state, noDescription.mindId).routingProfile,
+    "description_based");
 
   const writable = await setMode(env, env.first.mindId, "read_write", 1, "write-described");
   assert.equal(writable.kind, "applied");
-  await assert.rejects(
-    env.api.ordinary.renameSpace(actor(env.account.principalId, "clear-description", T2), {
+  const previousGeneration = generationFor(writable.state, env.first.mindId).generationId;
+  const cleared = await env.api.ordinary.renameSpace(
+    actor(env.account.principalId, "clear-description", T2),
+    {
       mindId: env.first.mindId,
       description: null,
       expectedMetadataVersion: env.first.metadataVersion,
       idempotencyKey: "clear-writable-description",
-    }),
-    (error) => error instanceof OrdinaryMindControlFailure &&
-      error.code === "description_required_for_write",
+    },
   );
+  assert.equal(cleared.description, null);
+  const afterClear = await env.metadata.readPrincipalMindUsage(env.account.principalId);
+  assert.equal(entryFor(afterClear, env.first.mindId).usageMode, "read_write");
+  assert.notEqual(generationFor(afterClear, env.first.mindId).generationId,
+    previousGeneration);
 });
 
 test("descriptionless Personal Mind is writable, idempotent, and survives restart", async () => {
@@ -521,7 +545,10 @@ test("descriptionless Personal Mind is writable, idempotent, and survives restar
     "personal-writable",
   );
   assert.equal(writable.kind, "applied");
-  const generationId = writable.state.personalWriteGeneration.generationId;
+  const generationId = generationFor(
+    writable.state,
+    initial.personalMind.mindId,
+  ).generationId;
   assert.equal(await env.metadata.validatePrincipalMindUsageWritePin({
     principalId: env.account.principalId,
     spaceId: initial.personalMind.mindId,
@@ -547,22 +574,30 @@ test("descriptionless Personal Mind is writable, idempotent, and survives restar
   }), true);
 });
 
-test("Personal requested writes and one ordinary automatic writer remain independent", async () => {
+test("three ordinary Minds and Personal remain independently writable across restart and disable", async () => {
   const env = await setup();
   const personal = await env.api.personal.resolveMyMind(
     actor(env.account.principalId, "independent-personal", T1),
   );
-  const ordinary = await setMode(
+  const third = await env.api.ordinary.createSpaceWithOwner(
+    actor(env.account.principalId, "request-third-ordinary", T1),
+    {
+      name: "Architecture notes",
+      handle: "architecture-notes",
+      description: null,
+      idempotencyKey: "create-architecture-notes",
+    },
+  );
+  const first = await setMode(
     env,
     env.first.mindId,
     "read_write",
     0,
-    "independent-ordinary",
+    "independent-first",
   );
-  assert.equal(ordinary.kind, "applied");
-  const ordinaryGeneration = ordinary.state.ordinaryWriteGeneration.generationId;
-
-  const both = await setMode(
+  assert.equal(first.kind, "applied");
+  const firstGeneration = generationFor(first.state, env.first.mindId).generationId;
+  const withPersonal = await setMode(
     env,
     personal.personalMind.mindId,
     "read_write",
@@ -570,71 +605,107 @@ test("Personal requested writes and one ordinary automatic writer remain indepen
     "independent-personal-write",
     T2,
   );
-  assert.equal(both.kind, "applied");
-  assert.equal(both.state.entries.filter((entry) =>
-    entry.usageMode === "read_write").length, 2);
-  assert.equal(
-    both.state.ordinaryWriteGeneration.generationId,
-    ordinaryGeneration,
-  );
-  const personalGeneration = both.state.personalWriteGeneration.generationId;
-  assert.equal(await env.metadata.validatePrincipalMindUsageWritePin({
-    principalId: env.account.principalId,
-    spaceId: env.first.mindId,
-    generationId: ordinaryGeneration,
-  }), true);
-  assert.equal(await env.metadata.validatePrincipalMindUsageWritePin({
-    principalId: env.account.principalId,
-    spaceId: personal.personalMind.mindId,
-    generationId: personalGeneration,
-  }), true);
-
-  const switchedOrdinary = await setMode(
+  assert.equal(withPersonal.kind, "applied");
+  const personalGeneration = generationFor(
+    withPersonal.state,
+    personal.personalMind.mindId,
+  ).generationId;
+  const withSecond = await setMode(
     env,
     env.second.mindId,
     "read_write",
     2,
-    "independent-ordinary-switch",
+    "independent-second",
     T2,
   );
-  assert.equal(switchedOrdinary.kind, "applied");
-  assert.equal(switchedOrdinary.state.personalWriteGeneration.generationId,
+  assert.equal(withSecond.kind, "applied");
+  const secondGeneration = generationFor(withSecond.state, env.second.mindId).generationId;
+  const all = await setMode(
+    env,
+    third.mindId,
+    "read_write",
+    3,
+    "independent-third",
+    T2,
+  );
+  assert.equal(all.kind, "applied");
+  const thirdGeneration = generationFor(all.state, third.mindId).generationId;
+  assert.equal(all.state.entries.filter((entry) =>
+    entry.usageMode === "read_write").length, 4);
+  assert.equal(generationFor(all.state, env.first.mindId).generationId, firstGeneration);
+  assert.equal(generationFor(all.state, env.second.mindId).generationId, secondGeneration);
+  assert.equal(generationFor(all.state, personal.personalMind.mindId).generationId,
     personalGeneration);
-  assert.equal(switchedOrdinary.state.entries.find((entry) =>
-    entry.spaceId === env.first.mindId).usageMode, "read");
-  assert.equal(switchedOrdinary.state.entries.find((entry) =>
-    entry.spaceId === env.second.mindId).usageMode, "read_write");
-  assert.equal(await env.metadata.validatePrincipalMindUsageWritePin({
+
+  const restarted = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    env.metadata.exportDurableSnapshot(),
+  );
+  const restartedState = await restarted.readPrincipalMindUsage(env.account.principalId);
+  assert.equal(restartedState.contractVersion, "principal-mind-usage/v3");
+  assert.equal(restartedState.entries.filter((entry) =>
+    entry.usageMode === "read_write").length, 4);
+
+  const restartedEnv = {
+    ...env,
+    metadata: restarted,
+    api: services(restarted, usageIds({ prefix: "multi_restart" })),
+  };
+  const firstDisabled = await setMode(
+    restartedEnv,
+    env.first.mindId,
+    "disabled",
+    4,
+    "disable-first-only",
+    T2,
+  );
+  assert.equal(firstDisabled.kind, "applied");
+  assert.equal(firstDisabled.state.entries.some((entry) =>
+    entry.spaceId === env.first.mindId), false);
+  for (const [spaceId, generationId] of [
+    [env.second.mindId, secondGeneration],
+    [third.mindId, thirdGeneration],
+    [personal.personalMind.mindId, personalGeneration],
+  ]) {
+    assert.equal(entryFor(firstDisabled.state, spaceId).usageMode, "read_write");
+    assert.equal(await restarted.validatePrincipalMindUsageWritePin({
+      principalId: env.account.principalId,
+      spaceId,
+      generationId,
+    }), true);
+  }
+  assert.equal(await restarted.validatePrincipalMindUsageWritePin({
     principalId: env.account.principalId,
     spaceId: env.first.mindId,
-    generationId: ordinaryGeneration,
+    generationId: firstGeneration,
   }), false);
-  assert.equal(await env.metadata.validatePrincipalMindUsageWritePin({
-    principalId: env.account.principalId,
-    spaceId: personal.personalMind.mindId,
-    generationId: personalGeneration,
-  }), true);
 
   const personalRead = await setMode(
-    env,
+    restartedEnv,
     personal.personalMind.mindId,
     "read",
-    3,
+    5,
     "independent-personal-read",
     T2,
   );
   assert.equal(personalRead.kind, "applied");
-  assert.equal(personalRead.state.personalWriteGeneration, null);
-  assert.equal(personalRead.state.ordinaryWriteGeneration.spaceId, env.second.mindId);
-  assert.equal(await env.metadata.validatePrincipalMindUsageWritePin({
+  assert.equal(entryFor(personalRead.state, personal.personalMind.mindId).writeGeneration,
+    null);
+  assert.equal(entryFor(personalRead.state, env.second.mindId).usageMode, "read_write");
+  assert.equal(entryFor(personalRead.state, third.mindId).usageMode, "read_write");
+  assert.equal(await restarted.validatePrincipalMindUsageWritePin({
     principalId: env.account.principalId,
     spaceId: personal.personalMind.mindId,
     generationId: personalGeneration,
   }), false);
 });
 
-test("v3 singleton snapshots migrate into the matching independent write lane", async () => {
-  for (const target of ["ordinary", "personal"]) {
+test("v1 and v2 singleton states migrate to v3 without changing the selected generation", async () => {
+  for (const [legacyVersion, target] of [
+    [1, "ordinary"],
+    [1, "personal"],
+    [2, "ordinary"],
+    [2, "personal"],
+  ]) {
     const env = await setup();
     const personal = await env.api.personal.resolveMyMind(
       actor(env.account.principalId, `legacy-${target}`, T1),
@@ -650,22 +721,28 @@ test("v3 singleton snapshots migrate into the matching independent write lane", 
       `legacy-${target}-write`,
     );
     assert.equal(writable.kind, "applied");
+    const selectedGeneration = generationFor(writable.state, spaceId);
     const snapshot = env.metadata.exportDurableSnapshot();
-    snapshot.v = 3;
+    snapshot.v = legacyVersion === 1 ? 3 : 4;
     const owner = snapshot.principalMindUsageOwners.get(env.account.principalId);
     const downgradeState = (state) => {
-      const {
-        ordinaryWriteGeneration,
-        personalWriteGeneration,
-        contractVersion: _contractVersion,
-        entries,
-        ...rest
-      } = state;
+      const entry = entryFor(state, spaceId);
+      if (legacyVersion === 1) {
+        return {
+          principalId: state.principalId,
+          contractVersion: "principal-mind-usage/v1",
+          usageVersion: state.usageVersion,
+          entries: state.entries.map(({ routingProfile: _routingProfile, ...item }) => item),
+          activeWriteGeneration: entry.writeGeneration,
+          createdAt: state.createdAt,
+          updatedAt: state.updatedAt,
+        };
+      }
       return {
-        ...rest,
-        contractVersion: "principal-mind-usage/v1",
-        entries: entries.map(({ routingProfile: _routingProfile, ...entry }) => entry),
-        activeWriteGeneration: ordinaryWriteGeneration ?? personalWriteGeneration,
+        ...state,
+        contractVersion: "principal-mind-usage/v2",
+        ordinaryWriteGeneration: target === "ordinary" ? entry.writeGeneration : null,
+        personalWriteGeneration: target === "personal" ? entry.writeGeneration : null,
       };
     };
     owner.state = downgradeState(owner.state);
@@ -679,13 +756,10 @@ test("v3 singleton snapshots migrate into the matching independent write lane", 
 
     const restored = InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot);
     const migrated = await restored.readPrincipalMindUsage(env.account.principalId);
-    assert.equal(migrated.contractVersion, "principal-mind-usage/v2");
+    assert.equal(migrated.contractVersion, "principal-mind-usage/v3");
     assert.equal(migrated.entries[0].routingProfile,
       target === "personal" ? "personal_default" : "description_based");
-    assert.equal(migrated.ordinaryWriteGeneration?.spaceId ?? null,
-      target === "ordinary" ? spaceId : null);
-    assert.equal(migrated.personalWriteGeneration?.spaceId ?? null,
-      target === "personal" ? spaceId : null);
+    assert.deepEqual(generationFor(migrated, spaceId), selectedGeneration);
     const replay = await setMode(
       { ...env, metadata: restored, api: services(restored) },
       spaceId,
@@ -699,7 +773,7 @@ test("v3 singleton snapshots migrate into the matching independent write lane", 
   }
 });
 
-test("corrupt usage snapshots fail closed instead of reviving two writable destinations", async () => {
+test("corrupt generations and incompatible downgrade snapshots fail closed", async () => {
   const env = await setup();
   const writable = await setMode(env, env.first.mindId, "read_write", 0, "corrupt-base");
   assert.equal(writable.kind, "applied");
@@ -713,9 +787,8 @@ test("corrupt usage snapshots fail closed instead of reviving two writable desti
         ...owner.state.entries[0],
         spaceId: env.second.mindId,
         writeGeneration: {
-          ...owner.state.ordinaryWriteGeneration,
+          ...owner.state.entries[0].writeGeneration,
           spaceId: env.second.mindId,
-          generationId: "corrupt_second_generation",
         },
       },
     ],
@@ -726,16 +799,7 @@ test("corrupt usage snapshots fail closed instead of reviving two writable desti
   );
 
   const mismatchedPinSnapshot = env.metadata.exportDurableSnapshot();
-  const mismatchedOwner = mismatchedPinSnapshot.principalMindUsageOwners.get(
-    env.account.principalId,
-  );
-  mismatchedOwner.state = {
-    ...mismatchedOwner.state,
-    ordinaryWriteGeneration: {
-      ...mismatchedOwner.state.ordinaryWriteGeneration,
-      spaceId: env.second.mindId,
-    },
-  };
+  mismatchedPinSnapshot.v = 4;
   assert.throws(
     () => InMemoryRevisionMetadataStore.fromDurableSnapshot(mismatchedPinSnapshot),
     /durable snapshot is invalid/u,
@@ -776,7 +840,10 @@ test("Sites persistence restores a descriptionless Personal writable pin and exa
   assert.equal(await metadata.validatePrincipalMindUsageWritePin({
     principalId: env.account.principalId,
     spaceId: personal.personalMind.mindId,
-    generationId: writable.state.personalWriteGeneration.generationId,
+    generationId: generationFor(
+      writable.state,
+      personal.personalMind.mindId,
+    ).generationId,
   }), true);
 });
 
@@ -788,9 +855,9 @@ for (const storage of ["memory", "sites"]) test(`${storage}: description changes
   await setMode(env, env.first.mindId, "read_write", 0, "description-ordinary");
   const both = await setMode(env, personalId, "read_write", 1, "description-personal");
   const oldPin = { principalId, spaceId: personalId,
-    generationId: both.state.personalWriteGeneration.generationId };
+    generationId: generationFor(both.state, personalId).generationId };
   const ordinaryPin = { principalId, spaceId: env.first.mindId,
-    generationId: both.state.ordinaryWriteGeneration.generationId };
+    generationId: generationFor(both.state, env.first.mindId).generationId };
   const before = await env.metadata.readAccount(principalId);
   const command = { description: "Engineering decisions; exclude daily logs",
     expectedMetadataVersion: before.personalMind.space.metadataVersion,
@@ -802,7 +869,7 @@ for (const storage of ["memory", "sites"]) test(`${storage}: description changes
   const after = await env.metadata.readAccount(principalId);
   assert.equal(after.personalMind.space.description, command.description);
   assert.equal(after.personalMind.space.headRevisionId, before.personalMind.space.headRevisionId);
-  assert.equal(configured.personalWriteGeneration.spaceId, personalId);
+  assert.equal(generationFor(configured, personalId).spaceId, personalId);
   const replay = await env.api.personal.updateMyMindDescription(actor(principalId, "description-replay"), command);
   assert.equal(replay.replayed, true);
   await env.api.personal.updateMyMindDescription(actor(principalId, "description-noop"), {
@@ -822,5 +889,5 @@ for (const storage of ["memory", "sites"]) test(`${storage}: description changes
   assert.equal(await restored.validatePrincipalMindUsageWritePin(ordinaryPin), true);
   const current = await restored.readPrincipalMindUsage(principalId);
   assert.equal(await restored.validatePrincipalMindUsageWritePin({ ...oldPin,
-    generationId: current.personalWriteGeneration.generationId }), true);
+    generationId: generationFor(current, personalId).generationId }), true);
 });

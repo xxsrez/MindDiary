@@ -61,7 +61,7 @@ export const ACCESS_TOKEN_STATES = ["active", "revoked", "expired"] as const;
 export const CREDENTIAL_WRITE_TARGET_CONTRACT_VERSION =
   "credential-write-target/v1" as const;
 export const PRINCIPAL_MIND_USAGE_CONTRACT_VERSION =
-  "principal-mind-usage/v2" as const;
+  "principal-mind-usage/v3" as const;
 export const MIND_USAGE_MODES = ["disabled", "read", "read_write"] as const;
 export const CREDENTIAL_KINDS = ["oauth_grant", "personal_token"] as const;
 export const CREDENTIAL_WRITE_TARGET_LIFECYCLE_STATES = [
@@ -299,10 +299,6 @@ export interface PrincipalMindUsageState {
   readonly contractVersion: typeof PRINCIPAL_MIND_USAGE_CONTRACT_VERSION;
   readonly usageVersion: MindUsageVersion;
   readonly entries: readonly Readonly<MindUsageEntry>[];
-  /** The sole ordinary-Mind automatic-save destination, independent of /me. */
-  readonly ordinaryWriteGeneration: Readonly<PrincipalMindWriteGeneration> | null;
-  /** Personal /me requested-write capability, independent of the ordinary lane. */
-  readonly personalWriteGeneration: Readonly<PrincipalMindWriteGeneration> | null;
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
 }

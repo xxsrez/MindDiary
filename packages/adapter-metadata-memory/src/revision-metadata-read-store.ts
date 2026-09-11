@@ -148,7 +148,6 @@ import {
   createFreshPrincipalMindUsageState,
   freezePrincipalMindUsageState,
   isReservedTopLevelHandle,
-  normalizeOrdinaryMindDescription,
   parseCanonicalSpaceHandle,
   principalMindUsageWritePinMatches,
   revokeCredentialWriteTarget,
@@ -995,11 +994,7 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         membership === undefined ||
         !["editor", "admin", "owner"].includes(membership.role)
       ) return false;
-      if (isOwnPersonal) return true;
-      if (typeof space.description !== "string") return false;
-      const normalized = normalizeOrdinaryMindDescription(space.description);
-      return normalized.kind === "valid" && normalized.value !== null &&
-        normalized.value === space.description;
+      return true;
     }
 
   async runPrincipalMindUsageTransaction<Result>(
@@ -1018,11 +1013,11 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         const generationUsed = (generationId: PrincipalMindUsageGenerationId) =>
           [...owners.values()].some((owner) =>
             owner.retiredGenerationIds.has(generationId) ||
-            owner.state.ordinaryWriteGeneration?.generationId === generationId ||
-            owner.state.personalWriteGeneration?.generationId === generationId ||
+            owner.state.entries.some((entry) =>
+              entry.writeGeneration?.generationId === generationId) ||
             [...owner.idempotency.values()].some((record) =>
-              record.result.state.ordinaryWriteGeneration?.generationId === generationId ||
-              record.result.state.personalWriteGeneration?.generationId === generationId));
+              record.result.state.entries.some((entry) =>
+                entry.writeGeneration?.generationId === generationId)));
 
         const transaction: PrincipalMindUsageTransaction = Object.freeze({
           kind: "principal-mind-usage-transaction" as const,
@@ -1057,11 +1052,7 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
               !["editor", "admin", "owner"].includes(membership.role) ||
               !principalMindUsageWritePinMatches(owner.state, pin)
             ) return false;
-            if (isOwnPersonal) return true;
-            if (typeof space.description !== "string") return false;
-            const normalized = normalizeOrdinaryMindDescription(space.description);
-            return normalized.kind === "valid" && normalized.value !== null &&
-              normalized.value === space.description;
+            return true;
           },
           setPrincipalMindUsageMode: async (
             request: Readonly<SetPrincipalMindUsageModeRequest>,
@@ -1101,21 +1092,12 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
             if (linkedPersonalBinding !== undefined && !isOwnPersonal) {
               return Object.freeze({ kind: "mind_not_found" });
             }
-            if (request.usageMode === "read_write") {
-              if (
-                membership === undefined ||
-                !["editor", "admin", "owner"].includes(membership.role)
-              ) return Object.freeze({ kind: "writer_access_required" });
-              if (!isOwnPersonal) {
-                const normalized = typeof space.description === "string"
-                  ? normalizeOrdinaryMindDescription(space.description)
-                  : Object.freeze({ kind: "valid" as const, value: null });
-                if (
-                  normalized.kind !== "valid" ||
-                  normalized.value === null ||
-                  normalized.value !== space.description
-                ) return Object.freeze({ kind: "description_required" });
-              }
+            if (
+              request.usageMode === "read_write" &&
+              (membership === undefined ||
+                !["editor", "admin", "owner"].includes(membership.role))
+            ) {
+              return Object.freeze({ kind: "writer_access_required" });
             }
             let owner = owners.get(request.principalId);
             if (owner !== undefined) {
@@ -1167,22 +1149,22 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
                 (message) => message.auditEventId === request.auditEventId,
               )
             ) return Object.freeze({ kind: "effect_conflict" });
-            const previousGenerations = [
-              owner.state.ordinaryWriteGeneration,
-              owner.state.personalWriteGeneration,
-            ].filter((generation): generation is PrincipalMindWriteGeneration =>
-              generation !== null
-            );
+            const previousGenerations = owner.state.entries
+              .map((entry) => entry.writeGeneration)
+              .filter((generation): generation is PrincipalMindWriteGeneration =>
+                generation !== null
+              );
             if (!owners.has(request.principalId)) {
               owners.set(request.principalId, owner);
             }
             owner.state = transition.state;
-            const currentGenerationIds = new Set([
-              transition.state.ordinaryWriteGeneration?.generationId,
-              transition.state.personalWriteGeneration?.generationId,
-            ].filter((generationId): generationId is PrincipalMindUsageGenerationId =>
-              generationId !== undefined
-            ));
+            const currentGenerationIds = new Set(
+              transition.state.entries.flatMap((entry) =>
+                entry.writeGeneration === null
+                  ? []
+                  : [entry.writeGeneration.generationId]
+              ),
+            );
             for (const previousGeneration of previousGenerations) {
               if (!currentGenerationIds.has(previousGeneration.generationId)) {
                 owner.retiredGenerationIds.add(previousGeneration.generationId);
