@@ -62,7 +62,7 @@ shell, что остальные распознанные UI routes. Он не �
 Codex-разделы guide сохраняют три top-level шага `Install Mind Diary` → `Authenticate for
 reading` → `Choose readable Minds and start`. Над ними находится один
 keyboard-accessible switch между `Codex Desktop`, `Codex CLI` и `ChatGPT`; выбранный path меняет
-инструкции выбранного клиента; ChatGPT имеет собственные три шага. Без JavaScript все три path остаются
+инструкции выбранного клиента; ChatGPT имеет собственные пять шагов. Без JavaScript все три path остаются
 читаемыми, а при активном script switch использует tab semantics, включая
 Arrow/Home/End navigation и связанный tabpanel.
 
@@ -76,6 +76,14 @@ OAuth settings выбрать DCR, canonical resource `/api/mcp`, только `
 для первого подключения и отключить OIDC: discovery alias не означает OIDC.
 После Connect проверить Connected и выполнить Refresh при пустом Actions,
 затем выбрать plugin в новом чате и выполнить read-only smoke.
+После проверки подключения обязательно добавить копируемое правило в Settings →
+Personalization → Custom instructions, сохранив прежние инструкции: перед вебом
+проверять list_minds и читать подходящие Minds как приоритетный источник; веб
+дополняет данные и проверяет актуальность. Правило не разрешает запись, обход
+Personal restrictions или передачу приватного corpus в веб. Завершить настройку
+нейтральным запросом по теме включённого Mind без упоминания продукта и проверить
+реальный tool call. Автоматический выбор не гарантируется; при пропуске источника
+использовать явную просьбу. ChatGPT guide не предлагает установку skill.
 Ошибка `Sign in to Mind Diary before connecting` требует входа в Site в том же
 браузере и обновления OAuth-вкладки. Инструкция не обещает проверенную работу
 mobile или записи: для записи требуется отдельный `content:write` consent.
