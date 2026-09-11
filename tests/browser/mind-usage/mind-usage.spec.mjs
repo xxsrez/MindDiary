@@ -46,11 +46,13 @@ test("Personal and ordinary write modes stay independent and reload server state
 
   await page.locator("[data-agent-settings-disclosure] > summary").click();
   await expect(page.locator("[data-mind-usage-card]").first()).toBeVisible();
-  await expect(page.locator("[data-mind-usage-card]")).toHaveCount(3);
-  await expect(page.getByText("My Mind without a description is used only when you ask", { exact: false })).toBeVisible();
-  await expect(card(page, "/archive").locator('input[value="read_write"]')).toBeDisabled();
-  await expect(card(page, "/archive")).toContainText("Add a routing description");
-  await expect(card(page, "/archive")).toContainText("Read only still works when you name this Mind directly");
+  await expect(page.locator("[data-mind-usage-card]")).toHaveCount(5);
+  await expect(page.getByText("without one, it uses that Mind only when you ask", { exact: false })).toBeVisible();
+  await expect(card(page, "/archive").locator('input[value="read_write"]')).toBeEnabled();
+  await expect(card(page, "/archive")).toContainText("Codex uses this Mind only when you ask");
+  await expect(card(page, "/archive")).toContainText("Allow only the specific saves, updates, or deletions you directly ask Codex to make");
+  await expect(card(page, "/readonly").locator('input[value="read_write"]')).toBeDisabled();
+  await expect(card(page, "/readonly")).toContainText("current Mind role does not allow content writes");
   await expect(card(page, "/research-notes")).toContainText("Unlisted — signed-in readers with the exact link");
 
   await card(page, "/research-notes").locator('input[value="read_write"]').check();
@@ -58,12 +60,25 @@ test("Personal and ordinary write modes stay independent and reload server state
   await expect(page.getByText("Agent intent saved and read back from the server.")).toBeVisible();
   await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read and write/u);
 
+  await card(page, "/archive").locator('input[value="read_write"]').check();
+  await expect(card(page, "/archive").getByRole("status")).toBeEmpty();
+  await card(page, "/archive").getByRole("button", { name: "Save agent mode" }).click();
+  await expect(card(page, "/archive")).toContainText(/Configured intent\s*Read and write/u);
+  await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read and write/u);
+
+  await card(page, "/plans").locator('input[value="read_write"]').check();
+  await expect(card(page, "/plans").getByRole("status")).toBeEmpty();
+  await card(page, "/plans").getByRole("button", { name: "Save agent mode" }).click();
+  await expect(card(page, "/plans")).toContainText(/Configured intent\s*Read and write/u);
+  await expect(card(page, "/archive")).toContainText(/Configured intent\s*Read and write/u);
+  await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read and write/u);
+
   await card(page, "/me").locator('input[value="read_write"]').check();
   await expect(card(page, "/me").getByRole("status")).toBeEmpty();
   await card(page, "/me").getByRole("button", { name: "Save agent mode" }).click();
   await expect(card(page, "/me")).toContainText(/Configured intent\s*Read and write/u);
   await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read and write/u);
-  await expect(page.locator('input[value="read_write"]:checked')).toHaveCount(2);
+  await expect(page.locator('input[value="read_write"]:checked')).toHaveCount(4);
 
   await card(page, "/research-notes").locator('input[value="read"]').check();
   expect((await context.request.post(`${origin}/_fixture/conflict`)).ok()).toBe(true);
@@ -73,7 +88,7 @@ test("Personal and ordinary write modes stay independent and reload server state
   )).toBeVisible();
   await expect(card(page, "/me")).toContainText(/Configured intent\s*Read and write/u);
   await expect(card(page, "/research-notes")).toContainText(/Configured intent\s*Read and write/u);
-  await expect(page.getByText("After an automatic write, Codex should report what changed", {
+  await expect(page.getByText("After a write, Codex should report what changed", {
     exact: false,
   }).first()).toBeVisible();
   expect((await context.request.post(`${origin}/_fixture/topics`)).ok()).toBe(true);

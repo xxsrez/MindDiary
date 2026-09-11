@@ -50,11 +50,37 @@ const archive = Object.freeze({
   isPersonal: false,
   visibility: "private",
   discovery: "membership",
-  access: Object.freeze({ kind: "membership", role: "reader", capabilities: ["content:read"] }),
+  access: Object.freeze({ kind: "membership", role: "owner", capabilities: ["content:read", "content:write"] }),
   metadataVersion: 1,
   headRevisionId: "revision_archive_browser",
 });
-let minds = Object.freeze([personal, research, archive]);
+const plans = Object.freeze({
+  mindId: "space_plans_browser",
+  route: "/plans",
+  handle: "plans",
+  name: "Plans",
+  description: "Plans, decisions, and the next concrete actions.",
+  isPersonal: false,
+  visibility: "private",
+  discovery: "membership",
+  access: Object.freeze({ kind: "membership", role: "editor", capabilities: ["content:read", "content:write"] }),
+  metadataVersion: 1,
+  headRevisionId: "revision_plans_browser",
+});
+const readonly = Object.freeze({
+  mindId: "space_readonly_browser",
+  route: "/readonly",
+  handle: "readonly",
+  name: "Read-only Mind",
+  description: "Shared reference material.",
+  isPersonal: false,
+  visibility: "private",
+  discovery: "membership",
+  access: Object.freeze({ kind: "membership", role: "reader", capabilities: ["content:read"] }),
+  metadataVersion: 1,
+  headRevisionId: "revision_readonly_browser",
+});
+let minds = Object.freeze([personal, research, archive, plans, readonly]);
 let usage = null;
 
 const control = {
@@ -83,29 +109,14 @@ const mindUsage = {
     if (command.expectedUsageVersion !== version) return { kind: "usage_version_conflict" };
     const selected = minds.find((mind) => mind.mindId === command.spaceId);
     if (selected === undefined) return { kind: "mind_not_found" };
-    if (command.usageMode === "read_write" && !selected.isPersonal && selected.description === null) {
-      return { kind: "description_required" };
-    }
     if (command.usageMode === "read_write" && !["editor", "admin", "owner"].includes(selected.access.role)) {
       return { kind: "writer_access_required" };
     }
     const entries = new Map((usage?.entries ?? []).map((entry) => [entry.spaceId, entry.usageMode]));
     if (command.usageMode === "disabled") entries.delete(command.spaceId);
-    else {
-      if (command.usageMode === "read_write") {
-        for (const [spaceId, mode] of entries) {
-          if (
-            !selected.isPersonal &&
-            spaceId !== personal.mindId &&
-            mode === "read_write" &&
-            spaceId !== command.spaceId
-          ) entries.set(spaceId, "read");
-        }
-      }
-      entries.set(command.spaceId, command.usageMode);
-    }
+    else entries.set(command.spaceId, command.usageMode);
     usage = Object.freeze({
-      contractVersion: "principal-mind-usage/v2",
+      contractVersion: "principal-mind-usage/v3",
       principalId: actor.principalId,
       usageVersion: version + 1,
       entries: Object.freeze([...entries].map(([spaceId, usageMode]) =>
@@ -148,14 +159,14 @@ const server = createServer(async (incoming, outgoing) => {
     return;
   }
   if (url.pathname === "/_fixture/topics" && incoming.method === "POST") {
-    minds = Object.freeze([{ ...personal, description: "Research decisions; exclude daily logs." }, research, archive]);
+    minds = Object.freeze([{ ...personal, description: "Research decisions; exclude daily logs." }, research, archive, plans, readonly]);
     outgoing.writeHead(200, { "content-type": "application/json" });
     outgoing.end('{"ok":true}');
     return;
   }
   if (url.pathname === "/_fixture/conflict" && incoming.method === "POST") {
     const current = usage ?? {
-      contractVersion: "principal-mind-usage/v2",
+      contractVersion: "principal-mind-usage/v3",
       principalId: actor.principalId,
       usageVersion: 0,
       entries: Object.freeze([]),

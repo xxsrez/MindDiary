@@ -230,8 +230,8 @@ function renderPrincipalMindUsageNotice(
   const canWrite = scopes.includes("content:write");
   return `<section class="md-credential-mode-panel" data-principal-mind-usage-notice>
     <h4>Account-wide Mind modes</h4>
-    <p>${scopes.includes("content:read") ? "This credential can read." : "This credential cannot read content."} ${canWrite ? "Its write scope can also be used when the account-wide Read and write mode and current rights allow it. Personal Mind without a description requires a direct request; described Personal and ordinary Minds follow matching topics." : "It has no write scope."}</p>
-    <p>Credentials do not select Minds or own a separate automatic-save setting.</p>
+    <p>${scopes.includes("content:read") ? "This credential can read." : "This credential cannot read content."} ${canWrite ? "Its write scope can also be used for every Mind whose account-wide mode and current rights allow it. A Mind without a description requires a direct request; described Minds follow matching topics." : "It has no write scope."}</p>
+    <p>Credentials do not select Minds or own separate automatic-save settings.</p>
     <p><a href="/minds#mind-usage-heading">Manage Mind modes</a></p>
   </section>`;
 }

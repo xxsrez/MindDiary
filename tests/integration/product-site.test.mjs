@@ -644,7 +644,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     assert.match(body, new RegExp(marker.replaceAll("/", "\\/")));
     if (path.endsWith(".js")) assert.doesNotThrow(() => new vm.Script(body));
     if (path === "/ui/mind-diary-ordinary-minds-list-client.js") {
-      assert.match(body, /principal-mind-usage\/v2/u);
+      assert.match(body, /principal-mind-usage\/v3/u);
       assert.match(body, /\/api\/v1\/mind-usage/u);
     }
     if (path === "/ui/mind-diary-connections-client.js") {
@@ -1091,23 +1091,9 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
         entry.usageMode,
       ]));
       if (command.usageMode === "disabled") entries.delete(command.spaceId);
-      else {
-        if (command.usageMode === "read_write") {
-          for (const [spaceId, mode] of entries) {
-            if (
-              command.spaceId !== personal.mindId &&
-              spaceId !== personal.mindId &&
-              mode === "read_write" &&
-              spaceId !== command.spaceId
-            ) {
-              entries.set(spaceId, "read");
-            }
-          }
-        }
-        entries.set(command.spaceId, command.usageMode);
-      }
+      else entries.set(command.spaceId, command.usageMode);
       usage = Object.freeze({
-        contractVersion: "principal-mind-usage/v2",
+        contractVersion: "principal-mind-usage/v3",
         principalId: registeredActor.principalId,
         usageVersion: currentVersion + 1,
         entries: Object.freeze([...entries].map(([spaceId, usageMode]) =>
@@ -1135,7 +1121,7 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
   const initial = await handler(new Request(`${origin}/api/v1/mind-usage`));
   assert.equal(initial.status, 200);
   const initialBody = await initial.json();
-  assert.equal(initialBody.data.contract_version, "principal-mind-usage/v2");
+  assert.equal(initialBody.data.contract_version, "principal-mind-usage/v3");
   assert.equal(initialBody.data.usage_version, 0);
   assert.deepEqual(initialBody.data.items.map((item) => item.usage_mode), [
     "disabled", "disabled", "disabled",
@@ -1147,7 +1133,7 @@ test("principal-wide Mind usage Web API is safe, atomic, versioned, and independ
   assert.equal(initialBody.data.items[2].description, null);
   assert.equal(initialBody.data.items[2].eligibility.can_read, true);
   assert.equal(initialBody.data.items[2].eligibility.can_write, false);
-  assert.equal(initialBody.data.items[2].eligibility.description_required, true);
+  assert.equal(initialBody.data.items[2].eligibility.description_required, false);
   assert.doesNotMatch(JSON.stringify(initialBody), /principal_one|space_|revision_|mind_id|generation/iu);
 
   const denied = await handler(new Request(`${origin}/api/v1/minds/archive/usage`, {
@@ -1329,7 +1315,7 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.equal(detail.status, 200);
   const detailHtml = await detail.text();
   assert.match(detailHtml, /data-mind-route data-mind-handle="research-notes"[^>]*data-mind-visibility="private"/);
-  assert.match(detailHtml, /For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description; My Mind is controlled independently\./u);
+  assert.match(detailHtml, /For an ordinary Mind, Read and write permits automatic saving of explicitly discussed durable knowledge that matches its description\. Without a description, Codex writes only when you ask\. Other Minds are controlled independently\./u);
   assert.doesNotMatch(detailHtml, /For My Mind, Read and write permits only the specific writes/u);
   assert.match(detailHtml, /data-owner-delete-controls/);
   assert.match(detailHtml, /data-owner-visibility-controls/);
@@ -1939,7 +1925,7 @@ test("Connections expose credential scopes only and reject retired per-credentia
     connectionRef,
     bindingOwnerId,
     clientName: "Codex Marketplace",
-    scopes: Object.freeze(["content:read", "content:write"]),
+    scopes: Object.freeze(["content:read"]),
     createdAt: "2026-08-08T00:00:00.000Z",
     lastUsedAt: null,
   });
@@ -1977,7 +1963,7 @@ test("Connections expose credential scopes only and reject retired per-credentia
     created_at: "2026-08-08T00:00:00.000Z",
     last_used_at: null,
     can_read: true,
-    can_write: true,
+    can_write: false,
   });
   assert.equal(JSON.stringify(collectionBody).includes(bindingOwnerId), false);
   assert.doesNotMatch(JSON.stringify(collectionBody), /mind_(?:count|selected)|target|binding/iu);
@@ -1986,8 +1972,10 @@ test("Connections expose credential scopes only and reject retired per-credentia
   assert.equal(detail.status, 200);
   const detailHtml = await detail.text();
   assert.match(detailHtml, /Credential scopes/);
+  assert.match(detailHtml, /Write scope is not available/);
   assert.match(detailHtml, /Mind modes belong to your account/);
-  assert.match(detailHtml, /shared by all your Connections and personal tokens|Every Connection and personal token sees the same configured/u);
+  assert.match(detailHtml, /Every Connection and personal token sees the same independent/u);
+  assert.match(detailHtml, /Several matching writable Minds can receive independent commits/u);
   assert.match(detailHtml, /href="\/minds#mind-usage-heading"/);
   assert.doesNotMatch(detailHtml, /data-access-action|mind-access|select_write|clear_write|attach_read|detach_read|writable target|binding-version/iu);
   assert.doesNotMatch(detailHtml, /md_oauth_grant_internal_must_not_render|space_(?:personal|research)/);

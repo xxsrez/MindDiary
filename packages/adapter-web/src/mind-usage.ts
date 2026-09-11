@@ -315,7 +315,7 @@ export function renderMindUsageCollection(): string {
         <h2 id="mind-usage-heading">How Codex uses your Minds</h2>
       </div>
     </div>
-    <p>Choose what Codex may do with each Mind. Descriptions define when to use it. My Mind without a description is used only when you ask; with one, it can use matching topics automatically. If both Minds match, Codex can use both independently.</p>
+    <p>Choose what Codex may do with each Mind independently. A description lets Codex use matching topics automatically; without one, it uses that Mind only when you ask. If several descriptions match, Codex can use every matching Mind independently.</p>
     <p class="md-caveat"><strong>Credentials can only narrow access.</strong> A Connection or token still needs its own read or write scope, and current Mind rights are checked on every call.</p>
     <section class="md-state md-state--loading" aria-busy="true" data-mind-usage-state>
       <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -331,7 +331,7 @@ export function renderMindUsagePanel(mindRef: string): string {
     : "";
   const policyCopy = safeRef === "/me"
     ? "My Mind without a description is used only when you ask. With a description, Codex reads matching topics and, when writing is allowed, saves discussed lasting knowledge. Ask Codex to configure your topics and exclusions."
-    : "For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description; My Mind is controlled independently.";
+    : "For an ordinary Mind, Read and write permits automatic saving of explicitly discussed durable knowledge that matches its description. Without a description, Codex writes only when you ask. Other Minds are controlled independently.";
   return `<section class="md-usage-section" aria-labelledby="mind-usage-heading" data-mind-usage-panel data-mind-ref="${safeRef}">
     <div>
       <p class="md-eyebrow">Agent intent</p>

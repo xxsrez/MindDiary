@@ -152,7 +152,7 @@ function renderOrdinaryConnectionAccess(
   }
   return `<section class="md-credential-mode-panel" data-principal-mind-usage-notice>
     <section aria-labelledby="connection-read-access-heading"><h2 id="connection-read-access-heading">Credential scopes</h2><p>${canRead ? "Read scope is available." : "Read scope is not available."} ${canWrite ? "Write scope is also available." : "Write scope is not available."} Scopes only narrow the account-wide Mind modes and never choose a destination.</p></section>
-    <section aria-labelledby="connection-mind-intent-heading"><h2 id="connection-mind-intent-heading">Mind modes belong to your account</h2><p>Every Connection and personal token sees the same configured “Off”, “Read only”, or “Read and write” intent. Current rights, routing profile, each Mind’s description and this credential’s scopes are checked again on every call. Personal Mind without a description requires your direct request. With a description, it follows matching topics within its mode and current rights.</p><p><a class="md-button md-button--secondary" href="/minds#mind-usage-heading">Manage Mind modes</a></p></section>
+    <section aria-labelledby="connection-mind-intent-heading"><h2 id="connection-mind-intent-heading">Mind modes belong to your account</h2><p>Every Connection and personal token sees the same independent “Off”, “Read only”, or “Read and write” mode for each Mind. Current rights, each Mind’s description and this credential’s scopes are checked again on every call. A Mind without a description requires your direct request; described Minds follow matching topics within their modes. Several matching writable Minds can receive independent commits.</p><p><a class="md-button md-button--secondary" href="/minds#mind-usage-heading">Manage Mind modes</a></p></section>
   </section>`;
 }
 
@@ -171,7 +171,7 @@ function renderAdvancedTokenAccess(
   const writeHeading = `token-write-access-${input.headingSuffix}`;
   return `<section class="md-credential-mode-panel" data-principal-mind-usage-notice>
     <section aria-labelledby="${readHeading}"><h4 id="${readHeading}">Credential scope</h4><p>${input.canRead ? "This token can read." : "This token cannot read content."} ${input.canWrite ? "It can also write when the account-wide Mind mode and current rights allow it." : "It cannot write."}</p></section>
-    <section aria-labelledby="${writeHeading}"><h4 id="${writeHeading}">Account-wide Mind modes</h4><p>This token does not own a separate Mind choice. Manage the one shared intent for all credentials on the Minds page.</p><p><a href="/minds#mind-usage-heading">Manage Mind modes</a></p></section>
+    <section aria-labelledby="${writeHeading}"><h4 id="${writeHeading}">Account-wide Mind modes</h4><p>This token does not own separate Mind choices. Manage the independent modes shared by all credentials on the Minds page.</p><p><a href="/minds#mind-usage-heading">Manage Mind modes</a></p></section>
   </section>`;
 }
 

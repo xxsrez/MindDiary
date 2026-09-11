@@ -57,19 +57,14 @@
   const safeProjection = (value) => {
     if (
       !value || typeof value !== "object" ||
-      value.contract_version !== "principal-mind-usage/v2" ||
+      value.contract_version !== "principal-mind-usage/v3" ||
       !Number.isSafeInteger(value.usage_version) || value.usage_version < 0 ||
       !Array.isArray(value.items)
     ) return null;
     const items = value.items.map(safeItem);
     if (items.some((item) => item === null)) return null;
     const refs = new Set(items.map((item) => item.mind_ref));
-    const writable = items.filter((item) => item.usage_mode === "read_write");
-    if (
-      refs.size !== items.length ||
-      writable.filter((item) => item.is_personal).length > 1 ||
-      writable.filter((item) => !item.is_personal).length > 1
-    ) return null;
+    if (refs.size !== items.length) return null;
     return { usageVersion: value.usage_version, items };
   };
   const modeLabel = (mode) => mode === "disabled"
@@ -84,18 +79,15 @@
       ? "Unlisted — signed-in readers with the exact link"
       : "Public — listed for signed-in readers";
   const effectiveCopy = (item) => item.effective.can_write
-    ? item.is_personal
-      ? item.description ? "Reading and saving matching discussed knowledge are enabled for a write-scoped credential." : "Reading and specifically requested writes are effective for a write-scoped credential."
-      : "Read and automatic writes are effective for a write-scoped credential."
+    ? item.description
+      ? "Reading and saving matching discussed knowledge are enabled for a write-scoped credential."
+      : "Reading and specifically requested writes are effective for a write-scoped credential."
     : item.effective.can_read
       ? "Reading is effective for a read-scoped credential; writing is not."
       : "Codex will not use this Mind.";
   const warningCopy = (item) => {
     const warnings = [];
-    if (item.eligibility.description_required) {
-      warnings.push("Add a routing description before choosing Read and write. Read only still works when you name this Mind directly.");
-    }
-    if (!item.eligibility.can_write && !item.eligibility.description_required) {
+    if (!item.eligibility.can_write) {
       warnings.push("Your current Mind role does not allow content writes. The configured intent never expands your rights.");
     }
     if (item.visibility !== "private") {
@@ -125,7 +117,7 @@
     title.append(link);
     const description = node("p", "md-usage-copy", item.description ?? (item.is_personal
       ? "No topics configured. Codex uses My Mind only when you ask. Ask Codex to configure your topics and exclusions."
-      : "No routing description. Semantic matching is unavailable."));
+      : "No routing description. Codex uses this Mind only when you ask; automatic topic matching is unavailable."));
     const metadata = node("dl", "md-card__metadata");
     const definition = (term, value) => {
       const group = node("div");
@@ -147,10 +139,10 @@
     fieldset.append(
       node("legend", "", "Agent mode"),
       modeOption(item, "disabled", "Off", "Do not expose this Mind to Codex."),
-      modeOption(item, "read", "Read only", item.is_personal && !item.description
-        ? "Use it when you name My Mind directly."
+      modeOption(item, "read", "Read only", !item.description
+        ? "Use it when you name this Mind directly."
         : "Use it when you name it or its description matches the topic."),
-      modeOption(item, "read_write", "Read and write", item.is_personal && !item.description
+      modeOption(item, "read_write", "Read and write", !item.description
         ? "Allow only the specific saves, updates, or deletions you directly ask Codex to make."
         : "Also save discussed durable knowledge that matches this description."),
     );
@@ -164,7 +156,7 @@
     }
     const receipt = node("p", "md-usage-copy", item.is_personal
       ? "After a write, Codex should report what changed in My Mind after server read-back."
-      : "After an automatic write, Codex should report what changed and which Mind received it, after server read-back.");
+      : "After a write, Codex should report what changed and which Mind received it, after server read-back.");
     const actions = node("div", "md-usage-actions");
     const submit = node("button", "md-button md-button--primary", "Save agent mode");
     submit.type = "submit";
@@ -180,13 +172,7 @@
     form.addEventListener("change", () => {
       const selected = form.querySelector('input[type="radio"]:checked')?.value ?? "";
       submit.disabled = !modes.has(selected) || selected === form.dataset.currentMode;
-      const otherWritable = projection.items.find((candidate) =>
-        candidate.usage_mode === "read_write" &&
-        candidate.is_personal === item.is_personal &&
-        candidate.mind_ref !== item.mind_ref);
-      status.textContent = selected === "read_write" && otherWritable
-        ? `Saving will atomically move ${otherWritable.name} to Read only.`
-        : "";
+      status.textContent = "";
     });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -218,11 +204,9 @@
         }
         fieldset.disabled = false;
         submit.disabled = false;
-        status.textContent = error?.code === "description_required"
-          ? "Add and save a routing description, then reload current settings before choosing Read and write."
-          : error?.code === "usage_not_allowed"
-            ? "Current access no longer allows this mode. Reload the page to review rights."
-            : error?.message ?? "Agent intent was not changed.";
+        status.textContent = error?.code === "usage_not_allowed"
+          ? "Current access no longer allows this mode. Reload the page to review rights."
+          : error?.message ?? "Agent intent was not changed.";
       }
     });
     article.append(title, description, metadata, form);

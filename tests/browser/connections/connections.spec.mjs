@@ -182,7 +182,7 @@ for (const definition of fixtureDefinitions) {
         const readHeading = page.getByRole("heading", { level: 2, name: "Credential scopes" });
         await expect(readHeading).toBeVisible();
         await expect(page.getByRole("heading", { level: 2, name: "Mind modes belong to your account" })).toBeVisible();
-        await expect(page.getByText("Every Connection and personal token sees the same configured", { exact: false })).toBeVisible();
+        await expect(page.getByText("Every Connection and personal token sees the same independent", { exact: false })).toBeVisible();
         const readSummary = readHeading.locator("..");
         await expect(readSummary).toContainText("Scopes only narrow the account-wide Mind modes");
         await expect(readSummary.locator("li, select, button")).toHaveCount(0);
@@ -431,7 +431,7 @@ test("Advanced MCP shows credential scope without a token target and keeps revok
   await expectNoHorizontalOverflow(page);
   await expect(token.getByRole("heading", { name: "Credential scope" })).toBeVisible();
   await expect(token.getByRole("heading", { name: "Account-wide Mind modes" })).toBeVisible();
-  await expect(token.getByText("This token does not own a separate Mind choice", { exact: false })).toBeVisible();
+  await expect(token.getByText("This token does not own separate Mind choices", { exact: false })).toBeVisible();
   await expect(token.getByRole("link", { name: "Manage Mind modes" }))
     .toHaveAttribute("href", "/minds#mind-usage-heading");
   await expect(token).not.toContainText(/writable target|bind|unbind|capture/iu);
