@@ -767,7 +767,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "baefc725d201c08037dccbd94e8f16362971379e",
+      gitBlob: "af622de257e799ce78e135dc1d82519626d02141",
     },
     {
       surface: "plugin-label",
@@ -830,7 +830,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "0d23edd043cae1dc289d262dfabe11cf9560409b",
+          gitBlob: "ab18d11562c956189fe4f059c1bbbe1e4a3aa633",
         },
         {
           role: "installed-skill-probe-source",
@@ -853,7 +853,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "baefc725d201c08037dccbd94e8f16362971379e",
+        gitBlob: "af622de257e799ce78e135dc1d82519626d02141",
       }],
     },
     {
@@ -865,7 +865,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-playbook-source",
           path: "packages/adapter-web/src/token-management.ts",
-          gitBlob: "7d92c18c163e6a027e66e435e3d86cd1904a47d8",
+          gitBlob: "cf31fa2f523d4bed48759671da4d068b117f27f6",
         },
         {
           role: "help-route-source",

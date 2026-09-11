@@ -1,6 +1,6 @@
 # Plugin и OAuth Mind Diary
 
-> **ADR-0028, 2026-09-11; multi-Mind реализация и UAT ещё не подтверждены.**
+> **ADR-0028, 2026-09-11; локальная multi-Mind реализация подтверждена, UAT ещё нет.**
 > Mode задаёт разрешённые действия, nullable description — темы автоматического
 > использования Personal и ordinary Minds. Любой enabled Mind без description
 > используется только по прямой просьбе; с description — по теме. Все
@@ -286,21 +286,21 @@ search и fetch без общего cross-Mind search или фонового va
 
 После содержательного разговора skill рассматривает всё durable knowledge,
 явно обсуждённое в текущей conversation, включая обсуждённое знание из другого
-enabled readable Mind. Если единственный fresh effective ordinary
-`read_write` Mind соответствует знанию своим description, агент автоматически сохраняет
-его обычным
-`commit_changeset`: отдельная write-инструкция, toggle или confirmation не
-нужны. Перед изменением он целево ищет существующую Memory и выбирает
-create/update/явный delete/semantic no-op; changeset детерминированно обновляет
+enabled readable Mind. Каждый fresh effective `read_write` Mind с непустым
+подходящим description становится самостоятельным destination: отдельная
+write-инструкция, toggle или confirmation не нужны. Перед изменением агент
+целево ищет существующую Memory и выбирает create/update/явный
+delete/semantic no-op для каждого Mind; changeset детерминированно обновляет
 index/log, сохраняет неизвестные OKF types/fields и при cross-Mind переносе
 передаёт optional exact `source_references`.
 
-Если выбранный writable destination — canonical Personal `/me`, ни совпадение темы, ни
-обсуждение, ни read request, ни прежняя просьба не запускают write. Skill
-вызывает тот же `commit_changeset` только после прямой просьбы текущего
-пользователя сохранить, запомнить, добавить, обновить или удалить конкретное
-знание; `/me` при этом должен быть effective в своём `read_write` lane. Это не
-отключает и не заменяет ordinary automatic-write Mind.
+Любой writable Mind без description используется для записи только после
+прямой просьбы текущего пользователя сохранить, запомнить, добавить, обновить
+или удалить конкретное знание именно там. Такая просьба снимает только
+semantic-match условие; mode, scope, ACL и current role остаются обязательными.
+Фраза «only» ограничивает destinations названным множеством. Для каждого Mind
+skill выполняет независимый commit/read-back, сообщает no-op, failure и unknown
+отдельно, не откатывает успешную копию и не синхронизирует их позднее.
 Отдельного Personal write tool и клиентского intent flag нет.
 
 Client `mind` — только exact assertion. Server сам разрешает principal-owned

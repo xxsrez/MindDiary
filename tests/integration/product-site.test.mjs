@@ -988,9 +988,15 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /Choose readable Minds and start/u);
   assert.match(codexHelpHtml, /current rights and credential scope checks/u);
   assert.match(codexHelpHtml, /Writing is optional/u);
-  assert.match(codexHelpHtml, /choose Read and write for at most one ordinary Mind/u);
-  assert.match(codexHelpHtml, /Personal Mind without a description needs your direct request for each specific write/u);
-  assert.match(codexHelpHtml, /one account-wide choice is shared by every Connection and personal token/u);
+  assert.match(codexHelpHtml, /choose Read and write independently for every ordinary or Personal Mind/u);
+  assert.match(codexHelpHtml, /Any Mind without a description needs your direct request for a specific write there/u);
+  assert.match(codexHelpHtml, /This account-wide set is shared by every Connection and personal token/u);
+  assert.match(codexHelpHtml, /automatically save each durable fact or decision discussed now to every matching Mind/u);
+  assert.match(codexHelpHtml, /Refresh list_minds before writing/u);
+  assert.match(codexHelpHtml, /&#39;only&#39; limits destinations/u);
+  assert.match(codexHelpHtml, /Updating this help page does not replace Custom Instructions you already saved/u);
+  assert.match(codexHelpHtml, /Copy isolated routing check/u);
+  assert.match(codexHelpHtml, /at least three writable Minds matching descriptions/u);
   assert.match(codexHelpHtml, /Create the first useful Memory/);
   assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/);
   assert.match(codexHelpHtml, /href="\/settings\/developer\/mcp">Advanced MCP/);
@@ -999,6 +1005,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     /MIND_DIARY_TOKEN|PKCE|binding_version|write_binding_id/i,
   );
   assert.doesNotMatch(codexHelpHtml, /attach at least one Mind|select, switch, or clear this target/u);
+  assert.doesNotMatch(codexHelpHtml, /This instruction permits reading, not writing|at most one ordinary Mind/u);
 
   for (const path of ["/api", "/mcp", "/settings", "/settings/unknown", "/minds/extra"]) {
     assert.equal(await handler(new Request(`${origin}${path}`)), null, path);

@@ -1,7 +1,8 @@
 # Режимы использования Mind и автоматическое сохранение
 
-Статус: accepted target contract, обновлено 2026-09-11 по MD-436. Multi-Mind
-поправка ещё не реализована и не проверена в UAT.
+Статус: accepted target contract, обновлено 2026-09-11 по MD-436–MD-441.
+Multi-Mind поправка реализована и проверена на локальном candidate; UAT ещё не
+подтверждён.
 
 [ADR-0028](../decisions/0028-multiple-writable-minds.md) заменяет singleton
 ordinary lane из [ADR-0024](../decisions/0024-principal-mind-usage-modes-and-automatic-save.md)

@@ -32,7 +32,7 @@ test("copy-ready starter template exactly matches one strict checked-in OKF 0.2 
 
 test("starter and concierge playbooks keep the supported Codex-first boundary explicit", () => {
   for (const expected of [
-    "one Mind whose effective mode is Read and write",
+    "name exactly one enabled Mind",
     "UTF-8 Markdown",
     "validate_mind",
     "fetch index.md",
@@ -40,14 +40,15 @@ test("starter and concierge playbooks keep the supported Codex-first boundary ex
     "fetch the returned entry",
     "do not ask me to construct wire JSON",
     "Never request or repeat a token",
-    "commit it automatically",
-    "do not ask for a separate write instruction or product confirmation",
+    "direct request in this conversation",
+    "description matching is not required for this exact direct write",
+    "do not ask for another product confirmation",
   ]) {
     assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, new RegExp(expected, "u"));
   }
   for (const expected of [
     "concierge work, not a product import",
-    "one Mind whose effective mode is Read and write",
+    "name exactly one Mind whose effective mode is Read and write",
     "UTF-8 Markdown only",
     "Do not create or imply a ZIP/import/upload/crawl API",
     "Never put the target Mind's whole canonical corpus into the prompt",

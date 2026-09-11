@@ -187,7 +187,7 @@ test("credential cards ignore legacy binding and capture projections in favor of
   });
 
   assert.match(html, /Account-wide Mind modes/);
-  assert.match(html, /Credentials do not select Minds or own a separate automatic-save setting/);
+  assert.match(html, /Credentials do not select Minds or own separate automatic-save settings/);
   assert.match(html, /Manage Mind modes/);
   assert.doesNotMatch(html, /Personal Notes|Shared Research|Public Reader|Attached Minds|Version 4/iu);
   assert.doesNotMatch(html, /data-binding-action|data-binding-form|Automatic knowledge capture|routine_non_sensitive/iu);
@@ -272,13 +272,14 @@ test("Codex recovery playbooks require preview, confirmation, fresh CAS, immutab
 test("starter and concierge playbooks render as secret-free copy-ready guidance", () => {
   const html = renderMcpTokenManagement(model({ kind: "empty" }));
 
-  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /one Mind whose effective mode is Read and write/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /name exactly one enabled Mind/u);
   assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /validate_mind/u);
   assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /search for a distinctive phrase/u);
   assert.match(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK, /not a product import/u);
   assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Call list_minds before any content operation/u);
-  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /commit it automatically/u);
-  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /do not ask for a separate write instruction or product confirmation/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /direct request in this conversation/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /description matching is not required for this exact direct write/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /do not ask for another product confirmation/u);
   assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Minds page/u);
   assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /content MCP never changes usage mode/u);
   assert.match(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK, /ZIP\/import\/upload\/crawl API/u);

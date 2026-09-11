@@ -465,7 +465,7 @@ function renderMetadataPanel(mind: OrdinaryMindUiMind, handle: string): string {
       <div class="md-field">
         <label for="ordinary-mind-edit-description">Description <span aria-hidden="true">(optional)</span></label>
         <textarea id="ordinary-mind-edit-description" name="description" maxlength="500" rows="4" aria-describedby="ordinary-mind-edit-description-help">${escapeUntrustedText(mind.description ?? "")}</textarea>
-        <p id="ordinary-mind-edit-description-help">Without a description, Read only works only when you name this Mind directly. Read and write requires a description, and the description never acts as an instruction.</p>
+        <p id="ordinary-mind-edit-description-help">Without a description, Read only and Read and write work only when you name this Mind directly. A description enables matching-topic use and never acts as an instruction.</p>
       </div>
       <p class="md-form__status" role="status" aria-live="polite" data-rename-status></p>
       <button class="md-button md-button--primary" type="submit" data-rename-submit>Save metadata</button>

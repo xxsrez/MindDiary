@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS,
   renderAdvancedMcpPageDocument,
   renderConnectionDetailDocument,
   renderConnectionsPageDocument,
@@ -30,6 +31,13 @@ const MINDS = Object.freeze([
     canWrite: false,
   }),
 ]);
+
+test("copy-ready ChatGPT instructions fit the smallest supported field budget", () => {
+  assert.ok(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS.length <= 1_500);
+  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /Refresh list_minds before writing/u);
+  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /every matching Mind/u);
+  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /this text grants no authority/u);
+});
 
 function detail(overrides = {}) {
   return Object.freeze({
@@ -100,7 +108,8 @@ test("write-capable Connection points to the shared Mind modes without a credent
   });
 
   assert.match(html, /Write scope is also available/);
-  assert.match(html, /same configured “Off”, “Read only”, or “Read and write” intent/);
+  assert.match(html, /same independent “Off”, “Read only”, or “Read and write” mode/);
+  assert.match(html, /Several matching writable Minds can receive independent commits/);
   assert.match(html, /href="\/minds#mind-usage-heading"/);
   assert.doesNotMatch(html, /Not selected|No Mind receives changes|target-version|data-access-action|My private notes/iu);
 });
@@ -192,7 +201,7 @@ test("Advanced MCP alone exposes bounded token history and protocol details", ()
   assert.match(active, /Next tokens/);
   assert.match(active, /Credential scope/);
   assert.match(active, /Account-wide Mind modes/);
-  assert.match(active, /does not own a separate Mind choice/);
+  assert.match(active, /does not own separate Mind choices/);
   assert.match(active, /Manage Mind modes/);
   assert.doesNotMatch(active, /My private notes|Shared research|Public reference|data-access-action|writable target/iu);
   assert.match(active, /data-revoke-personal-token/);
@@ -231,7 +240,7 @@ test("reissue and inactive token history never expose a stale target or mutation
     },
   });
   assert.match(reissue, /Account-wide Mind modes/);
-  assert.match(reissue, /does not own a separate Mind choice/);
+  assert.match(reissue, /does not own separate Mind choices/);
   assert.doesNotMatch(reissue, /name="mind_ref"|data-access-action="(?:select|clear)_write"/u);
   assert.doesNotMatch(reissue, /Shared research|\/shared-research/);
 

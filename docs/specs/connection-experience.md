@@ -1,15 +1,17 @@
 # Connections, Advanced MCP и Codex Help
 
-> **Target amendment MD-373, 2026-08-30.** Mind mode теперь настраивается на
+> **Target amendment ADR-0028 / MD-441, 2026-09-11.** Mind mode настраивается на
 > странице Mind как `disabled | read | read_write` и принадлежит principal.
 > Connections и Advanced MCP больше не выбирают writable target и не содержат
 > capture toggle; они показывают только lifecycle/scopes и derived effective
-> capability. Нормативный replacement —
+> capability. Несколько ordinary Minds и Personal могут независимо иметь
+> `read_write`; nullable description управляет automatic routing, а прямая
+> просьба выбирает exact enabled destinations без semantic match. Нормативный replacement —
 > [режимы использования Mind](mind-usage-modes.md); historical UI ниже
 > сохраняется как evidence до MD-375/MD-377.
 
 Статус: accepted historical Release 0.1/0.2 evidence и реализованный локальный
-Release 0.3 target candidate, обновлено 2026-08-28. Access replacement принят
+Release 0.4 target candidate, обновлено 2026-09-11. Access replacement принят
 в [MD-339 contract](credential-write-target.md), реализован MD-343; live UAT
 evidence exact candidate проверяется отдельно.
 
@@ -79,17 +81,24 @@ OAuth settings выбрать DCR, canonical resource `/api/mcp`, только `
 MCP app в разделе Plugins, а не установка пакета Codex со skills и hooks;
 публичная публикация для собственного подключения не нужна.
 После проверки подключения обязательно добавить копируемое правило в Settings →
-Personalization → Custom instructions, сохранив прежние инструкции: перед вебом
-найти Mind Diary UAT через доступный поиск подключений, загрузить инструменты,
-вызвать list_minds и читать подходящие Minds как приоритетный источник; веб
-дополняет данные и проверяет актуальность. Правило не разрешает запись, обход
-Personal restrictions или передачу приватного corpus в веб. Завершить настройку
-нейтральным запросом по теме включённого Mind без упоминания продукта и проверить
-реальный tool call. Автоматический выбор не гарантируется; при пропуске источника
-использовать явную просьбу. ChatGPT guide не предлагает установку skill.
+Personalization → Custom instructions, сохранив прежние инструкции. Шаблон
+требует fresh `list_minds` в начале каждого релевантного запроса и повторно перед
+записью, если настройки могли измениться. Подходящие Minds читаются как
+приоритетный источник; веб дополняет данные и проверяет актуальность, но private
+corpus не переносится в web query. Для durable knowledge, явно обсуждённого в
+текущем разговоре, правило автоматически обрабатывает каждый matching effective
+`read_write` Mind отдельным dedupe/commit/read-back. Прямая просьба может выбрать
+точно названные writable Minds без description, а «only» ограничивает fan-out.
+Scope, ACL, current role, Personal-to-shared boundary и недоверенность
+description/corpus сохраняются. Публикация новой версии шаблона не изменяет уже
+сохранённые персональные Custom Instructions: пользователь копирует и сохраняет
+его явно. Завершить настройку нейтральным запросом по теме включённого Mind без
+упоминания продукта и проверить реальный tool call. ChatGPT guide не предлагает
+установку skill.
 Ошибка `Sign in to Mind Diary before connecting` требует входа в Site в том же
 браузере и обновления OAuth-вкладки. Инструкция не обещает проверенную работу
-mobile или записи: для записи требуется отдельный `content:write` consent.
+mobile. Для записи всё равно требуются отдельный `content:write` consent,
+`read_write` exact Mind и current writer rights; prompt не расширяет authority.
 
 Desktop path показывает проверяемый текущий flow:
 

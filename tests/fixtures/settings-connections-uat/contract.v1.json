@@ -34,11 +34,12 @@
     "real DOM exposes four canonical routes for the 21-item fixture": "SC-OAUTH-01",
     "mobile viewport keeps every route bounded and opens primary navigation by keyboard": "SC-NAV-01",
     "ordinary Connections and Help never load personal-token history or diagnostics": "SC-PRIVACY-01",
-    "Codex guide switches Desktop and CLI paths by keyboard and copies exact current inputs": "SC-NAV-01",
+    "Connection guide switches all three clients by keyboard and copies exact current inputs": "SC-NAV-01",
     "keyboard-only connection journey exposes progress, revoke, and reconnect states": "SC-OAUTH-02",
     "Advanced MCP shows credential scope without a token target and keeps revoke history": "SC-TOKEN-01",
     "Advanced MCP dialog receives and restores focus without exposing raw identifiers": "SC-TOKEN-02",
-    "deterministic error fixtures keep actions unavailable on both credential surfaces": "SC-FAIL-CLOSED-01"
+    "deterministic error fixtures keep actions unavailable on both credential surfaces": "SC-FAIL-CLOSED-01",
+    "Settings uses a side menu and reveals secondary work only on request": "SC-NAV-01"
   },
   "hosted_states": {
     "help": ["no_connection", "active", "revoked"],
