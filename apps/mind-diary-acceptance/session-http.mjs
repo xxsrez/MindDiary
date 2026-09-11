@@ -48,6 +48,12 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
       return json({ status: "authenticated" }, 200, { "set-cookie": session.cookie });
     }
     if (!(await controller(request, controllerKey))) return json({ error: "controller_required" }, 401);
+    const externalRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/external-mcp$/.exec(pathname);
+    if (externalRoute) {
+      if (request.method === "POST") return json(await store.enableExternalMcp(externalRoute[1], await body(request)));
+      if (request.method === "DELETE") return json(await store.revokeExternalMcp(externalRoute[1]));
+      return json({ error: "not_found" }, 404);
+    }
     if (pathname === "/_acceptance/inventory" && request.method === "GET" && inventory) return json(await inventory());
     if (pathname === "/_acceptance/recover" && request.method === "POST" && cleanup) {
       if (Object.keys(await body(request)).length !== 0) return json({ error: "invalid_request" }, 400);
@@ -81,7 +87,7 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     return json({ error: "not_found" }, 404);
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
-    const status = code === "exchange_denied" ? 401 : code === "run_not_found" ? 404
+    const status = code === "exchange_denied" ? 401 : code === "external_mcp_denied" ? 403 : code === "run_not_found" ? 404
       : ["run_capacity_reached", "idempotency_conflict"].includes(code) ? 409
       : ["invalid_run", "invalid_actor", "invalid_run_request", "invalid_idempotency_key", "invalid_request"].includes(code) ? 400 : 503;
     return json({ error: status === 503 ? "acceptance_unavailable" : code }, status);

@@ -17,6 +17,13 @@ test("controller and browser exchange reject forged identity, origin and oversiz
   assert.equal((await call("/_acceptance/runs", { email: "owner@example.com" }, controller)).status, 400);
   assert.equal((await call("/_acceptance/runs", "x".repeat(16385), controller)).status, 400);
   const run = await (await call("/_acceptance/runs", {}, controller)).json();
+  const external = `/_acceptance/runs/${run.run_id}/external-mcp`;
+  assert.equal((await call(external, { ttl_seconds: 60 })).status, 401);
+  assert.equal((await call(external, { ttl_seconds: 60 }, { ...controller, origin: "https://foreign.invalid" })).status, 403);
+  assert.equal((await call(external, { ttl_seconds: 901 }, controller)).status, 400);
+  assert.equal((await call(external, { ttl_seconds: 60 }, controller)).status, 403);
+  await store.bindPrincipal({ id: run.actors[0].actor_id, run_id: run.run_id }, "test-owner");
+  assert.equal((await call(external, { ttl_seconds: 60 }, controller)).status, 200);
   const exchange = await (await call(`/_acceptance/runs/${run.run_id}/exchanges`, { actor_id: run.actors[0].actor_id }, controller)).json();
   assert.equal((await call("/_acceptance/session", { code: exchange.code })).status, 403);
   assert.equal((await call("/_acceptance/session", { code: exchange.code }, { origin: "https://foreign.invalid" })).status, 403);

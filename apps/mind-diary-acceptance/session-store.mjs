@@ -11,6 +11,7 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS md_acceptance_exchanges (verifier TEXT PRIMARY KEY, run_id TEXT NOT NULL, actor_id TEXT NOT NULL, audience TEXT NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER)`,
   `CREATE TABLE IF NOT EXISTS md_acceptance_sessions (verifier TEXT PRIMARY KEY, run_id TEXT NOT NULL, actor_id TEXT NOT NULL, audience TEXT NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS md_acceptance_sessions_actor ON md_acceptance_sessions(actor_id)`,
+  `CREATE TABLE IF NOT EXISTS md_acceptance_external_mcp (run_id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)`,
 ];
 
 export class AcceptanceSessionStore {
@@ -113,11 +114,47 @@ export class AcceptanceSessionStore {
   }
   async admitPrincipal(principalId, request) {
     await this.ready();
+    if (new URL(request.url).origin !== ACCEPTANCE_ORIGIN) return false;
     const runId = request.headers.get("x-md-acceptance-run");
+    if (runId === null) {
+      const now = this.now();
+      const row = await this.statement(`SELECT a.id FROM md_acceptance_external_mcp e
+        JOIN md_acceptance_runs r ON r.id = e.run_id
+        JOIN md_acceptance_actors a ON a.id = e.actor_id AND a.run_id = r.id
+        WHERE a.principal_id = ? AND a.ordinal = 0 AND a.revoked = 0
+        AND r.profile = 'collaboration' AND r.state = 'active' AND r.expires_at > ?
+        AND e.revoked = 0 AND e.expires_at > ?`, principalId, now, now).first();
+      return row !== null;
+    }
     if (!uuid(runId)) return false;
     const row = await this.statement(`SELECT a.id FROM md_acceptance_actors a JOIN md_acceptance_runs r ON r.id = a.run_id
       WHERE a.principal_id = ? AND r.id = ? AND r.state = 'active' AND r.expires_at > ? AND a.revoked = 0`, principalId, runId, this.now()).first();
     return row !== null;
+  }
+  async enableExternalMcp(runId, input) {
+    await this.ready();
+    if (!uuid(runId) || !input || Object.keys(input).length !== 1
+      || !Number.isInteger(input.ttl_seconds) || input.ttl_seconds < 60 || input.ttl_seconds > 900) fail("invalid_request");
+    const now = this.now();
+    await this.statement(`INSERT OR IGNORE INTO md_acceptance_external_mcp (run_id,actor_id,expires_at)
+      SELECT r.id,a.id,MIN(r.expires_at,?) FROM md_acceptance_runs r
+      JOIN md_acceptance_actors a ON a.run_id = r.id
+      WHERE r.id = ? AND r.profile = 'collaboration' AND r.state = 'active' AND r.expires_at > ?
+      AND a.ordinal = 0 AND a.revoked = 0 AND a.principal_id IS NOT NULL`,
+    now + input.ttl_seconds * 1000, runId, now).run();
+    const lease = await this.statement(`SELECT e.expires_at FROM md_acceptance_external_mcp e
+      JOIN md_acceptance_runs r ON r.id = e.run_id
+      JOIN md_acceptance_actors a ON a.id = e.actor_id AND a.run_id = r.id
+      WHERE r.id = ? AND r.state = 'active' AND r.expires_at > ? AND a.revoked = 0
+      AND e.revoked = 0 AND e.expires_at > ?`, runId, now, now).first();
+    if (!lease) fail("external_mcp_denied");
+    return { run_id: runId, expires_at: lease.expires_at };
+  }
+  async revokeExternalMcp(runId) {
+    await this.ready();
+    if (!uuid(runId)) fail("invalid_run");
+    await this.statement("UPDATE md_acceptance_external_mcp SET revoked = 1 WHERE run_id = ?", runId).run();
+    return { run_id: runId, revoked: true };
   }
   async operatorPrincipalIds() {
     await this.ready();

@@ -12,6 +12,8 @@ for (const point of ["after_revoke", "before_delete", "after_delete", "after_act
     const store = new AcceptanceSessionStore(db);
     const run = await store.create({}, "journal-first-run-0001");
     const other = await store.create({}, "journal-other-run-0001");
+    await store.bindPrincipal(run.actors[0], `principal_${run.actors[0].id}`);
+    await store.enableExternalMcp(run.id, { ttl_seconds: 900 });
     const active = new Set(run.actors.map(a => a.id)); let deletes = 0;
     const product = async (actor, request) => {
       const path = new URL(request.url).pathname;
@@ -34,6 +36,7 @@ for (const point of ["after_revoke", "before_delete", "after_delete", "after_act
     assert.deepEqual(await cleanupRun(restored, run.id, product, async () => {}), receipt);
     assert.equal((await restored.run(other.id)).state, "active");
     assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM md_acceptance_cleanup_journal").first()).count, 0);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM md_acceptance_external_mcp").first()).count, 0);
   });
 }
 
