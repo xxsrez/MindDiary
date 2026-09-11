@@ -1020,6 +1020,47 @@ test("Product Worker recovers authenticated web and MCP reads around a late cano
   await Promise.allSettled(waits);
 });
 
+test("operator recovery requires existing allowlist, Sites identity, exact Origin and CSRF", async () => {
+  let authenticated = true;
+  const options = {
+    database: new FakeD1Database(), bucket: new FakeR2Bucket(), publicOrigin: ORIGIN,
+    identity: { readVerifiedIdentity() {
+      return authenticated ? { kind: "authenticated", verifiedEmail: "maintenance.owner@example.com", verifiedFullName: "Maintenance Owner" }
+        : { kind: "unauthenticated" };
+    } },
+    tokenVerifierKey: key(171), locatorKey: key(211), exportDownloadVerifierKey: key(251), csrfKey: key(35),
+    observabilityWriter: { write() {} }, schedule() {},
+  };
+  let runtime = await createProductSiteRuntime(options);
+  const registerCsrf = csrfFromHtml(await (await responseFrom(runtime, new Request(ORIGIN))).text());
+  const bootstrap = await responseFrom(runtime, new Request(ORIGIN + "/api/v1/account", {
+    method: "POST", headers: { origin: ORIGIN, "content-type": "application/json", "x-csrf-token": registerCsrf, "idempotency-key": "maintenance:bootstrap" },
+    body: JSON.stringify({ action: "create_isolated_account" }),
+  }));
+  assert.equal(bootstrap.status, 200);
+  const principalId = (await bootstrap.json()).data.principal_id;
+  assert.equal(typeof principalId, "string");
+  const csrf = csrfFromHtml(await (await responseFrom(runtime, new Request(ORIGIN + "/settings/developer/mcp"))).text());
+  const request = (body = { limit: 1 }, headers = {}) => new Request(ORIGIN + "/api/v1/internal/operators/recovery", {
+    method: "POST", headers: { origin: ORIGIN, "content-type": "application/json", "x-csrf-token": csrf, ...headers }, body: JSON.stringify(body),
+  });
+  assert.equal((await responseFrom(runtime, request())).status, 404);
+  runtime = await createProductSiteRuntime({ ...options, serviceOperatorPrincipalIds: [principalId] });
+  assert.equal((await responseFrom(runtime, request({ limit: 1 }, { origin: "https://foreign.example" }))).status, 403);
+  assert.equal((await responseFrom(runtime, request({ limit: 1 }, { "x-csrf-token": "invalid" }))).status, 403);
+  assert.equal((await responseFrom(runtime, request({ limit: 5 }))).status, 400);
+  const result = await responseFrom(runtime, request());
+  assert.equal(result.status, 200, await result.clone().text());
+  const data = (await result.json()).data;
+  assert.equal(typeof data.dispatched, "number");
+  assert.equal(typeof data.failed, "number");
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(runtime.recoverBackground(1, "full", controller.signal), { code: "recovery_deadline_exceeded" });
+  authenticated = false;
+  assert.equal((await responseFrom(runtime, request())).status, 404);
+});
+
 test("Product Site activates native staging only for an exact verified route composition", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();

@@ -136,6 +136,10 @@ export function apiOperation(method: string, pathname: string): {
   const three = segment(tail[2]);
   const four = segment(tail[3]);
   if (method === "GET" && one === "session" && tail.length === 1) return { operation: "get_session", path: {} };
+  if (method === "POST" && one === "internal" && two === "operators" &&
+      three === "recovery" && tail.length === 3) {
+    return { operation: "run_service_operator_recovery", path: {} };
+  }
   if (
     method === "GET" && one === "internal" && two === "operators" &&
     three === "users" && tail.length === 3
@@ -233,7 +237,7 @@ export function failureCode(error: unknown): string {
 }
 
 export function applicationErrorStatus(code: string): number {
-  if (code === "metadata_queue_timeout" || code === "metadata_d1_timeout") return 503;
+  if (code === "metadata_queue_timeout" || code === "metadata_d1_timeout" || code === "recovery_deadline_exceeded") return 503;
   if (code === "authentication_required") return 401;
   if (code === "operation_removed") return 400;
   if (code === "rate_limited") return 429;

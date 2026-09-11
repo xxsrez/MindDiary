@@ -487,6 +487,7 @@ class ProductControlApplication {
       readonly exports: Pick<ExportJobApplicationService, "start" | "getStatus">;
       readonly scheduleExport: (jobId: string) => void | Promise<void>;
       readonly operatorDirectory: ServiceOperatorDirectoryService;
+      readonly operatorRecovery?: (actor: ProductWebActor, input: Readonly<Record<string, unknown>>) => Promise<unknown>;
       /** Optional read-session bridge used by server-rendered detail pages. */
       readonly consistentRead?: <Result>(
         operation: (control: ProductWebControlApplication) => Promise<Result>,
@@ -755,6 +756,9 @@ class ProductControlApplication {
         return this.services.reads.reconcileInvitationExpiries(actor as never);
       case "list_service_operator_principals":
         return this.services.operatorDirectory.list(actor as never, input);
+      case "run_service_operator_recovery":
+        if (this.services.operatorRecovery !== undefined) return this.services.operatorRecovery(actor, input);
+        throw Object.assign(new Error("Route was not found."), { code: "not_found" });
       default:
         throw Object.assign(new Error("Unknown control operation."), { code: "not_found" });
     }
@@ -1664,6 +1668,21 @@ export async function createProductSiteRuntime(
       operatorPrincipalIds: configuredOperatorPrincipalIds,
       ids: generated,
     }),
+    operatorRecovery: async (actor: ProductWebActor, input: Readonly<Record<string, unknown>>) => {
+      if (actor.kind !== "registered_principal" || actor.authentication.kind !== "sites_identity"
+          || !configuredOperatorPrincipalIds.has(actor.principalId)) {
+        throw Object.assign(new Error("Route was not found."), { code: "not_found" });
+      }
+      const limit = input.limit ?? 1;
+      if (Object.keys(input).some((key) => key !== "limit" && key !== "idempotencyKey")
+          || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 4) {
+        throw Object.assign(new Error("Invalid maintenance limit."), { code: "invalid_request" });
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5_000);
+      try { return await recoverBackground(limit, "full", controller.signal); }
+      finally { clearTimeout(timer); }
+    },
   };
   const consistentRead = async <Result>(
     operation: (control: ProductWebControlApplication) => Promise<Result>,
@@ -1971,11 +1990,15 @@ export async function createProductSiteRuntime(
   const recoverBackground = async (
     requestedLimit = 16,
     mode: ProductSiteRecoveryMode = "full",
+    signal?: AbortSignal,
   ) => {
     if (mode !== "full" && mode !== "request") {
       throw new TypeError("unknown product recovery mode");
     }
     const requestTick = mode === "request";
+    const ensureActive = () => {
+      if (signal?.aborted) throw Object.assign(new Error("Maintenance deadline exceeded."), { code: "recovery_deadline_exceeded" });
+    };
     const limit = Number.isSafeInteger(requestedLimit)
       ? Math.max(1, Math.min(64, requestedLimit))
       : 16;
@@ -1998,6 +2021,7 @@ export async function createProductSiteRuntime(
         | "recovery_object_cleanup",
       run: () => Promise<Result>,
     ): Promise<Result> => {
+      ensureActive();
       const startedAt = Date.now();
       try {
         const result = await run();
@@ -2026,6 +2050,7 @@ export async function createProductSiteRuntime(
         let backfilled = 0;
         let repaired = 0;
         for (const candidate of candidates) {
+          ensureActive();
           if (candidate.reason === "verify_ready_projection") {
             const projected = index.inspectExactRevision === undefined
               ? await index.readExactRevision(candidate.spaceId, candidate.revisionId)
@@ -2089,6 +2114,7 @@ export async function createProductSiteRuntime(
         const due = await metadata.listRecoverableIndexJobs(clock.now(), limit);
         const settled: PromiseSettledResult<unknown>[] = [];
         for (const job of due) {
+          ensureActive();
           try {
             settled.push({
               status: "fulfilled",
@@ -2109,6 +2135,7 @@ export async function createProductSiteRuntime(
           );
           const settled: PromiseSettledResult<unknown>[] = [];
           for (const job of due) {
+            ensureActive();
             backgroundObservability.recordInvitationExpiry({
               actor: recoveryActor,
               jobId: job.jobId,
@@ -2137,6 +2164,7 @@ export async function createProductSiteRuntime(
             const due = await metadata.listRecoverableExportJobs(clock.now(), limit);
             const settled: PromiseSettledResult<unknown>[] = [];
             for (const job of due) {
+              ensureActive();
               try {
                 settled.push({
                   status: "fulfilled",
@@ -2191,6 +2219,7 @@ export async function createProductSiteRuntime(
           cleanupFailures = 1;
         }
       }
+      ensureActive();
       const result = Object.freeze({
         backfilled: reconciliation.backfilled,
         repaired: reconciliation.repaired,

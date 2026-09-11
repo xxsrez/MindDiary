@@ -96,7 +96,8 @@ export function createProductWebHttpHandler(
     const isApi = url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/");
     const isOperatorPath =
       url.pathname === "/internal/operators/users" ||
-      url.pathname === "/api/v1/internal/operators/users";
+      url.pathname === "/api/v1/internal/operators/users" ||
+      url.pathname === "/api/v1/internal/operators/recovery";
     const detailMatch = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(url.pathname);
     const connectionUiDetail = /^\/settings\/connections\/[^/]+$/u.test(url.pathname);
     const isUi = PRODUCT_UI_ROUTES.has(url.pathname) || (
@@ -524,7 +525,7 @@ export function createProductWebHttpHandler(
     } catch (error) {
       const code = failureCode(error);
       return errorResponse(applicationErrorStatus(code), code, requestId,
-        code === "metadata_queue_timeout" || code === "metadata_d1_timeout");
+        code === "metadata_queue_timeout" || code === "metadata_d1_timeout" || code === "recovery_deadline_exceeded");
     }
   };
 }

@@ -42,7 +42,7 @@ test("product UI does not schedule request-triggered recovery work", () => {
   assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /x-mind-diary-recovery-pulse/u);
 });
 
-test("production Worker enables bounded request-triggered recovery by default", async () => {
+test("production Worker disables request-triggered recovery by default", async () => {
   let recoveries = 0;
   const waits = [];
   const worker = createMindDiaryProductWorker({
@@ -60,9 +60,67 @@ test("production Worker enables bounded request-triggered recovery by default", 
     waitUntil: (promise) => waits.push(promise),
   });
   assert.equal(response.status, 200);
-  assert.equal(waits.length, 1);
-  await waits[0];
-  assert.equal(recoveries, 1);
+  assert.equal(waits.length, 0);
+  assert.equal(recoveries, 0);
+});
+
+test("operator maintenance and navigation use independent runtime generations", async () => {
+  let generations = 0;
+  const environment = {};
+  const worker = createMindDiaryProductWorker({
+    async createRuntime() {
+      const id = ++generations;
+      return { async fetch() { return new Response(String(id)); }, async recoverBackground() {}, async dispatchBackground() {} };
+    },
+    readConfig() { return { publicOrigin: ORIGIN }; },
+    async fallbackFetch() { return new Response("missing"); },
+  });
+  const request = async (path) => (await worker.fetch(new Request(ORIGIN + path), environment, { waitUntil() {} })).text();
+  assert.equal(await request("/me"), "1");
+  assert.equal(await request("/api/v1/internal/operators/recovery"), "2");
+  assert.equal(await request("/me"), "1");
+  assert.equal(await request("/api/v1/internal/operators/recovery"), "2");
+  assert.equal(generations, 2);
+});
+
+test("delayed operator maintenance does not block navigation or schedule recovery storms", async () => {
+  let generations = 0;
+  let release;
+  let entered;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { entered = resolve; });
+  const waits = [];
+  const environment = {};
+  const worker = createMindDiaryProductWorker({
+    foregroundTimeoutMs: 50,
+    async createRuntime() {
+      generations += 1;
+      return {
+        async fetch(request) {
+          if (new URL(request.url).pathname.endsWith("/recovery")) {
+            entered(); await gate;
+            throw new Error("synthetic maintenance failure");
+          }
+          return new Response("navigation");
+        },
+        async recoverBackground() { throw new Error("implicit recovery forbidden"); },
+        async dispatchBackground() {},
+      };
+    },
+    readConfig() { return { publicOrigin: ORIGIN }; },
+    async fallbackFetch() { return new Response("missing"); },
+  });
+  const context = { waitUntil(promise) { waits.push(promise); } };
+  const maintenance = worker.fetch(new Request(ORIGIN + "/api/v1/internal/operators/recovery", { method: "POST" }), environment, context);
+  await started;
+  for (let index = 0; index < 3; index += 1) {
+    const response = await worker.fetch(authenticatedNavigation("/me"), environment, context);
+    assert.equal(await response.text(), "navigation");
+  }
+  release();
+  assert.equal((await maintenance).status, 503);
+  assert.equal(waits.length, 0);
+  assert.equal(generations, 2);
 });
 
 test("a cold runtime timeout returns bounded 503s without retaining request contexts or duplicating initialization", async () => {

@@ -224,17 +224,17 @@ export function createMindDiaryProductWorker(options) {
     throw new TypeError("product Worker dependencies are required");
   }
   const runtimeCache = options.runtimeCache ?? new IsolateRuntimeCache();
+  const maintenanceRuntimeCache = new IsolateRuntimeCache();
   const foregroundTimeoutMs = options.foregroundTimeoutMs ?? FOREGROUND_TIMEOUT_MS;
   if (!Number.isSafeInteger(foregroundTimeoutMs) || foregroundTimeoutMs < 1) {
     throw new TypeError("foreground timeout must be a positive integer");
   }
   const runtimeInitializationTimeoutMs =
     options.runtimeInitializationTimeoutMs ?? RUNTIME_INITIALIZATION_TIMEOUT_MS;
-  // Sites shares the Worker/D1 resource budget between foreground requests and
-  // waitUntil work. Recovery therefore starts only after a quiet window, runs
-  // a bounded request-mode batch, and never delays the document response.
+  // Navigation never implicitly starts maintenance on the shared Sites budget.
+  // Explicit injected coordinators remain available for isolated verification.
   const recoveryCoordinator = options.recoveryCoordinator ??
-    new RequestRecoveryCoordinator();
+    new RequestRecoveryCoordinator({ enabled: false });
   return Object.freeze({
     async fetch(request, environment, context) {
       let activeHandle;
@@ -249,7 +249,9 @@ export function createMindDiaryProductWorker(options) {
         const config = options.readConfig(request, environment);
         failureStage = "composition";
         const fingerprint = productWorkerConfigFingerprint(environment, config.publicOrigin);
-        const acquired = runtimeCache.acquire({
+        const selectedRuntimeCache = new URL(request.url).pathname === "/api/v1/internal/operators/recovery"
+          ? maintenanceRuntimeCache : runtimeCache;
+        const acquired = selectedRuntimeCache.acquire({
           environment,
           fingerprint,
           initializationTimeoutMs: runtimeInitializationTimeoutMs,

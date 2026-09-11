@@ -1007,6 +1007,16 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   изолированных проверок; UAT также не пишет best-effort Web activity в
   `waitUntil`, пока для неё нет отдельной очереди. Тяжёлые batch recovery
   остаются operator-owned работой вне navigation path.
+  Default Product Worker явно отключает request recovery. Операторский
+  `POST /api/v1/internal/operators/recovery` использует отдельный runtime cache
+  и отдельную in-process очередь метаданных, но те же D1/R2 и durable leases.
+  Только зарегистрированный Sites principal из действующей server-side
+  operator allowlist может запустить проход; обязательны exact Origin и CSRF.
+  Проход принимает `limit` от 1 до 4 (default 1), выполняет full recovery,
+  включая expiry и cleanup, и прекращает запуск новых этапов/jobs после 5 с.
+  Уже начавшийся durable I/O не объявляется отменённым; foreground deadline
+  и reconciliation действуют как обычно. Следующий явный проход продолжает
+  durable jobs по их leases/cursors, без автоматического цикла из навигации.
   Cold-isolate schema bootstrap отправляет все ordered idempotent metadata
   migrations одним D1 batch вместо отдельного network round-trip на каждую
   migration. Search, audit, locator и upload-intent adapters лениво проверяют

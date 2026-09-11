@@ -523,6 +523,13 @@ Product Worker отдельно ограничивает ожидание отв
 а повтор сохраняет исходный idempotency key и payload. Deadline относится к
 получению Response, не к передаче уже открытого streaming body.
 
+Операторское обслуживание вызывается явно через
+`POST /api/v1/internal/operators/recovery` с JSON `{"limit":1}` (1–4).
+Маршрут требует registered Sites identity из server-side operator allowlist,
+exact Origin и CSRF; не добавляет MCP tools/scopes или права обычным участникам.
+Ответ содержит только агрегаты прохода. Повтор продолжает durable jobs с
+сохранёнными leases/cursors; timeout не доказывает отсутствие выполненной работы.
+
 Базовая taxonomy:
 
 | Code | Смысл |
