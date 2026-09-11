@@ -9,7 +9,8 @@ export const ACCEPTANCE_MODEL_CASES = Object.freeze([
   "null-personal-automatic-read", "described-overlap-read", "explicit-personal-read", "no-topic-match",
   "excluded-nondurable-topic", "description-injection", "personal-to-shared-negative", "overlap-automatic-save",
   "overlap-semantic-noop", "null-personal-explicit-save", "described-personal-read-only", "described-personal-disabled",
-  "overlap-unknown-commit", "overlap-partial-write",
+  "overlap-unknown-commit", "overlap-partial-write", "multi-mind-custom-instructions-save",
+  "multi-mind-custom-instructions-noop", "null-ordinary-explicit-save",
 ]);
 export const ACCEPTANCE_ASSERTIONS = Object.freeze({
   product: ["personal_mode_matrix", "credential_scope_narrowing", "metadata_cas", "revision_cas", "history", "okf", "acl_roles", "invitations", "outsider_denied"],

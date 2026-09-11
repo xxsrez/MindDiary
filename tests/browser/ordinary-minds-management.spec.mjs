@@ -138,7 +138,7 @@ test("shipped direct route saves name and description under one metadata version
   const transferDisclosure = page.locator("summary").filter({ hasText: /^Transfer ownership$/ });
   if (await transferDisclosure.count()) await transferDisclosure.click();
   await expect(page.locator("[data-mind-usage-panel]")).toContainText(
-    "For an ordinary Mind, Read and write permits automatic saving only for explicitly discussed durable knowledge that matches the Mind description; My Mind is controlled independently.",
+    "For an ordinary Mind, Read and write permits automatic saving of explicitly discussed durable knowledge that matches its description. Without a description, Codex writes only when you ask. Other Minds are controlled independently.",
   );
   await expect(page.locator("[data-mind-usage-panel]")).not.toContainText(
     "For My Mind, Read and write permits only the specific writes",

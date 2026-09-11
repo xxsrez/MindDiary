@@ -42,6 +42,7 @@ export function verifyModelTrace(events, scenario) {
   const scopedReads = calls.filter(c => ["get_mind_info", "search", "fetch", "browse_entries", "list_files", "grep_files", "read_files", "list_revisions", "get_revision", "validate_mind"].includes(c.tool));
   const attempts = calls.filter(c => c.tool === "commit_changeset");
   const commits = [...attempts];
+  if (scenario.requireFreshCatalog) assert.equal(calls[0]?.tool, "list_minds", "fresh_catalog_not_first");
   for (const uncertain of attempts.filter(c => c.result.structuredContent?.error?.code === "transport_outcome_unknown")) {
     const reconciled = calls.slice(calls.indexOf(uncertain) + 1).find(c => c.tool === "reconcile_changeset");
     assert.ok(reconciled, "unknown_commit_not_reconciled");

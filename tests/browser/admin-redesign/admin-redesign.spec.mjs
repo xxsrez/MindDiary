@@ -65,7 +65,7 @@ test('compact status shows configured modes, accessible icons and live mode chan
   await form.locator('input[value="read_write"]').check();
   await form.getByRole('button', { name: 'Save agent mode' }).click();
   await expect(list.locator('[data-mind-card="travel"] [data-agent-mode]')).toHaveText('Read + write');
-  await expect(list.locator('[data-mind-card="product"] [data-agent-mode]')).toHaveText('Read');
+  await expect(list.locator('[data-mind-card="product"] [data-agent-mode]')).toHaveText('Read + write');
   await expect(list.locator('[data-mind-card="me"] [data-agent-mode]')).toHaveText('Read + write');
   await list.locator('[data-mind-card="research"] [data-agent-mode]').click();
   await expect(page).toHaveURL(`${origin}/research#mind-usage-heading`);

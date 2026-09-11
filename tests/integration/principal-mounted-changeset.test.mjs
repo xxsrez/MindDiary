@@ -360,7 +360,7 @@ test("wrong/read-only destination, missing writable mode, and read-only scope fa
   assert.equal((await env.metadata.listRevisions(env.readable.mindId)).length, beforeReadable.length);
 });
 
-test("a concurrent writable-Mind switch invalidates the pinned generation before HEAD moves", async () => {
+test("enabling another writable Mind preserves the exact pinned generation", async () => {
   const env = await setup();
   const payload = await generatedOperations(env, "concepts/stale-pin.md", "Stale pin");
   let switched = false;
@@ -394,8 +394,11 @@ test("a concurrent writable-Mind switch invalidates the pinned generation before
     summary: "Must be fenced by principal generation",
     producerProfile: true,
   });
-  assert.equal(result.kind, "denied");
-  assert.equal(result.decision.code, "writable_mind_stale");
-  assert.equal(await env.metadata.readHead(env.writable.mindId), payload.expectedRevisionId);
-  assert.equal((await env.metadata.listRevisions(env.writable.mindId)).length, 1);
+  assert.equal(result.kind, "committed");
+  assert.notEqual(result.envelope.revision.revisionId, payload.expectedRevisionId);
+  assert.equal(
+    await env.metadata.readHead(env.writable.mindId),
+    result.envelope.revision.revisionId,
+  );
+  assert.equal((await env.metadata.listRevisions(env.writable.mindId)).length, 2);
 });

@@ -50,6 +50,11 @@ test("file operations are scoped reads and only content-bearing operations satis
   assert.doesNotThrow(() => verifyModelTrace([catalog, call("grep_files", { mind: "/shared", query: "decision" }, { items: [] })], scenario));
   assert.doesNotThrow(() => verifyModelTrace([catalog, call("read_files", { mind: "/shared", paths: ["wiki/decision.md"] }, { items: [] })], scenario));
 });
+test("Custom Instructions scenarios require list_minds before every content workflow", () => {
+  const fresh = { ...scenario, requireFreshCatalog: true };
+  assert.doesNotThrow(() => verifyModelTrace(prefix, fresh));
+  assert.throws(() => verifyModelTrace(prefix.slice(1), fresh), /fresh_catalog_not_first/);
+});
 test("unknown commits require exact reconciliation before any retry", () => {
   const request = { mind: "/shared", idempotency_key: "original", expected_revision: "revision-1", operations: [] };
   const unknown = call("commit_changeset", request, {});
