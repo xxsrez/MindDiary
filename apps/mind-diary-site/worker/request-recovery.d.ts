@@ -19,6 +19,7 @@ export declare class RequestRecoveryCoordinator {
 
   respond<Environment extends object>(options: {
     readonly request: Request;
+    readonly signal?: AbortSignal;
     readonly environment: Environment;
     readonly fingerprint: string;
     readonly foreground: () => Promise<Response>;
@@ -65,6 +66,7 @@ export declare function createMindDiaryProductWorker<
   ) => Promise<Response>;
   readonly runtimeCache?: object;
   readonly runtimeInitializationTimeoutMs?: number;
+  readonly foregroundTimeoutMs?: number;
   readonly recoveryCoordinator?: RequestRecoveryCoordinator;
 }): Readonly<{
   fetch(request: Request, environment: Environment, context: Context): Promise<Response>;

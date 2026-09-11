@@ -3,6 +3,8 @@ export const RUNTIME_INITIALIZATION_TIMEOUT_MS: number;
 export interface RuntimeCacheHandle<Runtime> {
   /** Request-bounded view of the shared initialization flight. */
   readonly runtime: Promise<Runtime>;
+  /** Retires only this settled generation, never a newer one or pending flight. */
+  retireReady(): void;
   /** Dispatches cold-start work only when a live request adopts it. */
   drainInitializationScheduled(): readonly Promise<unknown>[];
   /** Dispatches post-initialization work owned by the current operation. */
@@ -22,6 +24,7 @@ export declare class IsolateRuntimeCache<
     readonly fingerprint: string;
     readonly create: (
       schedule: (work: Readonly<Work>) => void,
+      retireReady: () => void,
     ) => Promise<Runtime>;
     readonly dispatch: (
       runtime: Runtime,

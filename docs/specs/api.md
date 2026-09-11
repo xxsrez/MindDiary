@@ -512,6 +512,17 @@ product code остаётся источником истины. Временн�
 errors имеют `retryable=false`, `category=validation`,
 `state=request_rejected` и `recovery.action=correct_arguments`.
 
+`metadata_queue_timeout` означает, что конкретная операция не получила доступ
+к очереди метаданных за 2500 мс; `metadata_d1_timeout` — ограниченное ожидание
+обычного D1 read. В web API это HTTP 503 с `retryable=true`; в MCP tool execution
+— безопасная structured error с `retryable=true`, без provider diagnostics.
+Product Worker отдельно ограничивает ожидание ответа 10 секундами, включая
+инициализацию и callback: HTTP 503 `request_timeout`, а при отмене клиента —
+`request_canceled`. Эти ответы не доказывают отсутствие commit всего запроса.
+После неизвестного результата записи сначала требуется read-back/reconciliation,
+а повтор сохраняет исходный idempotency key и payload. Deadline относится к
+получению Response, не к передаче уже открытого streaming body.
+
 Базовая taxonomy:
 
 | Code | Смысл |

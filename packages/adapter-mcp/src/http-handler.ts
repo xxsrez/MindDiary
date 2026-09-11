@@ -746,6 +746,13 @@ function readFailureDetails(
 }
 
 function safeReadToolFailure(error: unknown): SafeReadToolFailure | null {
+  if (isRecord(error) && (error.code === "metadata_queue_timeout" || error.code === "metadata_d1_timeout")) {
+    return Object.freeze({
+      code: error.code,
+      message: "Metadata is temporarily unavailable. Reconcile any write using its original idempotency key before retrying.",
+      retryable: true,
+    });
+  }
   if (
     !(
       error instanceof MindDiscoveryFailure ||
@@ -1716,6 +1723,7 @@ export function createMcpHttpHandlerAtEndpoint(
       return response;
     } catch (error) {
       const safeFailure = isReadToolName(name) || name === "get_bundle_file_download"
+        || (isRecord(error) && (error.code === "metadata_queue_timeout" || error.code === "metadata_d1_timeout"))
         ? safeReadToolFailure(error)
         : null;
       if (safeFailure !== null) {

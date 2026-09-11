@@ -516,6 +516,8 @@ export class SitesMetadataStore {
   readonly kind = "metadata-store" as const;
   readonly #database: D1DatabaseLike;
   readonly #d1TimeoutMs: number;
+  readonly #queueTimeoutMs: number;
+  readonly #onQueueTimeout: (() => void) | undefined;
   #metadata = new InMemoryRevisionMetadataStore();
   #tokens = new InMemoryMcpTokenStore();
   #sequence = 0;
@@ -527,10 +529,15 @@ export class SitesMetadataStore {
 
   constructor(
     database: D1DatabaseLike,
-    options: Readonly<{ readonly d1TimeoutMs?: number }> = {},
+    options: Readonly<{ readonly d1TimeoutMs?: number; readonly queueTimeoutMs?: number; readonly onQueueTimeout?: () => void }> = {},
   ) {
     this.#database = database;
     this.#d1TimeoutMs = options.d1TimeoutMs ?? SITES_METADATA_D1_TIMEOUT_MS;
+    this.#queueTimeoutMs = options.queueTimeoutMs ?? SITES_METADATA_D1_TIMEOUT_MS;
+    this.#onQueueTimeout = options.onQueueTimeout;
+    if (!Number.isSafeInteger(this.#queueTimeoutMs) || this.#queueTimeoutMs < 1) {
+      throw new TypeError("metadata queue timeout must be a positive integer");
+    }
     if (!Number.isSafeInteger(this.#d1TimeoutMs) || this.#d1TimeoutMs < 1) {
       throw new TypeError("metadata D1 timeout must be a positive integer");
     }
@@ -1499,7 +1506,29 @@ export class SitesMetadataStore {
     this.#tail = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await previous;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        previous,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(Object.assign(
+            new Error("Metadata queue admission timed out"),
+            { code: "metadata_queue_timeout" },
+          )), this.#queueTimeoutMs);
+        }),
+      ]);
+    } catch (error) {
+      // A canceled waiter must never release a still-running predecessor or
+      // execute its operation later. Preserve the chain until that predecessor
+      // settles; an unknown canonical append retains exclusive ownership.
+      void previous.then(release, release);
+      // Cache eviction is advisory: it cannot change the unsettled commit or
+      // prevent the caller receiving the original admission failure.
+      try { this.#onQueueTimeout?.(); } catch { /* no durable effect */ }
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
     try {
       return await operation();
     } finally {
@@ -1532,7 +1561,7 @@ export interface SitesMetadataStore
 
 export async function createSitesMetadataStore(
   database: D1DatabaseLike,
-  options: Readonly<{ readonly d1TimeoutMs?: number }> = {},
+  options: Readonly<{ readonly d1TimeoutMs?: number; readonly queueTimeoutMs?: number; readonly onQueueTimeout?: () => void }> = {},
 ): Promise<SitesMetadataStore> {
   return new SitesMetadataStore(database, options).ready();
 }

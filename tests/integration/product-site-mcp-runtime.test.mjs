@@ -927,6 +927,99 @@ async function mutateMindUsage(
   ));
 }
 
+test("Product Worker recovers authenticated web and MCP reads around a late canonical append", async () => {
+  const database = new FakeD1Database();
+  const environment = { DB: database, MIND_DIARY_BUCKET: new FakeR2Bucket(), MIND_DIARY_PUBLIC_ORIGIN: ORIGIN };
+  const waits = [];
+  const context = { waitUntil(promise) { waits.push(promise); } };
+  let generations = 0;
+  const worker = createMindDiaryProductWorker({
+    foregroundTimeoutMs: 100,
+    recoveryCoordinator: new RequestRecoveryCoordinator({ enabled: false }),
+    readConfig() {
+      return { publicOrigin: ORIGIN, tokenVerifierKey: key(171), locatorKey: key(211),
+        exportDownloadVerifierKey: key(251), csrfKey: key(35), serviceOperatorPrincipalIds: [] };
+    },
+    async createRuntime(options) {
+      generations += 1;
+      return createProductSiteRuntime({ ...options, observabilityWriter: { write() {} } });
+    },
+    async fallbackFetch() { return new Response("missing", { status: 404 }); },
+  });
+  const transport = { fetch(request) { return worker.fetch(request, environment, context); } };
+  const web = (path, init = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set("oai-authenticated-user-email", "deadline.owner@example.com");
+    headers.set("oai-authenticated-user-full-name", "Deadline%20Owner");
+    headers.set("oai-authenticated-user-full-name-encoding", "percent-encoded-utf-8");
+    return worker.fetch(new Request(ORIGIN + path, { ...init, headers }), environment, context);
+  };
+  const registration = await web("/");
+  const registerCsrf = csrfFromHtml(await registration.text());
+  const mutate = (path, csrf, id, body) => web(path, { method: "POST", headers: {
+    origin: ORIGIN, "content-type": "application/json", "x-csrf-token": csrf, "idempotency-key": id,
+  }, body: JSON.stringify(body) });
+  const bootstrap = await mutate("/api/v1/account", registerCsrf, "deadline:bootstrap", { action: "create_isolated_account" });
+  assert.equal(bootstrap.status, 200, await bootstrap.clone().text());
+  const csrf = csrfFromHtml(await (await web("/settings/developer/mcp")).text());
+  const token = await mutate("/api/v1/mcp-tokens", csrf, "deadline:token", { name: "Deadline test", scopes: ["content:read"] });
+  assert.equal(token.status, 200);
+  const secret = (await token.json()).data.secret;
+  assert.equal((await mutate("/api/v1/minds", csrf, "deadline:existing", { name: "Existing", handle: "deadline-existing" })).status, 200);
+  await Promise.allSettled(waits.splice(0));
+
+  let release;
+  let entered;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { entered = resolve; });
+  const originalRun = database.run.bind(database);
+  let held = false;
+  let settled;
+  const appendSettled = new Promise((resolve) => { settled = resolve; });
+  database.run = async (sql, values) => {
+    if (!held && sql.includes("/*md-metadata-append*/")) {
+      held = true;
+      entered();
+      await gate;
+      try { return await originalRun(sql, values); } finally { settled(); }
+    }
+    return originalRun(sql, values);
+  };
+  const payload = { name: "Late Mind", handle: "deadline-late" };
+  const writing = mutate("/api/v1/minds", csrf, "deadline:late", payload);
+  await started;
+  try {
+    const reads = ["/", "/me", "/deadline-existing"].map((path) => web(path));
+    const writeResponse = await writing;
+    assert.equal(writeResponse.status, 503);
+    assert.equal((await writeResponse.json()).error.code, "request_timeout");
+    for (const response of await Promise.all(reads)) {
+      assert.equal(response.status, 503);
+      assert.equal((await response.json()).error.code, "request_timeout");
+    }
+    assert.equal((await web("/me")).status, 200);
+    await modernTool(transport, secret, "deadline:read-before-late", "list_minds", {});
+  } finally {
+    release();
+    await appendSettled;
+  }
+  // Retry the exact operation after the unknown result. CAS and idempotency
+  // must reconcile the late commit rather than create a second Mind.
+  const replay = await mutate("/api/v1/minds", csrf, "deadline:late", payload);
+  assert.equal(replay.status, 200, await replay.clone().text());
+  const replayBody = await replay.json();
+  assert.equal(replayBody.data.route, "/deadline-late");
+  assert.equal(replayBody.data.replayed, true);
+  assert.equal((await web("/deadline-late")).status, 200);
+  await modernTool(transport, secret, "deadline:read-after-late", "list_minds", {});
+  const listed = await web("/api/v1/minds");
+  assert.equal(listed.status, 200);
+  const listedBody = await listed.json();
+  assert.equal(listedBody.data.filter((mind) => mind.route === "/deadline-late").length, 1);
+  assert.ok(generations >= 2);
+  await Promise.allSettled(waits);
+});
+
 test("Product Site activates native staging only for an exact verified route composition", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();

@@ -2,6 +2,7 @@ import {
   IsolateRuntimeCache,
   RUNTIME_INITIALIZATION_TIMEOUT_MS,
 } from "./runtime-cache.js";
+import { FOREGROUND_TIMEOUT_MS, withForegroundDeadline } from "./foreground-deadline.js";
 
 const STATIC_PATH_PREFIXES = Object.freeze([
   "/_next/",
@@ -114,7 +115,7 @@ export class RequestRecoveryCoordinator {
     const navigationGeneration = slot.navigationGeneration;
 
     const response = await options.foreground();
-    if (!candidate || response.status >= 500) return response;
+    if (!candidate || response.status >= 500 || options.request.signal.aborted || options.signal?.aborted) return response;
 
     if (slot.inFlight !== null) {
       // The request that started the flight already owns its waitUntil. Reusing
@@ -130,6 +131,8 @@ export class RequestRecoveryCoordinator {
       .then(() => {
         if (
           selected.navigationGeneration !== navigationGeneration ||
+          options.request.signal.aborted ||
+          options.signal?.aborted ||
           selected.inFlight !== null ||
           this.#now() < selected.nextEligibleAt
         ) return undefined;
@@ -221,6 +224,10 @@ export function createMindDiaryProductWorker(options) {
     throw new TypeError("product Worker dependencies are required");
   }
   const runtimeCache = options.runtimeCache ?? new IsolateRuntimeCache();
+  const foregroundTimeoutMs = options.foregroundTimeoutMs ?? FOREGROUND_TIMEOUT_MS;
+  if (!Number.isSafeInteger(foregroundTimeoutMs) || foregroundTimeoutMs < 1) {
+    throw new TypeError("foreground timeout must be a positive integer");
+  }
   const runtimeInitializationTimeoutMs =
     options.runtimeInitializationTimeoutMs ?? RUNTIME_INITIALIZATION_TIMEOUT_MS;
   // Sites shares the Worker/D1 resource budget between foreground requests and
@@ -230,6 +237,8 @@ export function createMindDiaryProductWorker(options) {
     new RequestRecoveryCoordinator();
   return Object.freeze({
     async fetch(request, environment, context) {
+      let activeHandle;
+      return withForegroundDeadline(request, foregroundTimeoutMs, async (request, foregroundSignal) => {
       let failureStage = "static-assets";
       try {
         const staticResponse = options.staticFetch?.(request) ?? null;
@@ -245,13 +254,14 @@ export function createMindDiaryProductWorker(options) {
           fingerprint,
           initializationTimeoutMs: runtimeInitializationTimeoutMs,
           dispatch: dispatchScheduled,
-          create: (schedule) => {
+          create: (schedule, retireReady) => {
             const generatedSourceTest =
               restrictedUatGeneratedSourceTestConfig(environment);
             return options.createRuntime({
               database: environment.DB,
               bucket: environment.MIND_DIARY_BUCKET,
               ...config,
+              onMetadataQueueTimeout: retireReady,
               // Web activity is observational and writes to the same D1
               // binding as navigation. Keep it opt-in on Sites until a
               // dedicated queue exists; MCP activity remains unchanged.
@@ -275,13 +285,16 @@ export function createMindDiaryProductWorker(options) {
             });
           },
         });
+        activeHandle = acquired;
         const runtime = await acquired.runtime;
+        foregroundSignal.throwIfAborted();
         const initializationScheduled = acquired.drainInitializationScheduled();
         if (initializationScheduled.length > 0) {
           context.waitUntil(Promise.allSettled(initializationScheduled));
         }
-        return recoveryCoordinator.respond({
+        return await recoveryCoordinator.respond({
           request,
+          signal: foregroundSignal,
           environment,
           fingerprint,
           waitUntil: (promise) => context.waitUntil(promise),
@@ -303,10 +316,12 @@ export function createMindDiaryProductWorker(options) {
             let response;
             try {
               response = await runtime.fetch(request, (promise) => {
-                context.waitUntil(Promise.resolve(promise).catch(() => undefined));
+                const observed = Promise.resolve(promise).catch(() => undefined);
+                if (!foregroundSignal.aborted) context.waitUntil(observed);
               });
+              foregroundSignal.throwIfAborted();
             } finally {
-              if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+              if (!foregroundSignal.aborted && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
                 const scheduled = acquired.drainScheduled();
                 if (scheduled.length > 0) context.waitUntil(Promise.allSettled(scheduled));
               }
@@ -339,6 +354,7 @@ export function createMindDiaryProductWorker(options) {
           },
         );
       }
+      }, () => activeHandle?.retireReady());
     },
   });
 }

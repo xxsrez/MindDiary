@@ -966,8 +966,25 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   cancellation или authoritative provider outcome такой timeout неоднозначно
   разделял бы late commit и failure и мог бы спровоцировать повторную mutation.
   Поэтому write queue удерживает mutation tail до settlement D1 append, тогда
-  как обычные reads и производные snapshot checkpoints остаются bounded. Если
-  provider отклонил append promise после возможного commit, adapter выполняет
+  как обычные D1 reads и производные snapshot checkpoints остаются bounded.
+  Admission в общую очередь метаданных ограничен 2500 мс (в тестах предел
+  задаётся отдельно через `queueTimeoutMs`). Истечение возвращает
+  `metadata_queue_timeout` до запуска ожидающей операции: она не исполняется
+  позже, а её место освобождается только после завершения предшественника.
+  Это не отменяет уже начавшийся append и не доказывает отсутствие commit.
+  Callback очереди исключает именно её готовое поколение из runtime cache,
+  даже если быстрый ошибочный ответ не достигает общего request deadline.
+  Данный предел относится к очереди, а не заменяет end-to-end deadline
+  пользовательского запроса или предел внешнего I/O внутри callback.
+  Product Worker ограничивает ожидание ответа 10 секундами от входа в fetch,
+  включая инициализацию, очередь и callback. Истечение либо отмена клиента
+  прекращает ожидание ответа, но не отменяет canonical append: результат
+  записи может оставаться неизвестным, повтор требует прежнего idempotency key
+  и reconciliation. Зависшее уже инициализированное поколение исключается из
+  cache; следующий запрос получает новое с durable replay и прежним HEAD CAS.
+  Позднее завершение старого поколения не заменяет новое и не запускает
+  request-triggered recovery. Pending initialization сохраняет отдельный lease.
+  Если provider отклонил append promise после возможного commit, adapter выполняет
   authoritative exact read-back ожидаемого sequence и сравнивает полный
   canonical envelope: `target`, `operation` и `payload_json`. Exact match
   означает committed success; чужая строка означает CAS loss и безопасный

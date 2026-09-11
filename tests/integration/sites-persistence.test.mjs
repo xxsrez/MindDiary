@@ -835,6 +835,52 @@ test("hung metadata D1 reads fail fast and release the serialized read queue", a
   await second;
 });
 
+test("foreground metadata read has a bounded queue wait behind an unsettled append", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database, { d1TimeoutMs: 25, queueTimeoutMs: 25 });
+  const gate = database.holdNextMetadataAppend();
+  const principalId = opaqueId("principal_queue_deadline");
+  const mutation = store.createMcpToken({
+    tokenId: "token_queue_deadline",
+    principalId,
+    name: "Queue deadline",
+    verifier: `hmac-sha256:v1:${"d".repeat(64)}`,
+    displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read"],
+    createdAt: T0,
+    expiresAt: "2026-11-06T08:00:00.000Z",
+  });
+  await gate.started;
+  const read = store.listMcpTokenMetadata(principalId);
+  // This mutation must be rejected before admission, not run after its caller
+  // has already received a queue timeout.
+  const skipped = store.createMcpToken({
+    tokenId: "token_queue_deadline_skipped", principalId, name: "Skipped waiter",
+    verifier: `hmac-sha256:v1:${"e".repeat(64)}`, displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read"], createdAt: T0, expiresAt: "2026-11-06T08:00:00.000Z",
+  }).then(() => "executed", (error) => error);
+  let outcome;
+  let skippedOutcome;
+  try {
+    outcome = await Promise.race([
+      read.then(() => "completed", (error) => error),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 150)),
+    ]);
+    skippedOutcome = await Promise.race([
+      skipped,
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 150)),
+    ]);
+  } finally {
+    gate.release();
+    await mutation;
+    await read.catch(() => undefined);
+  }
+  assert.equal(outcome?.code, "metadata_queue_timeout");
+  assert.equal(skippedOutcome?.code, "metadata_queue_timeout");
+  assert.equal(database.metadataEvents.length, 1);
+  assert.deepEqual((await store.listMcpTokenMetadata(principalId)).map((token) => token.tokenId), ["token_queue_deadline"]);
+});
+
 test("canonical metadata append waits past the read timeout and restart replay stays singular", async () => {
   const database = new FakeD1Database();
   const store = await createSitesMetadataStore(database, { d1TimeoutMs: 25 });

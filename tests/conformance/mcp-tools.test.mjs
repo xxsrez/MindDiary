@@ -108,6 +108,9 @@ function harness() {
       },
       async executeToolCall(request) {
         executionCalls.push(request);
+        if (request.name === "search" && request.arguments.query === "metadata-timeout") {
+          throw Object.assign(new Error("private SQL parameters must not escape"), { code: "metadata_queue_timeout" });
+        }
         if (
           request.name === "search" &&
           request.arguments.query === "private-query"
@@ -397,6 +400,19 @@ test("read execution preserves explicit exact binding and adds structured/text r
   assert.deepEqual(fixture.authorizationCalls[0].arguments, argumentsValue);
   assert.deepEqual(fixture.executionCalls[0].arguments, argumentsValue);
   assert.ok(fixture.executionCalls[0].signal instanceof AbortSignal);
+});
+
+test("metadata queue deadline is retryable without leaking provider diagnostics", async () => {
+  const fixture = harness();
+  const response = await fixture.send(rpc("tools/call", {
+    name: "search",
+    arguments: { mind: "research-notes", query: "metadata-timeout" },
+  }));
+  const result = await rpcResult(response);
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent.error.code, "metadata_queue_timeout");
+  assert.equal(result.structuredContent.error.retryable, true);
+  assert.doesNotMatch(JSON.stringify(result), /private SQL parameters/);
 });
 
 test("known read failures map to stable retryable errors without private text", async () => {

@@ -523,7 +523,8 @@ export function createProductWebHttpHandler(
       );
     } catch (error) {
       const code = failureCode(error);
-      return errorResponse(applicationErrorStatus(code), code, requestId);
+      return errorResponse(applicationErrorStatus(code), code, requestId,
+        code === "metadata_queue_timeout" || code === "metadata_d1_timeout");
     }
   };
 }

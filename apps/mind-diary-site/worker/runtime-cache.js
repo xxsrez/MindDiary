@@ -112,7 +112,9 @@ export class IsolateRuntimeCache {
       };
       // create runs in a microtask, after initialization has been assigned, so
       // schedule can safely share the same immutable flight.
-      const initialization = Promise.resolve().then(() => options.create(schedule));
+      const initialization = Promise.resolve().then(() => options.create(schedule, () => {
+        if (created.state === "fulfilled") this.#retire(environmentSlots, created);
+      }));
       created.initialization = initialization;
       // A request timeout bounds only that request. Pending flights remain
       // reusable until their lease expires, while settled obsolete, rejected,
@@ -136,6 +138,9 @@ export class IsolateRuntimeCache {
     const selected = slot;
     return Object.freeze({
       runtime: withInitializationTimeout(selected.initialization, timeoutMs),
+      retireReady: () => {
+        if (selected.state === "fulfilled") this.#retire(environmentSlots, selected);
+      },
       drainInitializationScheduled: () =>
         this.#drain(selected, selected.initializationScheduled),
       drainScheduled: () => this.#drain(selected, selected.scheduled),

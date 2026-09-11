@@ -233,6 +233,7 @@ export function failureCode(error: unknown): string {
 }
 
 export function applicationErrorStatus(code: string): number {
+  if (code === "metadata_queue_timeout" || code === "metadata_d1_timeout") return 503;
   if (code === "authentication_required") return 401;
   if (code === "operation_removed") return 400;
   if (code === "rate_limited") return 429;

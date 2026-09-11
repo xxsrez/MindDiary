@@ -182,6 +182,7 @@ export interface ProductSiteTrustedIdentityReader {
 export type ProductSiteRecoveryMode = "full" | "request";
 
 export interface ProductSiteRuntimeOptions {
+  readonly onMetadataQueueTimeout?: () => void;
   readonly database: MetadataD1DatabaseLike & SearchD1DatabaseLike & AuditD1DatabaseLike & OAuthD1DatabaseLike;
   readonly bucket: R2BucketLike;
   readonly publicOrigin: string;
@@ -903,7 +904,9 @@ export async function createProductSiteRuntime(
     createWebCryptoExportDownloadSecretCrypto({ verifierKey: options.exportDownloadVerifierKey }),
     createCsrf(options.csrfKey),
   ]);
-  const metadata = await createSitesMetadataStore(options.database);
+  const metadata = await createSitesMetadataStore(options.database, {
+    ...(options.onMetadataQueueTimeout === undefined ? {} : { onQueueTimeout: options.onMetadataQueueTimeout }),
+  });
   const index = await createSitesSearchIndex(options.database);
   const audit = await createSitesAuditSink(options.database);
   const uploadIntentMetadata = await createSitesLocalFileUploadIntentStore(options.database);
