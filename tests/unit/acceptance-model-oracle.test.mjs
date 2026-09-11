@@ -84,3 +84,20 @@ test("partial writes require a real denial and read-back of the independent succ
   aliases.at(-1).params.arguments.mind = "personal-id";
   assert.doesNotThrow(() => verifyModelTrace(aliases, partial));
 });
+
+test("real deadlines require model-owned reconciliation, tolerating a failed read but not a blind retry", () => {
+  const request = { mind: "/shared", idempotency_key: "original", operations: [] };
+  const failure = tool => ({ method: "acceptance/tool", params: { tool, arguments: request,
+    result: { isError: true, structuredContent: { error: { code: "request_timeout", retryable: true } } } } });
+  const confirmed = call("reconcile_changeset", request, { status: "committed", revision: { revision_id: "revision-2" } });
+  const readback = [call("validate_mind", { mind: "/shared" }, { valid: true, resolved_revision: { revision_id: "revision-2" } }),
+    call("read_files", { mind: "/shared" }, { resolved_revision: { revision_id: "revision-2" } })];
+  const writing = { ...scenario, writes: ["/shared"] };
+  assert.doesNotThrow(() => verifyModelTrace([...prefix, failure("commit_changeset"), failure("reconcile_changeset"), confirmed, ...readback], writing));
+  assert.throws(() => verifyModelTrace([...prefix, failure("commit_changeset"), failure("reconcile_changeset"), call("commit_changeset", request, {}), confirmed, ...readback], writing), /unknown_commit_blind_retry/);
+  assert.throws(() => verifyModelTrace([...prefix, failure("commit_changeset"), confirmed], writing), /committed_revision_validation_missing/);
+  const missing = call("reconcile_changeset", request, { status: "missing" });
+  assert.doesNotThrow(() => verifyModelTrace([...prefix, failure("commit_changeset"), missing,
+    call("commit_changeset", request, { revision: { revision_id: "revision-2" } }), ...readback], writing));
+  assert.throws(() => verifyModelTrace([...prefix, failure("commit_changeset"), missing], writing), /missing_commit_not_retried/);
+});

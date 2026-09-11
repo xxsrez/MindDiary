@@ -135,7 +135,18 @@ export class AcceptanceClient {
       "io.modelcontextprotocol/clientInfo": { name: "mind-diary-acceptance", version: "1" },
       "io.modelcontextprotocol/clientCapabilities": {},
     } } } });
-    if (!response.ok) throw new Error(`mcp_http_${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`mcp_http_${response.status}`);
+      // Preserve the actual product error for a model under test; never retry
+      // its tool call invisibly or discard the unknown-write explanation.
+      try {
+        const payload = await response.json();
+        if (payload?.ok === false && typeof payload.error?.code === "string") {
+          error.productError = payload.error;
+        }
+      } catch { /* A non-JSON upstream failure retains its HTTP outcome. */ }
+      throw error;
+    }
     return response.json();
   }
   async mcp(token, name, args = {}) {
@@ -144,6 +155,16 @@ export class AcceptanceClient {
     return result.structuredContent.data;
   }
   async commit(name, token, payload) {
+    // Fixture setup owns this bounded recovery. Model calls use mcpEnvelope
+    // directly and must choose reconciliation themselves.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { return await this.commitOnce(name, token, payload); }
+      catch (error) {
+        if (error.message !== "mcp_http_503" || attempt === 2) throw error;
+      }
+    }
+  }
+  async commitOnce(name, token, payload) {
     const key = `mcp:${name}`;
     let operation = this.state.operations[key];
     if (operation?.phase === "completed") return operation.result;

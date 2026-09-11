@@ -43,14 +43,25 @@ export function verifyModelTrace(events, scenario) {
   const attempts = calls.filter(c => c.tool === "commit_changeset");
   const commits = [...attempts];
   if (scenario.requireFreshCatalog) assert.equal(calls[0]?.tool, "list_minds", "fresh_catalog_not_first");
-  for (const uncertain of attempts.filter(c => c.result.structuredContent?.error?.code === "transport_outcome_unknown")) {
-    const reconciled = calls.slice(calls.indexOf(uncertain) + 1).find(c => c.tool === "reconcile_changeset");
-    assert.ok(reconciled, "unknown_commit_not_reconciled");
-    assert.deepEqual(reconciled.arguments, uncertain.arguments, "unknown_commit_payload_changed");
-    assert.equal(reconciled.result.structuredContent?.data?.status, "committed", "unknown_commit_not_confirmed");
+  const unknownCodes = new Set(["transport_outcome_unknown", "request_timeout", "request_canceled", "mcp_http_503"]);
+  for (const uncertain of attempts.filter(c => unknownCodes.has(c.result.structuredContent?.error?.code))) {
+    const candidates = calls.slice(calls.indexOf(uncertain) + 1).filter(c => c.tool === "reconcile_changeset" && c.resolvedMind === uncertain.resolvedMind);
+    assert.ok(candidates.length, "unknown_commit_not_reconciled");
+    let reconciled;
+    for (const candidate of candidates) {
+      assert.deepEqual(candidate.arguments, uncertain.arguments, "unknown_commit_payload_changed");
+      if (!candidate.result.isError) { reconciled = candidate; break; }
+    }
+    assert.ok(reconciled, "unknown_commit_not_confirmed");
     const retriedBeforeReconcile = calls.slice(calls.indexOf(uncertain) + 1, calls.indexOf(reconciled)).some(c => c.tool === "commit_changeset" && c.resolvedMind === uncertain.resolvedMind);
     assert.equal(retriedBeforeReconcile, false, "unknown_commit_blind_retry");
-    commits.push(reconciled);
+    if (reconciled.result.structuredContent?.data?.status === "committed") commits.push(reconciled);
+    else {
+      assert.equal(reconciled.result.structuredContent?.data?.status, "missing", "unknown_commit_not_confirmed");
+      const retry = calls.slice(calls.indexOf(reconciled) + 1).find(c => c.tool === "commit_changeset" && c.resolvedMind === uncertain.resolvedMind);
+      assert.ok(retry, "missing_commit_not_retried");
+      assert.deepEqual(retry.arguments, uncertain.arguments, "unknown_commit_payload_changed");
+    }
   }
   if (scenario.unknownCommit) assert.equal(attempts.some(c => c.result.structuredContent?.error?.code === "transport_outcome_unknown"), true, "unknown_commit_injection_missing");
   for (const read of scopedReads) assert.equal(scenario.reads.includes(read.resolvedMind), true, "unexpected_read_source");

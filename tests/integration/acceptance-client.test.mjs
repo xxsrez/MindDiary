@@ -51,3 +51,43 @@ test("recovery resumes bounded 503 cleanup chunks and preserves another active r
   assert.equal((await first.control(`/_acceptance/runs/${first.state.run.run_id}`)).state, "active");
   await first.cleanup(); await second.cleanup();
 });
+
+test("fixture commits reconcile a deadline with the original payload while model transport never retries", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "acceptance-deadline-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const calls = [];
+  const productError = { code: "request_timeout", message: "A write may still commit; reconcile using the original key.", retryable: true };
+  const client = await new AcceptanceClient({ directory, platformToken: "synthetic", controllerKey: "synthetic", fetch: async (_url, options) => {
+    const request = JSON.parse(options.body).params;
+    calls.push(request);
+    if (request.name === "commit_changeset") return Response.json({ ok: false, error: productError }, { status: 503 });
+    assert.equal(request.name, "reconcile_changeset");
+    assert.deepEqual(request.arguments, calls[0].arguments);
+    return Response.json({ result: { isError: false, structuredContent: { ok: true, data: { status: "committed", revision: { revision_id: "revision-2" } } } } });
+  } }).open();
+  client.state.run = { run_id: "synthetic-run" };
+  const result = await client.commit("fixture", "synthetic", { mind: "/me", expected_revision: "revision-1", operations: [] });
+  assert.equal(result.status, "committed");
+  assert.deepEqual(calls.map(c => c.name), ["commit_changeset", "reconcile_changeset"]);
+  await assert.rejects(client.mcpEnvelope("synthetic", "tools/call", { name: "commit_changeset", arguments: {} }), error => {
+    assert.equal(error.message, "mcp_http_503");
+    assert.deepEqual(error.productError, productError);
+    return true;
+  });
+  assert.equal(calls.length, 3, "model-facing transport must make exactly one attempt");
+});
+
+test("fixture deadline retries are bounded and retain a pending operation", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "acceptance-deadline-cap-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const calls = [];
+  const client = await new AcceptanceClient({ directory, platformToken: "synthetic", controllerKey: "synthetic", fetch: async (_url, options) => {
+    calls.push(JSON.parse(options.body).params);
+    return Response.json({ ok: false, error: { code: "request_timeout", retryable: true } }, { status: 503 });
+  } }).open();
+  client.state.run = { run_id: "synthetic-run" };
+  await assert.rejects(client.commit("fixture", "synthetic", { mind: "/me", operations: [] }), /mcp_http_503/);
+  assert.deepEqual(calls.map(c => c.name), ["commit_changeset", "reconcile_changeset", "reconcile_changeset"]);
+  for (const call of calls) assert.deepEqual(call.arguments, calls[0].arguments);
+  assert.equal(client.state.operations["mcp:fixture"].phase, "pending");
+});

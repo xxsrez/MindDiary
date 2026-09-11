@@ -86,7 +86,7 @@ async function addRoutingFixture(fixture) {
     name: "Synthetic direct only", handle: directHandle, description: null,
   } });
   await setOwnerMindUsage("model:usage:direct-read", owner, `/${directHandle}`, "read");
-  return Object.freeze({ unrelated: `/${unrelatedHandle}`, direct: `/${directHandle}` });
+  return Object.freeze({ unrelated: `/${unrelatedHandle}`, direct: `/${directHandle}`, overlap: `/uat-o-${fixture.run_id}` });
 }
 
 let server, finalInventory;
@@ -122,8 +122,8 @@ try {
     { id: "described-personal-disabled", mode: "disabled", description: topics, prompt: "Our lasting engineering decision: synthetic acceptance rollback rehearsals use an isolated Maple checkpoint before publication. Explain this policy.", reads: [shared], requiredReads: [shared], writes: [shared] },
     { id: "overlap-unknown-commit", description: topics, unknownCommit: true, prompt: "Our lasting engineering decision: synthetic acceptance evidence uses a Granite manifest that lists all completed checks and their checksums. Explain how that helps future releases.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: ["/me", shared] },
     { id: "overlap-partial-write", description: topics, partialCommit: true, prompt: "Our lasting engineering decision: synthetic acceptance recovery drills use an Obsidian checklist that records the last verified commit before retrying. Explain why we use it.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: ["/me", shared] },
-    { id: "multi-mind-custom-instructions-save", customInstructions: true, requireFreshCatalog: true, description: topics, prompt: "Our lasting engineering decision: synthetic acceptance releases use a Copper ledger that records every verified check before deployment. Explain why this improves recovery.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: ["/me", shared] },
-    { id: "multi-mind-custom-instructions-noop", customInstructions: true, requireFreshCatalog: true, description: topics, prompt: "Our lasting engineering decision: synthetic acceptance releases use a Copper ledger that records every verified check before deployment. Explain why this improves recovery.", reads: ["/me", shared], requiredReads: ["/me", shared], writes: [] },
+    { id: "multi-mind-custom-instructions-save", customInstructions: true, requireFreshCatalog: true, description: topics, prompt: "Our lasting engineering decision: synthetic acceptance releases use a Copper ledger that records every verified check before deployment. Explain why this improves recovery.", reads: ["/me", shared, routing.overlap], requiredReads: ["/me", shared, routing.overlap], writes: ["/me", shared, routing.overlap] },
+    { id: "multi-mind-custom-instructions-noop", customInstructions: true, requireFreshCatalog: true, description: topics, prompt: "Our lasting engineering decision: synthetic acceptance releases use a Copper ledger that records every verified check before deployment. Explain why this improves recovery.", reads: ["/me", shared, routing.overlap], requiredReads: ["/me", shared, routing.overlap], writes: [] },
     { id: "null-ordinary-explicit-save", customInstructions: true, requireFreshCatalog: true, ordinaryMode: "read_write", description: topics, prompt: `Save this specific decision only in ${routing.direct}: synthetic acceptance experiments use the Silver checklist before each isolated trial. Do not save it in another Mind.`, reads: [routing.direct], requiredReads: [routing.direct], writes: [routing.direct] },
   ];
   const selectedIds = process.env.MD_ACCEPTANCE_MODEL_CASES?.trim() ? process.env.MD_ACCEPTANCE_MODEL_CASES.split(",") : undefined;
@@ -136,6 +136,21 @@ try {
   let directMode = "read";
   for (const scenario of selectedCases) {
     phase = scenario.id;
+    if (scenario.id === "multi-mind-custom-instructions-save") {
+      const owner = fixture.actors.owner.actor_id;
+      await ownerMutation("model:create:overlap", owner, { path: "/api/v1/minds", body: {
+        name: "Synthetic overlapping engineering decisions", handle: routing.overlap.slice(1), description: topics,
+      } });
+      await setOwnerMindUsage("model:usage:overlap", owner, routing.overlap, "read_write");
+      const catalog = await client.mcp(token, "list_minds");
+      for (const route of ["/me", shared, routing.unrelated, routing.overlap]) {
+        assert.equal(catalog.minds.find(mind => mind.route === route)?.effective?.can_write, true, "independent_writable_mind_missing");
+      }
+      const overlap = catalog.minds.find(mind => mind.route === routing.overlap);
+      await client.commit("model:seed:overlap", token, { mind: routing.overlap, expected_revision: overlap.head.revision_id,
+        summary: "Seed synthetic overlapping acceptance fixture", operations: [{ type: "create_file", path: "concepts/acceptance.md",
+          text: "---\ntype: Reference\n---\n\nSynthetic acceptance decision version two.\n" }] });
+    }
     const desiredMode = scenario.mode ?? "read_write";
     if (desiredMode !== personalMode) {
       const owner = fixture.actors.owner.actor_id;
@@ -187,7 +202,8 @@ try {
       try { envelope = await client.mcpEnvelope(token, "tools/call", { name: tool, arguments: args }); }
       catch (error) {
         if (!/^mcp_http_\d{3}$/.test(error.message)) throw error;
-        return { isError: true, structuredContent: { ok: false, error: { code: error.message } }, content: [{ type: "text", text: error.message }] };
+        const productError = error.productError ?? { code: error.message };
+        return { isError: true, structuredContent: { ok: false, error: productError }, content: [{ type: "text", text: JSON.stringify(productError) }] };
       }
       const result = envelope.result ?? { isError: true, content: [{ type: "text", text: "Protocol error" }] };
       if (tool === "list_minds" && !result.isError) registerModelMindSelectors(observedSelectors, result.structuredContent.data.minds);
