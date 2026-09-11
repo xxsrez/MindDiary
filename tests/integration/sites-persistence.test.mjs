@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { RuntimeDiagnostics } from "../../apps/mind-diary-site/worker/runtime-diagnostics.js";
+import { withForegroundDeadline } from "../../apps/mind-diary-site/worker/foreground-deadline.js";
 
 import { InMemoryAuditSink } from "@mind-diary/adapter-audit-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
@@ -813,9 +815,11 @@ test("Sites metadata applies cold schema migrations in one D1 batch", async () =
 
 test("hung metadata D1 reads fail fast and release the serialized read queue", async () => {
   const database = new FakeD1Database();
-  const store = await createSitesMetadataStore(database, { d1TimeoutMs: 25 });
+  const events = [];
+  const diagnostics = new RuntimeDiagnostics({ write: (line) => events.push(JSON.parse(line)) });
+  const store = await createSitesMetadataStore(database, { d1TimeoutMs: 25, diagnostics: diagnostics.forRuntime(crypto.randomUUID()) });
   const gate = database.holdNextMetadataRead();
-  const first = store.readAccount("principal_missing");
+  const first = diagnostics.runRequest(new Request("https://example.com"), () => store.readAccount("principal_missing"));
   await gate.started;
   const second = store.readAccount("principal_missing");
 
@@ -833,6 +837,8 @@ test("hung metadata D1 reads fail fast and release the serialized read queue", a
   ]);
   assert.equal(secondOutcome, "completed");
   await second;
+  assert.ok(events.some((event) => event.stage === "operation" && event.phase === "timeout"));
+  assert.ok(events.some((event) => event.stage === "d1" && event.operation === "bounded" && event.phase === "end" && event.late));
 });
 
 test("foreground metadata read has a bounded queue wait behind an unsettled append", async () => {
@@ -879,6 +885,73 @@ test("foreground metadata read has a bounded queue wait behind an unsettled appe
   assert.equal(skippedOutcome?.code, "metadata_queue_timeout");
   assert.equal(database.metadataEvents.length, 1);
   assert.deepEqual((await store.listMcpTokenMetadata(principalId)).map((token) => token.tokenId), ["token_queue_deadline"]);
+});
+
+test("stalled append trace links its queued reader and preserves late settlement without private fields", async () => {
+  const events = [];
+  const diagnostics = new RuntimeDiagnostics({ write: (line) => events.push(JSON.parse(line)) });
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database, {
+    d1TimeoutMs: 25, queueTimeoutMs: 25, diagnostics: diagnostics.forRuntime(crypto.randomUUID()),
+  });
+  const gate = database.holdNextMetadataAppend();
+  const request = new Request("https://example.com/private-path");
+  let mutation;
+  const write = diagnostics.runRequest(request, () => withForegroundDeadline(request, 25, () => {
+    mutation = store.createMcpToken({
+      tokenId: "token_private_diagnostic", principalId: opaqueId("principal_private_diagnostic"),
+      name: "Private diagnostic", verifier: `hmac-sha256:v1:${"e".repeat(64)}`,
+      displayPrefix: "mdp_v1_private…", scopes: ["content:read"], createdAt: T0, expiresAt: "2026-11-06T08:00:00.000Z",
+    });
+    return mutation;
+  }, (code) => diagnostics.expire(code)));
+  await gate.started;
+  const read = diagnostics.runRequest(new Request("https://example.com"), () => store.readAccount("principal_private_diagnostic"));
+  const readOutcome = read.catch((error) => error);
+  try {
+    assert.equal((await write).status, 503);
+    assert.equal((await readOutcome).code, "metadata_queue_timeout");
+    const appendStart = events.find((event) => event.stage === "d1" && event.operation === "append" && event.phase === "start");
+    const waiting = events.find((event) => event.stage === "queue" && event.phase === "timeout");
+    assert.ok(appendStart);
+    assert.equal(waiting.blocked_by_trace_id, appendStart.trace_id);
+    assert.equal(waiting.blocked_by_span_id, appendStart.parent_span_id);
+    assert.ok(events.some((event) => event.stage === "request" && event.phase === "timeout"));
+    assert.equal(events.some((event) => event.span_id === appendStart.span_id && event.phase === "end"), false);
+  } finally {
+    gate.release();
+    await mutation;
+  }
+  assert.ok(events.some((event) => event.stage === "d1" && event.operation === "append" && event.phase === "end" && event.late));
+  assert.doesNotMatch(JSON.stringify(events), /private|hmac-sha256|mdp_v1|principal_private|payload_json/);
+  assert.equal(database.metadataEvents.length, 1);
+});
+
+test("a stalled consistent-read callback is distinguishable from active D1 I/O", async () => {
+  const events = [];
+  const diagnostics = new RuntimeDiagnostics({ write: (line) => events.push(JSON.parse(line)) });
+  const store = await createSitesMetadataStore(new FakeD1Database(), {
+    queueTimeoutMs: 25, diagnostics: diagnostics.forRuntime(crypto.randomUUID()),
+  });
+  let release;
+  let entered;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { entered = resolve; });
+  const callback = diagnostics.runRequest(new Request("https://example.com"), () => store.withConsistentRead(async () => {
+    entered(); await gate;
+  }));
+  await started;
+  try {
+    await assert.rejects(diagnostics.runRequest(new Request("https://example.com"), () => store.readAccount("principal_missing")), { code: "metadata_queue_timeout" });
+    const held = events.find((event) => event.stage === "operation" && event.operation === "read_session" && event.phase === "start");
+    assert.ok(held);
+    const waiting = events.find((event) => event.stage === "queue" && event.phase === "timeout");
+    assert.equal(waiting.blocked_by_span_id, held.span_id);
+    for (const begin of events.filter((event) => event.trace_id === held.trace_id && event.stage === "d1" && event.phase === "start")) {
+      assert.ok(events.some((event) => event.span_id === begin.span_id && event.phase === "end"));
+    }
+    assert.equal(events.some((event) => event.span_id === held.span_id && event.phase === "end"), false);
+  } finally { release(); await callback; }
 });
 
 test("canonical metadata append waits past the read timeout and restart replay stays singular", async () => {

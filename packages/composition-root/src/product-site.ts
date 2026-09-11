@@ -32,6 +32,7 @@ import {
   createSitesLocalFileUploadIntentStore,
   createSitesMetadataStore,
   type D1DatabaseLike as MetadataD1DatabaseLike,
+  type SitesMetadataDiagnostics,
 } from "@mind-diary/adapter-metadata-sites";
 import {
   createSitesObjectStore,
@@ -182,6 +183,7 @@ export interface ProductSiteTrustedIdentityReader {
 export type ProductSiteRecoveryMode = "full" | "request";
 
 export interface ProductSiteRuntimeOptions {
+  readonly metadataDiagnostics?: SitesMetadataDiagnostics;
   readonly onMetadataQueueTimeout?: () => void;
   readonly database: MetadataD1DatabaseLike & SearchD1DatabaseLike & AuditD1DatabaseLike & OAuthD1DatabaseLike;
   readonly bucket: R2BucketLike;
@@ -909,6 +911,7 @@ export async function createProductSiteRuntime(
     createCsrf(options.csrfKey),
   ]);
   const metadata = await createSitesMetadataStore(options.database, {
+    ...(options.metadataDiagnostics === undefined ? {} : { diagnostics: options.metadataDiagnostics }),
     ...(options.onMetadataQueueTimeout === undefined ? {} : { onQueueTimeout: options.onMetadataQueueTimeout }),
   });
   const index = await createSitesSearchIndex(options.database);
@@ -1680,7 +1683,11 @@ export async function createProductSiteRuntime(
       }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5_000);
-      try { return await recoverBackground(limit, "full", controller.signal); }
+      try {
+        const run = () => recoverBackground(limit, "full", controller.signal);
+        return await (options.metadataDiagnostics === undefined ? run()
+          : options.metadataDiagnostics.observe("recovery", "maintenance", run));
+      }
       finally { clearTimeout(timer); }
     },
   };

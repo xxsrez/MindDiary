@@ -9,7 +9,7 @@ export async function withForegroundDeadline(request, timeoutMs, operation, reti
     expire = (code) => {
       if (controller.signal.aborted) return;
       controller.abort();
-      retire();
+      retire(code);
       resolve(Response.json({
         ok: false,
         error: {

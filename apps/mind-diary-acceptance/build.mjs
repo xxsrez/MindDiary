@@ -12,6 +12,7 @@ const options = {
   absWorkingDir: root,
   entryPoints: ["apps/mind-diary-acceptance/entry.mjs"],
   bundle: true, format: "esm", platform: "browser", target: "es2022",
+  external: ["node:async_hooks"],
   metafile: true, write: false, logLevel: "silent",
 };
 const initial = await build({ ...options, define: { __MD_ACCEPTANCE_BUILD__: "null" } });

@@ -512,12 +512,27 @@ async function currentRouteAuthorizationStateWithToken(
  * operation is recomputed from the latest ordered log and appended with an
  * expected-sequence CAS, so separate isolates cannot both win a stale view.
  */
+export interface SitesMetadataDiagnostics {
+  observe<Result>(stage: "operation" | "queue" | "d1" | "recovery", operation: string, work: () => Promise<Result>,
+    blockedBy?: Readonly<{ traceId: string; spanId: string }> | undefined): Promise<Result>;
+  current?(): Readonly<{ traceId: string; spanId: string }> | undefined;
+}
+
+export interface SitesMetadataStoreOptions {
+  readonly d1TimeoutMs?: number;
+  readonly queueTimeoutMs?: number;
+  readonly onQueueTimeout?: () => void;
+  readonly diagnostics?: SitesMetadataDiagnostics;
+}
+
 export class SitesMetadataStore {
   readonly kind = "metadata-store" as const;
   readonly #database: D1DatabaseLike;
   readonly #d1TimeoutMs: number;
   readonly #queueTimeoutMs: number;
   readonly #onQueueTimeout: (() => void) | undefined;
+  readonly #diagnostics: SitesMetadataDiagnostics | undefined;
+  #tailOwner: Readonly<{ traceId: string; spanId: string }> | undefined;
   #metadata = new InMemoryRevisionMetadataStore();
   #tokens = new InMemoryMcpTokenStore();
   #sequence = 0;
@@ -529,12 +544,13 @@ export class SitesMetadataStore {
 
   constructor(
     database: D1DatabaseLike,
-    options: Readonly<{ readonly d1TimeoutMs?: number; readonly queueTimeoutMs?: number; readonly onQueueTimeout?: () => void }> = {},
+    options: Readonly<SitesMetadataStoreOptions> = {},
   ) {
     this.#database = database;
     this.#d1TimeoutMs = options.d1TimeoutMs ?? SITES_METADATA_D1_TIMEOUT_MS;
     this.#queueTimeoutMs = options.queueTimeoutMs ?? SITES_METADATA_D1_TIMEOUT_MS;
     this.#onQueueTimeout = options.onQueueTimeout;
+    this.#diagnostics = options.diagnostics;
     if (!Number.isSafeInteger(this.#queueTimeoutMs) || this.#queueTimeoutMs < 1) {
       throw new TypeError("metadata queue timeout must be a positive integer");
     }
@@ -552,13 +568,14 @@ export class SitesMetadataStore {
         if (!selected) return undefined;
         if (TRANSACTION_METHODS.has(property)) {
           return (operation: (transaction: unknown) => Promise<unknown>) =>
-            target.#exclusive(() => target.#runTransaction(property, operation));
+            target.#exclusive(() => target.#runTransaction(property, operation), "transaction");
         }
         const mutations = selected.target === "metadata" ? METADATA_MUTATIONS : TOKEN_MUTATIONS;
         if (mutations.has(property)) {
           return (...args: unknown[]) =>
             target.#exclusive(() =>
               target.#runDirect(selected.target, property, args),
+              "mutation",
             );
         }
         return (...args: unknown[]) =>
@@ -566,7 +583,7 @@ export class SitesMetadataStore {
             await target.#refresh();
             const current = selected.target === "metadata" ? target.#metadata : target.#tokens;
             return methodOf(current, property)(...args);
-          });
+          }, "read");
       },
     });
     this.#proxy = proxy;
@@ -678,7 +695,7 @@ export class SitesMetadataStore {
     return this.#exclusive(async () => {
       await this.#refresh();
       return operation(this.#consistentReadView(this.#metadata, this.#tokens));
-    });
+    }, "read_session");
   }
 
   /**
@@ -774,7 +791,12 @@ export class SitesMetadataStore {
   }
 
   #boundedD1<Result>(operation: Promise<Result>, description: string): Promise<Result> {
-    return withD1Timeout(operation, this.#d1TimeoutMs, description);
+    return withD1Timeout(this.#observe("d1", "bounded", () => operation), this.#d1TimeoutMs, description);
+  }
+
+  #observe<Result>(stage: "operation" | "queue" | "d1", kind: string, operation: () => Promise<Result>,
+    blockedBy?: Readonly<{ traceId: string; spanId: string }>): Promise<Result> {
+    return this.#diagnostics === undefined ? operation() : this.#diagnostics.observe(stage, kind, operation, blockedBy);
   }
 
   async #refresh(): Promise<void> {
@@ -1219,9 +1241,9 @@ export class SitesMetadataStore {
     let appendOutcome: D1ResultLike;
     try {
       if (deletedPrincipalId === null) {
-        appendOutcome = await append.run();
+        appendOutcome = await this.#observe("d1", "append", () => append.run());
       } else {
-        const [appendResult] = await this.#database.batch([
+        const [appendResult] = await this.#observe("d1", "append", () => this.#database.batch([
           append,
           this.#database
             .prepare(
@@ -1242,7 +1264,7 @@ export class SitesMetadataStore {
               event.method,
               payloadJson,
             ),
-        ]);
+        ]));
         appendOutcome = appendResult ?? { success: false, meta: { changes: 0 } };
       }
     } catch (error) {
@@ -1271,13 +1293,13 @@ export class SitesMetadataStore {
   }
 
   async #readCanonicalEvent(sequence: number): Promise<DurableEventRow | null> {
-    const result = await this.#database
+    const result = await this.#observe("d1", "readback", () => this.#database
       .prepare(
         `/*md-metadata-append-readback*/ SELECT sequence, target, operation, payload_json
          FROM md_metadata_events WHERE sequence = ?1`,
       )
       .bind(sequence)
-      .all<DurableEventRow>();
+      .all<DurableEventRow>());
     const rows = result.results ?? [];
     if (rows.length > 1) {
       throw new Error("Sites metadata append readback is not unique");
@@ -1500,15 +1522,25 @@ export class SitesMetadataStore {
     }
   }
 
-  async #exclusive<Result>(operation: () => Promise<Result>): Promise<Result> {
+  #exclusive<Result>(operation: () => Promise<Result>, kind = "metadata"): Promise<Result> {
+    return this.#observe("operation", kind, () => this.#exclusiveObserved(operation, kind));
+  }
+
+  async #exclusiveObserved<Result>(operation: () => Promise<Result>, kind: string): Promise<Result> {
     const previous = this.#tail;
+    const previousOwner = this.#tailOwner;
+    const owner = this.#diagnostics?.current?.();
+    this.#tailOwner = owner;
     let release: () => void = () => undefined;
     this.#tail = new Promise<void>((resolve) => {
-      release = resolve;
+      release = () => {
+        if (this.#tailOwner === owner) this.#tailOwner = undefined;
+        resolve();
+      };
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
+      await this.#observe("queue", kind, () => Promise.race([
         previous,
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => reject(Object.assign(
@@ -1516,7 +1548,7 @@ export class SitesMetadataStore {
             { code: "metadata_queue_timeout" },
           )), this.#queueTimeoutMs);
         }),
-      ]);
+      ]), previousOwner);
     } catch (error) {
       // A canceled waiter must never release a still-running predecessor or
       // execute its operation later. Preserve the chain until that predecessor
@@ -1561,7 +1593,7 @@ export interface SitesMetadataStore
 
 export async function createSitesMetadataStore(
   database: D1DatabaseLike,
-  options: Readonly<{ readonly d1TimeoutMs?: number; readonly queueTimeoutMs?: number; readonly onQueueTimeout?: () => void }> = {},
+  options: Readonly<SitesMetadataStoreOptions> = {},
 ): Promise<SitesMetadataStore> {
   return new SitesMetadataStore(database, options).ready();
 }

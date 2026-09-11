@@ -1017,6 +1017,17 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   Уже начавшийся durable I/O не объявляется отменённым; foreground deadline
   и reconciliation действуют как обычно. Следующий явный проход продолжает
   durable jobs по их leases/cursors, без автоматического цикла из навигации.
+  Диагностика ожиданий использует server-generated trace/span IDs и opaque
+  runtime generation. Вложенные request, metadata operation, queue, D1 и
+  recovery spans записывают start/end/failure/timeout/cancel в stdout, без
+  дополнительных D1 writes. Поля ограничены закрытыми stage/operation/outcome,
+  длительностью и служебными IDs; URL, SQL, arguments, credentials и error text
+  не включаются. На trace допускается не более 96 обычных событий и один
+  сигнал о подавлении лишних событий. Поздний settlement сохраняет trace и
+  помечается late; отсутствие end не является доказательством отсутствия commit.
+  Async context находится только в Worker adapter через `AsyncLocalStorage`
+  ([поддержка Cloudflare](https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/));
+  доменное ядро и metadata adapter не импортируют Node runtime APIs.
   Cold-isolate schema bootstrap отправляет все ordered idempotent metadata
   migrations одним D1 batch вместо отдельного network round-trip на каждую
   migration. Search, audit, locator и upload-intent adapters лениво проверяют

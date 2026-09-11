@@ -67,6 +67,7 @@ export declare function createMindDiaryProductWorker<
   readonly runtimeCache?: object;
   readonly runtimeInitializationTimeoutMs?: number;
   readonly foregroundTimeoutMs?: number;
+  readonly diagnosticWriter?: (line: string) => void;
   readonly recoveryCoordinator?: RequestRecoveryCoordinator;
 }): Readonly<{
   fetch(request: Request, environment: Environment, context: Context): Promise<Response>;

@@ -9,7 +9,7 @@ import { ACCEPTANCE_ORIGIN, ACCEPTANCE_PROJECT } from "../../apps/mind-diary-acc
 
 export async function acceptanceRuntime(t, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), "acceptance-harness-")); t.after(() => rm(directory, { recursive: true, force: true }));
-  const compiled = await build({ absWorkingDir: resolve(import.meta.dirname, "../.."), entryPoints: ["apps/mind-diary-acceptance/entry.mjs"], bundle: true, platform: "browser", format: "esm", write: false, logLevel: "silent", define: { __MD_ACCEPTANCE_BUILD__: JSON.stringify(options.buildIdentity ?? null) } });
+  const compiled = await build({ absWorkingDir: resolve(import.meta.dirname, "../.."), entryPoints: ["apps/mind-diary-acceptance/entry.mjs"], bundle: true, platform: "browser", external: ["node:async_hooks"], format: "esm", write: false, logLevel: "silent", define: { __MD_ACCEPTANCE_BUILD__: JSON.stringify(options.buildIdentity ?? null) } });
   await writeFile(join(directory, "worker.mjs"), compiled.outputFiles[0].contents);
   const module = await import(pathToFileURL(join(directory, "worker.mjs")).href);
   const worker = options.createRuntime ? module.createAcceptanceWorker({ createRuntime: options.createRuntime }) : module.default;

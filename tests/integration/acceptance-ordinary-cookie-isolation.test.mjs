@@ -13,7 +13,7 @@ import { ACCEPTANCE_ORIGIN } from "../../apps/mind-diary-acceptance/runtime-targ
 test("ordinary Worker never interprets a valid acceptance cookie as product identity", async t => {
   const directory = await mkdtemp(join(tmpdir(), "ordinary-cookie-isolation-")); t.after(() => rm(directory, { recursive: true, force: true }));
   const compiled = await build({ absWorkingDir: resolve(import.meta.dirname, "../.."), entryPoints: ["apps/mind-diary-site/worker/index.ts"],
-    bundle: true, platform: "browser", format: "esm", write: false, metafile: true, logLevel: "silent",
+    bundle: true, platform: "browser", external: ["node:async_hooks"], format: "esm", write: false, metafile: true, logLevel: "silent",
     plugins: [{ name: "unused-ui-fallback", setup(plugin) {
       plugin.onResolve({ filter: /^vinext\/server\/app-router-entry$/ }, () => ({ path: "unused", namespace: "unused" }));
       plugin.onLoad({ filter: /.*/, namespace: "unused" }, () => ({ contents: 'export default { fetch(){throw new Error("Unexpected UI fallback")} };' }));

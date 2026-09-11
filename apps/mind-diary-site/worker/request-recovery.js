@@ -3,6 +3,7 @@ import {
   RUNTIME_INITIALIZATION_TIMEOUT_MS,
 } from "./runtime-cache.js";
 import { FOREGROUND_TIMEOUT_MS, withForegroundDeadline } from "./foreground-deadline.js";
+import { RuntimeDiagnostics } from "./runtime-diagnostics.js";
 
 const STATIC_PATH_PREFIXES = Object.freeze([
   "/_next/",
@@ -224,6 +225,7 @@ export function createMindDiaryProductWorker(options) {
     throw new TypeError("product Worker dependencies are required");
   }
   const runtimeCache = options.runtimeCache ?? new IsolateRuntimeCache();
+  const diagnostics = new RuntimeDiagnostics({ write: options.diagnosticWriter });
   const maintenanceRuntimeCache = new IsolateRuntimeCache();
   const foregroundTimeoutMs = options.foregroundTimeoutMs ?? FOREGROUND_TIMEOUT_MS;
   if (!Number.isSafeInteger(foregroundTimeoutMs) || foregroundTimeoutMs < 1) {
@@ -237,7 +239,9 @@ export function createMindDiaryProductWorker(options) {
     new RequestRecoveryCoordinator({ enabled: false });
   return Object.freeze({
     async fetch(request, environment, context) {
+      return diagnostics.runRequest(request, async () => {
       let activeHandle;
+      const expire = diagnostics.expirationHandler();
       return withForegroundDeadline(request, foregroundTimeoutMs, async (request, foregroundSignal) => {
       let failureStage = "static-assets";
       try {
@@ -256,7 +260,7 @@ export function createMindDiaryProductWorker(options) {
           fingerprint,
           initializationTimeoutMs: runtimeInitializationTimeoutMs,
           dispatch: dispatchScheduled,
-          create: (schedule, retireReady) => {
+          create: (schedule, retireReady, generation) => {
             const generatedSourceTest =
               restrictedUatGeneratedSourceTestConfig(environment);
             return options.createRuntime({
@@ -264,6 +268,7 @@ export function createMindDiaryProductWorker(options) {
               bucket: environment.MIND_DIARY_BUCKET,
               ...config,
               onMetadataQueueTimeout: retireReady,
+              metadataDiagnostics: diagnostics.forRuntime(generation),
               // Web activity is observational and writes to the same D1
               // binding as navigation. Keep it opt-in on Sites until a
               // dedicated queue exists; MCP activity remains unchanged.
@@ -288,6 +293,7 @@ export function createMindDiaryProductWorker(options) {
           },
         });
         activeHandle = acquired;
+        diagnostics.bindRuntime(acquired.generation);
         const runtime = await acquired.runtime;
         foregroundSignal.throwIfAborted();
         const initializationScheduled = acquired.drainInitializationScheduled();
@@ -305,7 +311,7 @@ export function createMindDiaryProductWorker(options) {
               // Request-triggered maintenance must remain a tiny repair tick.
               // Larger batches are explicit operator work: on Sites they can
               // occupy the shared D1 binding long enough to starve navigation.
-              return await runtime.recoverBackground(4, "request");
+              return await diagnostics.observe("recovery", "request", () => runtime.recoverBackground(4, "request"));
             } finally {
               // Work produced by recovery belongs to the pulse that started
               // it. Never leave it for an unrelated foreground read to adopt.
@@ -356,7 +362,8 @@ export function createMindDiaryProductWorker(options) {
           },
         );
       }
-      }, () => activeHandle?.retireReady());
+      }, (code) => { expire(code); activeHandle?.retireReady(); });
+      });
     },
   });
 }

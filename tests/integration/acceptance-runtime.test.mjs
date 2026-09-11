@@ -12,7 +12,7 @@ import { ACCEPTANCE_ORIGIN, ACCEPTANCE_PROJECT } from "../../apps/mind-diary-acc
 test("four real bootstraps and normal bearer auth remain constrained by the run", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "md-acceptance-runtime-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const compiled = await build({ absWorkingDir: resolve(import.meta.dirname, "../.."), entryPoints: ["apps/mind-diary-acceptance/entry.mjs"], bundle: true, platform: "browser", format: "esm", write: false, logLevel: "silent", define: { __MD_ACCEPTANCE_BUILD__: "null" } });
+  const compiled = await build({ absWorkingDir: resolve(import.meta.dirname, "../.."), entryPoints: ["apps/mind-diary-acceptance/entry.mjs"], bundle: true, platform: "browser", external: ["node:async_hooks"], format: "esm", write: false, logLevel: "silent", define: { __MD_ACCEPTANCE_BUILD__: "null" } });
   await writeFile(join(directory, "worker.mjs"), compiled.outputFiles[0].contents);
   const worker = (await import(pathToFileURL(join(directory, "worker.mjs")).href)).default;
   const database = new SqliteD1(); t.after(() => database.close());
