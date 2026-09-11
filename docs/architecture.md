@@ -984,7 +984,12 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   recovery flight, и не наследуют его wall time. В UAT автоматический UI pulse
   отключён: Sites делит ресурсный бюджет Worker/D1 между foreground request и
   `waitUntil`, поэтому даже bounded request-triggered pass может занять общий
-  контур и вызвать starvation навигации. Request recovery оставлен opt-in для
+  контур и вызвать starvation навигации. Временная мера от 2026-09-11 также
+  отключает request-triggered recovery в default Worker factory: отключения
+  browser pulse недостаточно, потому что authenticated navigation сама
+  запускала этот проход. Это ограничивает фоновую обработку, но не исправляет
+  неограниченное ожидание общей очереди метаданных; постоянная работа
+  учитывается в MD-450–MD-452. Request recovery оставлен opt-in для
   изолированных проверок; UAT также не пишет best-effort Web activity в
   `waitUntil`, пока для неё нет отдельной очереди. Тяжёлые batch recovery
   остаются operator-owned работой вне navigation path.

@@ -42,7 +42,7 @@ test("product UI does not schedule request-triggered recovery work", () => {
   assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /x-mind-diary-recovery-pulse/u);
 });
 
-test("production Worker enables bounded request-triggered recovery by default", async () => {
+test("production Worker does not start navigation or pulse recovery by default", async () => {
   let recoveries = 0;
   const waits = [];
   const worker = createMindDiaryProductWorker({
@@ -56,13 +56,15 @@ test("production Worker enables bounded request-triggered recovery by default", 
     readConfig() { return { publicOrigin: ORIGIN }; },
     async fallbackFetch() { return new Response("fallback", { status: 404 }); },
   });
-  const response = await worker.fetch(recoveryPulse(), {}, {
-    waitUntil: (promise) => waits.push(promise),
-  });
-  assert.equal(response.status, 200);
-  assert.equal(waits.length, 1);
-  await waits[0];
-  assert.equal(recoveries, 1);
+  const environment = {};
+  for (const request of [authenticatedNavigation(), recoveryPulse()]) {
+    const response = await worker.fetch(request, environment, {
+      waitUntil: (promise) => waits.push(promise),
+    });
+    assert.equal(response.status, 200);
+  }
+  assert.equal(waits.length, 0);
+  assert.equal(recoveries, 0);
 });
 
 test("a cold runtime timeout returns bounded 503s without retaining request contexts or duplicating initialization", async () => {

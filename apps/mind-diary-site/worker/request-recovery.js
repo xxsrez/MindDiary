@@ -223,11 +223,11 @@ export function createMindDiaryProductWorker(options) {
   const runtimeCache = options.runtimeCache ?? new IsolateRuntimeCache();
   const runtimeInitializationTimeoutMs =
     options.runtimeInitializationTimeoutMs ?? RUNTIME_INITIALIZATION_TIMEOUT_MS;
-  // Sites shares the Worker/D1 resource budget between foreground requests and
-  // waitUntil work. Recovery therefore starts only after a quiet window, runs
-  // a bounded request-mode batch, and never delays the document response.
+  // Temporary UAT mitigation (MD-450/MD-451): canceled waitUntil recovery can
+  // retain the shared metadata queue. Keep navigation recovery opt-in until
+  // foreground requests are isolated from stalled background work.
   const recoveryCoordinator = options.recoveryCoordinator ??
-    new RequestRecoveryCoordinator();
+    new RequestRecoveryCoordinator({ enabled: false });
   return Object.freeze({
     async fetch(request, environment, context) {
       let failureStage = "static-assets";
