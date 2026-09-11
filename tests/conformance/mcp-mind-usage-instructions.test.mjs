@@ -81,3 +81,12 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
   assert.match(commit.description, /notify the user/u);
   assert.match(writes.get("reconcile_changeset").description, /exact original/u);
 });
+
+// Hosts may keep only the initialization prefix; it must preserve selection boundaries.
+test("discovery prefix is self-contained before host truncation", () => {
+  const prefix = MCP_AGENT_INSTRUCTIONS.slice(0, 512);
+  for (const fragment of [/even when Mind Diary is not named/u, /Read only topic-matching Minds/u, /Personal without a description requires a direct request/u, /current access and scopes/u]) {
+    assert.match(prefix, fragment);
+    assert.match(MCP_READ_TOOL_DEFINITIONS.find(t => t.name === "list_minds").description, fragment);
+  }
+});

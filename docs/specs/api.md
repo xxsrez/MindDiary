@@ -2054,6 +2054,16 @@ temporary URL, local path and bytes are absent.
 
 ### `list_minds`
 
+Уточнение discovery guidance, 2026-09-11: перед содержательным запросом агент
+проверяет свежие descriptions включённых Minds, даже без упоминания Mind Diary.
+Само discovery не разрешает чтение всех corpora: далее выбирается только
+релевантный Mind, Personal без description требует прямой просьбы. Проверка
+актуальности во внешнем источнике дополняет релевантные сохранённые сведения.
+Это правило выбора инструмента, не гарантия его вызова клиентом. Краткое
+самодостаточное правило помещается в первые 512 символов server instructions
+и повторяется в description `list_minds`; доступ, scopes и write policy не меняются.
+
+
 Input:
 
 | Field | Type | Required | Meaning |
