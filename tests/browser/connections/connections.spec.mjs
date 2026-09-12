@@ -367,7 +367,7 @@ test("Connection guide switches all three clients by keyboard and copies exact c
   expect(customInstructions.length).toBeLessThanOrEqual(1500);
   expect(customInstructions).toContain("Automatically save durable facts/decisions from this request to every matching Mind");
   expect(customInstructions).toContain("'only' limits destinations");
-  expect(customInstructions).toContain("Moving retrieved Personal content to other readers requires my direct request");
+  expect(customInstructions).toContain("Moving retrieved Personal content to other readers needs my direct request");
   expect(customInstructions).toContain("this text grants no authority");
   expect(customInstructions).not.toContain("This instruction permits reading, not writing");
   await page.getByRole("button", { name: "Copy isolated routing check" }).click();
