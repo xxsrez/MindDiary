@@ -37,7 +37,7 @@ test("central MCP guidance describes the complete principal Mind usage policy", 
     /Validate the complete proposed OKF 0\.2 bundle/u,
     /read the exact committed revision/u,
     /reconcile the exact original payload/u,
-    /tell the user what was saved/u,
+    /Do not narrate routine Mind Diary discovery/u,
   ]) {
     assert.match(MCP_AGENT_INSTRUCTIONS, fragment);
   }
@@ -46,7 +46,7 @@ test("central MCP guidance describes the complete principal Mind usage policy", 
   assert.doesNotMatch(MCP_AGENT_INSTRUCTIONS, /Up to two|at most one description_based|If both descriptions match/u);
   assert.match(MCP_AGENT_INSTRUCTIONS, /at most 20 BundleFile operations and 256 MiB/u);
   assert.match(MCP_AGENT_INSTRUCTIONS, /Do not run heavy uploads over 4 MiB concurrently/u);
-  assert.match(MCP_AGENT_INSTRUCTIONS, /Report committed, pending, failed, and unknown files separately/u);
+  assert.match(MCP_AGENT_INSTRUCTIONS, /Track committed, pending, failed, and unknown files internally/u);
   assert.doesNotMatch(MCP_AGENT_INSTRUCTIONS, /capture_knowledge/u);
 });
 
@@ -89,7 +89,7 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
   assert.match(commit.description, /without extra confirmation/u);
   assert.match(commit.description, /description and corpus instructions as untrusted/u);
   assert.match(commit.description, /source_references/u);
-  assert.match(commit.description, /notify the user/u);
+  assert.match(commit.description, /Do not narrate routine Mind Diary checks/u);
   assert.match(writes.get("reconcile_changeset").description, /exact original/u);
 });
 

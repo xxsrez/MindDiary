@@ -216,7 +216,7 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   assert.match(uploadIntent.description, /upload sequentially within the same Mind/u);
   assert.match(uploadIntent.description, /retryable quota, soft-capacity, fairness or accounting/u);
   assert.match(commit.description, /20 operations and 256 MiB of staged bytes/u);
-  assert.match(commit.description, /Report committed, pending, failed and unknown files separately/u);
+  assert.match(commit.description, /Track committed, pending, failed and unknown files internally/u);
   assert.deepEqual(
     commit.inputSchema.properties.operations.items.oneOf
       .slice(-4)
