@@ -347,6 +347,7 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 
 - [ChatGPT: приоритет Mind Diary и очистка экспериментов](reports/2026-09-11-chatgpt-guide-and-cleanup.md) — два обычных Chat, read-only evidence и UAT153.
 - [Multi-Mind: живая приёмка ChatGPT](reports/2026-09-11-multi-mind-chatgpt-acceptance.md) — автоматический выбор, no-op, explicit-only и отдельное ограничение host approval.
+- [Mind Diary без служебных отчётов](reports/2026-09-12-quiet-mind-diary.md) — инструкции аккаунта, MCP metadata, UAT159 и границы проверки ответов.
 
 ## Статусы и проверяемые claims
 
