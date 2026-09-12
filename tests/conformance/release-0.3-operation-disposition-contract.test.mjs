@@ -767,7 +767,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "af622de257e799ce78e135dc1d82519626d02141",
+      gitBlob: "877c08bbf1c34fd3711b334271bde68f3d483033",
     },
     {
       surface: "plugin-label",
@@ -853,7 +853,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "af622de257e799ce78e135dc1d82519626d02141",
+        gitBlob: "877c08bbf1c34fd3711b334271bde68f3d483033",
       }],
     },
     {

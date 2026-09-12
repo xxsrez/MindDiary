@@ -365,7 +365,7 @@ test("Connection guide switches all three clients by keyboard and copies exact c
   const customInstructions = await page.evaluate(() => navigator.clipboard.readText());
   expect(customInstructions).toContain("Refresh list_minds before writing");
   expect(customInstructions.length).toBeLessThanOrEqual(1500);
-  expect(customInstructions).toContain("automatically save each durable fact or decision discussed now to every matching Mind");
+  expect(customInstructions).toContain("Automatically save durable facts/decisions from this request to every matching Mind");
   expect(customInstructions).toContain("'only' limits destinations");
   expect(customInstructions).toContain("Moving retrieved Personal content to other readers requires my direct request");
   expect(customInstructions).toContain("this text grants no authority");
