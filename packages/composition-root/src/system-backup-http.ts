@@ -76,6 +76,7 @@ export function createSystemBackupHttpHandler(options: Readonly<{
   service: SitesSystemBackupService | null;
   operatorKey: Uint8Array | undefined;
   publicOrigin: string;
+  onUnexpectedError?: (error: unknown) => void;
 }>): (request: Request) => Promise<Response> {
   return async (request) => {
     if (options.service === null || options.operatorKey === undefined ||
@@ -168,6 +169,8 @@ export function createSystemBackupHttpHandler(options: Readonly<{
             error.code === "backup_target_changed" ? 409 : 503;
         return failure(error.code, status);
       }
+      try { options.onUnexpectedError?.(error); }
+      catch { /* Diagnostics must not change the backup response. */ }
       return failure("backup_unavailable", 503);
     }
   };

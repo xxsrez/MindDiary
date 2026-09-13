@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { join } from "node:path";
 import { acceptanceRuntime } from "../helpers/acceptance-runtime.mjs";
 import { ACCEPTANCE_ORIGIN } from "../../apps/mind-diary-acceptance/runtime-target.mjs";
+import { AcceptanceClient } from "../../scripts/lib/acceptance-client.mjs";
+import { createCollaborationFixture } from "../../scripts/lib/acceptance-fixture.mjs";
 
 test("acceptance controller can complete a synthetic backup without a Product key", async (t) => {
   const { fetch, controllerKey, bucket, db } = await acceptanceRuntime(t);
@@ -83,4 +86,25 @@ test("acceptance controller can complete a synthetic backup without a Product ke
   assert.equal(postCleanup.rows.md_backup_sessions, 0);
   assert.equal(postCleanup.rows.md_backup_pages, 0);
   assert.equal(postCleanup.rows.md_backup_inventory, 0);
+});
+
+test("synthetic multi-principal fixture can start a hosted backup session", async (t) => {
+  const runtime = await acceptanceRuntime(t);
+  const list = runtime.bucket.list.bind(runtime.bucket);
+  runtime.bucket.list = async (options) => ({ ...await list(options), delimitedPrefixes: [] });
+  const client = await new AcceptanceClient({
+    directory: join(runtime.directory, "backup-fixture"),
+    platformToken: "test-platform", controllerKey: runtime.controllerKey,
+    fetch: runtime.fetch,
+  }).open();
+  await client.setup({ profile: "operator" });
+  await createCollaborationFixture(client);
+  const response = await runtime.fetch(`${ACCEPTANCE_ORIGIN}/api/v1/internal/system-backup/sessions`, {
+    method: "POST", headers: { authorization: `Bearer mdb_v1_${runtime.controllerKey}`,
+      "content-type": "application/json", "x-md-acceptance-run": client.state.run.run_id },
+    body: JSON.stringify({ request_id: randomUUID() }),
+  });
+  assert.equal(response.status, 201, JSON.stringify(await response.clone().json()));
+  const descriptor = await response.json();
+  assert.ok(descriptor.record_count > 0);
 });

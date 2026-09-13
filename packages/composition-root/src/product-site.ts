@@ -208,6 +208,8 @@ export interface ProductSiteRuntimeOptions {
   readonly systemBackupOperatorKey?: Uint8Array;
   /** Constructor-only acceptance tables, checked by exact columns and excluded from backup. */
   readonly systemBackupRuntimeExtraD1Schema?: Readonly<Record<string, string>>;
+  /** Constructor-only test diagnostic for unexpected backup adapter failures. */
+  readonly systemBackupUnexpectedError?: (error: unknown) => void;
   /** Optional trusted admission policy; may only deny an already authenticated principal. */
   readonly mcpPrincipalAdmission?: (principalId: string, request: Request) => Promise<boolean>;
   /**
@@ -941,6 +943,8 @@ export async function createProductSiteRuntime(
     service: systemBackup,
     operatorKey: options.systemBackupOperatorKey,
     publicOrigin: options.publicOrigin,
+    ...(options.systemBackupUnexpectedError === undefined ? {} :
+      { onUnexpectedError: options.systemBackupUnexpectedError }),
   });
   const index = await createSitesSearchIndex(options.database);
   const audit = await createSitesAuditSink(options.database);

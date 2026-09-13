@@ -36,6 +36,13 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
         const runtime = await createRuntime({
           ...options,
           systemBackupRuntimeExtraD1Schema: ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA,
+          systemBackupUnexpectedError: (error) => {
+            const name = error instanceof Error ? error.name : "unknown";
+            const message = error instanceof Error ? error.message : "unknown";
+            console.error(JSON.stringify({ event: "md-acceptance-backup-error", name,
+              message: message.replace(/[A-Za-z0-9_-]{30,}/gu, "[redacted]")
+                .replace(/[^\x20-\x7E]/gu, "?").slice(0, 240) }));
+          },
           observabilityWriter: { write: value => telemetryFor(options.database).write(value) },
           identity: { async readVerifiedIdentity(request) {
             const actor = recoveryIdentities.get(request) ?? await storeFor(options.database).actorForRequest(request);
