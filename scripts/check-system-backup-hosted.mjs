@@ -39,13 +39,26 @@ assert.equal(baseline.owned_minds, 0);
 assert.equal(baseline.object_count, 0);
 assert.ok(Object.values(baseline.rows).every((count) => count === 0));
 
-const fetchImpl = (url, options) => {
+const fetchImpl = async (url, options) => {
   if (new URL(url).origin !== ACCEPTANCE_ORIGIN) throw new Error("foreign_backup_target");
-  return fetch(url, {
+  const response = await fetch(url, {
     ...options,
     headers: { ...options.headers, "OAI-Sites-Authorization": `Bearer ${platform}`,
       "x-md-acceptance-run": client.state.run.run_id },
   });
+  if (!response.ok) {
+    let code = "untyped";
+    try {
+      const body = await response.clone().json();
+      const candidate = typeof body.code === "string" ? body.code : body.error;
+      if (typeof candidate === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(candidate)) {
+        code = candidate;
+      }
+    } catch { /* Keep only the status when the gateway has no JSON error. */ }
+    console.error(JSON.stringify({ event: "hosted_backup_http_error",
+      status: response.status, code }));
+  }
+  return response;
 };
 const directory = join(client.directory, "backup");
 const run = () => runBackup({
