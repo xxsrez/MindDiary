@@ -17,7 +17,8 @@ import { createSystemBackupHttpHandler } from
   "../../packages/composition-root/dist/system-backup-http.js";
 import { backupObjectPath, backupStatus, openBackupCatalog, runBackup } from
   "../../scripts/lib/system-backup-client.mjs";
-import { createRecoveryKit, recoveryKitPath, verifyRecoveryKit } from
+import { copyPortableNode, createRecoveryKit, recoveryKitPath,
+  verifyRecoveryKit } from
   "../../scripts/lib/system-backup-kit.mjs";
 import { inspectRestoredTarget, restoreBackup } from
   "../../scripts/lib/system-backup-restore.mjs";
@@ -30,6 +31,25 @@ const KEY = `mdb_v1_${KEY_BYTES.toString("base64url")}`;
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const NETWORK_BLOCK = fileURLToPath(new URL(
   "../fixtures/system-backup-no-network.mjs", import.meta.url));
+
+test("macOS rejects a Node binary linked to non-system libraries", {
+  skip: process.platform !== "darwin",
+}, async (context) => {
+  const linked = spawnSync("/usr/bin/otool", ["-L", process.execPath],
+    { encoding: "utf8" });
+  assert.equal(linked.status, 0, linked.stderr);
+  const external = linked.stdout.split("\n").slice(1).some((line) => {
+    const path = /^\s*(\S+)\s+\(/u.exec(line)?.[1];
+    return path && !path.startsWith("/usr/lib/") &&
+      !path.startsWith("/System/Library/");
+  });
+  if (!external) return context.skip("current Node is self-contained");
+  const directory = await mkdtemp(join(tmpdir(), "mind-diary-runtime-"));
+  try {
+    await assert.rejects(copyPortableNode(process.execPath,
+      join(directory, "node")), /kit_runtime_not_portable/u);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 class SyntheticR2 {
   objects = new Map();

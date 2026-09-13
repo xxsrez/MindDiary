@@ -32,6 +32,14 @@ writer, а падение процесса освобождает lock. В те�
 kit не позволяют продвинуть локальный checkpoint. Старые kits сохраняются
 для старой точки при смене схемы. `integrity` проверяет также kit; его
 `kit: verified` нельзя заменить одним только `status`.
+На macOS Node должен быть самостоятельным бинарником. Homebrew Node может
+ссылаться на `libnode` и другие библиотеки вне системных каталогов: копия
+такого исполняемого файла не запустится на другом Mac. Передайте путь к
+автономному Node `>=22.13.0` через
+`MIND_DIARY_BACKUP_RUNTIME_NODE=/absolute/path/to/node` для ручного `run`
+или `install`; отсутствие подходящего runtime завершает операцию ошибкой
+`kit_runtime_not_portable` до продвижения checkpoint или установки Agent.
+Путь к runtime не является секретом.
 
 `status` показывает записанный `last_success`, отдельный `pending` и ошибку
 без bytes, object keys, email, путей и credentials. Поле
@@ -120,7 +128,7 @@ identity/access.
 com.xxsrez.mind-diary-backup.uat -w` запрашивает пароль интерактивно, если
 `-w` последний аргумент; не передавайте его в argv, URL, shell history или
 документы. `install` сначала проверяет доступность и формат ключа, затем
-создаёт приватный независимый clone точного commit и Node runtime.
+создаёт приватный независимый clone точного commit и автономный Node runtime.
 
 ```text
 node scripts/system-backup-runner.mjs install \

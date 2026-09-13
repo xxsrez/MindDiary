@@ -130,6 +130,9 @@ test("macOS install creates a private independent source and launch agent; unins
     assert.equal(xml.includes(KEY), false);
     assert.equal((await stat(join(appRoot, "runtime", "node"))).isFile(),
       true);
+    const copiedRuntime = spawnSync(join(appRoot, "runtime", "node"),
+      ["--version"], { encoding: "utf8" });
+    assert.equal(copiedRuntime.status, 0, copiedRuntime.stderr);
     assert.equal((await stat(join(appRoot, "source", "package-lock.json")))
       .isFile(), true);
     const status = await installedBackupStatus({ home, execute,

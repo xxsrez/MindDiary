@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, lstat, mkdir, mkdtemp, open, readFile, rename, rm,
+import { lstat, mkdir, mkdtemp, open, readFile, rename, rm,
   stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { BackupClientError } from "./system-backup-client.mjs";
 import { readOperatorKey, readRunnerConfig, scheduledBackupStatus } from
   "./system-backup-runner.mjs";
+import { copyPortableNode } from "./system-backup-kit.mjs";
 
 const LABEL = "com.xxsrez.mind-diary-backup.uat";
 const SERVICE = "com.xxsrez.mind-diary-backup.uat";
@@ -74,6 +75,7 @@ async function fsyncPath(path) {
 export async function installScheduledBackup({ directory, origin,
   hour = 3, minute = 0, staleHours = 48,
   home = homedir(), sourceRoot,
+  runtimeNode = process.env.MIND_DIARY_BACKUP_RUNTIME_NODE || process.execPath,
   keyProvider = readOperatorKey,
   execute = command,
   now = () => new Date() }) {
@@ -119,7 +121,7 @@ export async function installScheduledBackup({ directory, origin,
   try {
     stage = await mkdtemp(`${appRoot}.staging-`);
     await mkdir(join(stage, "runtime"), { mode: 0o700 });
-    await copyFile(process.execPath, join(stage, "runtime", "node"));
+    await copyPortableNode(runtimeNode, join(stage, "runtime", "node"));
     execute("git", ["clone", "--quiet", "--no-hardlinks",
       "--no-checkout", sourceRoot, join(stage, "source")]);
     execute("git", ["-C", join(stage, "source"), "checkout", "--quiet",

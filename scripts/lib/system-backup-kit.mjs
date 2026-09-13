@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { copyFile, lstat, mkdir, mkdtemp, open, readFile, rename, rm,
   stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BackupClientError } from "./system-backup-client.mjs";
 
@@ -16,6 +16,7 @@ const FILES = Object.freeze([
   "scripts/lib/system-backup-viewer.mjs",
 ]);
 const SOURCE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const NODE_VERSION = /^v(\d+)\.(\d+)\.(\d+)$/u;
 
 function fail(code) { throw new BackupClientError(code); }
 function required(condition, code) { if (!condition) fail(code); }
@@ -50,6 +51,34 @@ function git(root, ...args) {
   return result.stdout.trim();
 }
 
+export async function copyPortableNode(runtimeNode, destination) {
+  required(isAbsolute(runtimeNode ?? ""), "kit_runtime_not_absolute");
+  const source = await lstat(runtimeNode);
+  required(source.isFile() && !source.isSymbolicLink(),
+    "kit_runtime_invalid");
+  const probe = spawnSync(runtimeNode, ["--version"], {
+    encoding: "utf8", timeout: 10_000, maxBuffer: 1024 });
+  const match = NODE_VERSION.exec(probe.stdout?.trim() ?? "");
+  required(probe.status === 0 && match &&
+    (Number(match[1]) > 22 ||
+      (Number(match[1]) === 22 && Number(match[2]) >= 13)),
+  "kit_runtime_incompatible");
+  await copyFile(runtimeNode, destination);
+  if (process.platform === "darwin") {
+    const linked = spawnSync("/usr/bin/otool", ["-L", destination], {
+      encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024 });
+    required(linked.status === 0, "kit_runtime_inspection_failed");
+    const dependencies = linked.stdout.trimEnd().split("\n").slice(1);
+    required(dependencies.length > 0 && dependencies.every((line) => {
+      const path = /^\s*(\S+)\s+\(/u.exec(line)?.[1];
+      return path?.startsWith("/usr/lib/") ||
+        path?.startsWith("/System/Library/");
+    }), "kit_runtime_not_portable");
+  }
+  await fsyncPath(destination);
+  return probe.stdout.trim();
+}
+
 async function archiveSource(root, destination) {
   const output = createWriteStream(destination, { mode: 0o600 });
   const child = spawn("git", ["archive", "--format=tar", "HEAD"],
@@ -76,9 +105,10 @@ export async function verifyRecoveryKit(directory, schemaDigest) {
   let manifest;
   try { manifest = JSON.parse(await readFile(join(kit, "kit.json"), "utf8")); }
   catch { fail("kit_invalid_manifest"); }
-  required(manifest?.format === "mind-diary-recovery-kit/v1" &&
+  required(manifest?.format === "mind-diary-recovery-kit/v2" &&
     manifest.schema_digest === schemaDigest &&
     manifest.platform === process.platform && manifest.arch === process.arch &&
+    manifest.runtime_portable === true &&
     /^v(?:2[2-9]|[3-9][0-9])\./u.test(manifest.node_version) &&
     /^[0-9a-f]{40}$/u.test(manifest.source_sha) &&
     manifest.files && typeof manifest.files === "object" &&
@@ -102,7 +132,8 @@ export async function verifyRecoveryKit(directory, schemaDigest) {
 }
 
 export async function createRecoveryKit({ directory, schemaDigest,
-  sourceRoot = SOURCE_ROOT, allowDirty = false }) {
+  sourceRoot = SOURCE_ROOT, allowDirty = false,
+  runtimeNode = process.env.MIND_DIARY_BACKUP_RUNTIME_NODE || process.execPath }) {
   const previousUmask = process.umask(0o077);
   let stage;
   try {
@@ -125,8 +156,8 @@ export async function createRecoveryKit({ directory, schemaDigest,
     await mkdir(join(stage, "runtime"), { mode: 0o700 });
     const fileNames = ["runtime/node", "source.tar", ...FILES];
     const files = {};
-    await copyFile(process.execPath, join(stage, "runtime/node"));
-    await fsyncPath(join(stage, "runtime/node"));
+    const nodeVersion = await copyPortableNode(runtimeNode,
+      join(stage, "runtime/node"));
     await archiveSource(sourceRoot, join(stage, "source.tar"));
     for (const name of FILES) {
       await mkdir(dirname(join(stage, name)),
@@ -135,10 +166,10 @@ export async function createRecoveryKit({ directory, schemaDigest,
       await fsyncPath(join(stage, name));
     }
     for (const name of fileNames) files[name] = await fileDigest(join(stage, name));
-    const manifest = { format: "mind-diary-recovery-kit/v1",
+    const manifest = { format: "mind-diary-recovery-kit/v2",
       schema_digest: schemaDigest, source_sha: sourceSha,
       platform: process.platform, arch: process.arch,
-      node_version: process.version, files };
+      node_version: nodeVersion, runtime_portable: true, files };
     await writeFile(join(stage, "kit.json"), `${JSON.stringify(manifest)}\n`,
       { mode: 0o600 });
     await fsyncPath(join(stage, "kit.json"));
