@@ -2,7 +2,8 @@ import {
   IsolateRuntimeCache,
   RUNTIME_INITIALIZATION_TIMEOUT_MS,
 } from "./runtime-cache.js";
-import { FOREGROUND_TIMEOUT_MS, withForegroundDeadline } from "./foreground-deadline.js";
+import { FOREGROUND_TIMEOUT_MS, SYSTEM_BACKUP_FOREGROUND_TIMEOUT_MS,
+  withForegroundDeadline } from "./foreground-deadline.js";
 import { RuntimeDiagnostics } from "./runtime-diagnostics.js";
 
 const STATIC_PATH_PREFIXES = Object.freeze([
@@ -232,6 +233,11 @@ export function createMindDiaryProductWorker(options) {
   if (!Number.isSafeInteger(foregroundTimeoutMs) || foregroundTimeoutMs < 1) {
     throw new TypeError("foreground timeout must be a positive integer");
   }
+  const backupForegroundTimeoutMs = options.backupForegroundTimeoutMs ??
+    SYSTEM_BACKUP_FOREGROUND_TIMEOUT_MS;
+  if (!Number.isSafeInteger(backupForegroundTimeoutMs) || backupForegroundTimeoutMs < 1) {
+    throw new TypeError("backup foreground timeout must be a positive integer");
+  }
   const runtimeInitializationTimeoutMs =
     options.runtimeInitializationTimeoutMs ?? RUNTIME_INITIALIZATION_TIMEOUT_MS;
   // Navigation never implicitly starts maintenance on the shared Sites budget.
@@ -243,7 +249,10 @@ export function createMindDiaryProductWorker(options) {
       return diagnostics.runRequest(request, async () => {
       let activeHandle;
       const expire = diagnostics.expirationHandler();
-      return withForegroundDeadline(request, foregroundTimeoutMs, async (request, foregroundSignal) => {
+      const deadlineMs = new URL(request.url).pathname.startsWith(
+        "/api/v1/internal/system-backup/",
+      ) ? backupForegroundTimeoutMs : foregroundTimeoutMs;
+      return withForegroundDeadline(request, deadlineMs, async (request, foregroundSignal) => {
       let failureStage = "static-assets";
       try {
         const staticResponse = options.staticFetch?.(request) ?? null;

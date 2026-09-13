@@ -32,6 +32,8 @@ for (const input of manifest.inputs) {
 }
 const group = (predicate) => hash(JSON.stringify(manifest.inputs.filter(({ path }) => predicate(path))));
 assert.equal(manifest.common_modules_sha256, group((p) => p.startsWith("packages/") || p.startsWith("apps/mind-diary-site/worker/")));
+assert.equal(manifest.backup_foreground_sha256, group((p) => p === "apps/mind-diary-site/worker/foreground-deadline.js" ||
+  p === "apps/mind-diary-site/worker/request-recovery.js"));
 assert.equal(manifest.backup_transport_sha256, hash(await readFile(resolve(root, "packages/composition-root/src/system-backup-sites.ts"))));
 assert.equal(manifest.backup_client_sha256, hash(await readFile(resolve(root, "scripts/lib/system-backup-client.mjs"))));
 assert.equal(manifest.test_adapter_sha256, group((p) => p.startsWith("apps/mind-diary-acceptance/")));

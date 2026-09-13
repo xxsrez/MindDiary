@@ -1,4 +1,5 @@
 export const FOREGROUND_TIMEOUT_MS = 10_000;
+export const SYSTEM_BACKUP_FOREGROUND_TIMEOUT_MS = 45_000;
 
 /** Bounds caller waiting, never claims cancellation of durable effects. */
 export async function withForegroundDeadline(request, timeoutMs, operation, retire) {

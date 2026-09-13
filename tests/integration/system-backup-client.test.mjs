@@ -120,6 +120,10 @@ test("malformed source error code cannot replace the last backup error", async (
     catalog = await openBackupCatalog(f.directory);
     try { assert.equal(backupStatus(catalog.db).pending.error, "backup_r2_namespace_unknown"); }
     finally { catalog.close(); }
+    await assert.rejects(runBackup({ ...options,
+      fetchImpl: async () => Response.json({ ok: false,
+        error: { code: "request_timeout", retryable: true } }, { status: 503 }) }),
+    /request_timeout/u);
   } finally { await f.close(); }
 });
 

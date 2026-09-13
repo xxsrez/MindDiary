@@ -65,6 +65,7 @@ test("mutation receipts and the autonomous harness require exact baseline restor
   assert.match(acceptanceClient, /x-md-acceptance-run/u);
   assert.match(acceptanceClient, /\/_acceptance\/runs\/\$\{this\.state\.run\.run_id\}\/cleanup/u);
   assert.match(acceptanceFixture, /create:shared/u);
-  assert.match(acceptanceFixture, /for \(const mind of \["\/me"/u);
+  assert.match(acceptanceFixture, /writeSharedContent = true/u);
+  assert.match(acceptanceFixture, /for \(const mind of writeSharedContent \? \["\/me", `\/\$\{handle\}`\] : \["\/me"\]\)/u);
   assert.match(acceptanceSuite, /assert\.deepEqual\(await lastClient\.control\("\/_acceptance\/inventory"\), baseline\)/u);
 });

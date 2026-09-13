@@ -16,7 +16,7 @@ test("foreground deadline preserves trusted request identity", async () => {
   assert.equal(await response.text(), "verified-actor");
 });
 
-function fixture() {
+function fixture({ backupForegroundTimeoutMs } = {}) {
   let generations = 0;
   let release;
   let started;
@@ -25,6 +25,7 @@ function fixture() {
   const scheduled = [];
   const worker = createMindDiaryProductWorker({
     foregroundTimeoutMs: 25,
+    ...(backupForegroundTimeoutMs === undefined ? {} : { backupForegroundTimeoutMs }),
     recoveryCoordinator: new RequestRecoveryCoordinator({ enabled: false }),
     readConfig() { return { publicOrigin: ORIGIN }; },
     async fallbackFetch() { return new Response("fallback"); },
@@ -67,6 +68,19 @@ for (const path of ["/", "/me", "/ordinary", "/api/mcp/2025-11-25"]) {
     assert.deepEqual(f.scheduled, []);
   });
 }
+
+test("operator backup route may complete after the ordinary foreground deadline", async () => {
+  const f = fixture({ backupForegroundTimeoutMs: 300 });
+  const pending = f.worker.fetch(new Request(ORIGIN + "/api/v1/internal/system-backup/sessions", {
+    method: "POST", body: "{}",
+  }), {}, context);
+  await f.entered;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  f.release();
+  const response = await pending;
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "generation-1");
+});
 
 test("client cancellation retires a ready generation without claiming write failure", async () => {
   const f = fixture();

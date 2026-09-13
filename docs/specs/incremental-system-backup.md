@@ -87,7 +87,14 @@ history** при этом сохраняется в `revisionsById` и object cl
 передаёт обязательные `captured_at` и `schema_digest` в checkpoint, а также
 `schema_digest` в descriptor/manifest. Fingerprint охватывает exact-поля,
 фактическую схему D1 и допустимые R2-префиксы; при его смене новая session
-становится `rebaseline`. Envelope включает:
+становится `rebaseline`.
+
+Операторский HTTP route создания backup session получает отдельный bounded
+foreground deadline 45 секунд при обычном 10-секундном deadline web/MCP.
+Клиент ждёт ответ не более 60 секунд; после неопределённого обрыва он
+повторяет исходный `request_id`, не создавая вторую независимую точку.
+
+Envelope включает:
 
 - случайный `origin_id`, однажды созданный для данного Site, и монотонную
   `generation`; они не выводятся из URL, email или Git SHA;

@@ -26,6 +26,8 @@ const identity = {
   candidate_sha: candidate,
   dirty,
   common_modules_sha256: group((p) => p.startsWith("packages/") || p.startsWith("apps/mind-diary-site/worker/")),
+  backup_foreground_sha256: group((p) => p === "apps/mind-diary-site/worker/foreground-deadline.js" ||
+    p === "apps/mind-diary-site/worker/request-recovery.js"),
   backup_transport_sha256: hash(await readFile(resolve(root, "packages/composition-root/src/system-backup-sites.ts"))),
   backup_client_sha256: hash(await readFile(resolve(root, "scripts/lib/system-backup-client.mjs"))),
   test_adapter_sha256: group((p) => p.startsWith("apps/mind-diary-acceptance/")),

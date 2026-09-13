@@ -212,8 +212,10 @@ function transport({ origin, key, fetchImpl = fetch, metrics, signal }) {
       try {
         const bytes = await boundedBody(response, 2048);
         const parsed = JSON.parse(bytes.toString("utf8"));
-        if (typeof parsed?.code === "string" &&
-          /^[a-z][a-z0-9_]{0,63}$/u.test(parsed.code)) code = parsed.code;
+        const candidate = typeof parsed?.code === "string" ? parsed.code :
+          parsed?.ok === false ? parsed?.error?.code : undefined;
+        if (typeof candidate === "string" &&
+          /^[a-z][a-z0-9_]{0,63}$/u.test(candidate)) code = candidate;
       } catch { /* Preserve a safe error code. */ }
       fail(code);
     }
