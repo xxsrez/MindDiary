@@ -60,7 +60,7 @@ let cleanup;
 let primaryFailure;
 try {
   await client.setup({ profile: "operator" });
-  fixture = await createCollaborationFixture(client);
+  fixture = await createCollaborationFixture(client, { revisionsPerMind: 1 });
   populated = await client.control("/_acceptance/inventory");
   assert.equal(populated.complete, true);
   assert.equal(populated.principals, 4);
@@ -72,7 +72,7 @@ try {
 
   const token = client.state.operations["token:owner"].result.data.secret;
   await client.commit("backup:delta", token, {
-    mind: "/me", expected_revision: fixture.revisions["/me"][1],
+    mind: "/me", expected_revision: fixture.revisions["/me"].at(-1),
     summary: "Synthetic hosted backup delta",
     operations: [{ type: "replace_file", path: "concepts/acceptance.md",
       text: "---\ntype: Reference\n---\n\nSynthetic acceptance decision version three.\n" }],

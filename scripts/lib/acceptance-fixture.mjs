@@ -1,5 +1,6 @@
 // Bounded synthetic collaboration fixture, built exclusively by product APIs.
-export async function createCollaborationFixture(client) {
+export async function createCollaborationFixture(client, { revisionsPerMind = 2 } = {}) {
+  if (revisionsPerMind !== 1 && revisionsPerMind !== 2) throw new Error("invalid_fixture_revision_count");
   const run = client.state.run ?? await client.setup();
   const roles = ["owner", "editor", "reader", "outsider"];
   if (run.actors.length !== 4) throw new Error("fixture_requires_four_actors");
@@ -51,9 +52,12 @@ export async function createCollaborationFixture(client) {
     if (!selected) throw new Error("fixture_mind_missing");
     const first = await client.commit(`create:${mind}`, token, { mind, expected_revision: selected.head.revision_id,
       summary: "Create synthetic acceptance fixture", operations: [{ type: "create_file", path: "concepts/acceptance.md", text: "---\ntype: Reference\n---\n\nSynthetic acceptance decision version one.\n" }] });
-    const second = await client.commit(`replace:${mind}`, token, { mind, expected_revision: first.revision.revision_id,
-      summary: "Revise synthetic acceptance fixture", operations: [{ type: "replace_file", path: "concepts/acceptance.md", text: "---\ntype: Reference\n---\n\nSynthetic acceptance decision version two.\n" }] });
-    revisions[mind] = [first.revision.revision_id, second.revision.revision_id];
+    revisions[mind] = [first.revision.revision_id];
+    if (revisionsPerMind === 2) {
+      const second = await client.commit(`replace:${mind}`, token, { mind, expected_revision: first.revision.revision_id,
+        summary: "Revise synthetic acceptance fixture", operations: [{ type: "replace_file", path: "concepts/acceptance.md", text: "---\ntype: Reference\n---\n\nSynthetic acceptance decision version two.\n" }] });
+      revisions[mind].push(second.revision.revision_id);
+    }
   }
   const fixture = { schema: "mind-diary/acceptance-fixture/v1", run_id: run.run_id, handle, actors, revisions };
   client.state.fixture = fixture; await client.save();
