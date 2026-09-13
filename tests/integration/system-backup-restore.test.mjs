@@ -184,6 +184,15 @@ test("offline kit restores all Minds, exact history and bytes with a new loopbac
         "--directory", f.directory, "--target", target], {
         env: { ...process.env, NODE_OPTIONS: `--import=${NETWORK_BLOCK}` },
         encoding: "utf8" });
+    if (child.status !== 0) {
+      try {
+        await restoreBackup({ directory: f.directory,
+          target: `${target}-diagnostic`,
+          verifyKit: () => verifyRecoveryKit(f.directory, schemaDigest) });
+      } catch (error) {
+        assert.fail(`offline kit CLI: ${child.stderr}\nrestore cause: ${error.stack}`);
+      }
+    }
     assert.equal(child.status, 0, child.stderr);
     const receipt = JSON.parse(child.stdout);
     assert.equal(receipt.mind_count, 3);
