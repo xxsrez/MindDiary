@@ -632,21 +632,22 @@ function applyVerifiedPages(db, descriptor, receipt, onStage) {
       JOIN temp.backup_change_parts p ON p.record_key=d.record_key LIMIT 1`).get()) {
       fail("conflicting_record_change");
     }
-    for (const row of db.prepare("SELECT record_key FROM temp.backup_deletes").iterate()) {
+    const deletes = db.prepare("SELECT record_key FROM temp.backup_deletes");
+    for (const row of deletes.iterate()) {
       db.prepare("DELETE FROM backup_records WHERE record_key=?").run(row.record_key);
     }
     const groups = db.prepare(`SELECT record_key, MIN(part_count) AS part_count,
       MAX(part_count) AS max_parts, MIN(sha256) AS sha256,
       MAX(sha256) AS max_sha, COUNT(*) AS n
       FROM temp.backup_change_parts GROUP BY record_key ORDER BY record_key`);
+    const parts = db.prepare(`SELECT part_index, data
+      FROM temp.backup_change_parts WHERE record_key=? ORDER BY part_index`);
     for (const group of groups.iterate()) {
       if (group.part_count !== group.max_parts || group.sha256 !== group.max_sha ||
         group.n !== group.part_count) fail("record_parts_incomplete");
       const hash = createHash("sha256");
       let index = 0;
-      for (const part of db.prepare(`SELECT part_index, data
-        FROM temp.backup_change_parts WHERE record_key=? ORDER BY part_index`)
-        .iterate(group.record_key)) {
+      for (const part of parts.iterate(group.record_key)) {
         exact(part.part_index, index, "record_parts_incomplete");
         hash.update(part.data);
         index += 1;
