@@ -147,6 +147,9 @@ import {
   createRestrictedUatGeneratedSourceHandler,
   type RestrictedUatGeneratedSourceTestConfig,
 } from "./restricted-uat-generated-sources.js";
+import { SystemBackupCleanupBarrier } from "./system-backup-cleanup-barrier.js";
+import { SitesSystemBackupService } from "./system-backup-sites.js";
+import { createSystemBackupHttpHandler } from "./system-backup-http.js";
 
 export {
   RESTRICTED_UAT_GENERATED_SOURCE_TEST_ROUTE,
@@ -201,6 +204,8 @@ export interface ProductSiteRuntimeOptions {
   readonly webActivityEnabled?: boolean;
   /** Constructor-only service authority. Missing/empty configuration fails closed. */
   readonly serviceOperatorPrincipalIds?: readonly string[];
+  /** Separate operator-only read capability; absent keeps backup HTTP hidden. */
+  readonly systemBackupOperatorKey?: Uint8Array;
   /** Optional trusted admission policy; may only deny an already authenticated principal. */
   readonly mcpPrincipalAdmission?: (principalId: string, request: Request) => Promise<boolean>;
   /**
@@ -904,8 +909,15 @@ export async function createProductSiteRuntime(
   // D1-backed adapters now probe their existing schema lazily; only a genuinely
   // missing or outdated table runs the idempotent migration batch. This keeps
   // cold isolates from competing on schema-changing DDL before serving a page.
+  if (options.systemBackupOperatorKey !== undefined &&
+    options.systemBackupOperatorKey.byteLength !== 32) {
+    throw new TypeError("systemBackupOperatorKey must contain exactly 32 bytes");
+  }
+  // Existing sessions may outlive operator-key rotation or temporary route
+  // disablement; canonical cleanup must keep honoring their D1 pins.
+  const backupCleanupBarrier = new SystemBackupCleanupBarrier(options.database);
   const [objects, tokenHasher, downloadCrypto, csrf] = await Promise.all([
-    createSitesObjectStore(options.bucket),
+    createSitesObjectStore(options.bucket, backupCleanupBarrier),
     createWebCryptoTokenHasher({ verifierKey: options.tokenVerifierKey }),
     createWebCryptoExportDownloadSecretCrypto({ verifierKey: options.exportDownloadVerifierKey }),
     createCsrf(options.csrfKey),
@@ -913,6 +925,18 @@ export async function createProductSiteRuntime(
   const metadata = await createSitesMetadataStore(options.database, {
     ...(options.metadataDiagnostics === undefined ? {} : { diagnostics: options.metadataDiagnostics }),
     ...(options.onMetadataQueueTimeout === undefined ? {} : { onQueueTimeout: options.onMetadataQueueTimeout }),
+  });
+  const systemBackup = options.systemBackupOperatorKey === undefined ? null :
+    new SitesSystemBackupService({
+      database: options.database,
+      bucket: options.bucket,
+      metadata,
+      now,
+    });
+  const systemBackupHttp = createSystemBackupHttpHandler({
+    service: systemBackup,
+    operatorKey: options.systemBackupOperatorKey,
+    publicOrigin: options.publicOrigin,
   });
   const index = await createSitesSearchIndex(options.database);
   const audit = await createSitesAuditSink(options.database);
@@ -2306,6 +2330,9 @@ export async function createProductSiteRuntime(
     ): Promise<Response | null> {
       request = await trustedPerformanceRequest(request);
       const path = new URL(request.url).pathname;
+      if (path.startsWith("/api/v1/internal/system-backup")) {
+        return systemBackupHttp(request);
+      }
       const oauthResponse = await oauth.fetch(request);
       if (oauthResponse !== null) return oauthResponse;
       if (path === MCP_ENDPOINT) return handleMcp(request, "modern", deferActivity);

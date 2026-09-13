@@ -28,6 +28,7 @@ class Statement {
 class EventLogD1 {
   metadataSchemaVersion = 4;
   events = [];
+  backupControl = null;
   snapshot = null;
   snapshotHead = null;
   snapshotChunks = new Map();
@@ -39,6 +40,14 @@ class EventLogD1 {
   }
   async run(sql, values) {
     if (/^\s*CREATE TABLE/u.test(sql)) return { meta: { changes: 0 } };
+    if (/^\s*INSERT OR IGNORE INTO md_backup_control/u.test(sql)) {
+      if (this.backupControl !== null) return { meta: { changes: 0 } };
+      this.backupControl = {
+        backup_sequence: this.events.at(-1)?.sequence ?? 0,
+        invalidation_epoch: 0,
+      };
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("/*md-metadata-migration*/")) {
       this.metadataSchemaVersion = Math.max(this.metadataSchemaVersion, Number(values[0]));
       return { meta: { changes: 1 } };
@@ -46,7 +55,10 @@ class EventLogD1 {
     if (sql.includes("migration*/")) return { meta: { changes: 1 } };
     if (sql.includes("/*md-metadata-append*/")) {
       const current = this.events.at(-1)?.sequence ?? 0;
-      if (current !== Number(values[5])) return { meta: { changes: 0 } };
+      if (current !== Number(values[5]) ||
+        this.backupControl?.backup_sequence !== Number(values[5])) {
+        return { meta: { changes: 0 } };
+      }
       this.events.push({
         sequence: Number(values[0]),
         target: values[1],
@@ -54,6 +66,19 @@ class EventLogD1 {
         payload_json: values[3],
       });
       return { meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-backup-sequence-advance*/")) {
+      const [sequence, invalidates, expected, target, operation, payload] = values;
+      const event = this.events.find((row) => row.sequence === Number(sequence));
+      if (this.backupControl?.backup_sequence !== Number(expected) ||
+        event?.target !== target || event?.operation !== operation ||
+        event?.payload_json !== payload) return { meta: { changes: 0 } };
+      this.backupControl.backup_sequence = Number(sequence);
+      this.backupControl.invalidation_epoch += Number(invalidates);
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-backup-invalidate-deleted-state*/")) {
+      return { meta: { changes: 0 } };
     }
     if (sql.includes("/*md-metadata-snapshot-write*/")) {
       const sequence = Number(values[0]);
@@ -88,6 +113,11 @@ class EventLogD1 {
     throw new Error(`unsupported statement: ${sql}`);
   }
   async all(sql, values) {
+    if (sql.includes("/*md-metadata-append-readback*/")) {
+      const row = this.events.find((event) => event.sequence === Number(values[0]));
+      return { results: row ? [{ ...row,
+        backup_sequence: this.backupControl?.backup_sequence ?? -1 }] : [] };
+    }
     if (sql.includes("/*md-metadata-cold-load*/")) {
       const rows = [];
       const baseSequence = this.snapshotHead?.sequence ?? this.snapshot?.sequence ?? 0;

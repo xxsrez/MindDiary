@@ -65,6 +65,9 @@ class FakeD1Statement {
 
 export class FakeD1Database {
   metadataEvents = [];
+  backupControl = null;
+  backupSessions = new Map();
+  backupCleanupOps = new Map();
   metadataSnapshot = null;
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
@@ -116,6 +119,16 @@ export class FakeD1Database {
       }
       this.#appliedSchema.add(normalizedSql);
       return { success: true, meta: { changes: 0 } };
+    }
+    if (normalizedSql.startsWith("INSERT OR IGNORE INTO md_backup_control")) {
+      this.#appliedSchema.add(normalizedSql);
+      if (this.backupControl !== null) return { success: true, meta: { changes: 0 } };
+      this.backupControl = {
+        origin_id: "synthetic-origin", generation: 1,
+        backup_sequence: this.metadataEvents.at(-1)?.sequence ?? 0,
+        invalidation_epoch: 0,
+      };
+      return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-metadata-migration*/")) {
       return { success: true, meta: { changes: 1 } };
@@ -413,7 +426,9 @@ export class FakeD1Database {
       this.#assertSchema("metadata");
       const expected = Number(values[5]);
       const current = this.metadataEvents.at(-1)?.sequence ?? 0;
-      if (current !== expected) return { success: true, meta: { changes: 0 } };
+      if (current !== expected || this.backupControl?.backup_sequence !== expected) {
+        return { success: true, meta: { changes: 0 } };
+      }
       this.metadataEvents.push({
         sequence: Number(values[0]),
         target: values[1],
@@ -421,6 +436,38 @@ export class FakeD1Database {
         payload_json: values[3],
       });
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-backup-sequence-advance*/")) {
+      const [sequence, invalidates, expected, target, operation, payload] = values;
+      const event = this.metadataEvents.find((row) => row.sequence === Number(sequence));
+      if (this.backupControl?.backup_sequence !== Number(expected) ||
+        event?.target !== target || event?.operation !== operation ||
+        event?.payload_json !== payload) return { success: true, meta: { changes: 0 } };
+      this.backupControl.backup_sequence = Number(sequence);
+      this.backupControl.invalidation_epoch += Number(invalidates);
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-backup-invalidate-deleted-state*/")) {
+      let changes = 0;
+      for (const session of this.backupSessions.values()) {
+        if (session.status !== "building" && session.status !== "ready") continue;
+        session.status = "invalidated";
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-backup-cleanup-admit*/")) {
+      if ([...this.backupSessions.values()].some((session) =>
+        ["building", "ready"].includes(session.status) &&
+        session.expires_at > values[1])) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      this.backupCleanupOps.set(values[0], values[1]);
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-backup-cleanup-finish*/")) {
+      return { success: true,
+        meta: { changes: this.backupCleanupOps.delete(values[0]) ? 1 : 0 } };
     }
     if (sql.includes("/*md-metadata-snapshot-write*/")) {
       this.#assertSchema("metadata");
@@ -918,7 +965,8 @@ export class FakeD1Database {
       this.#assertSchema("metadata");
       const row = this.metadataEvents.find((event) =>
         event.sequence === Number(values[0]));
-      return { success: true, results: row ? [{ ...row }] : [] };
+      return { success: true, results: row ? [{ ...row,
+        backup_sequence: this.backupControl?.backup_sequence ?? -1 }] : [] };
     }
     if (sql.includes("/*md-metadata-events-tail*/")) {
       this.#assertSchema("metadata");

@@ -50,6 +50,7 @@ export interface R2ObjectBodyLike {
   readonly etag: string;
   readonly customMetadata?: Readonly<Record<string, string>>;
   readonly body: ReadableStream<Uint8Array>;
+  readonly range?: Readonly<{ offset: number; length: number }>;
   arrayBuffer(): Promise<ArrayBuffer>;
 }
 
@@ -67,7 +68,10 @@ export interface R2ListResultLike {
 }
 
 export interface R2BucketLike {
-  get(key: string): Promise<R2ObjectBodyLike | null>;
+  get(key: string, options?: Readonly<{
+    range?: Readonly<{ offset: number; length: number }>;
+  }>): Promise<R2ObjectBodyLike | null>;
+  head?(key: string): Promise<R2ListedObjectLike | null>;
   put(
     key: string,
     value: ArrayBuffer | Uint8Array | ReadableStream<Uint8Array>,
@@ -85,8 +89,13 @@ export interface R2BucketLike {
     prefix?: string;
     cursor?: string;
     limit?: number;
+    delimiter?: string;
     include?: readonly ("customMetadata" | "httpMetadata")[];
-  }>): Promise<R2ListResultLike>;
+  }>): Promise<R2ListResultLike & Readonly<{ delimitedPrefixes?: readonly string[] }>>;
+}
+
+export interface CanonicalCleanupBarrier {
+  run(operation: () => Promise<boolean>): Promise<boolean>;
 }
 
 type Digest = ImmutableObjectMetadata["sha256"];
@@ -372,9 +381,11 @@ async function verifyBodyStream(
 export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveStore, BoundedObjectCleanupStore {
   readonly kind = "object-store" as const;
   readonly #bucket: R2BucketLike;
+  readonly #cleanupBarrier: CanonicalCleanupBarrier | undefined;
 
-  constructor(bucket: R2BucketLike) {
+  constructor(bucket: R2BucketLike, cleanupBarrier?: CanonicalCleanupBarrier) {
     this.#bucket = bucket;
+    this.#cleanupBarrier = cleanupBarrier;
   }
 
   async ready(): Promise<this> {
@@ -624,6 +635,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   async deleteSpaceCanonicalObject(
     request: SpaceCanonicalObjectDeleteRequest,
   ): Promise<boolean> {
+    return this.#cleanupBarrier === undefined
+      ? this.#deleteSpaceCanonicalObject(request)
+      : this.#cleanupBarrier.run(() => this.#deleteSpaceCanonicalObject(request));
+  }
+
+  async #deleteSpaceCanonicalObject(
+    request: SpaceCanonicalObjectDeleteRequest,
+  ): Promise<boolean> {
     assertDigest(request.sha256);
     assertUtc(request.createdBefore);
     assertUtc(request.expectedProtectedAt);
@@ -781,6 +800,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   }
 
   async deleteBundleFileObject(
+    request: BundleFileObjectDeleteRequest,
+  ): Promise<boolean> {
+    return this.#cleanupBarrier === undefined
+      ? this.#deleteBundleFileObject(request)
+      : this.#cleanupBarrier.run(() => this.#deleteBundleFileObject(request));
+  }
+
+  async #deleteBundleFileObject(
     request: BundleFileObjectDeleteRequest,
   ): Promise<boolean> {
     assertDigest(request.sha256);
@@ -1133,6 +1160,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   }
 
   async deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean> {
+    return this.#cleanupBarrier === undefined
+      ? this.#deleteImmutableObject(request)
+      : this.#cleanupBarrier.run(() => this.#deleteImmutableObject(request));
+  }
+
+  async #deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean> {
     assertDigest(request.sha256);
     assertUtc(request.createdBefore);
     assertUtc(request.expectedProtectedAt);
@@ -1769,6 +1802,9 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   }
 }
 
-export async function createSitesObjectStore(bucket: R2BucketLike): Promise<SitesObjectStore> {
-  return new SitesObjectStore(bucket).ready();
+export async function createSitesObjectStore(
+  bucket: R2BucketLike,
+  cleanupBarrier?: CanonicalCleanupBarrier,
+): Promise<SitesObjectStore> {
+  return new SitesObjectStore(bucket, cleanupBarrier).ready();
 }

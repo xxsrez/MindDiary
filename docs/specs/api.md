@@ -530,6 +530,34 @@ exact Origin и CSRF; не добавляет MCP tools/scopes или права
 Ответ содержит только агрегаты прохода. Повтор продолжает durable jobs с
 сохранёнными leases/cursors; timeout не доказывает отсутствие выполненной работы.
 
+### Операторская выдача системного бэкапа MD-445
+
+`/api/v1/internal/system-backup/**` — отдельная машинная surface, скрытая при
+отсутствии `MIND_DIARY_BACKUP_OPERATOR_KEY`. Она принимает только exact
+`Authorization: Bearer mdb_v1_{base64url-32-bytes}` из независимо выданного
+read-only operator credential. Sites session, обычный участник, personal MCP
+token и OAuth grant не получают эту capability. Ключ не передаётся через URL,
+cookie или body, не входит в ответ и не журналируется. Конфигурация реального
+ключа и подключение unattended runner — отдельное действие над доступом и
+секретом, а не побочный эффект UAT deployment.
+
+| Method | Route | Результат |
+|---|---|---|
+| `POST` | `/api/v1/internal/system-backup/sessions` | Создать fixed-target session. Body содержит обязательный случайный UUID v4 `request_id` и optional `base_checkpoint`; повтор с тем же ID после потерянного ответа возвращает ту же точку либо `409`, пока она строится. Ответ — format, mode (`baseline`, `incremental`, `rebaseline`), base/target, page/object counts, manifest digest, expiry. |
+| `GET` | `/api/v1/internal/system-backup/sessions/{session_id}` | Повторить descriptor активной session. |
+| `GET` | `/api/v1/internal/system-backup/sessions/{session_id}/pages/{index}` | Одну immutable bounded JSON страницу `upsert` fragments/`delete` records с SHA-256. |
+| `GET` | `/api/v1/internal/system-backup/sessions/{session_id}/inventory?cursor=&limit=` | До 128 descriptors объектов; `next_cursor` задаёт продолжение. |
+| `GET` | `/api/v1/internal/system-backup/sessions/{session_id}/objects/{index}?offset=&length=` | Verified R2 range не более 4 МиБ, HTTP `206` с part/object digest и `Content-Range`. |
+| `POST` | `/api/v1/internal/system-backup/sessions/{session_id}/complete` | D1 CAS completion receipt; только он разрешает локальному клиенту продвинуть checkpoint после полной проверки. |
+| `DELETE` | `/api/v1/internal/system-backup/sessions/{session_id}` | Отпустить ещё активную session. |
+
+Все ответы имеют `Cache-Control: no-store`. Неаутентифицированный и
+неправильный credential получает одинаковый `404`; некорректный input — `400`,
+неактивная/инвалидированная точка — `409`, недоступное хранилище или
+неизвестная durable surface — `503`. Session ID и object index — только
+локаторы внутри operator capability. Исходные object keys и персональные
+данные остаются в operator-only ответах и не попадают в общие логи.
+
 Базовая taxonomy:
 
 | Code | Смысл |

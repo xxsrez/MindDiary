@@ -94,6 +94,7 @@ class FakeD1Statement {
   #database;
   #sql;
   #values = [];
+  appendGate = null;
 
   constructor(database, sql) {
     this.#database = database;
@@ -105,8 +106,14 @@ class FakeD1Statement {
     return this;
   }
 
+  get sql() { return this.#sql; }
+  get values() { return this.#values; }
+
   async run(options) {
-    return this.#database.run(this.#sql, this.#values, options);
+    return this.#database.run(this.#sql, this.#values, {
+      ...options,
+      appendGate: this.appendGate,
+    });
   }
 
   async all() {
@@ -120,8 +127,10 @@ class FakeD1Statement {
 
 class FakeD1Database {
   batchStatementCounts = [];
-  metadataSchemaVersion = 4;
+  metadataSchemaVersion = 5;
   metadataEvents = [];
+  backupControl = { origin_id: "synthetic-origin", generation: 1, backup_sequence: 0, invalidation_epoch: 0 };
+  backupSessions = new Map();
   metadataSnapshot = null;
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
@@ -151,12 +160,25 @@ class FakeD1Database {
 
   async batch(statements) {
     this.batchStatementCounts.push(statements.length);
+    const append = statements.find((statement) => statement.sql.includes("/*md-metadata-append*/"));
+    if (append !== undefined && this.#metadataAppendGate !== null &&
+      (this.#metadataAppendGate.operation === undefined ||
+        this.#metadataAppendGate.operation === append.values[2])) {
+      const gate = this.#metadataAppendGate;
+      this.#metadataAppendGate = null;
+      gate.markStarted();
+      await gate.wait;
+      if (gate.failAfterRelease) throw new Error("synthetic delayed D1 append failure");
+      append.appendGate = gate;
+    }
     const previous = this.#batchTail;
     let release;
     this.#batchTail = new Promise((resolve) => { release = resolve; });
     await previous;
     const before = {
       metadataEvents: structuredClone(this.metadataEvents),
+      backupControl: structuredClone(this.backupControl),
+      backupSessions: structuredClone(this.backupSessions),
       metadataSnapshot: structuredClone(this.metadataSnapshot),
       metadataSnapshotHead: structuredClone(this.metadataSnapshotHead),
       metadataSnapshotChunks: new Map(this.metadataSnapshotChunks),
@@ -179,6 +201,8 @@ class FakeD1Database {
     } catch (error) {
       this.#batchPostCommitError = null;
       this.metadataEvents = before.metadataEvents;
+      this.backupControl = before.backupControl;
+      this.backupSessions = before.backupSessions;
       this.metadataSnapshot = before.metadataSnapshot;
       this.metadataSnapshotHead = before.metadataSnapshotHead;
       this.metadataSnapshotChunks = before.metadataSnapshotChunks;
@@ -250,8 +274,8 @@ class FakeD1Database {
     }
   }
 
-  async run(sql, values, { deferCommitRejection = false } = {}) {
-    let metadataAppendGate = null;
+  async run(sql, values, { deferCommitRejection = false, appendGate = null } = {}) {
+    let metadataAppendGate = appendGate;
     if (
       sql.includes("/*md-metadata-append*/") &&
       this.#metadataAppendGate !== null &&
@@ -284,13 +308,24 @@ class FakeD1Database {
       this.metadataSchemaVersion = Math.max(this.metadataSchemaVersion, Number(values[0]));
       return { success: true, meta: { changes: 1 } };
     }
+    if (normalizedSql.startsWith("INSERT OR IGNORE INTO md_backup_control")) {
+      if (this.backupControl !== null) return { success: true, meta: { changes: 0 } };
+      this.backupControl = {
+        origin_id: "synthetic-origin", generation: 1,
+        backup_sequence: this.metadataEvents.at(-1)?.sequence ?? 0,
+        invalidation_epoch: 0,
+      };
+      return { success: true, meta: { changes: 1 } };
+    }
     if (sql.includes("migration*/")) {
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-metadata-append*/")) {
       const expected = Number(values[5]);
       const current = this.metadataEvents.at(-1)?.sequence ?? 0;
-      if (current !== expected) return { success: true, meta: { changes: 0 } };
+      if (current !== expected || this.backupControl?.backup_sequence !== expected) {
+        return { success: true, meta: { changes: 0 } };
+      }
       this.metadataEvents.push({
         sequence: Number(values[0]),
         target: values[1],
@@ -303,6 +338,29 @@ class FakeD1Database {
         else throw error;
       }
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-backup-sequence-advance*/")) {
+      const [sequence, invalidates, expected, target, operation, payload] = values;
+      const event = this.metadataEvents.find((row) => row.sequence === Number(sequence));
+      if (this.backupControl?.backup_sequence !== Number(expected) ||
+        event?.target !== target || event?.operation !== operation ||
+        event?.payload_json !== payload) return { success: true, meta: { changes: 0 } };
+      this.backupControl.backup_sequence = Number(sequence);
+      this.backupControl.invalidation_epoch += Number(invalidates);
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-backup-invalidate-deleted-state*/")) {
+      const [sequence, target, operation, payload] = values;
+      const event = this.metadataEvents.find((row) => row.sequence === Number(sequence));
+      if (event?.target !== target || event?.operation !== operation ||
+        event?.payload_json !== payload) return { success: true, meta: { changes: 0 } };
+      let changed = 0;
+      for (const session of this.backupSessions.values()) {
+        if (session.status !== "building" && session.status !== "ready") continue;
+        session.status = "invalidated";
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
     }
     if (sql.includes("/*md-metadata-snapshot-write*/")) {
       const sequence = Number(values[0]);
@@ -678,7 +736,8 @@ class FakeD1Database {
     if (sql.includes("/*md-metadata-append-readback*/")) {
       const row = this.metadataEvents.find((event) =>
         event.sequence === Number(values[0]));
-      return { success: true, results: row ? [{ ...row }] : [] };
+      return { success: true, results: row ? [{ ...row,
+        backup_sequence: this.backupControl?.backup_sequence ?? -1 }] : [] };
     }
     if (sql.includes("/*md-metadata-events-migration*/")) {
       this.metadataReadLog.push("migration");
@@ -3008,6 +3067,8 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
       idempotencyKey: "create-restartable-deletion",
     },
   );
+  const mindBackupEpoch = database.backupControl.invalidation_epoch;
+  database.backupSessions.set("mind-session", { status: "ready" });
 
   let failMindIndexPurge = true;
   const failingMindIndex = {
@@ -3054,6 +3115,8 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
   );
   assert.equal(await boundary.metadata.inspectOrdinaryMindStateForTest(mind.mindId), null);
   assert.equal((await boundary.metadata.inspectDeletionCleanupForTest()).length, 1);
+  assert.equal(database.backupControl.invalidation_epoch, mindBackupEpoch + 1);
+  assert.equal(database.backupSessions.get("mind-session").status, "invalidated");
 
   boundary = await createSitesPersistenceBoundary({ database, bucket });
   const resumedMindDeletion = new OrdinaryMindDeletionService({
@@ -3098,6 +3161,8 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
     host: HOST,
   };
   const accountDeletion = new AccountDeletionService(accountDeletionOptions);
+  const accountBackupEpoch = database.backupControl.invalidation_epoch;
+  database.backupSessions.set("account-session", { status: "ready" });
   await boundary.metadata.recordPrincipalActivity({
     principalId: owner.principalId,
     surface: "web",
@@ -3123,6 +3188,8 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
   assert.equal(await boundary.metadata.readAccount(owner.principalId), null);
   assert.equal(database.principalActivities.size, 0);
   assert.equal((await boundary.metadata.inspectAccountDeletionCleanupForTest()).length, 1);
+  assert.equal(database.backupControl.invalidation_epoch, accountBackupEpoch + 1);
+  assert.equal(database.backupSessions.get("account-session").status, "invalidated");
 
   boundary = await createSitesPersistenceBoundary({ database, bucket });
   const resumedAccountDeletion = new AccountDeletionService({

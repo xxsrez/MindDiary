@@ -1,8 +1,9 @@
 # Инкрементальный системный бэкап Mind Diary
 
 Статус: выбранный инженерный контракт MD-444 для MD-443–MD-449, 2026-09-13.
-Серверная выдача, локальный runner, установка и offline restore ещё не
-реализованы и не подтверждены этим документом. Контракт не меняет обычный
+MD-445 содержит серверную реализацию выдачи, но hosted transport пока не
+подтверждён. Локальный runner, установка и offline restore ещё не реализованы
+и не подтверждены этим документом. Контракт не меняет обычный
 пользовательский export и не даёт content MCP административных прав.
 
 ## Цель и граница
@@ -78,7 +79,11 @@ history** при этом сохраняется в `revisionsById` и object cl
 
 ## Формат и согласованная точка
 
-`MD-SYSTEM-BACKUP-1` — версионированный portable envelope. Он включает:
+`MD-SYSTEM-BACKUP-1` — версионированный portable envelope. Сервер MD-445
+передаёт обязательные `captured_at` и `schema_digest` в checkpoint, а также
+`schema_digest` в descriptor/manifest. Fingerprint охватывает exact-поля,
+фактическую схему D1 и допустимые R2-префиксы; при его смене новая session
+становится `rebaseline`. Envelope включает:
 
 - случайный `origin_id`, однажды созданный для данного Site, и монотонную
   `generation`; они не выводятся из URL, email или Git SHA;
@@ -93,8 +98,9 @@ history** при этом сохраняется в `revisionsById` и object cl
 
 Canonical JSON сериализуется детерминированно UTF-8; digest считается по
 точным байтам. Повтор страницы с тем же session/cursor возвращает те же bytes,
-index и digest. Cursor является opaque, привязан к `origin`, `generation`,
-`base`, `target` и session, не пропускает страницу и не действует после
+index и digest. Числовой cursor действует только внутри выбранной session:
+`session_id` вместе с operator credential привязывает его к `origin`,
+`generation`, `base` и `target`. Он не пропускает страницу и не действует после
 истечения срока. Part большого объекта адресуется проверяемыми offset/length;
 сервер отдаёт не больше bounded part, клиент проверяет весь объект по size и
 SHA-256 перед его публикацией. Ни страницы, ни original bytes не идут через
@@ -110,6 +116,23 @@ metadata adapter event sequence недостаточен. Для изменен�
 неизвестный schema fingerprint или digest mismatch не дают false complete:
 клиент начинает полную сверку metadata с прежней безопасной локальной копией.
 
+Текущая классификация durable surfaces допускает один источник exact логического
+состояния: metadata snapshot; OAuth, locator, search, audit-delivery и upload
+intent не восстанавливаются как exact. Это проверяется реестром, а не
+предполагается для будущих adapters. Сервер фиксирует immutable target из
+одного snapshot вместе с его event sequence, затем публикует backup session
+через D1 CAS на том же sequence. Каждый успешный metadata append одновременно
+продвигает отдельный backup sequence. Страницы готовой session не читают
+изменяющееся live состояние. Server-side пересчёт полного metadata snapshot
+допустим; по сети при обычном обновлении идут только изменённые records и
+отсутствующие у локального клиента objects. Полнота большого snapshot в памяти
+пока ограничена действующей in-memory архитектурой metadata adapter и не
+считается доказательством bounded server-memory.
+`spaces` передаёт HEAD без дублирования всех envelopes: `revisionsById`
+содержит каждую committed revision отдельно, а per-Space revisions map
+восстанавливается из неё. Это сохраняет историю и не заставляет каждое новое
+изменение повторно передавать прежние manifest-ы.
+
 Перед публикацией checkpoint сервер фиксирует target D1 state и object closure
 атомарно относительно metadata mutations. Canonical R2 bytes должны быть
 записаны и проверены до D1 reference. Session удерживает referenced objects от
@@ -120,6 +143,24 @@ target generation. Удаление данных не откладывается
 отбрасывает неполный target. После expiry, explicit release либо invalidation
 pin снимается; повторный запрос на старую session fail closed. Неизвестная
 reachability или deletion state запрещает выдачу complete.
+
+Сервер хранит завершённую точку и её record digests до 30 суток для
+инкрементального сравнения. При следующем создании session один устаревший
+server checkpoint вместе со страницами и inventory удаляется; если Mac
+пришёл с уже удалённой base, сервер выдаёт `rebaseline` вместо ложной дельты.
+Локально подтверждённая копия от этого удаления не зависит.
+
+Первый server adapter использует грубый глобальный pin: пока есть building или
+ready session, физический canonical GC не начинает новый проход. Любая уже
+начатая операция удаления регистрируется в D1 до R2 и должна завершиться до
+создания session; при неизвестном исходе новых sessions нет. Whole-Mind/account
+deletion имеет приоритет и инвалидирует все активные sessions в том же D1
+коммите, который удаляет exact metadata, до физической очистки R2. Последний
+скачанный part не означает успешный backup: только отдельный completion CAS
+по status, epoch и expiry выдаёт receipt, после которого локальный клиент может
+продвинуть checkpoint. Уже выданные bytes нельзя отозвать, но удаление до
+completion не может дать успешный receipt. Удаление после receipt относится к
+более позднему состоянию, которое попадёт в следующий checkpoint.
 
 Полная потеря Site после последнего checkpoint неизбежно оставляет локальную
 копию старее: в ней могут быть данные, удалённые **после** этого checkpoint.

@@ -107,6 +107,75 @@ export const SITES_METADATA_MIGRATIONS = Object.freeze([
       )`,
     ]),
   }),
+  Object.freeze({
+    version: 5,
+    name: "system-backup-control",
+    statements: Object.freeze([
+      `CREATE TABLE IF NOT EXISTS md_backup_control (
+        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+        origin_id TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        backup_sequence INTEGER NOT NULL CHECK (backup_sequence >= 0),
+        invalidation_epoch INTEGER NOT NULL CHECK (invalidation_epoch >= 0)
+      )`,
+      `INSERT OR IGNORE INTO md_backup_control
+       (singleton_id, origin_id, generation, backup_sequence, invalidation_epoch)
+       VALUES (1, lower(hex(randomblob(16))), 1,
+         COALESCE((SELECT MAX(sequence) FROM md_metadata_events), 0), 0)`,
+      `CREATE TABLE IF NOT EXISTS md_backup_sessions (
+        session_id TEXT PRIMARY KEY,
+        origin_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        base_sequence INTEGER,
+        base_digest TEXT,
+        base_session_id TEXT,
+        base_captured_at TEXT,
+        base_schema_digest TEXT,
+        mode TEXT NOT NULL CHECK (mode IN ('baseline', 'incremental', 'rebaseline')),
+        target_sequence INTEGER NOT NULL,
+        target_digest TEXT NOT NULL,
+        invalidation_epoch INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK (status IN
+          ('building', 'ready', 'invalidated', 'completed', 'released')),
+        created_at TEXT NOT NULL,
+        completed_at TEXT,
+        expires_at TEXT NOT NULL,
+        page_count INTEGER NOT NULL,
+        record_count INTEGER NOT NULL,
+        object_count INTEGER NOT NULL,
+        manifest_digest TEXT NOT NULL,
+        schema_digest TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS md_backup_pages (
+        session_id TEXT NOT NULL,
+        page_index INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        PRIMARY KEY (session_id, page_index)
+      )`,
+      `CREATE TABLE IF NOT EXISTS md_backup_record_digests (
+        session_id TEXT NOT NULL,
+        record_key TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        PRIMARY KEY (session_id, record_key)
+      )`,
+      `CREATE TABLE IF NOT EXISTS md_backup_inventory (
+        session_id TEXT NOT NULL,
+        object_index INTEGER NOT NULL,
+        namespace TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        media_type TEXT NOT NULL,
+        PRIMARY KEY (session_id, object_index)
+      )`,
+      `CREATE TABLE IF NOT EXISTS md_backup_cleanup_ops (
+        operation_id TEXT PRIMARY KEY,
+        started_at TEXT NOT NULL
+      )`,
+    ]),
+  }),
 ]);
 
 type DurableTarget = "metadata" | "tokens";
@@ -137,6 +206,7 @@ interface DurableEventRow {
   readonly target: DurableTarget;
   readonly operation: string;
   readonly payload_json: string;
+  readonly backup_sequence?: number;
 }
 
 interface DurableColdLoadRow {
@@ -189,6 +259,16 @@ function accountDeletionPrincipalId(
   return request.principalId as PrincipalId;
 }
 
+function invalidatesSystemBackup(event: DurableEvent, result: unknown): boolean {
+  if (event.kind !== "transaction" ||
+    typeof result !== "object" || result === null ||
+    !("kind" in result) ||
+    (result.kind !== "deleted" && result.kind !== "cleanup_pending")) return false;
+  return event.calls.some((call) =>
+    call.method === "deleteOrdinaryMind" ||
+    call.method === "deleteAccountCascade");
+}
+
 function isExactDurableEvent(
   row: DurableEventRow,
   sequence: number,
@@ -196,6 +276,7 @@ function isExactDurableEvent(
   payloadJson: string,
 ): boolean {
   return row.sequence === sequence &&
+    (row.backup_sequence ?? -1) >= sequence &&
     row.target === event.target &&
     row.operation === event.method &&
     row.payload_json === payloadJson;
@@ -597,6 +678,20 @@ export class SitesMetadataStore {
     return this.#proxy;
   }
 
+  /** Internal backup capture. The caller must publish with a D1 sequence CAS. */
+  async captureSystemBackupState(): Promise<Readonly<{
+    eventSequence: number;
+    snapshot: unknown;
+  }>> {
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      return Object.freeze({
+        eventSequence: this.#sequence,
+        snapshot: this.#metadata.exportDurableSnapshot(),
+      });
+    }, "read_session");
+  }
+
   /**
    * Activity is an observational last-seen projection, not canonical product
    * state. Keep it out of the fenced metadata event log so a page view never
@@ -838,6 +933,7 @@ export class SitesMetadataStore {
            SELECT
              COALESCE(MAX(version), 0) AS schema_version,
              (SELECT COUNT(*) FROM md_principal_activity WHERE 0) AS activity_guard
+             ,(SELECT COUNT(*) FROM md_backup_control WHERE 0) AS backup_guard
            FROM md_metadata_schema_migrations
          ),
          current_head AS (
@@ -1223,7 +1319,8 @@ export class SitesMetadataStore {
         `/*md-metadata-append*/ INSERT INTO md_metadata_events
          (sequence, target, operation, payload_json, committed_at)
          SELECT ?1, ?2, ?3, ?4, ?5
-         WHERE COALESCE((SELECT MAX(sequence) FROM md_metadata_events), 0) = ?6`,
+         WHERE COALESCE((SELECT MAX(sequence) FROM md_metadata_events), 0) = ?6
+           AND (SELECT backup_sequence FROM md_backup_control WHERE singleton_id = 1) = ?6`,
       )
       .bind(
         sequence,
@@ -1234,38 +1331,58 @@ export class SitesMetadataStore {
         expectedSequence,
       );
     const deletedPrincipalId = accountDeletionPrincipalId(event, mutationResult);
+    const invalidatesBackup = invalidatesSystemBackup(event, mutationResult);
+    const advance = this.#database
+      .prepare(
+        `/*md-backup-sequence-advance*/ UPDATE md_backup_control
+         SET backup_sequence = ?1,
+             invalidation_epoch = invalidation_epoch + ?2
+         WHERE singleton_id = 1 AND backup_sequence = ?3
+           AND EXISTS (
+             SELECT 1 FROM md_metadata_events
+             WHERE sequence = ?1 AND target = ?4 AND operation = ?5
+               AND payload_json = ?6
+           )`,
+      )
+      .bind(sequence, invalidatesBackup ? 1 : 0, expectedSequence,
+        event.target, event.method, payloadJson);
+    const statements = [append, advance];
+    if (invalidatesBackup) {
+      statements.push(this.#database.prepare(
+        `/*md-backup-invalidate-deleted-state*/ UPDATE md_backup_sessions
+         SET status = 'invalidated'
+         WHERE status IN ('building', 'ready')
+           AND EXISTS (
+             SELECT 1 FROM md_metadata_events
+             WHERE sequence = ?1 AND target = ?2 AND operation = ?3
+               AND payload_json = ?4
+           )`,
+      ).bind(sequence, event.target, event.method, payloadJson));
+    }
+    if (deletedPrincipalId !== null) {
+      statements.push(this.#database
+        .prepare(
+          `/*md-principal-activity-delete-committed*/ DELETE FROM md_principal_activity
+           WHERE principal_id = ?1
+             AND EXISTS (
+               SELECT 1 FROM md_metadata_events
+               WHERE sequence = ?2 AND target = ?3 AND operation = ?4
+                 AND payload_json = ?5
+             )`,
+        )
+        .bind(deletedPrincipalId, sequence, event.target, event.method, payloadJson));
+    }
     // D1 promises do not expose cancellation. Timing out this canonical write
     // would let the caller observe failure while the same INSERT can still
     // commit, making an automatic retry ambiguous. Reads and derived writes
     // remain bounded, but the fenced event append must reach its exact result.
     let appendOutcome: D1ResultLike;
     try {
-      if (deletedPrincipalId === null) {
-        appendOutcome = await this.#observe("d1", "append", () => append.run());
-      } else {
-        const [appendResult] = await this.#observe("d1", "append", () => this.#database.batch([
-          append,
-          this.#database
-            .prepare(
-              `/*md-principal-activity-delete-committed*/ DELETE FROM md_principal_activity
-               WHERE principal_id = ?1
-                 AND EXISTS (
-                   SELECT 1 FROM md_metadata_events
-                   WHERE sequence = ?2
-                     AND target = ?3
-                     AND operation = ?4
-                     AND payload_json = ?5
-                 )`,
-            )
-            .bind(
-              deletedPrincipalId,
-              sequence,
-              event.target,
-              event.method,
-              payloadJson,
-            ),
-        ]));
-        appendOutcome = appendResult ?? { success: false, meta: { changes: 0 } };
+      const [appendResult, advanceResult] = await this.#observe("d1", "append", () =>
+        this.#database.batch(statements));
+      appendOutcome = appendResult ?? { success: false, meta: { changes: 0 } };
+      if (changes(appendOutcome) === 1 && changes(advanceResult ?? {}) !== 1) {
+        throw new Error("Sites metadata backup sequence did not advance with commit");
       }
     } catch (error) {
       // A rejected provider promise does not prove that the INSERT failed: the
@@ -1295,7 +1412,9 @@ export class SitesMetadataStore {
   async #readCanonicalEvent(sequence: number): Promise<DurableEventRow | null> {
     const result = await this.#observe("d1", "readback", () => this.#database
       .prepare(
-        `/*md-metadata-append-readback*/ SELECT sequence, target, operation, payload_json
+        `/*md-metadata-append-readback*/ SELECT sequence, target, operation, payload_json,
+           (SELECT backup_sequence FROM md_backup_control WHERE singleton_id = 1)
+             AS backup_sequence
          FROM md_metadata_events WHERE sequence = ?1`,
       )
       .bind(sequence)

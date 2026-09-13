@@ -14,6 +14,7 @@ export interface ProductEnv {
   readonly MIND_DIARY_RELEASE_CANDIDATE_SHA?: string;
   readonly MIND_DIARY_CAPACITY_FENCE_NONCE?: string;
   readonly MIND_DIARY_PERFORMANCE_CORRELATION_KEY?: string;
+  readonly MIND_DIARY_BACKUP_OPERATOR_KEY?: string;
 }
 
 /**
@@ -29,6 +30,7 @@ export interface ProductWorkerRuntimeConfig {
   readonly csrfKey: Uint8Array;
   readonly performanceCorrelationKey?: Uint8Array;
   readonly serviceOperatorPrincipalIds: readonly string[];
+  readonly systemBackupOperatorKey?: Uint8Array;
   readonly verifiedNativeFileParameterRoute?: never;
 }
 
@@ -107,6 +109,10 @@ export function readRuntimeConfig(
     env.MIND_DIARY_PERFORMANCE_CORRELATION_KEY,
     "MIND_DIARY_PERFORMANCE_CORRELATION_KEY",
   );
+  const systemBackupOperatorKey = decodeOptionalKey(
+    env.MIND_DIARY_BACKUP_OPERATOR_KEY,
+    "MIND_DIARY_BACKUP_OPERATOR_KEY",
+  );
   return Object.freeze({
     publicOrigin,
     tokenVerifierKey: decodeKey(env.MIND_DIARY_TOKEN_VERIFIER_KEY, "MIND_DIARY_TOKEN_VERIFIER_KEY"),
@@ -114,6 +120,7 @@ export function readRuntimeConfig(
     exportDownloadVerifierKey: decodeKey(env.MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY, "MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY"),
     csrfKey: decodeKey(env.MIND_DIARY_CSRF_KEY, "MIND_DIARY_CSRF_KEY"),
     ...(performanceCorrelationKey === undefined ? {} : { performanceCorrelationKey }),
+    ...(systemBackupOperatorKey === undefined ? {} : { systemBackupOperatorKey }),
     serviceOperatorPrincipalIds: serviceOperatorPrincipalIds(
       env.MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS,
     ),

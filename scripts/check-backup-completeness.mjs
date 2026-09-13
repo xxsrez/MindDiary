@@ -77,6 +77,22 @@ compare("D1 tables", new Set(actualTables.keys()), new Set(Object.keys(backupPol
 for (const [table, [, columnList]] of Object.entries(backupPolicy.d1)) {
   compare(`D1 ${table}`, actualTables.get(table) ?? new Set(), new Set(columnList.split(" ")));
 }
+const runtimeSchemaSource = read("packages/composition-root/src/system-backup-schema.ts");
+const runtimeSchemaBlock = runtimeSchemaSource.match(/SYSTEM_BACKUP_D1_SCHEMA\s*=\s*Object\.freeze\(\{([\s\S]*?)\}\s+as const\)/u);
+if (runtimeSchemaBlock === null) {
+  failures.push("system backup runtime D1 schema declaration changed");
+} else {
+  const runtimeTables = new Map([...runtimeSchemaBlock[1]
+    .matchAll(/^\s+([a-z_][a-z_0-9]*):\s*"([^"]+)"/gmu)]
+    .map((match) => [match[1], match[2]]));
+  compare("system backup runtime D1 tables", new Set(runtimeTables.keys()),
+    new Set(Object.keys(backupPolicy.d1)));
+  for (const [table, [, columns]] of Object.entries(backupPolicy.d1)) {
+    if (runtimeTables.get(table) !== columns) {
+      failures.push(`system backup runtime D1 ${table}: columns differ from registry`);
+    }
+  }
+}
 
 function snapshotFields(path, indentation) {
   const source = read(path);
@@ -90,6 +106,21 @@ function snapshotFields(path, indentation) {
 compare("metadata snapshot fields",
   snapshotFields("packages/adapter-metadata-memory/src/revision-metadata-snapshot-store.ts", 8),
   new Set(Object.keys(backupPolicy.metadataSnapshot)));
+const backupFormatSource = read("packages/composition-root/src/system-backup-format.ts");
+const exactFieldsBlock = backupFormatSource.match(/SYSTEM_BACKUP_EXACT_FIELDS\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\s+as const\)/u);
+if (exactFieldsBlock === null) {
+  failures.push("system backup exact field declaration changed");
+} else {
+  compare("system backup runtime exact fields",
+    new Set([...exactFieldsBlock[1].matchAll(/"([a-zA-Z][a-zA-Z0-9]*)"/gu)]
+      .map((match) => match[1])),
+    new Set(Object.entries(backupPolicy.metadataSnapshot)
+      .filter(([, policy]) => policy === "exact")
+      .map(([field]) => field)));
+}
+for (const [table, [policy]] of Object.entries(backupPolicy.d1)) {
+  if (policy === "exact") failures.push(`D1 ${table}: exact table needs a backup feed`);
+}
 compare("token snapshot fields",
   snapshotFields("packages/adapter-metadata-memory/src/mcp-token-store.ts", 6),
   new Set(Object.keys(backupPolicy.tokenSnapshot)));

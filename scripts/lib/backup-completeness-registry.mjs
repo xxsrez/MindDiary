@@ -24,6 +24,12 @@ export const backupPolicy = Object.freeze({
     md_oauth_refresh_tokens: ["revoke", "id token_verifier grant_id family_id parent_id principal_id client_id resource scopes_json expires_at created_at used_at revoked_at"],
     md_mind_locator_handles: ["revoke", "verifier encrypted_payload expires_at created_at"],
     md_local_file_upload_intents: ["revoke", "intent_id namespace_hash expires_at record_version record_json"],
+    md_backup_control: ["reset", "singleton_id origin_id generation backup_sequence invalidation_epoch"],
+    md_backup_sessions: ["reset", "session_id origin_id generation base_sequence base_digest base_session_id base_captured_at base_schema_digest mode target_sequence target_digest invalidation_epoch status created_at completed_at expires_at page_count record_count object_count manifest_digest schema_digest"],
+    md_backup_pages: ["reset", "session_id page_index payload_json sha256 byte_size"],
+    md_backup_record_digests: ["reset", "session_id record_key sha256"],
+    md_backup_inventory: ["reset", "session_id object_index namespace object_key sha256 byte_size media_type"],
+    md_backup_cleanup_ops: ["reset", "operation_id started_at"],
   }),
   metadataSnapshot: Object.freeze({
     spaces: "exact",
