@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -184,6 +185,41 @@ async function fixture() {
     async close() { database.close(); await rm(directory,
       { recursive: true, force: true }); } };
 }
+
+test("legacy manifest without format restores canonical v1 bytes and preserves raw records", async () => {
+  const f = await fixture();
+  try {
+    const previous = f.value.revisionsById.get("r_shared_1");
+    const canonical = createRevisionManifest(previous.manifest.entries,
+      "mind-diary-revision-manifest-v1");
+    const bytes = Buffer.from(serializeRevisionManifest(canonical));
+    const entries = canonical.entries.map(({ kind, mediaType, ...entry }) => entry);
+    const legacy = { revision: { ...previous.revision,
+      manifestHash: await systemBackupSha256(bytes), manifestSize: bytes.length },
+    manifest: { entries } };
+    f.value.revisionsById.set("r_shared_1", legacy);
+    f.value.spaces.get("s_shared").revisions.set("r_shared_1", legacy);
+    f.bucket.putBytes(`canonical/sha256/${f.old.markdownHash.slice(7)}`,
+      f.old.markdownBytes, "text/markdown; charset=utf-8", f.old.markdownHash);
+    await runBackup({ directory: f.directory, origin: ORIGIN, key: KEY,
+      fetchImpl: f.fetch });
+    const target = join(f.directory, "legacy-restored");
+    const receipt = await restoreBackup({ directory: f.directory, target,
+      verifyKit: async () => {} });
+    assert.equal(receipt.revision_count, 4);
+    const restored = new DatabaseSync(join(target, "restored.sqlite"));
+    const source = await openBackupCatalog(f.directory);
+    try {
+      const raw = Buffer.concat(source.db.prepare(`SELECT data FROM backup_record_parts
+        WHERE record_key=? ORDER BY part_index`).all(
+        JSON.stringify(["revisionsById", "r_shared_1"])).map(row => row.data)).toString();
+      assert.equal(restored.prepare(`SELECT payload_json FROM restore_records
+        WHERE field='revisionsById' AND record_id='r_shared_1'`).get().payload_json, raw);
+      assert.equal(restored.prepare(`SELECT kind FROM restore_files
+        WHERE revision_id='r_shared_1'`).get().kind, "markdown");
+    } finally { source.close(); restored.close(); }
+  } finally { await f.close(); }
+});
 
 test("offline kit restores all Minds, exact history and bytes with a new loopback-only credential", async () => {
   const f = await fixture();

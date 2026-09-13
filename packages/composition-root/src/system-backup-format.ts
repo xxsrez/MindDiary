@@ -254,7 +254,7 @@ export function systemBackupObjectSeeds(value: unknown): readonly SystemBackupOb
     };
     const spaceId = envelope.revision?.spaceId;
     const manifestHash = envelope.revision?.manifestHash;
-    const format = envelope.manifest?.format;
+    const format = envelope.manifest?.format ?? REVISION_MANIFEST_FORMAT_V1;
     const entries = envelope.manifest?.entries;
     if (typeof spaceId !== "string" || typeof manifestHash !== "string" ||
       !/^sha256:[0-9a-f]{64}$/u.test(manifestHash) || !Array.isArray(entries)) {
@@ -281,6 +281,7 @@ export function systemBackupObjectSeeds(value: unknown): readonly SystemBackupOb
         throw new TypeError("system backup manifest entry is invalid");
       }
       const entry = entryValue as Record<string, unknown>;
+      const kind = entry.kind ?? (format === REVISION_MANIFEST_FORMAT_V1 ? "markdown" : undefined);
       if (typeof entry.sha256 !== "string" ||
         !/^sha256:[0-9a-f]{64}$/u.test(entry.sha256) ||
         typeof entry.size !== "number" || entry.size < 0 ||
@@ -291,16 +292,16 @@ export function systemBackupObjectSeeds(value: unknown): readonly SystemBackupOb
       let fallbackKey: string | null = null;
       let namespace: SystemBackupObjectSeed["namespace"];
       let mediaType: string;
-      if (entry.kind === "opaque") {
+      if (kind === "opaque") {
         key = `bundle-files/${encodeURIComponent(spaceId)}/sha256/${entry.sha256.slice(7)}`;
         namespace = "bundle_file";
         mediaType = String(entry.mediaType);
-      } else if (entry.kind === "markdown" && modern) {
+      } else if (kind === "markdown" && modern) {
         key = `spaces/${encodeURIComponent(spaceId)}/objects/sha256/${entry.sha256.slice(7)}`;
         fallbackKey = `canonical/sha256/${entry.sha256.slice(7)}`;
         namespace = "space_canonical";
         mediaType = MARKDOWN_MEDIA_TYPE;
-      } else if (entry.kind === "markdown") {
+      } else if (kind === "markdown") {
         key = `canonical/sha256/${entry.sha256.slice(7)}`;
         namespace = "immutable";
         mediaType = MARKDOWN_MEDIA_TYPE;

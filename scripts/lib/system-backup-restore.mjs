@@ -599,6 +599,22 @@ export async function restoreBackup({ directory, target, verifyKit = async () =>
         if (error?.code !== "ENOENT") throw error;
       }
       const records = loadRecords(source.db);
+      // Normalize only the derived view. insertTarget copies the original
+      // encoded records directly from source, preserving their exact digests.
+      for (const envelope of records.revisionsById.values()) {
+        if (isObject(envelope?.manifest) && Array.isArray(envelope.manifest.entries)) {
+          const manifest = envelope.manifest;
+          manifest.format ??= "mind-diary-revision-manifest-v1";
+          if (manifest.format === "mind-diary-revision-manifest-v1") {
+            for (const entry of manifest.entries) {
+              if (isObject(entry)) {
+                entry.kind ??= "markdown";
+                entry.mediaType ??= MARKDOWN;
+              }
+            }
+          }
+        }
+      }
       const inventory = inventoryFrom(source.db);
       validateRecords(records, inventory);
       await validateManifestBytes(directory, records);
