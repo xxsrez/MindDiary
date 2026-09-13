@@ -164,7 +164,10 @@ function validateRecords(records, inventory) {
       principal.state === "active", "restore_invalid_principal");
   }
   for (const [id, binding] of externalBindings) {
-    required(isObject(binding) && binding.bindingId === id &&
+    required(isObject(binding) && safeId(binding.bindingId) &&
+      typeof binding.provider === "string" && binding.provider.length > 0 &&
+      typeof binding.normalizedBinding === "string" && binding.normalizedBinding.length > 0 &&
+      id === `${binding.provider}\0${binding.normalizedBinding}` &&
       principals.has(binding.principalId) &&
       ["active", "revoked"].includes(binding.state),
     "restore_invalid_identity_binding");

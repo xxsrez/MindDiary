@@ -91,7 +91,7 @@ function snapshot() {
       state: "active", profileVersion: 1, createdAt: now, updatedAt: now });
     result.personalBindings.set(id, { principalId: id,
       spaceId: `s_${id}`, version: 1, createdAt: now });
-    result.externalBindings.set(`e_${id}`, { bindingId: `e_${id}`,
+    result.externalBindings.set(`sites\0${id}@example.test`, { bindingId: `e_${id}`,
       principalId: id, provider: "sites", normalizedBinding: `${id}@example.test`,
       state: "active", version: 1, verifiedAt: now,
       createdAt: now, updatedAt: now });
