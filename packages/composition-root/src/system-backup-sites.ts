@@ -229,8 +229,10 @@ export class SitesSystemBackupService {
     ).all<{ table_name: string }>();
     const applicationSchema: { table_name: string; column_name: string }[] = [];
     for (const { table_name } of tables.results ?? []) {
+      // Sites owns its migration journal; only Mind Diary tables are portable.
       if (table_name.startsWith("sqlite_") || table_name === "_cf_KV" ||
-        table_name === "d1_migrations") continue;
+        table_name === "d1_migrations" ||
+        table_name === "__appgarden_migrations") continue;
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(table_name)) {
         throw new TypeError("system backup D1 schema contains an unknown table");
       }

@@ -306,6 +306,18 @@ test("unknown durable D1 table fails closed before session registration", async 
   } finally { fixture.database.close(); }
 });
 
+test("Sites migration journal does not appear as portable product state", async () => {
+  const fixture = await setup();
+  try {
+    fixture.database.database.exec(
+      "CREATE TABLE __appgarden_migrations (id INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)",
+    );
+    const session = await fixture.service.createSession();
+    assert.equal(session.mode, "baseline");
+    assert.equal(session.page_count, 1);
+  } finally { fixture.database.close(); }
+});
+
 test("portable records project the real Sites metadata snapshot without duplicating history", async () => {
   const database = new SqliteD1();
   try {

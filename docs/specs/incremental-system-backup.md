@@ -50,6 +50,9 @@ DDL, snapshot serializers и R2 namespace constants; новый неописан
 adapters. MD-445 дополнительно должна сверять runtime `sqlite_schema` и R2
 inventory на exact candidate: динамический SQL/ключ, не выраженный как
 статический DDL/prefix, не доказывается этим check.
+Служебная таблица миграций Sites `__appgarden_migrations`, обнаруженная в
+hosted D1, исключается из переносимого состояния по точному имени; любая
+другая неизвестная таблица или колонка по-прежнему блокирует backup session.
 
 Политики реестра:
 

@@ -103,7 +103,8 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
           if (typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
             return { invalid_table_name: true };
           }
-          if (name.startsWith("sqlite_") || name === "_cf_KV" || name === "d1_migrations") continue;
+          if (name.startsWith("sqlite_") || name === "_cf_KV" || name === "d1_migrations" ||
+            name === "__appgarden_migrations") continue;
           try {
             const columns = await environment.DB.prepare(`PRAGMA table_info("${name}")`).all();
             tables.push({ name, columns: (columns.results ?? []).map((column) => column.name) });
