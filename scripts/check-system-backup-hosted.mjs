@@ -60,7 +60,9 @@ let cleanup;
 let primaryFailure;
 try {
   await client.setup({ profile: "operator" });
-  fixture = await createCollaborationFixture(client, { revisionsPerMind: 1 });
+  fixture = await createCollaborationFixture(client, {
+    revisionsPerMind: 1, writeSharedContent: false,
+  });
   populated = await client.control("/_acceptance/inventory");
   assert.equal(populated.complete, true);
   assert.equal(populated.principals, 4);

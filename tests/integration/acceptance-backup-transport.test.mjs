@@ -107,7 +107,11 @@ test("synthetic multi-principal fixture can start a hosted backup session", asyn
     fetch: runtime.fetch,
   }).open();
   await client.setup({ profile: "operator" });
-  await createCollaborationFixture(client, { revisionsPerMind: 1 });
+  const fixture = await createCollaborationFixture(client, {
+    revisionsPerMind: 1, writeSharedContent: false,
+  });
+  assert.equal(fixture.revisions["/me"].length, 1);
+  assert.equal(fixture.revisions[`/${fixture.handle}`], undefined);
   const response = await runtime.fetch(`${ACCEPTANCE_ORIGIN}/api/v1/internal/system-backup/sessions`, {
     method: "POST", headers: { authorization: `Bearer mdb_v1_${runtime.controllerKey}`,
       "content-type": "application/json", "x-md-acceptance-run": client.state.run.run_id },

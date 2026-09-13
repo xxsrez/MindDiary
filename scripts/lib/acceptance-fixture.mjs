@@ -1,6 +1,9 @@
 // Bounded synthetic collaboration fixture, built exclusively by product APIs.
-export async function createCollaborationFixture(client, { revisionsPerMind = 2 } = {}) {
+export async function createCollaborationFixture(client, {
+  revisionsPerMind = 2, writeSharedContent = true,
+} = {}) {
   if (revisionsPerMind !== 1 && revisionsPerMind !== 2) throw new Error("invalid_fixture_revision_count");
+  if (typeof writeSharedContent !== "boolean") throw new Error("invalid_fixture_write_scope");
   const run = client.state.run ?? await client.setup();
   const roles = ["owner", "editor", "reader", "outsider"];
   if (run.actors.length !== 4) throw new Error("fixture_requires_four_actors");
@@ -46,7 +49,7 @@ export async function createCollaborationFixture(client, { revisionsPerMind = 2 
   const issued = await mutate("token:owner", actors.owner, { path: "/api/v1/mcp-tokens", body: { name: "Synthetic acceptance", scopes: ["content:write", "personal:configure"] } });
   const token = issued.data.secret;
   const revisions = {};
-  for (const mind of ["/me", `/${handle}`]) {
+  for (const mind of writeSharedContent ? ["/me", `/${handle}`] : ["/me"]) {
     const listed = await client.mcp(token, "list_minds");
     const selected = listed.minds.find(item => item.route === mind);
     if (!selected) throw new Error("fixture_mind_missing");
