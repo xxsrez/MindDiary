@@ -109,3 +109,48 @@ target и не создаёт дубликаты. Повреждённый sourc
 автоматического восстановления доступа пользователей. Перед будущим открытием
 кому-либо ещё требуется отдельно проверить удаления и заново подтвердить
 identity/access.
+
+## Ежедневный runner на macOS
+
+Установка требует отдельного UAT operator key `mdb_v1_`, выданного с явным
+разрешением. Создайте его в Keychain как generic password для service
+`com.xxsrez.mind-diary-backup.uat` и account, равного числовому UID Mac.
+`/usr/bin/security add-generic-password -a <uid> -s
+com.xxsrez.mind-diary-backup.uat -w` запрашивает пароль интерактивно, если
+`-w` последний аргумент; не передавайте его в argv, URL, shell history или
+документы. `install` сначала проверяет доступность и формат ключа, затем
+создаёт приватный независимый clone точного commit и Node runtime.
+
+```text
+node scripts/system-backup-runner.mjs install \
+  --directory /absolute/private/local-backup \
+  --origin <UAT HTTPS origin> \
+  --hour 3 --minute 0 --stale-hours 48
+node scripts/system-backup-runner.mjs status
+node scripts/system-backup-runner.mjs run --config \
+  "/absolute/Library/Application Support/MindDiaryBackup/config.json"
+node scripts/system-backup-runner.mjs uninstall
+```
+
+Команду `install` запускайте из проверенного чистого Git checkout.
+`install` создаёт user LaunchAgent с `StartCalendarInterval` и `RunAtLoad`.
+`launchd` не будит выключенный Mac: после сна календарный запуск догоняется
+при пробуждении, после выключения runner запускается при следующем login.
+Пропущенные календарные интервалы объединяются в один запуск. Mac может
+уснуть посреди работы; клиент возобновит незавершённую копию при следующем
+запуске. Один `lockf` запрещает параллельных writers. Каждый HTTP запрос
+ограничен 60 секундами, сетевой run — четырьмя часами; для временных ошибок
+есть до трёх попыток с паузами 5 и 20 секунд.
+
+`status` разделяет последний успешный checkpoint, pending и последнюю
+попытку, показывает `stale` после заданного числа часов без успеха. Первая
+просроченная неудача вызывает локальное уведомление без private bytes,
+пути или credential; его повтор без промежуточного успеха не дублирует
+уведомление. `uninstall` останавливает Agent и удаляет установленный runtime,
+но оставляет backup data и Keychain item. Отзыв UAT operator key выполняется
+отдельно. Каталог копии нельзя размещать внутри синхронизируемого Drive:
+живую SQLite-базу нельзя копировать обычной файловой синхронизацией.
+
+Код проверен синтетически. Настоящая установка, первый scheduled run,
+Keychain provisioning и read-back свежей копии требуют отдельного evidence
+MD-448; до него user data не считаются защищёнными.

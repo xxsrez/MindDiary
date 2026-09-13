@@ -190,13 +190,16 @@ async function boundedBody(response, limit) {
   return Buffer.concat(chunks, length);
 }
 
-function transport({ origin, key, fetchImpl = fetch, metrics }) {
+function transport({ origin, key, fetchImpl = fetch, metrics, signal }) {
   if (!/^mdb_v1_[A-Za-z0-9_-]{43}$/u.test(key ?? "")) fail("invalid_operator_key");
   return async (method, suffix, body, maxBytes = MAX_JSON_BYTES) => {
     let response;
     try {
       response = await fetchImpl(endpoint(origin, suffix), {
         method, redirect: "error", cache: "no-store",
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(60_000)])
+          : AbortSignal.timeout(60_000),
         headers: {
           authorization: `Bearer ${key}`,
           ...(body === undefined ? {} : { "content-type": "application/json" }),
@@ -447,9 +450,12 @@ async function downloadObject(db, request, directory, descriptor, item, onStage)
 
 async function fetchObjects(db, request, directory, descriptor, onStage) {
   let downloaded = 0;
-  const rows = db.prepare(`SELECT * FROM backup_pending_inventory
-    ORDER BY object_index`).iterate();
-  for (const item of rows) {
+  const nextObject = db.prepare(`SELECT * FROM backup_pending_inventory
+    WHERE object_index > ? ORDER BY object_index LIMIT 1`);
+  let objectIndex = -1;
+  for (let item = nextObject.get(objectIndex); item;
+    item = nextObject.get(objectIndex)) {
+    objectIndex = item.object_index;
     if (await downloadObject(db, request, directory, descriptor, item, onStage)) downloaded += 1;
   }
   return downloaded;
@@ -707,7 +713,7 @@ async function verifyStaged(db, directory, descriptor) {
 }
 
 export async function runBackup({ directory, origin, key, fetchImpl = fetch,
-  onStage = () => {} }) {
+  onStage = () => {}, signal }) {
   const catalog = await openBackupCatalog(directory);
   const db = catalog.db;
   const metrics = { largestResponseBytes: 0,
@@ -717,7 +723,7 @@ export async function runBackup({ directory, origin, key, fetchImpl = fetch,
   const sampler = setInterval(sample, 10);
   sampler.unref();
   try {
-    const request = transport({ origin, key, fetchImpl, metrics });
+    const request = transport({ origin, key, fetchImpl, metrics, signal });
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const stored = current(db);
