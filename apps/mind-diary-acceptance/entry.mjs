@@ -13,6 +13,7 @@ import { acceptanceInventory } from "./inventory.mjs";
 import { recoverOrphanOAuth } from "./oauth-recovery.mjs";
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
+import { ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA } from "./backup-test-profile.mjs";
 
 export function createAcceptanceWorker({ createRuntime = createProductSiteRuntime } = {}) {
   const stores = new WeakMap();
@@ -34,6 +35,7 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
       createRuntime: async (options) => {
         const runtime = await createRuntime({
           ...options,
+          systemBackupRuntimeExtraD1Schema: ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA,
           observabilityWriter: { write: value => telemetryFor(options.database).write(value) },
           identity: { async readVerifiedIdentity(request) {
             const actor = recoveryIdentities.get(request) ?? await storeFor(options.database).actorForRequest(request);
@@ -80,6 +82,14 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
         return recoverOrphanOAuth(environment.DB, principalId => recovery.runtime(environment.DB).purgeDeletedPrincipalOAuth(principalId));
       });
       if (sessionResponse) return sessionResponse;
+      if (path.startsWith("/api/v1/internal/system-backup/")) {
+        let backupRun;
+        try { backupRun = await store.run(request.headers.get("x-md-acceptance-run")); }
+        catch { return Response.json({ code: "not_found" }, { status: 404 }); }
+        if (backupRun.profile !== "operator" || backupRun.state !== "active") {
+          return Response.json({ code: "not_found" }, { status: 404 });
+        }
+      }
       const actor = await store.actorForRequest(request);
       if (path === "/" && !actor) return probe.fetch(request, environment);
       // Internal constructor configuration is derived from normal bootstrap results;
@@ -87,6 +97,9 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
       if (!runtimeEnvironments.has(environment)) runtimeEnvironments.set(environment, { ...environment });
       const runtimeEnvironment = runtimeEnvironments.get(environment);
       runtimeEnvironment.MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS = (await store.operatorPrincipalIds()).join(",");
+      // The controller already owns this synthetic-only Site. Reuse its key
+      // for the backup transport without creating an all-user Product secret.
+      runtimeEnvironment.MIND_DIARY_BACKUP_OPERATOR_KEY = environment.MD_ACCEPTANCE_CONTROLLER_KEY;
       const journal = telemetryFor(environment.DB);
       let measurement, response;
       try {

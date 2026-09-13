@@ -157,17 +157,20 @@ export class SitesSystemBackupService {
   readonly #bucket: R2BucketLike;
   readonly #metadata: SitesMetadataStore;
   readonly #now: () => Date;
+  readonly #runtimeExtraD1Schema: Readonly<Record<string, string>>;
 
   constructor(options: Readonly<{
     database: D1DatabaseLike;
     bucket: R2BucketLike;
     metadata: SitesMetadataStore;
     now?: () => Date;
+    runtimeExtraD1Schema?: Readonly<Record<string, string>>;
   }>) {
     this.#database = options.database;
     this.#bucket = options.bucket;
     this.#metadata = options.metadata;
     this.#now = options.now ?? (() => new Date());
+    this.#runtimeExtraD1Schema = options.runtimeExtraD1Schema ?? {};
   }
 
   async #one<Row>(sql: string, ...args: unknown[]): Promise<Row | null> {
@@ -230,7 +233,7 @@ export class SitesSystemBackupService {
     const applicationSchema = (schema.results ?? []).filter((row) =>
       !row.table_name.startsWith("sqlite_") &&
       row.table_name !== "_cf_KV" && row.table_name !== "d1_migrations");
-    assertSystemBackupD1Schema(applicationSchema);
+    assertSystemBackupD1Schema(applicationSchema, this.#runtimeExtraD1Schema);
     let cursor: string | undefined;
     do {
       const page = await this.#bucket.list({

@@ -80,8 +80,28 @@ export async function cleanupRun(store, runId, productCall, resumeDeletion, faul
       }
     }
     await assertLease();
+    const backupTables = ["md_backup_sessions", "md_backup_pages",
+      "md_backup_record_digests", "md_backup_inventory", "md_backup_cleanup_ops"];
+    let backupCleanup = [];
+    if (run.profile === "operator") {
+      const present = await store.db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name LIKE 'md_backup_%'").all();
+      const names = new Set((present.results ?? []).map((row) => row.name));
+      if (backupTables.some((table) => names.has(table))) {
+        if (backupTables.some((table) => !names.has(table))) throw new Error("backup_cleanup_schema_incomplete");
+        const active = await store.statement("SELECT COUNT(*) AS count FROM md_backup_sessions WHERE status IN ('building', 'ready')").first();
+        const operations = await store.statement("SELECT COUNT(*) AS count FROM md_backup_cleanup_ops").first();
+        if (active.count !== 0 || operations.count !== 0) throw new Error("backup_cleanup_active");
+        backupCleanup = [
+          store.db.prepare("DELETE FROM md_backup_pages"),
+          store.db.prepare("DELETE FROM md_backup_record_digests"),
+          store.db.prepare("DELETE FROM md_backup_inventory"),
+          store.db.prepare("DELETE FROM md_backup_sessions"),
+        ];
+      }
+    }
     const receipt = { run_id: runId, state: "cleaned", actors_cleaned: run.actors.length, results };
     await store.db.batch([
+      ...backupCleanup,
       store.statement("INSERT OR REPLACE INTO md_acceptance_cleanup_receipts (run_id,receipt_json) VALUES (?,?)", runId, JSON.stringify(receipt)),
       store.statement("DELETE FROM md_acceptance_telemetry WHERE run_id = ?", runId),
       store.statement("DELETE FROM md_acceptance_cleanup_journal WHERE actor_id IN (SELECT id FROM md_acceptance_actors WHERE run_id = ?)", runId),

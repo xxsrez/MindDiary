@@ -207,6 +207,19 @@ manifest в logs/Task Manager. Credential для unattended чтения все�
 требуют соблюдения границ доступа и секретов; синтетический UAT test их не
 подменяет.
 
+Для hosted синтетической проверки MD-445 используется отдельный acceptance Site:
+перед прогоном его исходный inventory должен быть нулевым, затем создаются
+только временные тестовые principal/Mind. Его существующий controller credential
+допускается как backup credential только для активного эксклюзивного operator
+run в этой test-only composition; Product Site не наследует это правило. Строгая
+проверка runtime D1 schema в acceptance дополнительно классифицирует точный
+перечень `md_acceptance_*` таблиц как временное состояние, которое не входит в
+portable backup. Любая неизвестная таблица или колонка по-прежнему блокирует
+сессию. После очистки run удаляются тестовые backup sessions/pages/inventory,
+и исходный inventory снова должен быть пустым. Completion receipt из acceptance
+доказывает transport на hosted D1/R2, но не подтверждает рабочую копию
+пользовательских Minds на Product UAT.
+
 ## Evidence для следующих задач
 
 MD-445 проверяет fixed-target pages/parts, update/delete/GC races, expiry,

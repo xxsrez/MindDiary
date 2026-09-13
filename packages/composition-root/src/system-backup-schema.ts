@@ -33,6 +33,7 @@ export const SYSTEM_BACKUP_D1_SCHEMA = Object.freeze({
 
 export function assertSystemBackupD1Schema(
   rows: readonly Readonly<{ table_name: string; column_name: string }>[],
+  extraTables: Readonly<Record<string, string>> = {},
 ): void {
   const actual = new Map<string, Set<string>>();
   for (const row of rows) {
@@ -45,14 +46,19 @@ export function assertSystemBackupD1Schema(
     actual.set(row.table_name, columns);
   }
   const expectedTables = Object.keys(SYSTEM_BACKUP_D1_SCHEMA);
-  if ([...actual.keys()].some((table) => !expectedTables.includes(table)) ||
+  if (Object.keys(extraTables).some((table) =>
+    !table.startsWith("md_acceptance_") || expectedTables.includes(table))) {
+    throw new TypeError("system backup D1 schema extra tables are invalid");
+  }
+  const allowedTables = { ...SYSTEM_BACKUP_D1_SCHEMA, ...extraTables };
+  if ([...actual.keys()].some((table) => !Object.hasOwn(allowedTables, table)) ||
     ["md_backup_control", "md_backup_sessions", "md_backup_pages",
       "md_backup_record_digests", "md_backup_inventory",
       "md_backup_cleanup_ops", "md_metadata_events"]
       .some((table) => !actual.has(table))) {
     throw new TypeError("system backup D1 schema contains an unknown or missing required table");
   }
-  for (const [table, columns] of Object.entries(SYSTEM_BACKUP_D1_SCHEMA)) {
+  for (const [table, columns] of Object.entries(allowedTables)) {
     const expected = new Set(columns.split(" "));
     const present = actual.get(table);
     if (present === undefined) continue;

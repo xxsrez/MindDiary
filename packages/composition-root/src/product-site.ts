@@ -206,6 +206,8 @@ export interface ProductSiteRuntimeOptions {
   readonly serviceOperatorPrincipalIds?: readonly string[];
   /** Separate operator-only read capability; absent keeps backup HTTP hidden. */
   readonly systemBackupOperatorKey?: Uint8Array;
+  /** Constructor-only acceptance tables, checked by exact columns and excluded from backup. */
+  readonly systemBackupRuntimeExtraD1Schema?: Readonly<Record<string, string>>;
   /** Optional trusted admission policy; may only deny an already authenticated principal. */
   readonly mcpPrincipalAdmission?: (principalId: string, request: Request) => Promise<boolean>;
   /**
@@ -932,6 +934,8 @@ export async function createProductSiteRuntime(
       bucket: options.bucket,
       metadata,
       now,
+      ...(options.systemBackupRuntimeExtraD1Schema === undefined ? {} :
+        { runtimeExtraD1Schema: options.systemBackupRuntimeExtraD1Schema }),
     });
   const systemBackupHttp = createSystemBackupHttpHandler({
     service: systemBackup,
