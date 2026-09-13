@@ -2,10 +2,10 @@
 
 Статус: выбранный инженерный контракт MD-444 для MD-443–MD-449, 2026-09-13.
 MD-445 содержит опубликованную в UAT серверную реализацию выдачи и
-подтверждённый synthetic hosted transport; реальная передача пользовательских
-Minds с operator key пока не выполнена. Ручной локальный CLI MD-446 и
-offline restore MD-447 и runner MD-448 реализованы в repository и проверены
-синтетически; установка расписания MD-448 ещё не выполнена. Контракт не меняет обычный
+подтверждённый synthetic hosted transport; первая реальная копия пользовательских
+Minds и offline restore подтверждены отчётом MD-449 от 2026-09-13.
+Ручной локальный CLI MD-446 и offline restore MD-447 проверены на этой копии.
+Ежедневный runner MD-448 отменён пользователем. Контракт не меняет обычный
 пользовательский export и не даёт content MCP административных прав.
 
 ## Цель и граница
@@ -264,7 +264,7 @@ delta-only transfer, bounded memory, fsync/transaction ordering и fault
 injection. MD-447 поднимает чистый локальный target без Site/network и сверяет
 все fixture Minds/revisions/bytes: repository test использует три Minds,
 четыре ревизии и opaque bytes; отдельный kit содержит Node runtime, Git archive
-точного SHA с lockfile/миграциями и автономный CLI. MD-448 подтверждает реальный macOS runner,
-catch-up и last-success status. MD-449 соединяет эти доказательства в один
+точного SHA с lockfile/миграциями и автономный CLI. MD-448 отменён; установка
+runner и catch-up не входят в текущую приёмку. MD-449 соединяет доказательства в один
 source-bound drill. До этих receipts данный контракт не является обещанием
 работающего бэкапа.

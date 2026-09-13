@@ -116,8 +116,7 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 29. [Инкрементальный системный бэкап](specs/incremental-system-backup.md)
     — контракт MD-444 для полной локальной копии, классификация durable state,
     фиксированные дельты и offline recovery; synthetic hosted transport и
-    локальный offline restore проверены, передача пользовательских Minds ещё
-    не подтверждена.
+    локальный offline restore и первая копия пользовательских Minds подтверждены.
 
 ## Руководства
 
@@ -128,9 +127,8 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 ## Операции
 
 - [Локальная копия Mind Diary на Mac](operations/system-backup-local.md) —
-  ручной CLI MD-446, offline restore MD-447, runner MD-448 и порядок
-  fsync/commit, status, integrity, GC; hosted передача и расписание ожидают
-  отдельной проверки.
+  ручной CLI MD-446, offline restore MD-447 и порядок fsync/commit, status,
+  integrity, GC; первая копия проверена, ежедневный runner MD-448 отменён.
 - [Runbook `ship-work-release`](operations/ship-work-release.md) —
   универсальный UX в Codex Desktop: status, «дойти до точки с запятой»,
   batch/UAT pause, resume, cohort upgrade, task-manager projection, recovery и
@@ -359,8 +357,8 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 - [Mind Diary без служебных отчётов](reports/2026-09-12-quiet-mind-diary.md) — инструкции аккаунта, MCP metadata, UAT159 и границы проверки ответов.
 - [Системный бэкап: локальное испытание, 2026-09-13](reports/2026-09-13-system-backup-drill.md)
   — одна синтетическая дельта, прерывание и повтор, offline restore всех Minds,
-  измерения, hosted synthetic transport и граница ещё не проведённой
-  пользовательской ежедневной приёмки.
+  измерения, hosted transport, первая пользовательская копия и автономное
+  восстановление десяти Minds; ежедневный запуск отменён.
 
 ## Статусы и проверяемые claims
 
