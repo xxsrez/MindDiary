@@ -92,12 +92,14 @@ export class AcceptanceClient {
     if (this.state.phase === "cleaned") return this.state.receipt;
     if (!this.state.run) await this.setup(this.state.runInput ?? {});
     this.state.phase = "cleanup_pending"; await this.save();
-    const deadline = Date.now() + 300000;
-    for (let attempt = 0; attempt < 16; attempt++) {
+    // R2 delete uncertainty lasts five minutes; allow its full window plus
+    // bounded Worker timeouts before declaring this run unrecovered.
+    const deadline = Date.now() + 420000;
+    for (let attempt = 0; attempt < 32; attempt++) {
       try { this.state.receipt = await this.control(`/_acceptance/runs/${this.state.run.run_id}/cleanup`, "POST", {}); }
       catch (error) {
         const transient = error.message === "acceptance_control_http_503" || ["AbortError", "TimeoutError"].includes(error.name);
-        if (!retryTransient || !transient || attempt === 15 || Date.now() >= deadline) throw error;
+        if (!retryTransient || !transient || attempt === 31 || Date.now() >= deadline) throw error;
         await this.sleep(Math.min(15000, 1000 * 2 ** Math.min(attempt, 4)));
         continue;
       }

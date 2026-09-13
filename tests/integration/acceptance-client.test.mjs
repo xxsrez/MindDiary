@@ -52,6 +52,27 @@ test("recovery resumes bounded 503 cleanup chunks and preserves another active r
   await first.cleanup(); await second.cleanup();
 });
 
+test("cleanup permits more than 16 transient responses with the same run key", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "acceptance-cleanup-window-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const keys = [];
+  const client = await new AcceptanceClient({
+    directory, platformToken: "test-platform", controllerKey: "test-controller",
+    sleep: async () => {},
+    fetch: async (_url, options) => {
+      keys.push(options.headers["idempotency-key"]);
+      return keys.length <= 17 ? Response.json({}, { status: 503 }) :
+        Response.json({ state: "cleaned", actors_cleaned: 4 });
+    },
+  }).open();
+  client.state.run = { run_id: "synthetic-run" };
+  await client.save();
+  assert.equal((await client.cleanup()).state, "cleaned");
+  assert.equal(client.state.phase, "cleaned");
+  assert.equal(keys.length, 18);
+  assert.equal(new Set(keys).size, 1);
+});
+
 test("fixture commits reconcile a deadline with the original payload while model transport never retries", async t => {
   const directory = await mkdtemp(join(tmpdir(), "acceptance-deadline-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
