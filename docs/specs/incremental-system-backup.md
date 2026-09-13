@@ -41,7 +41,7 @@ materialized snapshot/chunks и projection активности. Его `sequenc
 
 Исполняемый реестр
 [`backup-completeness-registry.mjs`](../../scripts/lib/backup-completeness-registry.mjs)
-перечисляет **21 D1 table со всеми обнаруженными columns**, **48 полей
+перечисляет **27 D1 tables со всеми обнаруженными columns**, **48 полей
 metadata snapshot**, **4 поля token snapshot**, event envelope и **5 R2
 prefixes**. `npm run check:backup-completeness` сверяет его с production
 DDL, snapshot serializers и R2 namespace constants; новый неописанный столбец,
@@ -97,7 +97,8 @@ history** при этом сохраняется в `revisionsById` и object cl
 - digest manifest, счётчики записей/байтов и expiry server session.
 
 Canonical JSON сериализуется детерминированно UTF-8; digest считается по
-точным байтам. Повтор страницы с тем же session/cursor возвращает те же bytes,
+точным байтам. Ключ portable record — JSON-пара `[field, id]`, без NUL в
+SQLite TEXT. Повтор страницы с тем же session/cursor возвращает те же bytes,
 index и digest. Числовой cursor действует только внутри выбранной session:
 `session_id` вместе с operator credential привязывает его к `origin`,
 `generation`, `base` и `target`. Он не пропускает страницу и не действует после

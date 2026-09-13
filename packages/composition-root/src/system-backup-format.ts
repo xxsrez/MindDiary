@@ -66,9 +66,9 @@ export function systemBackupTargetDigest(
 }
 
 function canonicalValue(value: unknown): unknown {
-  if (value === undefined) return { __md_sites_type: "undefined" };
+  if (value === undefined) return { __md_backup_type: "undefined" };
   if (value instanceof Uint8Array) {
-    return { __md_sites_type: "uint8array", bytes: [...value] };
+    return { __md_backup_type: "uint8array", bytes: [...value] };
   }
   if (value instanceof Map) {
     const entries = [...value.entries()].map(([key, item]) => [
@@ -76,20 +76,19 @@ function canonicalValue(value: unknown): unknown {
     ] as const);
     entries.sort((left, right) =>
       compareText(JSON.stringify(left[0]), JSON.stringify(right[0])));
-    return { __md_sites_type: "map", entries };
+    return { __md_backup_type: "map", entries };
   }
   if (value instanceof Set) {
     const values = [...value.values()].map(canonicalValue);
     values.sort((left, right) =>
       compareText(JSON.stringify(left), JSON.stringify(right)));
-    return { __md_sites_type: "set", values };
+    return { __md_backup_type: "set", values };
   }
   if (Array.isArray(value)) return value.map(canonicalValue);
   if (typeof value === "object" && value !== null) {
     const source = value as Record<string, unknown>;
-    return Object.fromEntries(Object.keys(source).sort().map((key) => [
-      key, canonicalValue(source[key]),
-    ]));
+    return { __md_backup_type: "object", entries: Object.keys(source).sort()
+      .map((key) => [key, canonicalValue(source[key])]) };
   }
   if (typeof value === "number" && !Number.isFinite(value)) {
     throw new TypeError("system backup metadata contains a non-finite number");
@@ -99,6 +98,63 @@ function canonicalValue(value: unknown): unknown {
     throw new TypeError("system backup metadata contains an unsupported value");
   }
   return value;
+}
+
+/** Inverse of canonicalValue. Plain objects are tagged, so source metadata
+ * cannot masquerade as a Map/Set/byte marker. */
+export function decodeSystemBackupValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(decodeSystemBackupValue);
+  if (typeof value !== "object" || value === null) {
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      throw new TypeError("system backup contains a non-finite number");
+    }
+    return value;
+  }
+  const tagged = value as Record<string, unknown>;
+  if (tagged.__md_backup_type === "undefined" &&
+    Object.keys(tagged).length === 1) return undefined;
+  if (tagged.__md_backup_type === "uint8array" &&
+    Object.keys(tagged).length === 2 && Array.isArray(tagged.bytes) &&
+    tagged.bytes.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+    return new Uint8Array(tagged.bytes as number[]);
+  }
+  if (tagged.__md_backup_type === "set" &&
+    Object.keys(tagged).length === 2 && Array.isArray(tagged.values)) {
+    const values = tagged.values.map(decodeSystemBackupValue);
+    if (new Set(values).size !== values.length) {
+      throw new TypeError("system backup Set contains duplicate values");
+    }
+    return new Set(values);
+  }
+  if ((tagged.__md_backup_type === "map" ||
+      tagged.__md_backup_type === "object") &&
+    Object.keys(tagged).length === 2 && Array.isArray(tagged.entries)) {
+    const entries = tagged.entries.map((entry) => {
+      if (!Array.isArray(entry) || entry.length !== 2) {
+        throw new TypeError("system backup entry is malformed");
+      }
+      return [decodeSystemBackupValue(entry[0]),
+        decodeSystemBackupValue(entry[1])] as const;
+    });
+    if (tagged.__md_backup_type === "map") {
+      const result = new Map(entries);
+      if (result.size !== entries.length) {
+        throw new TypeError("system backup Map contains duplicate keys");
+      }
+      return result;
+    }
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of entries) {
+      if (typeof key !== "string" || Object.hasOwn(result, key)) {
+        throw new TypeError("system backup object key is invalid or duplicate");
+      }
+      Object.defineProperty(result, key, {
+        value: item, enumerable: true, writable: true, configurable: true,
+      });
+    }
+    return result;
+  }
+  throw new TypeError("system backup tagged value is unsupported");
 }
 
 function compareText(left: string, right: string): number {
@@ -153,7 +209,9 @@ export async function systemBackupRecords(value: unknown): Promise<readonly Syst
         : item;
       const payload = canonicalJson(projected);
       records.push(Object.freeze({
-        key: `${field}\u0000${id}`,
+        // A JSON tuple is unambiguous and survives SQLite clients that
+        // truncate TEXT at NUL on read (including Node 22's node:sqlite).
+        key: JSON.stringify([field, id]),
         payload,
         sha256: await systemBackupSha256(payload),
       }));

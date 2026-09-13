@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DatabaseSync } from "node:sqlite";
+import { SqliteD1 as TestSqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
 import { createSitesMetadataStore } from "../../packages/adapter-metadata-sites/dist/index.js";
 import { AccountBootstrapService } from "@mind-diary/application-control";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
@@ -10,6 +10,7 @@ import {
   SYSTEM_BACKUP_EXACT_FIELDS,
   systemBackupRecords,
   systemBackupObjectSeeds,
+  decodeSystemBackupValue,
   systemBackupSha256,
 } from "../../packages/composition-root/dist/system-backup-format.js";
 import {
@@ -17,44 +18,8 @@ import {
 } from "../../packages/composition-root/dist/system-backup-sites.js";
 import { createSystemBackupHttpHandler } from "../../packages/composition-root/dist/system-backup-http.js";
 
-class SqliteStatement {
-  constructor(database, sql) {
-    this.database = database;
-    this.sql = sql;
-    this.values = [];
-  }
-
-  bind(...values) { this.values = values; return this; }
-
-  execute() {
-    const result = this.database.prepare(this.sql).run(...this.values);
-    return { success: true, meta: { changes: Number(result.changes) } };
-  }
-
-  async run() { return this.execute(); }
-
-  async all() {
-    return { success: true, results: this.database.prepare(this.sql).all(...this.values) };
-  }
-
-  async first() { return (await this.all()).results[0] ?? null; }
-}
-
-class SqliteD1 {
-  constructor() { this.database = new DatabaseSync(":memory:"); }
-  prepare(sql) { return new SqliteStatement(this.database, sql); }
-  async batch(statements) {
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
-      const results = statements.map((statement) => statement.execute());
-      this.database.exec("COMMIT");
-      return results;
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
-  }
-  close() { this.database.close(); }
+class SqliteD1 extends TestSqliteD1 {
+  get database() { return this.sqlite; }
 }
 
 class SyntheticR2 {
@@ -161,8 +126,9 @@ test("fixed target gives exact incremental, no-change, deletion and rebaseline p
     fixture.setSnapshot(snapshot(["principal_a"]));
     fixture.advance();
     const deleted = await fixture.service.createSession(unchangedReceipt.checkpoint);
-    assert.match((await fixture.service.readPage(deleted.session_id, 0)).payload,
-      /"kind":"delete","key":"principals\\u0000principal_b"/u);
+    assert.ok(JSON.parse((await fixture.service.readPage(deleted.session_id, 0)).payload)
+      .some((change) => change.kind === "delete" &&
+        change.key === JSON.stringify(["principals", "principal_b"])));
 
     const stale = await fixture.service.createSession({
       ...firstReceipt.checkpoint, digest: `sha256:${"0".repeat(64)}`,
@@ -362,10 +328,10 @@ test("portable records project the real Sites metadata snapshot without duplicat
     }, { action: "create_isolated_account" });
     const capture = await metadata.captureSystemBackupState();
     const records = await systemBackupRecords(capture.snapshot);
-    const spaces = records.filter((record) => record.key.startsWith("spaces\u0000"));
+    const spaces = records.filter((record) => JSON.parse(record.key)[0] === "spaces");
     assert.equal(spaces.length, 1);
-    assert.deepEqual(Object.keys(JSON.parse(spaces[0].payload)), ["head"]);
-    assert.ok(records.some((record) => record.key.startsWith("revisionsById\u0000")));
+    assert.deepEqual(Object.keys(decodeSystemBackupValue(JSON.parse(spaces[0].payload))), ["head"]);
+    assert.ok(records.some((record) => JSON.parse(record.key)[0] === "revisionsById"));
     assert.ok(systemBackupObjectSeeds(capture.snapshot).length > 0);
   } finally { database.close(); }
 });
@@ -419,4 +385,19 @@ test("expired server retention prunes old checkpoint state and safely rebaseline
       "SELECT COUNT(*) AS count FROM md_backup_record_digests WHERE session_id = ?",
     ).get(initial.session_id).count, 0);
   } finally { fixture.database.close(); }
+});
+
+test("portable typed encoding keeps ordinary marker-shaped data distinct from Maps", async () => {
+  const value = snapshot();
+  value.principals.set("principal_marker", {
+    __md_backup_type: "map",
+    entries: [["user", "data"]],
+    nested: new Map([["key", new Uint8Array([0, 1, 255])]]),
+  });
+  const record = (await systemBackupRecords(value)).find((item) =>
+    item.key === JSON.stringify(["principals", "principal_marker"]));
+  const decoded = decodeSystemBackupValue(JSON.parse(record.payload));
+  assert.equal(decoded.__md_backup_type, "map");
+  assert.deepEqual(decoded.entries, [["user", "data"]]);
+  assert.deepEqual(decoded.nested.get("key"), new Uint8Array([0, 1, 255]));
 });
