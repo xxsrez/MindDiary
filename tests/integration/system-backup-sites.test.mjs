@@ -104,6 +104,43 @@ async function setup() {
   };
 }
 
+test("inventory overlaps at most six R2 reads and retains canonical order", async () => {
+  const f = await setup();
+  try {
+    const value = snapshot(["principal_a"]);
+    const entries = [];
+    for (let index = 0; index < 13; index += 1) {
+      const bytes = Buffer.from(`object ${index}`);
+      const sha256 = await systemBackupSha256(bytes);
+      entries.push({ kind: "markdown", sha256, size: bytes.length });
+      f.bucket.putBytes(`canonical/sha256/${sha256.slice(7)}`, bytes,
+        { sha256, mediaType: "text/markdown; charset=utf-8", state: "active" });
+    }
+    value.revisionsById.set("revision_1", { revision: { spaceId: "space_1",
+      manifestHash: `sha256:${"1".repeat(64)}` },
+    manifest: { format: "mind-diary-revision-manifest-v1", entries } });
+    f.setSnapshot(value);
+    let active = 0;
+    let peak = 0;
+    const head = f.bucket.head.bind(f.bucket);
+    f.bucket.head = async key => {
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        await new Promise(resolve => setTimeout(resolve, 3));
+        return await head(key);
+      } finally { active -= 1; }
+    };
+    const result = await f.service.createSession();
+    assert.equal(result.object_count, 13);
+    assert.equal(peak, 6);
+    const rows = f.database.database.prepare(`SELECT object_index,object_key
+      FROM md_backup_inventory WHERE session_id=? ORDER BY object_index`).all(result.session_id);
+    assert.deepEqual(rows.map(row => row.object_index), Array.from({ length: 13 }, (_, i) => i));
+    assert.deepEqual(rows.map(row => row.object_key), [...f.bucket.objects.keys()].sort());
+  } finally { f.database.close(); }
+});
+
 test("fixed target gives exact incremental, no-change, deletion and rebaseline pages", async () => {
   const fixture = await setup();
   try {

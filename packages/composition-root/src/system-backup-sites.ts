@@ -335,7 +335,8 @@ export class SitesSystemBackupService {
   async #inventory(seeds: readonly SystemBackupObjectSeed[]):
     Promise<readonly SystemBackupInventoryItem[]> {
     const items: SystemBackupInventoryItem[] = [];
-    for (const seed of seeds) {
+    for (let start = 0; start < seeds.length; start += 6) {
+      const chunk = await Promise.all(seeds.slice(start, start + 6).map(async (seed, index) => {
       let key = seed.key;
       let metadata = await this.#head(key);
       if (metadata === null && seed.fallbackKey !== null) {
@@ -350,14 +351,16 @@ export class SitesSystemBackupService {
           metadata.customMetadata.state !== "active")) {
         throw new SystemBackupFailure("backup_object_closure_invalid");
       }
-      items.push(Object.freeze({
-        object_index: items.length,
+      return Object.freeze({
+        object_index: start + index,
         namespace: key.startsWith("canonical/") ? "immutable" : seed.namespace,
         object_key: key,
         sha256: seed.sha256,
         byte_size: metadata.size,
         media_type: seed.mediaType,
+      });
       }));
+      items.push(...chunk);
     }
     return Object.freeze(items);
   }
