@@ -51,12 +51,14 @@ export function assertSystemBackupD1Schema(
     throw new TypeError("system backup D1 schema extra tables are invalid");
   }
   const allowedTables = { ...SYSTEM_BACKUP_D1_SCHEMA, ...extraTables };
-  if ([...actual.keys()].some((table) => !Object.hasOwn(allowedTables, table)) ||
-    ["md_backup_control", "md_backup_sessions", "md_backup_pages",
+  const unknownTables = [...actual.keys()].filter((table) => !Object.hasOwn(allowedTables, table));
+  const missingRequired = ["md_backup_control", "md_backup_sessions", "md_backup_pages",
       "md_backup_record_digests", "md_backup_inventory",
       "md_backup_cleanup_ops", "md_metadata_events"]
-      .some((table) => !actual.has(table))) {
-    throw new TypeError("system backup D1 schema contains an unknown or missing required table");
+    .filter((table) => !actual.has(table));
+  if (unknownTables.length > 0 || missingRequired.length > 0) {
+    throw new TypeError(`system backup D1 schema mismatch: actual_tables=${actual.size}; ` +
+      `unknown_tables=${unknownTables.length}; missing_required=${missingRequired.join(",") || "none"}`);
   }
   for (const [table, columns] of Object.entries(allowedTables)) {
     const expected = new Set(columns.split(" "));

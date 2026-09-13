@@ -299,7 +299,7 @@ test("unknown durable D1 table fails closed before session registration", async 
   try {
     fixture.database.database.exec("CREATE TABLE new_private_state (content TEXT)");
     await assert.rejects(() => fixture.service.createSession(),
-      /unknown or missing required table/u);
+      /schema mismatch/u);
     assert.equal(fixture.database.database.prepare(
       "SELECT COUNT(*) AS count FROM md_backup_sessions",
     ).get().count, 0);

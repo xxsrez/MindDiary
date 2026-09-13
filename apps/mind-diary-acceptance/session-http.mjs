@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -48,6 +48,9 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
       return json({ status: "authenticated" }, 200, { "set-cookie": session.cookie });
     }
     if (!(await controller(request, controllerKey))) return json({ error: "controller_required" }, 401);
+    if (pathname === "/_acceptance/backup-schema-probe" && request.method === "GET" && backupSchemaProbe) {
+      return json(await backupSchemaProbe());
+    }
     const externalRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/external-mcp$/.exec(pathname);
     if (externalRoute) {
       if (request.method === "POST") return json(await store.enableExternalMcp(externalRoute[1], await body(request)));

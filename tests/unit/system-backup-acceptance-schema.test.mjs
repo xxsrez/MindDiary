@@ -13,7 +13,7 @@ test("acceptance backup checks its transient D1 columns without relaxing Product
   const product = rows(SYSTEM_BACKUP_D1_SCHEMA);
   const acceptance = [...product, ...rows(ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA)];
   assert.doesNotThrow(() => assertSystemBackupD1Schema(product));
-  assert.throws(() => assertSystemBackupD1Schema(acceptance), /unknown or missing required table/u);
+  assert.throws(() => assertSystemBackupD1Schema(acceptance), /schema mismatch/u);
   assert.doesNotThrow(() => assertSystemBackupD1Schema(
     acceptance, ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA));
   assert.throws(() => assertSystemBackupD1Schema(
@@ -21,5 +21,5 @@ test("acceptance backup checks its transient D1 columns without relaxing Product
     ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA), /unknown or missing column/u);
   assert.throws(() => assertSystemBackupD1Schema(
     [...acceptance, { table_name: "md_unknown", column_name: "content" }],
-    ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA), /unknown or missing required table/u);
+    ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA), /schema mismatch/u);
 });

@@ -88,6 +88,20 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
         const recovery = createProduct();
         await recovery.worker.fetch(new Request(ACCEPTANCE_ORIGIN + "/api/v1/session"), environment, context);
         return recoverOrphanOAuth(environment.DB, principalId => recovery.runtime(environment.DB).purgeDeletedPrincipalOAuth(principalId));
+      }, async () => {
+        const result = await environment.DB.prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
+        ).all();
+        const tables = [];
+        for (const row of result.results ?? []) {
+          const name = row.name;
+          if (typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
+            return { invalid_table_name: true };
+          }
+          const columns = await environment.DB.prepare(`PRAGMA table_info("${name}")`).all();
+          tables.push({ name, columns: (columns.results ?? []).map((column) => column.name) });
+        }
+        return { tables };
       });
       if (sessionResponse) return sessionResponse;
       if (path.startsWith("/api/v1/internal/system-backup/")) {

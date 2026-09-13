@@ -11,6 +11,8 @@ test("acceptance controller can complete a synthetic backup without a Product ke
   const { fetch, controllerKey, bucket, db } = await acceptanceRuntime(t);
   const list = bucket.list.bind(bucket);
   bucket.list = async (options) => ({ ...await list(options), delimitedPrefixes: [] });
+  const probeUrl = `${ACCEPTANCE_ORIGIN}/_acceptance/backup-schema-probe`;
+  assert.equal((await fetch(probeUrl)).status, 401);
   const started = await fetch(`${ACCEPTANCE_ORIGIN}/_acceptance/runs`, {
     method: "POST", headers: { authorization: `Bearer ${controllerKey}`,
       "content-type": "application/json", "idempotency-key": `backup-test-${randomUUID()}` },
@@ -30,6 +32,13 @@ test("acceptance controller can complete a synthetic backup without a Product ke
   const created = await fetch(url, authorized);
   assert.equal(created.status, 201, JSON.stringify(await created.clone().json()));
   const descriptor = await created.json();
+  const probe = await fetch(probeUrl, {
+    headers: { authorization: `Bearer ${controllerKey}` },
+  });
+  assert.equal(probe.status, 200);
+  const schema = await probe.json();
+  assert.ok(schema.tables.some((table) => table.name === "md_backup_control" &&
+    table.columns.includes("backup_sequence")));
   assert.equal(descriptor.format, "MD-SYSTEM-BACKUP-1");
   assert.equal(descriptor.mode, "baseline");
   assert.ok(descriptor.page_count > 0);
