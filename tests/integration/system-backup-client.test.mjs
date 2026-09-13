@@ -3,6 +3,8 @@ import test from "node:test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
@@ -367,6 +369,58 @@ test("corrupt local metadata forces full reconciliation; corrupt object bytes ar
     } finally { catalog.close(); }
     await checkBackupIntegrity({ directory: f.directory });
   } finally { await f.close(); }
+});
+
+test("ENOSPC after a short part write preserves the old copy and resumes verified bytes", async () => {
+  const f = await fixture();
+  const originalOpen = fsPromises.open;
+  try {
+    await runBackup({ directory: f.directory, origin: ORIGIN, key: KEY, fetchImpl: f.fetch });
+    const value = snapshot(["principal_a"]);
+    const bytes = Buffer.alloc(4 * 1024 * 1024 + 37, 42);
+    const hash = await systemBackupSha256(bytes);
+    await attachRevision(value, f.bucket, bytes);
+    f.setSnapshot(value);
+    f.advance();
+    let shortWrite = false;
+    fsPromises.open = async (...args) => {
+      const handle = await originalOpen(...args);
+      if (String(args[0]).endsWith(`${hash.slice(7)}.partial`)) {
+        const write = handle.write.bind(handle);
+        handle.write = async (buffer, offset, length, position) => {
+          if (position >= 4 * 1024 * 1024) {
+            if (shortWrite) throw Object.assign(new Error("synthetic disk full"), { code: "ENOSPC" });
+            shortWrite = true;
+            return write(buffer, offset, 7, position);
+          }
+          return write(buffer, offset, length, position);
+        };
+      }
+      return handle;
+    };
+    syncBuiltinESMExports();
+    await assert.rejects(runBackup({ directory: f.directory, origin: ORIGIN,
+      key: KEY, fetchImpl: f.fetch }), { code: "ENOSPC" });
+    fsPromises.open = originalOpen;
+    syncBuiltinESMExports();
+    assert.equal(shortWrite, true);
+    assert.equal((await checkBackupIntegrity({ directory: f.directory })).sequence, 0);
+    assert.equal((await fsPromises.stat(join(f.directory, "staging",
+      `${hash.slice(7)}.partial`))).size, 4 * 1024 * 1024 + 7);
+    const offsets = [];
+    const recovered = await runBackup({ directory: f.directory, origin: ORIGIN, key: KEY,
+      fetchImpl: (url, init) => {
+        if (new URL(url).pathname.includes("/objects/")) offsets.push(Number(new URL(url).searchParams.get("offset")));
+        return f.fetch(url, init);
+      } });
+    assert.equal(recovered.last_success.sequence, 1);
+    assert.ok(offsets.includes(4 * 1024 * 1024));
+    assert.equal((await checkBackupIntegrity({ directory: f.directory })).sequence, 1);
+  } finally {
+    fsPromises.open = originalOpen;
+    syncBuiltinESMExports();
+    await f.close();
+  }
 });
 
 test("SIGKILL after a durable object part preserves the old checkpoint and resumes the range", async () => {
