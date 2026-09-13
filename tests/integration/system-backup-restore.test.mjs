@@ -15,7 +15,7 @@ import { SitesSystemBackupService } from
   "../../packages/composition-root/dist/system-backup-sites.js";
 import { createSystemBackupHttpHandler } from
   "../../packages/composition-root/dist/system-backup-http.js";
-import { backupObjectPath, runBackup } from
+import { backupObjectPath, backupStatus, openBackupCatalog, runBackup } from
   "../../scripts/lib/system-backup-client.mjs";
 import { createRecoveryKit, recoveryKitPath, verifyRecoveryKit } from
   "../../scripts/lib/system-backup-kit.mjs";
@@ -159,7 +159,7 @@ async function fixture() {
   const handler = createSystemBackupHttpHandler({ service,
     operatorKey: KEY_BYTES, publicOrigin: ORIGIN });
   const directory = await mkdtemp(join(tmpdir(), "mind-diary-restore-"));
-  return { directory, database, current, old, p1,
+  return { directory, database, bucket, value, current, old, p1,
     fetch: (url, init) => handler(new Request(url, init)),
     async close() { database.close(); await rm(directory,
       { recursive: true, force: true }); } };
@@ -240,6 +240,130 @@ test("offline kit restores all Minds, exact history and bytes with a new loopbac
   } finally { await f.close(); }
 });
 
+test("one source-bound delta resumes a large file and restores the new HEAD with old history offline", async (context) => {
+  const f = await fixture();
+  try {
+    const drillStarted = performance.now();
+    let schemaDigest;
+    const kitStage = async (stage, details) => {
+      if (stage === "after_receipt_before_catalog") {
+        schemaDigest = details.schemaDigest;
+        await createRecoveryKit({ directory: f.directory, schemaDigest,
+          sourceRoot: ROOT, allowDirty: true });
+      }
+    };
+    const initial = await runBackup({ directory: f.directory, origin: ORIGIN,
+      key: KEY, fetchImpl: f.fetch, onStage: kitStage });
+    assert.equal(initial.last_success.sequence, 0);
+    assert.equal(initial.last_success.object_count, 9);
+    const large = await attachRevision(f.value, f.bucket, {
+      id: "r_shared_3", spaceId: "s_shared", parent: "r_shared_2",
+      number: 3, markdown: `# New HEAD needle\n${"x".repeat(4 * 1024 * 1024)}`,
+    });
+    f.value.spaces.get("s_shared").head = "r_shared_3";
+    f.value.knowledgeSpaces.get("s_shared").headRevisionId = "r_shared_3";
+    f.value.knowledgeSpaces.get("s_shared").metadataVersion += 1;
+    f.database.sqlite.exec(`UPDATE md_backup_control
+      SET backup_sequence=backup_sequence+1`);
+    let interrupted = false;
+    const requested = [];
+    const fetchImpl = async (url, init) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.includes("/objects/")) {
+        const index = Number(parsed.pathname.split("/").at(-1));
+        const offset = Number(parsed.searchParams.get("offset"));
+        if (!interrupted && offset === 4 * 1024 * 1024) {
+          interrupted = true;
+          throw new Error("synthetic network loss");
+        }
+        const response = await f.fetch(url, init);
+        const range = /^bytes (\d+)-(\d+)\/\d+$/u.exec(
+          response.headers.get("content-range") ?? "");
+        assert.ok(range);
+        requested.push({ index, offset,
+          bytes: Number(range[2]) - Number(range[1]) + 1 });
+        return response;
+      }
+      return f.fetch(url, init);
+    };
+    await assert.rejects(runBackup({ directory: f.directory, origin: ORIGIN,
+      key: KEY, fetchImpl, onStage: kitStage }), /transport_unavailable/u);
+    assert.equal(interrupted, true);
+    let catalog = await openBackupCatalog(f.directory);
+    try {
+      assert.equal(backupStatus(catalog.db).last_success.sequence, 0);
+      assert.equal(backupStatus(catalog.db).pending.phase, "downloading");
+    } finally { catalog.close(); }
+    const updated = await runBackup({ directory: f.directory,
+      origin: ORIGIN, key: KEY, fetchImpl, onStage: kitStage });
+    assert.equal(updated.last_success.sequence, 1);
+    assert.equal(updated.last_success.object_count, 11);
+    assert.equal(updated.downloaded_objects <= 2, true);
+    assert.equal(Math.max(...requested.map((part) => part.bytes)),
+      4 * 1024 * 1024);
+    assert.equal(requested.filter((part) =>
+      part.bytes === 4 * 1024 * 1024).length, 1);
+    catalog = await openBackupCatalog(f.directory);
+    try {
+      const inventory = catalog.db.prepare(`SELECT object_index, sha256
+        FROM backup_inventory`).all();
+      const hashes = new Map(inventory.map((row) =>
+        [row.object_index, row.sha256]));
+      assert.equal(requested.length >= 3, true);
+      assert.equal(requested.every((part) => [large.markdownHash,
+        large.manifestHash].includes(hashes.get(part.index))), true);
+    } finally { catalog.close(); }
+    const noChange = await runBackup({ directory: f.directory,
+      origin: ORIGIN, key: KEY, fetchImpl: f.fetch, onStage: kitStage });
+    assert.equal(noChange.downloaded_objects, 0);
+    const kit = await verifyRecoveryKit(f.directory, schemaDigest);
+    const target = join(f.directory, "delta-restored");
+    const restored = spawnSync(join(kit.path, "runtime/node"),
+      [join(kit.path, "scripts/system-backup-restore.mjs"), "restore",
+        "--directory", f.directory, "--target", target], {
+        env: { ...process.env, NODE_OPTIONS: `--import=${NETWORK_BLOCK}` },
+        encoding: "utf8" });
+    assert.equal(restored.status, 0, restored.stderr);
+    const receipt = JSON.parse(restored.stdout);
+    assert.equal(receipt.mind_count, 3);
+    assert.equal(receipt.revision_count, 5);
+    assert.equal(receipt.file_count, 6);
+    assert.equal(receipt.object_count, 11);
+    const viewer = await startRestoredViewer({ target });
+    try {
+      const key = await readFile(join(target, "operator-key"), "utf8");
+      const get = (path) => fetch(`${viewer.url}${path}`,
+        { headers: { authorization: `Bearer ${key}` } });
+      const minds = await (await get("/minds")).json();
+      assert.equal(minds.minds.find((item) => item.space_id === "s_shared")
+        .head_revision_id, "r_shared_3");
+      const history = await (await get("/minds/s_shared/revisions")).json();
+      assert.deepEqual(history.revisions.map((item) => item.revision_id),
+        ["r_shared_1", "r_shared_2", "r_shared_3"]);
+      const oldBinary = Buffer.from(await (await get(
+        "/minds/s_shared/revisions/r_shared_2/files/0")).arrayBuffer());
+      assert.deepEqual(oldBinary, Buffer.from([0, 1, 2, 255]));
+      const newBytes = Buffer.from(await (await get(
+        "/minds/s_shared/revisions/r_shared_3/files/0")).arrayBuffer());
+      assert.equal(await systemBackupSha256(newBytes), large.markdownHash);
+    } finally { await viewer.close(); }
+    const sha = spawnSync("git", ["-C", ROOT, "rev-parse", "HEAD"],
+      { encoding: "utf8" }).stdout.trim();
+    context.diagnostic(JSON.stringify({ candidate_sha: sha,
+      format: "MD-SYSTEM-BACKUP-1", minds: receipt.mind_count,
+      revisions: receipt.revision_count, files: receipt.file_count,
+      objects: receipt.object_count, sequence: updated.last_success.sequence,
+      transferred_object_parts: requested.length,
+      transferred_object_bytes: requested.reduce((sum, part) =>
+        sum + part.bytes, 0),
+      largest_object_part_bytes: Math.max(...requested.map((part) =>
+        part.bytes)),
+      observed_peak_rss_bytes: updated.observed_peak_rss_bytes,
+      duration_ms: Math.round(performance.now() - drillStarted),
+      offline_restore: true }));
+  } finally { await f.close(); }
+});
+
 test("corrupt object or kit is rejected before creating a new restore target", async () => {
   const f = await fixture();
   try {
@@ -258,6 +382,17 @@ test("corrupt object or kit is rejected before creating a new restore target", a
     await assert.rejects(restoreBackup({ directory: f.directory, target,
       verifyKit: () => verifyRecoveryKit(f.directory, schemaDigest) }),
     /kit_file_corrupt/u);
+    await assert.rejects(stat(target), { code: "ENOENT" });
+    await rm(kit, { recursive: true });
+    await createRecoveryKit({ directory: f.directory, schemaDigest,
+      sourceRoot: ROOT, allowDirty: true });
+    const manifestPath = join(kit, "kit.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    await writeFile(manifestPath, JSON.stringify({ ...manifest,
+      platform: "incompatible" }));
+    await assert.rejects(restoreBackup({ directory: f.directory, target,
+      verifyKit: () => verifyRecoveryKit(f.directory, schemaDigest) }),
+    /kit_incompatible/u);
     await assert.rejects(stat(target), { code: "ENOENT" });
     await rm(kit, { recursive: true });
     await createRecoveryKit({ directory: f.directory, schemaDigest,

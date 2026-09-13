@@ -117,11 +117,19 @@ export async function startRestoredViewer({ target, port = 0 }) {
         if (query.length < 1 || query.length > 256) {
           json(response, 400, { error: "invalid_query" }); return;
         }
-        const phrase = `"${query.replaceAll('"', '""')}"`;
-        const matches = db.prepare(`SELECT s.space_id, s.revision_id, s.file_index,
-          f.path FROM restore_search s JOIN restore_files f
-          ON f.revision_id=s.revision_id AND f.file_index=s.file_index
-          WHERE restore_search MATCH ? LIMIT 100`).all(phrase);
+        const simple = /^[\p{L}\p{N}]{1,128}$/u.test(query);
+        const matches = simple
+          ? db.prepare(`SELECT s.space_id, s.revision_id, s.file_index,
+              f.path FROM restore_terms t JOIN restore_search s
+              ON s.revision_id=t.revision_id AND s.file_index=t.file_index
+              JOIN restore_files f ON f.revision_id=s.revision_id AND
+              f.file_index=s.file_index WHERE t.token=? LIMIT 100`)
+            .all(query.toLowerCase())
+          : db.prepare(`SELECT s.space_id, s.revision_id, s.file_index,
+              f.path FROM restore_search s JOIN restore_files f
+              ON f.revision_id=s.revision_id AND f.file_index=s.file_index
+              WHERE instr(lower(s.content), lower(?)) > 0 LIMIT 100`)
+            .all(query);
         json(response, 200, { matches });
         return;
       }

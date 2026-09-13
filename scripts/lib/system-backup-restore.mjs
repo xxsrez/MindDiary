@@ -388,10 +388,18 @@ function setupTarget(db) {
     CREATE TABLE restore_object_references (
       sha256 TEXT PRIMARY KEY, reference_count INTEGER NOT NULL
     );
-    CREATE VIRTUAL TABLE restore_search USING fts5(
-      space_id UNINDEXED, revision_id UNINDEXED,
-      file_index UNINDEXED, content
+    CREATE TABLE restore_search (
+      space_id TEXT NOT NULL, revision_id TEXT NOT NULL,
+      file_index INTEGER NOT NULL, content TEXT NOT NULL,
+      PRIMARY KEY(revision_id, file_index)
     );
+    CREATE TABLE restore_terms (
+      token TEXT NOT NULL, revision_id TEXT NOT NULL,
+      file_index INTEGER NOT NULL,
+      PRIMARY KEY(token, revision_id, file_index)
+    );
+    CREATE INDEX restore_terms_by_file ON restore_terms
+      (revision_id, file_index);
     CREATE INDEX restore_revisions_by_space ON restore_revisions
       (space_id, revision_number);
     CREATE INDEX restore_files_by_sha ON restore_files (sha256);
@@ -498,6 +506,8 @@ async function rebuildSearch(stage) {
       ORDER BY f.revision_id, f.file_index LIMIT 1`);
     const insert = db.prepare(`INSERT INTO restore_search
       (space_id, revision_id, file_index, content) VALUES (?, ?, ?, ?)`);
+    const insertTerm = db.prepare(`INSERT INTO restore_terms
+      (token, revision_id, file_index) VALUES (?, ?, ?)`);
     let revisionId = "";
     let fileIndex = -1;
     db.exec("BEGIN IMMEDIATE");
@@ -509,6 +519,13 @@ async function rebuildSearch(stage) {
         try { content = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
         catch { fail("restore_invalid_markdown_utf8"); }
         insert.run(row.space_id, row.revision_id, row.file_index, content);
+        const tokens = new Set();
+        for (const match of content.toLowerCase().matchAll(/[\p{L}\p{N}]+/gu)) {
+          if (match[0].length <= 128) tokens.add(match[0]);
+        }
+        for (const token of tokens) {
+          insertTerm.run(token, row.revision_id, row.file_index);
+        }
         revisionId = row.revision_id;
         fileIndex = row.file_index;
       }

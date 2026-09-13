@@ -150,6 +150,7 @@ export async function runScheduledBackup({ configFile,
   let result;
   let failure = null;
   let attempts = 0;
+  const runSignal = AbortSignal.timeout(4 * 60 * 60 * 1000);
   try {
     const key = await keyProvider(config);
     required(/^mdb_v1_[A-Za-z0-9_-]{43}$/u.test(key),
@@ -158,7 +159,7 @@ export async function runScheduledBackup({ configFile,
       try {
         result = await runImpl({ directory: config.directory,
           origin: config.origin, key,
-          signal: AbortSignal.timeout(4 * 60 * 60 * 1000),
+          signal: runSignal,
           onStage: async (stage, details) => {
             if (stage === "after_receipt_before_catalog") {
               await kitCreator({ directory: config.directory,
