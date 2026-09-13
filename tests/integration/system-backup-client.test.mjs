@@ -369,6 +369,130 @@ test("corrupt local metadata forces full reconciliation; corrupt object bytes ar
   } finally { await f.close(); }
 });
 
+test("SIGKILL after a durable object part preserves the old checkpoint and resumes the range", async () => {
+  const f = await fixture();
+  let server;
+  let running;
+  try {
+    const original = snapshot(["principal_a"]);
+    await attachRevision(original, f.bucket, Buffer.from("original"));
+    f.setSnapshot(original);
+    const baseline = await runBackup({ directory: f.directory,
+      origin: ORIGIN, key: KEY, fetchImpl: f.fetch });
+    assert.equal(baseline.last_success.sequence, 0);
+
+    const changed = snapshot(["principal_a", "principal_b"]);
+    await attachRevision(changed, f.bucket,
+      Buffer.alloc(4 * 1024 * 1024 + 37, 42));
+    f.setSnapshot(changed);
+    f.advance();
+
+    let origin;
+    let killedObjectIndex;
+    let restarting = false;
+    const resumedOffsets = [];
+    server = createServer(async (incoming, outgoing) => {
+      try {
+        const url = new URL(incoming.url, origin);
+        if (url.pathname.includes("/objects/")) {
+          const objectIndex = url.pathname.split("/").at(-1);
+          const offset = Number(url.searchParams.get("offset"));
+          if (!restarting && offset === 4 * 1024 * 1024 &&
+            killedObjectIndex === undefined) {
+            killedObjectIndex = objectIndex;
+            process.kill(-running.pid, "SIGKILL");
+            outgoing.destroy();
+            return;
+          }
+          if (restarting && objectIndex === killedObjectIndex) {
+            resumedOffsets.push(offset);
+          }
+        }
+        const chunks = [];
+        for await (const chunk of incoming) chunks.push(chunk);
+        const headers = new Headers();
+        for (const [key, value] of Object.entries(incoming.headers)) {
+          if (value !== undefined) headers.set(key,
+            Array.isArray(value) ? value.join(", ") : value);
+        }
+        const request = new Request(origin + incoming.url, {
+          method: incoming.method, headers,
+          ...(["GET", "HEAD"].includes(incoming.method) ? {} : {
+            body: Buffer.concat(chunks),
+          }),
+        });
+        const handler = createSystemBackupHttpHandler({ service: f.service,
+          operatorKey: KEY_BYTES, publicOrigin: origin });
+        const response = await handler(request);
+        outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+        outgoing.end(Buffer.from(await response.arrayBuffer()));
+      } catch { outgoing.writeHead(503); outgoing.end(); }
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    origin = `http://127.0.0.1:${server.address().port}`;
+
+    const childSource = `import { runBackup } from ${JSON.stringify(
+      new URL("../../scripts/lib/system-backup-client.mjs", import.meta.url).href)};
+      const result = await runBackup({ directory: process.env.MD_TEST_DIRECTORY,
+        origin: process.env.MD_TEST_ORIGIN, key: process.env.MD_TEST_KEY });
+      process.stdout.write(JSON.stringify({ sequence: result.last_success.sequence }));`;
+    const launch = async () => {
+      running = spawn(process.execPath, ["--input-type=module", "-e", childSource], {
+        detached: true, stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, MD_TEST_DIRECTORY: f.directory,
+          MD_TEST_ORIGIN: origin, MD_TEST_KEY: KEY },
+      });
+      let stdout = "";
+      let stderr = "";
+      running.stdout.on("data", (part) => { stdout += part; });
+      running.stderr.on("data", (part) => { stderr += part; });
+      const child = running;
+      const timeout = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          process.kill(-child.pid, "SIGKILL");
+        }
+      }, 30_000);
+      try {
+        const { code, signal } = await new Promise((resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", (exitCode, exitSignal) =>
+            resolve({ code: exitCode, signal: exitSignal }));
+        });
+        return { code, signal, stdout, stderr };
+      } finally { clearTimeout(timeout); }
+    };
+    const killed = await launch();
+    assert.equal(killed.signal, "SIGKILL", killed.stderr);
+    assert.ok(killedObjectIndex !== undefined);
+    let catalog = await openBackupCatalog(f.directory);
+    try {
+      assert.equal(backupStatus(catalog.db).last_success.sequence, 0);
+      assert.equal(backupStatus(catalog.db).pending.phase, "downloading");
+    } finally { catalog.close(); }
+
+    restarting = true;
+    const recovered = await launch();
+    assert.equal(recovered.code, 0, recovered.stderr);
+    assert.equal(JSON.parse(recovered.stdout).sequence, 1);
+    assert.ok(resumedOffsets.includes(4 * 1024 * 1024));
+    assert.equal(resumedOffsets.includes(0), false);
+    assert.equal((await checkBackupIntegrity({ directory: f.directory })).sequence,
+      1);
+    catalog = await openBackupCatalog(f.directory);
+    try { assert.equal(backupStatus(catalog.db).pending, null); }
+    finally { catalog.close(); }
+  } finally {
+    if (running && running.exitCode === null && running.signalCode === null) {
+      process.kill(-running.pid, "SIGKILL");
+    }
+    if (server) {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+    await f.close();
+  }
+});
+
 test("a separate Mac runner process keeps observed memory bounded across larger objects", async (t) => {
   const f = await fixture();
   let server;
