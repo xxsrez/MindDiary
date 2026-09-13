@@ -20,6 +20,12 @@ import { createSystemBackupHttpHandler } from "../../packages/composition-root/d
 
 class SqliteD1 extends TestSqliteD1 {
   get database() { return this.sqlite; }
+  prepare(sql) {
+    if (/pragma_table_info\s*\(/iu.test(sql)) {
+      throw new Error("D1_ERROR: not authorized: SQLITE_AUTH");
+    }
+    return super.prepare(sql);
+  }
 }
 
 class SyntheticR2 {

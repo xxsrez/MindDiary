@@ -223,16 +223,24 @@ export class SitesSystemBackupService {
   }
 
   async #validateRuntimeInventory(): Promise<string> {
-    const schema = await this.#database.prepare(
-      `/*md-backup-schema-inventory*/ SELECT m.name AS table_name,
-       p.name AS column_name FROM sqlite_schema AS m
-       JOIN pragma_table_info(m.name) AS p
-       WHERE m.type = 'table'
-       ORDER BY m.name, p.cid`,
-    ).all<{ table_name: string; column_name: string }>();
-    const applicationSchema = (schema.results ?? []).filter((row) =>
-      !row.table_name.startsWith("sqlite_") &&
-      row.table_name !== "_cf_KV" && row.table_name !== "d1_migrations");
+    const tables = await this.#database.prepare(
+      `/*md-backup-schema-tables*/ SELECT name AS table_name
+       FROM sqlite_schema WHERE type = 'table' ORDER BY name`,
+    ).all<{ table_name: string }>();
+    const applicationSchema: { table_name: string; column_name: string }[] = [];
+    for (const { table_name } of tables.results ?? []) {
+      if (table_name.startsWith("sqlite_") || table_name === "_cf_KV" ||
+        table_name === "d1_migrations") continue;
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(table_name)) {
+        throw new TypeError("system backup D1 schema contains an unknown table");
+      }
+      const columns = await this.#database.prepare(
+        `/*md-backup-schema-columns*/ PRAGMA table_info("${table_name}")`,
+      ).all<{ name: string }>();
+      for (const column of columns.results ?? []) {
+        applicationSchema.push({ table_name, column_name: column.name });
+      }
+    }
     assertSystemBackupD1Schema(applicationSchema, this.#runtimeExtraD1Schema);
     let cursor: string | undefined;
     do {
