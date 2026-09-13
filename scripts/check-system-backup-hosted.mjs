@@ -57,6 +57,7 @@ let deltaBackup;
 let noChangeBackup;
 let populated;
 let cleanup;
+let primaryFailure;
 try {
   await client.setup({ profile: "operator" });
   fixture = await createCollaborationFixture(client);
@@ -87,9 +88,19 @@ try {
   noChangeBackup = await run();
   assert.equal(noChangeBackup.downloaded_objects, 0);
   assert.equal(noChangeBackup.pending, null);
+} catch (error) {
+  primaryFailure = error;
 } finally {
-  if (client.state.run) cleanup = await client.cleanup();
+  if (client.state.run) {
+    try { cleanup = await client.cleanup(); }
+    catch (error) {
+      if (primaryFailure) throw new AggregateError([primaryFailure, error],
+        "hosted_backup_and_cleanup_failed");
+      throw error;
+    }
+  }
 }
+if (primaryFailure) throw primaryFailure;
 assert.equal(cleanup?.state, "cleaned");
 const final = await client.control("/_acceptance/inventory");
 assert.equal(final.complete, true);
