@@ -90,6 +90,10 @@ try {
   assert.equal(noChangeBackup.pending, null);
 } catch (error) {
   primaryFailure = error;
+  if (process.env.MD_ACCEPTANCE_DIAGNOSTIC_PAUSE === "1") {
+    console.error("hosted_backup_failed_diagnostic_pause");
+    await new Promise((resolve) => setTimeout(resolve, 30_000));
+  }
 } finally {
   if (client.state.run) {
     try { cleanup = await client.cleanup(); }
