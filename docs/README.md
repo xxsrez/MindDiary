@@ -116,7 +116,8 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 29. [Инкрементальный системный бэкап](specs/incremental-system-backup.md)
     — контракт MD-444 для полной локальной копии, классификация durable state,
     фиксированные дельты и offline recovery; серверный UAT adapter опубликован,
-    но передача всех Minds и восстановление ещё не подтверждены.
+    но передача пользовательских Minds ещё не подтверждена; offline restore
+    проверен на синтетических данных.
 
 ## Руководства
 
@@ -127,8 +128,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 ## Операции
 
 - [Локальная копия Mind Diary на Mac](operations/system-backup-local.md) —
-  ручной CLI MD-446, порядок fsync/commit, status, integrity, GC и граница
-  ещё не проведённого hosted/offline приёма.
+  ручной CLI MD-446, offline restore MD-447, runner MD-448 и порядок
+  fsync/commit, status, integrity, GC; hosted передача и расписание ожидают
+  отдельной проверки.
 - [Runbook `ship-work-release`](operations/ship-work-release.md) —
   универсальный UX в Codex Desktop: status, «дойти до точки с запятой»,
   batch/UAT pause, resume, cohort upgrade, task-manager projection, recovery и
@@ -355,6 +357,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 - [ChatGPT: приоритет Mind Diary и очистка экспериментов](reports/2026-09-11-chatgpt-guide-and-cleanup.md) — два обычных Chat, read-only evidence и UAT153.
 - [Multi-Mind: живая приёмка ChatGPT](reports/2026-09-11-multi-mind-chatgpt-acceptance.md) — автоматический выбор, no-op, explicit-only и отдельное ограничение host approval.
 - [Mind Diary без служебных отчётов](reports/2026-09-12-quiet-mind-diary.md) — инструкции аккаунта, MCP metadata, UAT159 и границы проверки ответов.
+- [Системный бэкап: локальное испытание, 2026-09-13](reports/2026-09-13-system-backup-drill.md)
+  — одна синтетическая дельта, прерывание и повтор, offline restore всех Minds,
+  измерения и граница ещё не проведённой hosted/ежедневной приёмки.
 
 ## Статусы и проверяемые claims
 
