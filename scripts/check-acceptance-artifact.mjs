@@ -32,6 +32,7 @@ for (const input of manifest.inputs) {
 }
 const group = (predicate) => hash(JSON.stringify(manifest.inputs.filter(({ path }) => predicate(path))));
 assert.equal(manifest.common_modules_sha256, group((p) => p.startsWith("packages/") || p.startsWith("apps/mind-diary-site/worker/")));
+assert.equal(manifest.backup_transport_sha256, hash(await readFile(resolve(root, "packages/composition-root/src/system-backup-sites.ts"))));
 assert.equal(manifest.test_adapter_sha256, group((p) => p.startsWith("apps/mind-diary-acceptance/")));
 assert.equal(manifest.dependencies_sha256, group((p) => p.includes("node_modules/")));
 console.log(JSON.stringify({ status: "passed", candidate_sha: manifest.candidate_sha, server_sha256: manifest.server_sha256, checked_inputs: paths.length }));

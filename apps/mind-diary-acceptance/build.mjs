@@ -26,6 +26,7 @@ const identity = {
   candidate_sha: candidate,
   dirty,
   common_modules_sha256: group((p) => p.startsWith("packages/") || p.startsWith("apps/mind-diary-site/worker/")),
+  backup_transport_sha256: hash(await readFile(resolve(root, "packages/composition-root/src/system-backup-sites.ts"))),
   test_adapter_sha256: group((p) => p.startsWith("apps/mind-diary-acceptance/")),
   dependencies_sha256: group((p) => p.includes("node_modules/")),
   lock_sha256: hash(await readFile(resolve(root, "package-lock.json"))),
