@@ -694,8 +694,13 @@ async function verifyStaged(db, directory, descriptor) {
     exact(sha(Buffer.from(page.payload_json, "utf8")), page.sha256,
       "page_digest_mismatch");
   }
-  for (const row of db.prepare(`SELECT sha256, byte_size
-      FROM backup_pending_inventory ORDER BY object_index`).iterate()) {
+  const nextObject = db.prepare(`SELECT object_index, sha256, byte_size
+      FROM backup_pending_inventory WHERE object_index > ?
+      ORDER BY object_index LIMIT 1`);
+  let objectIndex = -1;
+  for (let row = nextObject.get(objectIndex); row;
+    row = nextObject.get(objectIndex)) {
+    objectIndex = row.object_index;
     if (!(await existingVerified(backupObjectPath(directory, row.sha256),
       row.sha256, row.byte_size))) fail("object_closure_incomplete");
   }
@@ -748,7 +753,10 @@ export async function runBackup({ directory, origin, key, fetchImpl = fetch,
         if (!receipt || !sameJson(receipt.checkpoint, descriptor.target_checkpoint) ||
           receipt.manifest_digest !== descriptor.manifest_digest ||
           typeof receipt.completed_at !== "string") fail("invalid_receipt");
-        await onStage("after_receipt_before_catalog");
+        await onStage("after_receipt_before_catalog", {
+          schemaDigest: descriptor.schema_digest,
+          checkpoint: descriptor.target_checkpoint,
+        });
         applyVerifiedPages(db, descriptor, receipt, onStage);
         sample();
         return { ...backupStatus(db), downloaded_objects: downloaded,
@@ -783,11 +791,15 @@ export async function checkBackupIntegrity({ directory }) {
     verifyCatalogMetadata(catalog.db, state);
     const root = rootDigest(catalog.db);
     let objects = 0;
-    for (const item of catalog.db.prepare(`SELECT * FROM backup_inventory
-        ORDER BY object_index`).iterate()) {
+    const nextObject = catalog.db.prepare(`SELECT * FROM backup_inventory
+        WHERE object_index > ? ORDER BY object_index LIMIT 1`);
+    let objectIndex = -1;
+    for (let item = nextObject.get(objectIndex); item;
+      item = nextObject.get(objectIndex)) {
       exact(item.object_index, objects, "inventory_count_mismatch");
       if (!(await existingVerified(backupObjectPath(directory, item.sha256),
         item.sha256, item.byte_size))) fail("object_closure_incomplete");
+      objectIndex = item.object_index;
       objects += 1;
     }
     exact(objects, state.object_count, "inventory_count_mismatch");

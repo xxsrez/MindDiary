@@ -11,6 +11,7 @@ import {
   openBackupCatalog,
   runBackup,
 } from "./lib/system-backup-client.mjs";
+import { createRecoveryKit, verifyRecoveryKit } from "./lib/system-backup-kit.mjs";
 
 function argumentsFrom(argv) {
   const [command, flag, directory] = argv;
@@ -44,9 +45,23 @@ async function main() {
   if (command === "run") {
     result = await runBackup({ directory,
       origin: process.env.MIND_DIARY_BACKUP_ORIGIN,
-      key: process.env.MIND_DIARY_BACKUP_OPERATOR_KEY });
+      key: process.env.MIND_DIARY_BACKUP_OPERATOR_KEY,
+      onStage: async (stage, details) => {
+        if (stage === "after_receipt_before_catalog") {
+          await createRecoveryKit({ directory,
+            schemaDigest: details.schemaDigest });
+        }
+      } });
   } else if (command === "integrity") {
     result = await checkBackupIntegrity({ directory });
+    const catalog = await openBackupCatalog(directory);
+    try {
+      const state = catalog.db.prepare(`SELECT checkpoint_json FROM backup_state
+        WHERE singleton=1`).get();
+      await verifyRecoveryKit(directory,
+        JSON.parse(state.checkpoint_json).schema_digest);
+      result.kit = "verified";
+    } finally { catalog.close(); }
   } else if (command === "gc") {
     result = await collectBackupGarbage({ directory });
   } else {

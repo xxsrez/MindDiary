@@ -2,9 +2,9 @@
 
 Статус: выбранный инженерный контракт MD-444 для MD-443–MD-449, 2026-09-13.
 MD-445 содержит опубликованную в UAT серверную реализацию выдачи, но hosted
-transport с operator key пока не подтверждён. Ручной локальный CLI MD-446
-реализован в repository; расписание, установка и offline restore ещё не
-реализованы. Контракт не меняет обычный
+transport с operator key пока не подтверждён. Ручной локальный CLI MD-446 и
+offline restore MD-447 реализованы в repository и проверены синтетически;
+расписание и установка MD-448 ещё не выполнены. Контракт не меняет обычный
 пользовательский export и не даёт content MCP административных прав.
 
 ## Цель и граница
@@ -213,7 +213,9 @@ MD-445 проверяет fixed-target pages/parts, update/delete/GC races, expi
 generation mismatch, repeat и synthetic UAT transport. MD-446 доказывает
 delta-only transfer, bounded memory, fsync/transaction ordering и fault
 injection. MD-447 поднимает чистый локальный target без Site/network и сверяет
-все fixture Minds/revisions/bytes. MD-448 подтверждает реальный macOS runner,
+все fixture Minds/revisions/bytes: repository test использует три Minds,
+четыре ревизии и opaque bytes; отдельный kit содержит Node runtime, Git archive
+точного SHA с lockfile/миграциями и автономный CLI. MD-448 подтверждает реальный macOS runner,
 catch-up и last-success status. MD-449 соединяет эти доказательства в один
 source-bound drill. До этих receipts данный контракт не является обещанием
 работающего бэкапа.
