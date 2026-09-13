@@ -90,6 +90,8 @@ try {
   assert.equal(noChangeBackup.pending, null);
 } catch (error) {
   primaryFailure = error;
+  console.error(JSON.stringify({ event: "hosted_backup_failed",
+    code: error?.code ?? error?.productError?.code ?? "unknown" }));
   if (process.env.MD_ACCEPTANCE_DIAGNOSTIC_PAUSE === "1") {
     console.error("hosted_backup_failed_diagnostic_pause");
     await new Promise((resolve) => setTimeout(resolve, 30_000));
