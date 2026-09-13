@@ -1,7 +1,8 @@
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
+import { acceptanceInventory } from "./inventory.mjs";
 
-export async function cleanupRun(store, runId, productCall, resumeDeletion, fault = async () => {}, maxActors = 1) {
+export async function cleanupRun(store, runId, productCall, resumeDeletion, fault = async () => {}, maxActors = 1, bucket = null) {
   await store.ready();
   await new AcceptanceTelemetryJournal(store.db, null).ready();
   await store.db.batch([
@@ -90,13 +91,29 @@ export async function cleanupRun(store, runId, productCall, resumeDeletion, faul
         if (backupTables.some((table) => !names.has(table))) throw new Error("backup_cleanup_schema_incomplete");
         const active = await store.statement("SELECT COUNT(*) AS count FROM md_backup_sessions WHERE status IN ('building', 'ready')").first();
         const operations = await store.statement("SELECT COUNT(*) AS count FROM md_backup_cleanup_ops").first();
-        if (active.count !== 0 || operations.count !== 0) throw new Error("backup_cleanup_active");
-        backupCleanup = [
+        if (active.count !== 0) throw new Error("backup_cleanup_active");
+        if (operations.count > 0) {
+          if (bucket === null || operations.count > 16) throw new Error("backup_cleanup_unreconciled");
+          const rows = await store.statement("SELECT started_at FROM md_backup_cleanup_ops").all();
+          if (rows.results.length !== operations.count || rows.results.some(({ started_at }) =>
+            !Number.isFinite(Date.parse(started_at)) ||
+            store.now() - Date.parse(started_at) < 300_000)) {
+            throw new Error("backup_cleanup_still_uncertain");
+          }
+          const inventory = await acceptanceInventory({ DB: store.db, MIND_DIARY_BUCKET: bucket });
+          if (!inventory.complete || inventory.principals !== 0 ||
+            inventory.owned_minds !== 0 || inventory.object_count !== 0 ||
+            inventory.object_bytes !== 0) {
+            throw new Error("backup_cleanup_unreconciled");
+          }
+          backupCleanup.push(store.db.prepare("DELETE FROM md_backup_cleanup_ops"));
+        }
+        backupCleanup.push(
           store.db.prepare("DELETE FROM md_backup_pages"),
           store.db.prepare("DELETE FROM md_backup_record_digests"),
           store.db.prepare("DELETE FROM md_backup_inventory"),
           store.db.prepare("DELETE FROM md_backup_sessions"),
-        ];
+        );
       }
     }
     const receipt = { run_id: runId, state: "cleaned", actors_cleaned: run.actors.length, results };

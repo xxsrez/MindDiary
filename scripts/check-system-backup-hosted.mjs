@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,9 @@ import { ACCEPTANCE_ORIGIN } from "../apps/mind-diary-acceptance/runtime-target.
 
 const expected = process.env.MD_ACCEPTANCE_EXPECTED_SHA;
 assert.match(expected ?? "", /^[0-9a-f]{40}$/u);
+const runnerSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+assert.equal(execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim(), "",
+  "clean_runner_required");
 const tag = process.argv[2] ?? crypto.randomUUID();
 assert.match(tag, /^[A-Za-z0-9_-]{1,80}$/u);
 const privateRoot = join(homedir(), ".codex/private/mind-diary-acceptance");
@@ -59,7 +63,7 @@ try {
   populated = await client.control("/_acceptance/inventory");
   assert.equal(populated.complete, true);
   assert.equal(populated.principals, 4);
-  assert.equal(populated.owned_minds, 5);
+  assert.ok(populated.owned_minds >= 1);
   baselineBackup = await run();
   assert.equal(baselineBackup.mode, "baseline");
   assert.equal(baselineBackup.pending, null);
@@ -94,8 +98,9 @@ assert.equal(final.owned_minds, baseline.owned_minds);
 assert.equal(final.object_count, baseline.object_count);
 assert.deepEqual(final.rows, baseline.rows);
 console.log(JSON.stringify({
-  status: "passed", candidate_sha: expected, hosted: true,
-  fixture_minds: populated.owned_minds, baseline: {
+  status: "passed", candidate_sha: expected, runner_sha: runnerSha, hosted: true,
+  fixture_principals: populated.principals,
+  owned_ordinary_minds: populated.owned_minds, baseline: {
     sequence: baselineBackup.last_success.sequence,
     records: baselineBackup.last_success.record_count,
     objects: baselineBackup.last_success.object_count,

@@ -5,7 +5,7 @@ import { acceptanceRuntime } from "../helpers/acceptance-runtime.mjs";
 import { ACCEPTANCE_ORIGIN } from "../../apps/mind-diary-acceptance/runtime-target.mjs";
 
 test("acceptance controller can complete a synthetic backup without a Product key", async (t) => {
-  const { fetch, controllerKey, bucket } = await acceptanceRuntime(t);
+  const { fetch, controllerKey, bucket, db } = await acceptanceRuntime(t);
   const list = bucket.list.bind(bucket);
   bucket.list = async (options) => ({ ...await list(options), delimitedPrefixes: [] });
   const started = await fetch(`${ACCEPTANCE_ORIGIN}/_acceptance/runs`, {
@@ -48,15 +48,31 @@ test("acceptance controller can complete a synthetic backup without a Product ke
   const value = await receipt.json();
   assert.deepEqual(value.checkpoint, descriptor.target_checkpoint);
   assert.equal(value.manifest_digest, descriptor.manifest_digest);
+  await db.prepare("INSERT INTO md_backup_cleanup_ops (operation_id, started_at) VALUES (?1, ?2)")
+    .bind(randomUUID(), new Date().toISOString()).run();
   let cleaned;
   for (let attempt = 0; attempt < 4; attempt++) {
     const response = await fetch(`${ACCEPTANCE_ORIGIN}/_acceptance/runs/${run.run_id}/cleanup`, {
       method: "POST", headers: { authorization: `Bearer ${controllerKey}`,
         "content-type": "application/json" }, body: "{}",
     });
+    if (attempt === 3) {
+      assert.equal(response.status, 503);
+      await db.prepare("UPDATE md_backup_cleanup_ops SET started_at = ?1")
+        .bind(new Date(Date.now() - 600_000).toISOString()).run();
+      continue;
+    }
     assert.equal(response.status, 200);
     cleaned = await response.json();
     if (cleaned.state === "cleaned") break;
+  }
+  if (cleaned?.state !== "cleaned") {
+    const response = await fetch(`${ACCEPTANCE_ORIGIN}/_acceptance/runs/${run.run_id}/cleanup`, {
+      method: "POST", headers: { authorization: `Bearer ${controllerKey}`,
+        "content-type": "application/json" }, body: "{}",
+    });
+    assert.equal(response.status, 200);
+    cleaned = await response.json();
   }
   assert.equal(cleaned.state, "cleaned");
   const inventoryResponse = await fetch(`${ACCEPTANCE_ORIGIN}/_acceptance/inventory`, {

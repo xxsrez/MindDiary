@@ -216,7 +216,11 @@ run в этой test-only composition; Product Site не наследует эт
 перечень `md_acceptance_*` таблиц как временное состояние, которое не входит в
 portable backup. Любая неизвестная таблица или колонка по-прежнему блокирует
 сессию. После очистки run удаляются тестовые backup sessions/pages/inventory,
-и исходный inventory снова должен быть пустым. Completion receipt из acceptance
+и исходный inventory снова должен быть пустым. Если физическое удаление R2
+оставило неопределённую запись, только acceptance operator run может убрать её
+после пяти минут и повторной проверки нуля аккаунтов, Minds и R2 objects;
+Product оставляет такую запись до отдельной операторской сверки. Completion
+receipt из acceptance
 доказывает transport на hosted D1/R2, но не подтверждает рабочую копию
 пользовательских Minds на Product UAT.
 

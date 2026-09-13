@@ -75,7 +75,8 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
             try { return await recovery.worker.fetch(internalRequest, environment, context); }
             finally { recoveryIdentities.delete(internalRequest); }
           },
-          (input) => recovery.runtime(environment.DB).resumeAccountDeletion(input));
+          (input) => recovery.runtime(environment.DB).resumeAccountDeletion(input),
+          undefined, undefined, environment.MIND_DIARY_BUCKET);
       }, () => acceptanceInventory(environment), async () => {
         const recovery = createProduct();
         await recovery.worker.fetch(new Request(ACCEPTANCE_ORIGIN + "/api/v1/session"), environment, context);
