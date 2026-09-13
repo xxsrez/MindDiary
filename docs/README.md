@@ -115,9 +115,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
     или source of truth.
 29. [Инкрементальный системный бэкап](specs/incremental-system-backup.md)
     — контракт MD-444 для полной локальной копии, классификация durable state,
-    фиксированные дельты и offline recovery; серверный UAT adapter опубликован,
-    но передача пользовательских Minds ещё не подтверждена; offline restore
-    проверен на синтетических данных.
+    фиксированные дельты и offline recovery; synthetic hosted transport и
+    локальный offline restore проверены, передача пользовательских Minds ещё
+    не подтверждена.
 
 ## Руководства
 
@@ -359,7 +359,8 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 - [Mind Diary без служебных отчётов](reports/2026-09-12-quiet-mind-diary.md) — инструкции аккаунта, MCP metadata, UAT159 и границы проверки ответов.
 - [Системный бэкап: локальное испытание, 2026-09-13](reports/2026-09-13-system-backup-drill.md)
   — одна синтетическая дельта, прерывание и повтор, offline restore всех Minds,
-  измерения и граница ещё не проведённой hosted/ежедневной приёмки.
+  измерения, hosted synthetic transport и граница ещё не проведённой
+  пользовательской ежедневной приёмки.
 
 ## Статусы и проверяемые claims
 
