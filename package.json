@@ -28,6 +28,7 @@
     "check:product-site": "node scripts/generate-product-ui-assets.mjs --check && node scripts/check-product-site.mjs",
     "check:product-site-artifact": "node scripts/check-product-site-artifact.mjs",
     "check:docs": "node scripts/check-docs.mjs",
+    "check:backup-completeness": "node scripts/check-backup-completeness.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "gate:synthetic-multi-principal": "npm run build --silent && node scripts/run-synthetic-multi-principal-probe.mjs",
     "gate:synthetic-browser": "npm run build --silent && node scripts/run-synthetic-browser-gate.mjs",
@@ -58,7 +59,7 @@
     "readiness:report": "node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json",
     "readiness:file-ingress": "node scripts/generate-file-ingress-matrix-report.mjs --sha HEAD --local-receipt build/file-ingress/local-receipt.json --output build/file-ingress/matrix-report.json --require-complete",
     "report:file-ingress": "node scripts/generate-file-ingress-matrix-report.mjs --sha HEAD --local-receipt build/file-ingress/local-receipt.json --output build/file-ingress/matrix-report.json",
-    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && playwright test --config=playwright.config.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
+    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && playwright test --config=playwright.config.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:backup-completeness && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
   },
   "dependencies": {
     "re2js": "2.8.6",

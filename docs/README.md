@@ -113,6 +113,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 28. [Исторический Linear adapter](specs/ship-work-release-linear.md) —
     прежнее отображение Linear entities; не является текущим provider, profile
     или source of truth.
+29. [Инкрементальный системный бэкап](specs/incremental-system-backup.md)
+    — контракт MD-444 для полной локальной копии, классификация durable state,
+    фиксированные дельты и offline recovery; реализация и UAT ещё предстоят.
 
 ## Руководства
 
