@@ -212,7 +212,8 @@ function transport({ origin, key, fetchImpl = fetch, metrics, signal }) {
       try {
         const bytes = await boundedBody(response, 2048);
         const parsed = JSON.parse(bytes.toString("utf8"));
-        if (/^[a-z_]{1,64}$/u.test(parsed?.code)) code = parsed.code;
+        if (typeof parsed?.code === "string" &&
+          /^[a-z][a-z0-9_]{0,63}$/u.test(parsed.code)) code = parsed.code;
       } catch { /* Preserve a safe error code. */ }
       fail(code);
     }
@@ -784,8 +785,10 @@ export async function runBackup({ directory, origin, key, fetchImpl = fetch,
     }
     fail("backup_retry_exhausted");
   } catch (error) {
-    const code = error instanceof BackupClientError ? error.code : "local_failure";
-    db.prepare("UPDATE backup_pending SET last_error=? WHERE singleton=1").run(code);
+    const code = error instanceof BackupClientError && typeof error.code === "string" ?
+      error.code : "local_failure";
+    try { db.prepare("UPDATE backup_pending SET last_error=? WHERE singleton=1").run(code); }
+    catch { /* A failed status write must not hide the primary backup failure. */ }
     throw error;
   } finally { clearInterval(sampler); catalog.close(); }
 }

@@ -104,6 +104,25 @@ async function attachRevision(value, bucket, bytes) {
       mediaType: "text/markdown; charset=utf-8", state: "active" });
 }
 
+test("malformed source error code cannot replace the last backup error", async () => {
+  const f = await fixture();
+  try {
+    const options = { directory: f.directory, origin: ORIGIN, key: KEY };
+    await assert.rejects(runBackup({ ...options,
+      fetchImpl: async () => Response.json({ code: ["backup_r2_namespace_unknown"] },
+        { status: 503 }) }), /source_unavailable/u);
+    let catalog = await openBackupCatalog(f.directory);
+    try { assert.equal(backupStatus(catalog.db).pending.error, "source_unavailable"); }
+    finally { catalog.close(); }
+    await assert.rejects(runBackup({ ...options,
+      fetchImpl: async () => Response.json({ code: "backup_r2_namespace_unknown" },
+        { status: 503 }) }), /backup_r2_namespace_unknown/u);
+    catalog = await openBackupCatalog(f.directory);
+    try { assert.equal(backupStatus(catalog.db).pending.error, "backup_r2_namespace_unknown"); }
+    finally { catalog.close(); }
+  } finally { await f.close(); }
+});
+
 test("client commits one exact current copy and transfers only changed metadata and missing objects", async () => {
   const f = await fixture();
   try {
