@@ -158,7 +158,14 @@ export function decodeSystemBackupValue(value: unknown): unknown {
 }
 
 function compareText(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+  // SQLite BINARY ordering uses UTF-8 bytes. Match it so a local catalog can
+  // verify the root digest as a stream without loading all record keys.
+  const a = new TextEncoder().encode(left);
+  const b = new TextEncoder().encode(right);
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    if (a[index] !== b[index]) return a[index]! < b[index]! ? -1 : 1;
+  }
+  return a.length < b.length ? -1 : a.length > b.length ? 1 : 0;
 }
 
 function canonicalJson(value: unknown): string {

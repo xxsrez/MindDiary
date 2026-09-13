@@ -115,7 +115,8 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
     или source of truth.
 29. [Инкрементальный системный бэкап](specs/incremental-system-backup.md)
     — контракт MD-444 для полной локальной копии, классификация durable state,
-    фиксированные дельты и offline recovery; реализация и UAT ещё предстоят.
+    фиксированные дельты и offline recovery; серверный UAT adapter опубликован,
+    но передача всех Minds и восстановление ещё не подтверждены.
 
 ## Руководства
 
@@ -125,6 +126,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 
 ## Операции
 
+- [Локальная копия Mind Diary на Mac](operations/system-backup-local.md) —
+  ручной CLI MD-446, порядок fsync/commit, status, integrity, GC и граница
+  ещё не проведённого hosted/offline приёма.
 - [Runbook `ship-work-release`](operations/ship-work-release.md) —
   универсальный UX в Codex Desktop: status, «дойти до точки с запятой»,
   batch/UAT pause, resume, cohort upgrade, task-manager projection, recovery и
