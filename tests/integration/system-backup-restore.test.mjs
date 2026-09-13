@@ -340,6 +340,9 @@ test("one source-bound delta resumes a large file and restores the new HEAD with
       const history = await (await get("/minds/s_shared/revisions")).json();
       assert.deepEqual(history.revisions.map((item) => item.revision_id),
         ["r_shared_1", "r_shared_2", "r_shared_3"]);
+      const headFiles = await (await get(
+        "/minds/s_shared/revisions/r_shared_3/files")).json();
+      assert.equal(headFiles.files.length, 1);
       const oldBinary = Buffer.from(await (await get(
         "/minds/s_shared/revisions/r_shared_2/files/0")).arrayBuffer());
       assert.deepEqual(oldBinary, Buffer.from([0, 1, 2, 255]));
