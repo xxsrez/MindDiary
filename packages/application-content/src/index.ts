@@ -580,8 +580,16 @@ export interface HeadRevisionReader {
   readHeadRevision(spaceId: SpaceId): Promise<Readonly<MaterializedRevision> | null>;
 }
 
+export interface CanonicalRevisionReadSession extends ExactRevisionStreamSession {
+  readRevisionFile(path: string): Promise<Readonly<MaterializedRevisionFile> | null>;
+}
+
 /** Optional delta-aware exact reader; callers fall back to full materialization for legacy doubles. */
 export interface DeltaRevisionReader extends HeadRevisionReader {
+  openRevisionSession?(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<Pick<CanonicalRevisionReadSession, "readRevisionFile">>>;
   readHeadRevisionEnvelope(
     spaceId: SpaceId,
   ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
@@ -848,7 +856,7 @@ export class CanonicalRevisionCoordinator {
   async openRevisionSession(
     spaceId: SpaceId,
     revisionId: RevisionId,
-  ): Promise<Readonly<ExactRevisionStreamSession>> {
+  ): Promise<Readonly<CanonicalRevisionReadSession>> {
     const envelope = await this.#readVerifiedEnvelope(spaceId, revisionId);
     return Object.freeze({
       envelope,

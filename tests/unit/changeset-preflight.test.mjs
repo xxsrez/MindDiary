@@ -159,8 +159,40 @@ async function fixture(options = {}) {
       files: materialized.files.map((file) => [file.path, file.text]),
     };
   };
-  return { service, request, events, snapshot };
+  return { service, request, events, snapshot, coordinator, authorizer, metadata, objects };
 }
+
+test("producer scan reuses one exact session and still verifies every unchanged file", async () => {
+  const env = await fixture();
+  let envelopeReads = 0;
+  const originalRead = env.metadata.readRevision.bind(env.metadata);
+  env.metadata.readRevision = async (...args) => {
+    envelopeReads += 1;
+    return originalRead(...args);
+  };
+  const service = new ChangesetPreflightService({
+    authorizer: env.authorizer,
+    revisions: env.coordinator,
+    clock: { now: () => FIXED_NOW },
+  });
+  const request = env.request([validCreate()], { producerProfile: true });
+  const legacyResult = await env.service.preflight(request);
+  envelopeReads = 0;
+  const result = await service.preflight(request);
+  assert.deepEqual(result, legacyResult);
+  assert.equal(result.kind, "ready");
+  assert.equal(envelopeReads, 2, "HEAD envelope plus one exact session, independent of file count");
+  await service.preflight(request);
+  assert.equal(envelopeReads, 4, "sessions are never shared across requests");
+
+  const originalGet = env.objects.getImmutable.bind(env.objects);
+  env.objects.getImmutable = async (...args) => {
+    const object = await originalGet(...args);
+    return object ? { ...object, size: object.size + 1 } : object;
+  };
+  await assert.rejects(service.preflight(request), { code: "object_integrity_failure" });
+  assert.equal(await env.metadata.readHead(MINDS.ordinary.spaceId), REVISIONS.initial.revisionId);
+});
 
 function validCreate(path = "concepts/new.md") {
   return {

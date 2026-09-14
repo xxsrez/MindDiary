@@ -937,6 +937,17 @@ export class ChangesetPreflightService {
       });
     }
 
+    // One request-scoped immutable session avoids reloading the same manifest
+    // for every file during producer/full-reference validation.
+    let revisionSession: ReturnType<NonNullable<DeltaRevisionReader["openRevisionSession"]>> | undefined;
+    const readParentFile = async (path: string) => {
+      if (deltaReader === null || currentRevisionId === null) return null;
+      if (deltaReader.openRevisionSession === undefined) {
+        return deltaReader.readRevisionFile(request.spaceId, currentRevisionId, path);
+      }
+      revisionSession ??= deltaReader.openRevisionSession(request.spaceId, currentRevisionId);
+      return (await revisionSession).readRevisionFile(path);
+    };
     const working = new Map<string, WorkingRevisionFile>();
     if (headEnvelope !== null) {
       for (const entry of headEnvelope.manifest.entries) {
@@ -1053,11 +1064,7 @@ export class ChangesetPreflightService {
           });
         }
         if (current.text === undefined && deltaReader !== null && currentRevisionId !== null) {
-          const loaded = await deltaReader.readRevisionFile(
-            request.spaceId,
-            currentRevisionId,
-            operation.path,
-          );
+          const loaded = await readParentFile(operation.path);
           if (!loaded || loaded.kind !== "markdown") {
             return invalid("file_not_found", "log target does not exist", {
               operationIndex: index,
@@ -1220,11 +1227,7 @@ export class ChangesetPreflightService {
           });
         }
         const loaded = deltaReader !== null && currentRevisionId !== null
-          ? await deltaReader.readRevisionFile(
-              request.spaceId,
-              currentRevisionId,
-              operation.path,
-            )
+          ? await readParentFile(operation.path)
           : head?.files.find((file) => file.path === operation.path) ?? null;
         if (
           !loaded || loaded.kind !== "opaque" || loaded.sha256 !== current.sha256 ||
@@ -1274,11 +1277,7 @@ export class ChangesetPreflightService {
     ) {
       for (const [path, file] of working) {
         if (file.kind !== "markdown" || file.text !== undefined) continue;
-        const loaded = await deltaReader.readRevisionFile(
-          request.spaceId,
-          currentRevisionId,
-          path,
-        );
+        const loaded = await readParentFile(path);
         if (!loaded || loaded.kind !== "markdown" || loaded.sha256 !== file.sha256) {
           return invalid("okf_validation_failed", "exact parent file cannot be verified", {
             path,

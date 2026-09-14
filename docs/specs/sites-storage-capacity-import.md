@@ -142,6 +142,13 @@ Commit строит новый manifest как delta от exact parent:
 4. Создаёт revision record, обновляет reachability/usage and HEAD, consumes
    staging/reservation и ставит derived jobs.
 
+Producer validation и проверка ссылок BundleFile могут требовать чтения всего
+Markdown corpus. В пределах одного preflight они используют одну лениво
+открытую exact-revision session: manifest проверяется при открытии, каждый
+content object по-прежнему проверяется по digest, metadata и размеру. Session
+не переиспользуется между запросами; current authorization и финальный HEAD
+CAS сохраняются. Readers без session API используют прежний exact-file путь.
+
 Неуспешный CAS не создаёт видимую revision. Уже записанные immutable objects
 остаются unreachable и удаляются только после safety window. Retry с тем же
 canonical request/idempotency key возвращает прежний result; новый HEAD требует
