@@ -365,6 +365,8 @@ test("Connection guide switches all three clients by keyboard and copies exact c
   const customInstructions = await page.evaluate(() => navigator.clipboard.readText());
   expect(customInstructions).toContain("Refresh list_minds before writing");
   expect(customInstructions.length).toBeLessThanOrEqual(1500);
+  expect(customInstructions).toContain("For durable facts/decisions or substantive requests");
+  expect(customInstructions).toContain("ChatGPT memory is not a substitute");
   expect(customInstructions).toContain("Save durable facts/decisions from this request to every matching Mind");
   expect(customInstructions).toContain("For new notes use enqueue_note");
   expect(customInstructions).toContain("continue without polling/read-back");
