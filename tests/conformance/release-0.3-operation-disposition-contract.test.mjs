@@ -853,7 +853,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "f73ca2b3d3f2f606f6c290682183de94c17e682b",
+        gitBlob: "f052608fe741aa5fd21c99ca7f3e9792bcd94399",
       }],
     },
     {
