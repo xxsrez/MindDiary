@@ -290,6 +290,7 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
   description routing ordinary Minds, `personal_default` с записью только по
   прямой просьбе и automatic discussed-only OKF save без binding/capture controls.
 - [ADR-0028: несколько независимо записываемых Minds](decisions/0028-multiple-writable-minds.md)
+- [ADR-0029: входящие заметки с фоновой записью](decisions/0029-queued-incoming-notes.md)
   — singleton ordinary lane заменён per-Mind generations; несколько ordinary
   Minds и Personal могут независимо иметь `read_write`, automatic и direct
   destinations обрабатываются отдельными commits.
