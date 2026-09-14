@@ -36,6 +36,7 @@ import type {
 } from "./metadata-store-internals.js";
 import type {
   AuditEvent,
+  QueuedNote,
   AuditOutboxMessage,
   AuthorizationStateQuery,
   BackgroundJob,
@@ -113,6 +114,7 @@ export abstract class RevisionMetadataStoreState {
   protected _auditOutbox = new Map<OutboxMessageId, Readonly<AuditOutboxMessage>>();
 
   protected _backgroundJobs = new Map<JobId, Readonly<BackgroundJob>>();
+  protected _queuedNotes = new Map<string, Readonly<QueuedNote>>();
 
   protected _exportJobs = new Map<JobId, Readonly<ExportJob>>();
 
@@ -327,6 +329,7 @@ export abstract class RevisionMetadataStoreState {
             spaceIds: new Set([request.spaceId]),
             spaces: this._spaces,
             stagedBundleFiles: this._stagedBundleFiles,
+            queuedNotes: this._queuedNotes,
             exportJobs: this._exportJobs,
             markdownImportPlans: this._markdownImportPlans,
             markdownImportSessions: this._markdownImportSessions,
@@ -345,6 +348,7 @@ export abstract class RevisionMetadataStoreState {
             spaceIds: principalSpaceIds,
             spaces: this._spaces,
             stagedBundleFiles: this._stagedBundleFiles,
+            queuedNotes: this._queuedNotes,
             exportJobs: this._exportJobs,
             markdownImportPlans: this._markdownImportPlans,
             markdownImportSessions: this._markdownImportSessions,
@@ -356,6 +360,7 @@ export abstract class RevisionMetadataStoreState {
             spaceIds: new Set(this._spaces.keys()),
             spaces: this._spaces,
             stagedBundleFiles: this._stagedBundleFiles,
+            queuedNotes: this._queuedNotes,
             exportJobs: this._exportJobs,
             markdownImportPlans: this._markdownImportPlans,
             markdownImportSessions: this._markdownImportSessions,

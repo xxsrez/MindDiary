@@ -10,7 +10,7 @@ import { BackupClientError, backupObjectPath, checkBackupIntegrity,
 const FORMAT = "MD-SYSTEM-BACKUP-1";
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const FIELDS = Object.freeze([
-  "spaces", "revisionsById", "auditEvents", "principals",
+  "spaces", "revisionsById", "queuedNotes", "auditEvents", "principals",
   "externalBindings", "knowledgeSpaces", "personalBindings", "memberships",
   "principalMindUsageOwners", "activeHandlesByKey",
   "activeHandlesBySpace", "retiredHandles",
@@ -122,6 +122,12 @@ function expectedInventory(records) {
     } else expected.set(key, { namespace, object_key: key, sha256,
       byte_size: byteSize, media_type: mediaType, fallback });
   };
+  for (const note of records.queuedNotes.values()) {
+    required(isObject(note) && typeof note.spaceId === "string" && DIGEST.test(note.payloadHash) && count(note.size), "restore_invalid_note");
+    add(`spaces/${encodeURIComponent(note.spaceId)}/objects/sha256/${note.payloadHash.slice(7)}`,
+      "space_canonical", note.payloadHash, note.size, MARKDOWN,
+      `canonical/sha256/${note.payloadHash.slice(7)}`);
+  }
   for (const envelope of records.revisionsById.values()) {
     required(isObject(envelope) && isObject(envelope.revision) &&
       isObject(envelope.manifest) && Array.isArray(envelope.manifest.entries),

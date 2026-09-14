@@ -99,6 +99,8 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "list_bundle_files",
   "get_bundle_file_download",
   "capture_knowledge",
+  "enqueue_note",
+  "get_note_status",
   "start_export",
   "get_export_status",
   "commit_changeset",

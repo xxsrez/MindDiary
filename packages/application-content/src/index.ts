@@ -106,6 +106,8 @@ export type McpPerformanceStage =
   | "stage_application"
   | "stage_total";
 export type McpPerformanceTool =
+  | "enqueue_note"
+  | "get_note_status"
   | "get_personal_mind_configuration"
   | "set_personal_mind_description"
   | "list_minds"
@@ -1151,3 +1153,4 @@ export * from "./idempotency.js";
 export * from "./capacity.js";
 export * from "./incremental-sha256.js";
 export * from "./markdown-imports.js";
+export * from "./note-queue.js";

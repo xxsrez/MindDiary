@@ -34,6 +34,7 @@ export const backupPolicy = Object.freeze({
   metadataSnapshot: Object.freeze({
     spaces: "exact",
     revisionsById: "exact",
+    queuedNotes: "exact",
     objectReachabilityCounts: "rebuild",
     idempotencyRecords: "reset",
     auditEvents: "exact",

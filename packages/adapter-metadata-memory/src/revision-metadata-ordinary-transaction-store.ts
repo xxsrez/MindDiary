@@ -211,6 +211,14 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
         });
 
         const result = await operation(transaction);
+        // Accepted note payloads are service records, not historical authorship.
+        // Remove them with their Mind or requesting account, in the same commit.
+        for (const [id, note] of this._queuedNotes) {
+          if ((this._principals.has(note.actor.principalId) && !state.principals.has(note.actor.principalId)) ||
+              (this._knowledgeSpaces.has(note.spaceId) && !state.knowledgeSpaces.has(note.spaceId))) {
+            this._queuedNotes.delete(id);
+          }
+        }
         this._principals = state.principals;
         this._principalActivities = state.principalActivities;
         this._externalBindings = state.externalBindings;

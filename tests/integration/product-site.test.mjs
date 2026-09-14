@@ -2356,6 +2356,7 @@ test("product MCP facade advertises only canonical content tools and current-acc
     MCP_TOOL_DEFINITIONS
       .filter(({ name }) =>
         name !== "create_file_upload_intent" &&
+        name !== "enqueue_note" && name !== "get_note_status" &&
         name !== "stage_bundle_file" &&
         name !== "open_bundle_file_picker")
       .map(({ name }) => name),

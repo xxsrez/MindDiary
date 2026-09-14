@@ -510,6 +510,7 @@ export function ownedCapacitySpaceIds(
 }
 
 export function capacityUsageFromCanonicalState(input: Readonly<{
+  queuedNotes?: ReadonlyMap<string, Readonly<import("@mind-diary/application-ports").QueuedNote>>;
   spaceIds: ReadonlySet<SpaceId>;
   spaces: ReadonlyMap<SpaceId, SpaceState>;
   stagedBundleFiles: ReadonlyMap<StagedBundleFileId, Readonly<StagedBundleFileRecord>>;
@@ -565,6 +566,12 @@ export function capacityUsageFromCanonicalState(input: Readonly<{
     ) latestReconciledAt = reconciled;
   }
 
+  for (const note of input.queuedNotes?.values() ?? []) {
+    if (!input.spaceIds.has(note.spaceId)) continue;
+    d1MetadataBytes += 2_048;
+    const key = `${note.spaceId}\u0000markdown\u0000${note.payloadHash}`;
+    if (!uniqueCanonical.has(key)) { uniqueCanonical.add(key); physicalCanonicalBytes += note.size; }
+  }
   for (const record of input.stagedBundleFiles.values()) {
     if (!input.spaceIds.has(record.spaceId)) continue;
     temporaryBytes += record.size;

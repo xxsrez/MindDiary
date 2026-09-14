@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
+  NoteQueueService,
   DeterministicOkfExportService,
 } from "@mind-diary/application-content";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
@@ -346,6 +347,86 @@ async function fixture() {
   };
   return { objects, metadata, coordinator, grant, service, snapshot, usage };
 }
+
+test("queued note is durable before background commit and exact retry is deduplicated", async () => {
+  const env = await fixture();
+  const editor = actor(PRINCIPALS.editor.principalId, "token_note", "request_note");
+  const commits = env.service({ currentActor: editor, nextRevisionId: "revision_note" });
+  const scheduled = [];
+  const notes = new NoteQueueService({ metadata: env.metadata, objects: env.objects,
+    authorizer: new CapabilityAuthorizer(env.metadata), clock: { now: () => FIXED_NOW }, commits,
+    schedule: (id) => scheduled.push(id) });
+  const input = { idempotencyKey: "synthetic-1", title: "Synthetic note", text: "Paper lighthouse is blue. Fictional test." };
+  const accepted = await notes.enqueue(editor, MINDS.ordinary.spaceId, input);
+  assert.equal(accepted.state, "queued");
+  assert.equal((await env.snapshot()).head, REVISIONS.initial.revisionId);
+  const snapshot = env.metadata.exportDurableSnapshot();
+  assert.equal(snapshot.queuedNotes.size, 1);
+  assert.equal(InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot).exportDurableSnapshot().queuedNotes.size, 1);
+  assert.deepEqual(await notes.enqueue(editor, MINDS.ordinary.spaceId, input), accepted);
+  await assert.rejects(notes.enqueue(editor, MINDS.ordinary.spaceId, { ...input, text: "changed" }), /idempotency_conflict/);
+  await notes.process(scheduled[0]);
+  const receipt = await notes.status(editor, MINDS.ordinary.spaceId, accepted.receiptId);
+  assert.equal(receipt.state, "committed", JSON.stringify(receipt));
+  assert.equal(receipt.revisionId, "revision_note");
+  assert.ok((await env.snapshot()).files.some(([path, text]) => path === receipt.path && text.includes(input.text)));
+  await notes.process(scheduled[0]);
+  assert.equal((await env.snapshot()).revisions.length, 2);
+});
+
+test("queued note does not survive a writable generation change as write authority", async () => {
+  const env = await fixture();
+  const editor = actor(PRINCIPALS.editor.principalId, "token_note_revoke", "request_note_revoke");
+  const commits = env.service({ currentActor: editor, nextRevisionId: "revision_note_revoke" });
+  const notes = new NoteQueueService({ metadata: env.metadata, objects: env.objects,
+    authorizer: new CapabilityAuthorizer(env.metadata), clock: { now: () => FIXED_NOW }, commits, schedule: () => {} });
+  const accepted = await notes.enqueue(editor, MINDS.ordinary.spaceId, { idempotencyKey: "revoke", title: "Synthetic", text: "Fictional." });
+  env.usage.select(editor.principalId, MINDS.ordinary.spaceId);
+  await notes.process(accepted.receiptId);
+  const receipt = await notes.status(editor, MINDS.ordinary.spaceId, accepted.receiptId);
+  assert.equal(receipt.state, "failed");
+  assert.equal(receipt.failureCode, "writable_mind_stale");
+  assert.equal((await env.snapshot()).head, REVISIONS.initial.revisionId);
+  const record = env.metadata.exportDurableSnapshot().queuedNotes.get(accepted.receiptId);
+  assert.equal(await env.metadata.isSpaceCanonicalObjectReachable("markdown", record.spaceId, record.payloadHash), true);
+});
+
+test("queued note reconciles a lost successful response without a second revision", async () => {
+  const env = await fixture();
+  const editor = actor(PRINCIPALS.editor.principalId, "token_note_unknown", "request_note_unknown");
+  const real = env.service({ currentActor: editor, nextRevisionId: "revision_note_unknown" });
+  let writes = 0;
+  const notes = new NoteQueueService({ metadata: env.metadata, objects: env.objects,
+    authorizer: new CapabilityAuthorizer(env.metadata), clock: { now: () => FIXED_NOW }, schedule: () => {},
+    commits: { reconcile: (request) => real.reconcile(request), commit: async (request) => {
+      const result = await real.commit(request); writes += 1;
+      assert.equal(result.kind, "committed");
+      throw new Error("simulated lost transport response");
+    } } });
+  const accepted = await notes.enqueue(editor, MINDS.ordinary.spaceId, { idempotencyKey: "unknown", title: "Synthetic", text: "Fictional." });
+  await notes.process(accepted.receiptId);
+  assert.equal((await notes.status(editor, MINDS.ordinary.spaceId, accepted.receiptId)).state, "committed");
+  assert.equal(writes, 1);
+  assert.equal((await env.snapshot()).revisions.length, 2);
+});
+
+test("two queued notes accepted at one HEAD both commit additively", async () => {
+  const env = await fixture();
+  const editor = actor(PRINCIPALS.editor.principalId, "token_note_race", "request_note_race");
+  let revision = 0;
+  const real = env.service({ currentActor: editor, nextRevisionId: "unused" });
+  const commits = { reconcile: (request) => real.reconcile(request), commit: (request) =>
+    env.service({ currentActor: editor, nextRevisionId: `revision_note_race_${++revision}` }).commit(request) };
+  const notes = new NoteQueueService({ metadata: env.metadata, objects: env.objects,
+    authorizer: new CapabilityAuthorizer(env.metadata), clock: { now: () => FIXED_NOW }, schedule: () => {}, commits });
+  const first = await notes.enqueue(editor, MINDS.ordinary.spaceId, { idempotencyKey: "one", title: "One", text: "Fictional one." });
+  const second = await notes.enqueue(editor, MINDS.ordinary.spaceId, { idempotencyKey: "two", title: "Two", text: "Fictional two." });
+  await notes.process(first.receiptId);
+  await notes.process(second.receiptId);
+  assert.equal((await notes.status(editor, MINDS.ordinary.spaceId, first.receiptId)).state, "committed");
+  assert.equal((await notes.status(editor, MINDS.ordinary.spaceId, second.receiptId)).state, "committed");
+  assert.equal((await env.snapshot()).revisions.length, 3);
+});
 
 test("commit capacity rejection happens before canonical object writes", async () => {
   const env = await fixture();

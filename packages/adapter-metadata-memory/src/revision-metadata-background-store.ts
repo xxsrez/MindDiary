@@ -1132,6 +1132,9 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
 
   async purgeSpaceTargetRecords(spaceId: SpaceId): Promise<SpaceTargetPurgeResult> {
       return this._runExclusive(async () => {
+        for (const [id, note] of this._queuedNotes) {
+          if (note.spaceId === spaceId) this._queuedNotes.delete(id);
+        }
         const indexKeys = [...this._indexStates]
           .filter(([, state]) => state.spaceId === spaceId)
           .map(([key]) => key);

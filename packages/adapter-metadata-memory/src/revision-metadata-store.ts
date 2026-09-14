@@ -178,6 +178,14 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         throw new TypeError("Revision metadata durable snapshot is invalid");
       }
       const restored = new InMemoryRevisionMetadataStore();
+      if (snapshot.queuedNotes !== undefined && !(snapshot.queuedNotes instanceof Map)) {
+        throw new TypeError("Queued note snapshot is invalid");
+      }
+      restored._queuedNotes = new Map(snapshot.queuedNotes ?? []);
+      for (const [id, note] of restored._queuedNotes) {
+        if (!isQueuedNote(note) || id !== note.receiptId) throw new TypeError("Queued note snapshot is invalid");
+        restored._queuedNotes.set(id, Object.freeze(structuredClone(note)));
+      }
       restored._spaces = new Map(snapshot.spaces as Map<SpaceId, SpaceState>);
       restored._revisionsById = new Map(snapshot.revisionsById as Map<RevisionId, Envelope>);
       restored._reachabilityCounts = snapshot.objectReachabilityCounts === undefined
@@ -322,3 +330,4 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
       return restored;
     }
 }
+import { isQueuedNote } from "@mind-diary/application-ports";

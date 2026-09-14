@@ -54,6 +54,8 @@ import {
 import { IncrementalSha256 } from "./incremental-sha256.js";
 
 export interface CommitChangesetRequest {
+  /** Trusted queued-work fence; never populated from untrusted MCP arguments. */
+  readonly requiredWritePin?: Readonly<PrincipalMindUsageWritePin>;
   readonly actor: ActorContext;
   readonly spaceId: SpaceId;
   readonly expectedRevisionId: RevisionId | null;
@@ -461,6 +463,12 @@ export class ChangesetCommitService {
       });
     }
     const writePin = resolvedWritePin.pin;
+    if (request.requiredWritePin !== undefined &&
+        (request.requiredWritePin.principalId !== writePin.principalId ||
+         request.requiredWritePin.spaceId !== writePin.spaceId ||
+         request.requiredWritePin.generationId !== writePin.generationId)) {
+      return Object.freeze({ kind: "denied", decision: deniedWritableMind("writable_mind_stale") });
+    }
     const validated = this.#validatePayload(request);
     if ("kind" in validated) return validated;
     const sourceAuthorization = await this.#authorizeSourceReferences(
@@ -543,6 +551,12 @@ export class ChangesetCommitService {
     const writePin = resolvedWritePin.pin;
 
     const validated = this.#validatePayload(request);
+    if (request.requiredWritePin !== undefined &&
+        (request.requiredWritePin.principalId !== writePin.principalId ||
+         request.requiredWritePin.spaceId !== writePin.spaceId ||
+         request.requiredWritePin.generationId !== writePin.generationId)) {
+      return Object.freeze({ kind: "denied", decision: deniedWritableMind("writable_mind_stale") });
+    }
     if ("kind" in validated) return validated;
     const sourceAuthorization = await this.#authorizeSourceReferences(
       actor,

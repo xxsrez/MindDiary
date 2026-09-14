@@ -1,5 +1,13 @@
 # Sites storage, capacity и Markdown import
 
+MD-453 candidate (2026-09-14): incoming note queue допускает 32 незавершённые
+заметки на Mind, до 64 KiB текста каждая. До object put резервируются canonical
+bytes и 2048 bytes metadata обычным capacity admission; при durable receipt
+резерв consume-ится. Незавершённые payloads включаются в canonical reachability
+и physical capacity, committed payload не считается дважды. Очередь входит в
+system backup exact records; удаление Mind или исходного account удаляет её
+service records. Это отдельный приём заметок, не расширение file ingress.
+
 Статус: accepted, 2026-08-22. `normative_status: accepted`;
 `implementation_status: implemented_local_uat_pending`. Это Sites-only contract
 для post-MVP Brain-scale storage/import. Его технические invariants сохраняются,

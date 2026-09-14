@@ -435,7 +435,7 @@ test("all current MCP tools have a disposition and the target catalog is exact",
       "get_export_status",
     ],
   );
-  assert.equal(fixture.targetMcpCatalog.length, 23);
+  assert.equal(fixture.targetMcpCatalog.length, 25);
   for (const tool of fixture.mcpTools) {
     assertExactKeys(tool, ["name", "disposition", "profile", "mindScope", "owner"], tool.name);
     assert.ok(profiles.has(tool.profile), `${tool.name}: unknown profile`);
@@ -767,7 +767,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "877c08bbf1c34fd3711b334271bde68f3d483033",
+      gitBlob: "f73ca2b3d3f2f606f6c290682183de94c17e682b",
     },
     {
       surface: "plugin-label",
@@ -853,7 +853,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "877c08bbf1c34fd3711b334271bde68f3d483033",
+        gitBlob: "f73ca2b3d3f2f606f6c290682183de94c17e682b",
       }],
     },
     {

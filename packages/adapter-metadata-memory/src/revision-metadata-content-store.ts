@@ -149,6 +149,7 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         );
         const stagedBundleFiles = new Map(this._stagedBundleFiles);
         const markdownImportPlans = new Map(this._markdownImportPlans);
+        const queuedNotes = new Map(this._queuedNotes);
         const markdownImportSessions = new Map(this._markdownImportSessions);
         const markdownImportStagedFiles = new Map(this._markdownImportStagedFiles);
         const markdownImportPlanKeys = new Map(this._markdownImportPlanKeys);
@@ -164,6 +165,9 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         );
         const transaction: MarkdownImportMetadataTransaction = Object.freeze({
           ...capacityTransaction,
+          readQueuedNote: async (receiptId: string) => queuedNotes.get(receiptId) ?? null,
+          listQueuedNotes: async () => Object.freeze([...queuedNotes.values()]),
+          putQueuedNote: async (note: import("@mind-diary/application-ports").QueuedNote) => { queuedNotes.set(note.receiptId, Object.freeze(structuredClone(note))); },
           kind: "authorization-transaction" as const,
           readCredentialWriteTarget: (
             bindingOwnerId: MindBindingOwnerId,
@@ -600,6 +604,7 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         this._indexStates = indexStates;
         this._stagedBundleFiles = stagedBundleFiles;
         this._markdownImportPlans = markdownImportPlans;
+        this._queuedNotes = queuedNotes;
         this._markdownImportSessions = markdownImportSessions;
         this._markdownImportStagedFiles = markdownImportStagedFiles;
         this._markdownImportPlanKeys = markdownImportPlanKeys;
@@ -937,6 +942,11 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
           sha256: sha256 as Digest,
         });
       });
+      for (const note of this._queuedNotes.values()) {
+        if (!reachable.some((item) => item.kind === "markdown" && item.spaceId === note.spaceId && item.sha256 === note.payloadHash)) {
+          reachable.push(Object.freeze({ kind: "markdown", spaceId: note.spaceId, sha256: note.payloadHash }));
+        }
+      }
       return Object.freeze(reachable.sort((left, right) =>
         left.kind.localeCompare(right.kind) || left.spaceId.localeCompare(right.spaceId) ||
         left.sha256.localeCompare(right.sha256),
@@ -948,6 +958,8 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
       spaceId: SpaceId,
       sha256: Digest,
     ): Promise<boolean> {
+      if (kind === "markdown" && [...this._queuedNotes.values()].some((note) =>
+        note.spaceId === spaceId && note.payloadHash === sha256)) return true;
       return (this._objectReachabilityCounts().spaceCanonical.get(
         `${kind}\u0000${spaceId}\u0000${sha256}`,
       ) ?? 0) > 0;

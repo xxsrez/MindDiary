@@ -21,6 +21,12 @@
       "output_schema_sha256": "sha256:d39983f69ec3adc9dab7f8f4a9ee93d4345b9eaeb28805dbf364aefb11d54b24"
     },
     {
+      "name": "enqueue_note",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:a4ba63f5876e6c9efeb9caf133b8b4862e98e0e95d3bacc73ce26a9574fe643c",
+      "output_schema_sha256": "sha256:dd60206ebe8fa44c2bb94b8bc45257e336cfda12a83c8ccffde49041f2f15273"
+    },
+    {
       "name": "fetch",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:c5f456ca68129564e9cd0976ffeeb0388cf72730e64ac090596f32914a2b71c0",
@@ -43,6 +49,12 @@
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:7572b22c658ec6f1dc159561f116d9812ef8d4bc890e14972ccbf13aa282b3a3",
       "output_schema_sha256": "sha256:657d1b88d2f8c676bf8f64f5513f41005c266913c0c87bee957c8b46030ec225"
+    },
+    {
+      "name": "get_note_status",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:f83329712ce1e8d1a7e1ef52cd794a983b7bfa50b3db2c04ff3c02fdd4659a55",
+      "output_schema_sha256": "sha256:dd60206ebe8fa44c2bb94b8bc45257e336cfda12a83c8ccffde49041f2f15273"
     },
     {
       "name": "get_personal_mind_configuration",

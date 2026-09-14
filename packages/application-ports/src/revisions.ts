@@ -28,6 +28,7 @@ import {
 import {
   type MetadataStore,
 } from "./runtime.js";
+import type { NoteQueueTransaction } from "./note-queue.js";
 
 import {
   type CanonicalObjectReachabilityReader,
@@ -638,6 +639,7 @@ export interface CapacityLedgerStore extends MetadataStore {
  */
 export interface ContentCommitMetadataTransaction
   extends AuthorizationTransaction,
+    NoteQueueTransaction,
     PrincipalMindUsageReader,
     IdempotencyTransaction,
     CapacityReservationTransaction {

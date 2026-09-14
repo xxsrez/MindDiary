@@ -4,6 +4,7 @@ import {
   type D1DatabaseLike as AuditD1DatabaseLike,
   type SitesObservabilityWriter,
 } from "@mind-diary/adapter-audit-sites";
+import { NoteQueueService } from "@mind-diary/application-content";
 import {
   createBackgroundServiceActor,
   createProductBackgroundDispatcher,
@@ -256,6 +257,7 @@ export interface ProductSiteRuntime {
     cleanupReclaimedBytes: number;
   }>>;
   readonly dispatchBackground: (work: Readonly<
+    | { readonly kind: "note"; readonly jobId: string }
     | { readonly kind: "revision_index"; readonly jobId: string }
     | { readonly kind: "export"; readonly jobId: string }
     | { readonly kind: "audit_outbox"; readonly messageId: string }
@@ -1302,7 +1304,15 @@ export async function createProductSiteRuntime(
         && token.scopes.some((scope) => scope === "personal:configure")
         && (await contentAuthorizer.authorizeCredentialContentAccess(actor)).kind === "allowed";
     } });
+  const notes = new NoteQueueService({ metadata, objects, authorizer: contentAuthorizer, clock,
+    commits: {
+      reconcile: (request) => commits.reconcile(request),
+      commit: (request) => runWithCapturedWork(() => commits.commit(request), (result) => result.kind === "committed"),
+    },
+    schedule: (receiptId) => options.schedule({ kind: "note", id: receiptId }),
+  });
   const mcpApplicationDependencies = {
+    notes,
     personalConfiguration,
     discovery,
     browse,
@@ -1938,7 +1948,7 @@ export async function createProductSiteRuntime(
     clock,
     observability: backgroundObservability,
   });
-  const dispatchBackground = createProductBackgroundDispatcher({
+  const dispatchOrdinaryBackground = createProductBackgroundDispatcher({
     serviceId: "mind-diary-sites-background",
     now: clock.now,
     requestId: () => nextOpaque("background-request"),
@@ -2026,6 +2036,9 @@ export async function createProductSiteRuntime(
     },
   });
 
+  const dispatchBackground: ProductSiteRuntime["dispatchBackground"] = (work) =>
+    work.kind === "note" ? notes.process(work.jobId) : dispatchOrdinaryBackground(work);
+
   const recoverBackground = async (
     requestedLimit = 16,
     mode: ProductSiteRecoveryMode = "full",
@@ -2035,6 +2048,7 @@ export async function createProductSiteRuntime(
       throw new TypeError("unknown product recovery mode");
     }
     const requestTick = mode === "request";
+    if (!requestTick) await notes.recover(2);
     const ensureActive = () => {
       if (signal?.aborted) throw Object.assign(new Error("Maintenance deadline exceeded."), { code: "recovery_deadline_exceeded" });
     };

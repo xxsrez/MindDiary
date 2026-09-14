@@ -1,5 +1,27 @@
 # REST и MCP API Mind Diary
 
+## MD-453: асинхронный приём заметок (candidate, 2026-09-14)
+
+`enqueue_note(mind, idempotency_key, title, text)` принимает одну добавочную
+заметку до 64 KiB. Сервер сам формирует Markdown в `raw/inbox/`, сохраняет
+точные bytes в Space-scoped object storage и durable receipt до ответа
+`queued`. Ответ не означает canonical commit. `get_note_status(mind, receipt_id)`
+возвращает `queued | running | committed | failed` и, после commit, exact
+revision/path. Опрос и read-back агентом не обязательны. Повтор одинакового
+ключа возвращает ту же квитанцию; другой payload с тем же ключом отклоняется.
+
+Обработчик использует текущие credential/ACL и исходную write generation,
+обычный producer validation и HEAD CAS. Добавочная операция может повториться
+на новом HEAD; существующие файлы не заменяются. Payload сохраняется при ошибке.
+Квитанция доступна только исходному principal с текущим доступом к Mind.
+Заметки не копируются между Minds и не интерпретируются серверной моделью.
+
+На Sites первоначальная обработка запускается через bounded `waitUntil` после
+приёма; это не гарантия исполнения после потери isolate. Durable очередь
+позволяет восстановление, но наличие автономного scheduler после сбоя должно
+быть подтверждено отдельно. Не объявлять поддержку MCP Tasks. Большие файлы
+продолжают использовать существующий file ingress; этот tool их не принимает.
+
 > **Принятая multi-Mind поправка ADR-0028, 2026-09-11; реализация и UAT ещё не подтверждены.**
 > `usage_mode` определяет разрешённые действия, description — темы.
 > Personal `/me` получает опциональное description, настраиваемое через узкую

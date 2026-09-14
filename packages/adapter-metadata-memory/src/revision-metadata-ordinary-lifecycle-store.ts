@@ -740,6 +740,7 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
               spaceIds: targetSpaceIds,
               spaces: tx.revisionSpaces,
               stagedBundleFiles: this._stagedBundleFiles,
+              queuedNotes: this._queuedNotes,
               exportJobs: tx.exportJobs,
               markdownImportPlans: this._markdownImportPlans,
               markdownImportSessions: this._markdownImportSessions,

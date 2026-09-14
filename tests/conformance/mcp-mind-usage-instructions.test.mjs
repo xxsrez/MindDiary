@@ -81,7 +81,7 @@ test("Mind-aware tool descriptions repeat the local decision and write safety at
   const commit = writes.get("commit_changeset");
   assert.match(commit.description, /exact Mind's current principal-owned read_write lane/u);
   assert.match(commit.description, /Every Mind write lane is independent/u);
-  assert.match(commit.description, /Canonical and only content-write tool/u);
+  assert.match(commit.description, /Canonical synchronous changeset tool/u);
   assert.match(commit.description, /direct current user request/u);
   assert.match(commit.description, /previous request/u);
   assert.match(commit.description, /explicitly discussed/u);

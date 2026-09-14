@@ -207,7 +207,9 @@ export function restrictedUatGeneratedSourceTestConfig(environment) {
 
 function dispatchScheduled(runtime, work) {
   return runtime.dispatchBackground(
-    work.kind === "export"
+    work.kind === "note"
+      ? { kind: "note", jobId: work.id }
+      : work.kind === "export"
       ? { kind: "export", jobId: work.id }
       : work.kind === "audit_outbox"
         ? { kind: "audit_outbox", messageId: work.id }
@@ -348,7 +350,17 @@ export function createMindDiaryProductWorker(options) {
             } finally {
               if (!foregroundSignal.aborted && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
                 const scheduled = acquired.drainScheduled();
-                if (scheduled.length > 0) context.waitUntil(Promise.allSettled(scheduled));
+                if (scheduled.length > 0) context.waitUntil((async () => {
+                  await Promise.allSettled(scheduled);
+                  // A queued note commit creates index/audit work after the
+                  // foreground response. Adopt those bounded follow-on batches
+                  // here, rather than requiring another user request to drain it.
+                  for (let round = 0; round < 2; round += 1) {
+                    const followOn = acquired.drainScheduled();
+                    if (followOn.length === 0) break;
+                    await Promise.allSettled(followOn);
+                  }
+                })());
               }
             }
             if (response !== null) return response;

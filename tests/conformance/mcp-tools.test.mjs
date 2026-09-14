@@ -359,6 +359,7 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
         scopes: [
           tool.name === "get_personal_mind_configuration" || tool.name === "set_personal_mind_description" ? "personal:configure" :
           tool.name === "commit_changeset" ||
+            tool.name === "enqueue_note" ||
             tool.name === "reconcile_changeset" ||
             tool.name === "capture_knowledge" ||
             tool.name === "create_file_upload_intent" ||

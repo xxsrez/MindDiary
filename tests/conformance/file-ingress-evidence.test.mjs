@@ -289,8 +289,8 @@ test("MD-314 registry is versioned, closed across source x profile and names aut
   const directInventory = current.toolInventories[
     "tests/fixtures/file-ingress-evidence/direct-tool-inventory.json"
   ];
-  assert.equal(appsInventory.entries.length, 23);
-  assert.equal(directInventory.entries.length, 21);
+  assert.equal(appsInventory.entries.length, 25);
+  assert.equal(directInventory.entries.length, 23);
   assert.deepEqual(
     appsInventory.entries,
     MCP_TOOL_DEFINITIONS.map((definition) => ({

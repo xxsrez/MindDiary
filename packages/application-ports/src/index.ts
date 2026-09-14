@@ -101,3 +101,4 @@ export * from "./credential-write-targets.js";
 export * from "./principal-mind-usage.js";
 export * from "./tokens.js";
 export * from "./observability.js";
+export * from "./note-queue.js";

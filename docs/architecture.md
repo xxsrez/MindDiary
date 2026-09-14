@@ -1,5 +1,18 @@
 # Архитектура Mind Diary
 
+MD-453 candidate (2026-09-14): `NoteQueueService` принимает небольшие добавочные
+заметки через `enqueue_note`. Markdown bytes находятся в Space-scoped object
+storage; `queuedNotes` в durable metadata содержит digest, размер, квитанцию,
+исходного actor без bearer, write-generation fence и состояние попытки.
+Короткие metadata transactions фиксируют приём/lease/outcome; producer scan
+выполняется вне них обычным `ChangesetCommitService`. Исходный HEAD сохраняется
+для reconcile неизвестного результата, новый HEAD выбирается только после
+явного CAS conflict. На Sites `waitUntil` запускает обработку после приёма;
+потеря isolate требует нового dispatch либо explicit operator recovery.
+Автономный гарантированный scheduler пока не заявлен. Обычная навигация не
+включает общий recovery. Очередь сохраняется в system backup вместе с bytes;
+offline restore не восстанавливает работоспособность прежних credentials.
+
 > **Принятая multi-Mind поправка ADR-0028, 2026-09-11; реализация и UAT ещё не подтверждены.**
 > `usage_mode` определяет разрешённые действия, description — темы.
 > Personal `/me` получает опциональное description, настраиваемое через узкую

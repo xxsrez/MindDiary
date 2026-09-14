@@ -16,6 +16,7 @@ export const SYSTEM_BACKUP_FRAGMENT_BYTES = 64 * 1024;
 export const SYSTEM_BACKUP_EXACT_FIELDS = Object.freeze([
   "spaces",
   "revisionsById",
+  "queuedNotes",
   "auditEvents",
   "principals",
   "externalBindings",
@@ -184,7 +185,7 @@ function snapshotMaps(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("system backup metadata snapshot is invalid");
   }
-  const snapshot = value as Record<string, unknown>;
+  const snapshot = { queuedNotes: new Map(), ...value } as Record<string, unknown>;
   if (snapshot.v !== 5 || SYSTEM_BACKUP_EXACT_FIELDS.some((field) =>
     !(snapshot[field] instanceof Map))) {
     throw new TypeError("system backup metadata snapshot version or fields are unsupported");
@@ -244,6 +245,10 @@ export function systemBackupObjectSeeds(value: unknown): readonly SystemBackupOb
     }
     seeds.set(seed.key, Object.freeze(seed));
   };
+  for (const note of (snapshot.queuedNotes as Map<string, import("@mind-diary/application-ports").QueuedNote> ?? new Map()).values()) {
+    add({ namespace: "space_canonical", key: `spaces/${encodeURIComponent(note.spaceId)}/objects/sha256/${note.payloadHash.slice(7)}`,
+      fallbackKey: `canonical/sha256/${note.payloadHash.slice(7)}`, sha256: note.payloadHash, size: note.size, mediaType: MARKDOWN_MEDIA_TYPE });
+  }
   for (const envelopeValue of revisions.values()) {
     if (typeof envelopeValue !== "object" || envelopeValue === null) {
       throw new TypeError("system backup revision envelope is invalid");

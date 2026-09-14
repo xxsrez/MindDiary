@@ -1079,6 +1079,20 @@
       "profile": "personal-configuration",
       "mindScope": "own-personal-metadata-only",
       "owner": "MD-396"
+    },
+    {
+      "name": "enqueue_note",
+      "disposition": "change",
+      "profile": "content-write",
+      "mindScope": "explicit-principal-read-write-head",
+      "owner": "MD-453"
+    },
+    {
+      "name": "get_note_status",
+      "disposition": "change",
+      "profile": "content-read",
+      "mindScope": "explicit-enabled-mind",
+      "owner": "MD-453"
     }
   ],
   "targetMcpCatalog": [
@@ -1104,7 +1118,9 @@
     "reconcile_file_stage",
     "get_bundle_file_download",
     "commit_changeset",
-    "reconcile_changeset"
+    "reconcile_changeset",
+    "enqueue_note",
+    "get_note_status"
   ],
   "schemaDiffs": [
     {
@@ -1362,7 +1378,7 @@
         {
           "role": "help-renderer-source",
           "path": "packages/adapter-web/src/connections.ts",
-          "gitBlob": "877c08bbf1c34fd3711b334271bde68f3d483033"
+          "gitBlob": "f73ca2b3d3f2f606f6c290682183de94c17e682b"
         }
       ]
     },

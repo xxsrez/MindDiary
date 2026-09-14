@@ -2622,7 +2622,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(codexHelpHtml, /Writing is optional/u);
   assert.match(codexHelpHtml, /choose Read and write independently for every ordinary or Personal Mind/u);
   assert.match(codexHelpHtml, /This account-wide set is shared by every Connection and personal token/u);
-  assert.match(codexHelpHtml, /Automatically save durable facts\/decisions from this request to every matching Mind/u);
+  assert.match(codexHelpHtml, /Save durable facts\/decisions from this request to every matching Mind/u);
   assert.match(codexHelpHtml, /Refresh list_minds before writing/u);
   assert.match(codexHelpHtml, /Updating this help page does not replace Custom Instructions you already saved/u);
   assert.match(codexHelpHtml, /Copy isolated routing check/u);
@@ -4714,6 +4714,35 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     assert.equal(line.includes(recoveryMarker), false);
     assert.equal(line.includes("recovery.owner@example.com"), false);
   }
+});
+
+test("note receipt survives a Sites runtime restart and background dispatch commits without another MCP call", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const scheduled = [];
+  const options = { database, bucket, publicOrigin: ORIGIN, schedule(work) { scheduled.push(work); }, observabilityWriter: { write() {} },
+    identity: { readVerifiedIdentity: () => ({ kind: "authenticated", verifiedEmail: "notes@example.com", verifiedFullName: "Notes Owner" }) },
+    tokenVerifierKey: key(1), locatorKey: key(41), exportDownloadVerifierKey: key(81), csrfKey: key(121) };
+  let runtime = await createProductSiteRuntime(options);
+  let csrf = csrfFromHtml(await (await responseFrom(runtime, new Request(`${ORIGIN}/`))).text());
+  const mutate = (path, body, id) => responseFrom(runtime, new Request(`${ORIGIN}${path}`, {
+    method: "POST", headers: { origin: ORIGIN, "content-type": "application/json", "x-csrf-token": csrf, "idempotency-key": id }, body: JSON.stringify(body) }));
+  assert.equal((await mutate("/api/v1/account", { action: "create_isolated_account" }, "note-bootstrap")).status, 200);
+  csrf = csrfFromHtml(await (await responseFrom(runtime, new Request(`${ORIGIN}/me`))).text());
+  const issued = await mutate("/api/v1/mcp-tokens", { name: "Note test", scopes: ["content:write"] }, "note-token");
+  const secret = (await issued.json()).data.secret;
+  assert.equal((await mutateMindUsage(runtime, csrf, "/me", "read_write", 0, "note-enable")).status, 200);
+  const accepted = await modernTool(runtime, secret, "note-accept", "enqueue_note", {
+    mind: "/me", idempotency_key: "note-fixture", title: "Synthetic only", text: "Paper lighthouse: amber. Fictional test data." });
+  assert.equal(accepted.state, "queued");
+  assert.ok(scheduled.some((work) => work.kind === "note" && work.id === accepted.receipt_id));
+  runtime = await createProductSiteRuntime(options);
+  await runtime.dispatchBackground({ kind: "note", jobId: accepted.receipt_id });
+  const receipt = await modernTool(runtime, secret, "note-status", "get_note_status", { mind: "/me", receipt_id: accepted.receipt_id });
+  assert.equal(receipt.state, "committed", JSON.stringify(receipt));
+  const read = await modernTool(runtime, secret, "note-read", "read_files", { mind: "/me",
+    revision_selector: { kind: "revision", revision_id: receipt.revision_id }, requests: [{ mode: "whole", path: receipt.path }] });
+  assert.match(JSON.stringify(read), /Paper lighthouse: amber/u);
 });
 
 test("Personal configuration MCP is scoped, metadata-only, CAS protected and shared by both profiles", async () => {

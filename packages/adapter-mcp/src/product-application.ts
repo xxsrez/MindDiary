@@ -10,6 +10,7 @@ import type {
   MindHistoryService,
   MindSearchService,
   MindValidationService,
+  NoteQueueService,
 } from "@mind-diary/application-content";
 import {
   NativeFileParameterRoute,
@@ -37,6 +38,7 @@ type AuthenticatedActor = Parameters<
 type MindInfo = Awaited<ReturnType<MindDiscoveryService["getMindInfo"]>>;
 
 export interface ProductMcpApplicationDependencies {
+  readonly notes?: Pick<NoteQueueService, "enqueue" | "status">;
   readonly personalConfiguration?: {
     getMyMindConfiguration(actor: AuthenticatedActor): Promise<unknown>;
     configureMyMindDescription(actor: AuthenticatedActor, command: { description: string | null; expectedMetadataVersion: number; idempotencyKey: string }): Promise<unknown>;
@@ -586,6 +588,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
     return Object.freeze(
       MCP_TOOL_DEFINITIONS.filter(
         (definition) =>
+          (this.#dependencies.notes !== undefined || !["enqueue_note", "get_note_status"].includes(definition.name)) &&
           (hostedUploadIntents || definition.name !== "create_file_upload_intent") &&
           (nativeFileParameter || definition.name !== "stage_bundle_file") &&
           (mcpAppsProfile || definition.name !== "open_bundle_file_picker"),
@@ -667,6 +670,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
       return Object.freeze({ kind: "allowed" as const });
     }
     const writeTool = request.name === "commit_changeset" ||
+      request.name === "enqueue_note" ||
       request.name === "reconcile_changeset" ||
       request.name === "create_file_upload_intent" ||
       request.name === "stage_bundle_file" ||
@@ -1185,6 +1189,25 @@ export class ProductMcpContentApplication implements McpContentApplication {
           snakeOutput({ ...grant, retrieval: BUNDLE_FILE_DOWNLOAD_RETRIEVAL }),
           "Created a one-use BundleFile download.",
         );
+      }
+      case "enqueue_note":
+      case "get_note_status": {
+        if (this.#dependencies.notes === undefined) return createMcpToolErrorResult(request.actor.requestId, "unsupported_operation", "Note queue unavailable.", false);
+        try {
+        const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind);
+        const receipt = request.name === "enqueue_note"
+          ? await this.#dependencies.notes.enqueue(request.actor, info.mind.mindId, {
+              idempotencyKey: input.idempotencyKey, title: input.title, text: input.text,
+            })
+          : await this.#dependencies.notes.status(request.actor, info.mind.mindId, input.receiptId);
+        return createMcpToolSuccessResult(snakeOutput(receipt), "Note receipt.");
+        } catch (error) {
+          const codes = new Set(["invalid_note", "invalid_note_receipt", "note_not_found", "note_access_denied", "writable_mind_required", "idempotency_conflict", "note_queue_full", "note_capacity_rejected"]);
+          if (error instanceof Error && codes.has(error.message)) return createMcpToolErrorResult(
+            request.actor.requestId, error.message, "The note operation could not be completed.",
+            error.message === "note_queue_full" || error.message === "note_capacity_rejected");
+          throw error;
+        }
       }
       case "commit_changeset": {
         if (!validChangesetInput(input)) {

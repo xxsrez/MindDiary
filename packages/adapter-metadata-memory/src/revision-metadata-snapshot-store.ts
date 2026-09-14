@@ -35,6 +35,7 @@ export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStor
         auditEvents: new Map(this._auditEvents),
         auditOutbox: new Map(this._auditOutbox),
         backgroundJobs: new Map(this._backgroundJobs),
+        queuedNotes: new Map(this._queuedNotes),
         exportJobs: new Map(this._exportJobs),
         exportDownloadGrants: new Map(this._exportDownloadGrants),
         bundleFileDownloadGrants: new Map(this._bundleFileDownloadGrants),
