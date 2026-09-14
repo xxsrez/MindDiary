@@ -186,6 +186,36 @@ async function fixture() {
       { recursive: true, force: true }); } };
 }
 
+test("pending note receipt and uncommitted payload survive backup and offline restore", async () => {
+  const f = await fixture();
+  try {
+    const bytes = Buffer.from("---\ntype: Source\ntitle: Synthetic pending note\n---\n\nqueue-only bytes\n");
+    const payloadHash = await systemBackupSha256(bytes);
+    const note = { receiptId: "note_backup_probe", spaceId: "s_shared",
+      payloadHash, size: bytes.length, state: "queued", revisionId: null };
+    f.value.queuedNotes.set(note.receiptId, note);
+    f.bucket.putBytes(`spaces/s_shared/objects/sha256/${payloadHash.slice(7)}`,
+      bytes, "text/markdown; charset=utf-8", payloadHash);
+    const backup = await runBackup({ directory: f.directory, origin: ORIGIN,
+      key: KEY, fetchImpl: f.fetch });
+    assert.equal(backup.last_success.object_count, 10);
+    assert.deepEqual(await readFile(backupObjectPath(f.directory, payloadHash)), bytes);
+    const target = join(f.directory, "queue-restored");
+    const receipt = await restoreBackup({ directory: f.directory, target,
+      verifyKit: async () => {} });
+    assert.equal(receipt.revision_count, 4);
+    assert.deepEqual(await readFile(backupObjectPath(target, payloadHash)), bytes);
+    const restored = new DatabaseSync(join(target, "restored.sqlite"));
+    try {
+      const row = restored.prepare(`SELECT payload_json FROM restore_records
+        WHERE field='queuedNotes' AND record_id=?`).get(note.receiptId);
+      assert.ok(row);
+      assert.match(row.payload_json, /queue|queued/u);
+      assert.ok(row.payload_json.includes(payloadHash));
+    } finally { restored.close(); }
+  } finally { await f.close(); }
+});
+
 test("legacy manifest without format restores canonical v1 bytes and preserves raw records", async () => {
   const f = await fixture();
   try {

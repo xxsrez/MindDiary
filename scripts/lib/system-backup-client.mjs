@@ -575,7 +575,7 @@ function recordKey(value) {
   if (!Array.isArray(parts) || parts.length !== 2 ||
     typeof parts[0] !== "string" || typeof parts[1] !== "string" ||
     ![
-      "spaces", "revisionsById", "auditEvents", "principals",
+      "spaces", "revisionsById", "queuedNotes", "auditEvents", "principals",
       "externalBindings", "knowledgeSpaces", "personalBindings",
       "memberships", "principalMindUsageOwners", "activeHandlesByKey",
       "activeHandlesBySpace", "retiredHandles",
