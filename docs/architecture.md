@@ -976,8 +976,13 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   даже если быстрый ошибочный ответ не достигает общего request deadline.
   Данный предел относится к очереди, а не заменяет end-to-end deadline
   пользовательского запроса или предел внешнего I/O внутри callback.
-  Product Worker ограничивает ожидание ответа 10 секундами от входа в fetch,
-  включая инициализацию, очередь и callback. Истечение либо отмена клиента
+  Product Worker ограничивает ожидание страниц и обычного REST 10 секундами,
+  а exact MCP routes `/api/mcp`, `/api/mcp/2025-11-25` и `/api/mcp/apps` —
+  30 секундами от входа в fetch, включая инициализацию, очередь и callback.
+  MCP budget учитывает полную producer validation и durable commit, которые
+  на hosted storage могут превышать navigation budget даже для малой записи.
+  Он не меняет отдельные queue/I/O limits или авторизацию.
+  Истечение либо отмена клиента
   прекращает ожидание ответа, но не отменяет canonical append: результат
   записи может оставаться неизвестным, повтор требует прежнего idempotency key
   и reconciliation. Зависшее уже инициализированное поколение исключается из

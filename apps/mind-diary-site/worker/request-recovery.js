@@ -2,7 +2,7 @@ import {
   IsolateRuntimeCache,
   RUNTIME_INITIALIZATION_TIMEOUT_MS,
 } from "./runtime-cache.js";
-import { FOREGROUND_TIMEOUT_MS, SYSTEM_BACKUP_FOREGROUND_TIMEOUT_MS,
+import { FOREGROUND_TIMEOUT_MS, MCP_FOREGROUND_TIMEOUT_MS, SYSTEM_BACKUP_FOREGROUND_TIMEOUT_MS,
   withForegroundDeadline } from "./foreground-deadline.js";
 import { RuntimeDiagnostics } from "./runtime-diagnostics.js";
 
@@ -233,6 +233,11 @@ export function createMindDiaryProductWorker(options) {
   if (!Number.isSafeInteger(foregroundTimeoutMs) || foregroundTimeoutMs < 1) {
     throw new TypeError("foreground timeout must be a positive integer");
   }
+  const mcpForegroundTimeoutMs = options.mcpForegroundTimeoutMs ??
+    options.foregroundTimeoutMs ?? MCP_FOREGROUND_TIMEOUT_MS;
+  if (!Number.isSafeInteger(mcpForegroundTimeoutMs) || mcpForegroundTimeoutMs < 1) {
+    throw new TypeError("MCP foreground timeout must be a positive integer");
+  }
   const backupForegroundTimeoutMs = options.backupForegroundTimeoutMs ??
     SYSTEM_BACKUP_FOREGROUND_TIMEOUT_MS;
   if (!Number.isSafeInteger(backupForegroundTimeoutMs) || backupForegroundTimeoutMs < 1) {
@@ -249,9 +254,11 @@ export function createMindDiaryProductWorker(options) {
       return diagnostics.runRequest(request, async () => {
       let activeHandle;
       const expire = diagnostics.expirationHandler();
-      const deadlineMs = new URL(request.url).pathname.startsWith(
+      const pathname = new URL(request.url).pathname;
+      const isMcp = ["/api/mcp", "/api/mcp/2025-11-25", "/api/mcp/apps"].includes(pathname);
+      const deadlineMs = pathname.startsWith(
         "/api/v1/internal/system-backup/",
-      ) ? backupForegroundTimeoutMs : foregroundTimeoutMs;
+      ) ? backupForegroundTimeoutMs : isMcp ? mcpForegroundTimeoutMs : foregroundTimeoutMs;
       return withForegroundDeadline(request, deadlineMs, async (request, foregroundSignal) => {
       let failureStage = "static-assets";
       try {

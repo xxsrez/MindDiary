@@ -16,7 +16,7 @@ test("foreground deadline preserves trusted request identity", async () => {
   assert.equal(await response.text(), "verified-actor");
 });
 
-function fixture({ backupForegroundTimeoutMs } = {}) {
+function fixture({ backupForegroundTimeoutMs, mcpForegroundTimeoutMs } = {}) {
   let generations = 0;
   let release;
   let started;
@@ -25,6 +25,7 @@ function fixture({ backupForegroundTimeoutMs } = {}) {
   const scheduled = [];
   const worker = createMindDiaryProductWorker({
     foregroundTimeoutMs: 25,
+    ...(mcpForegroundTimeoutMs === undefined ? {} : { mcpForegroundTimeoutMs }),
     ...(backupForegroundTimeoutMs === undefined ? {} : { backupForegroundTimeoutMs }),
     recoveryCoordinator: new RequestRecoveryCoordinator({ enabled: false }),
     readConfig() { return { publicOrigin: ORIGIN }; },
@@ -81,6 +82,30 @@ test("operator backup route may complete after the ordinary foreground deadline"
   assert.equal(response.status, 200);
   assert.equal(await response.text(), "generation-1");
 });
+
+for (const path of ["/api/mcp", "/api/mcp/2025-11-25", "/api/mcp/apps"]) {
+  test(`MCP budget lets ${path} finish beyond the navigation deadline`, async () => {
+    const f = fixture({ mcpForegroundTimeoutMs: 300 });
+    const pending = f.worker.fetch(new Request(ORIGIN + path, {
+      method: "POST", body: "{}",
+    }), {}, context);
+    await f.entered;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    f.release();
+    assert.equal((await pending).status, 200);
+    assert.equal(f.generations(), 1);
+  });
+}
+
+for (const path of ["/me", "/api/mcp/not-a-route", "/api/mcp-extra"]) {
+  test(`MCP budget does not extend ${path}`, async () => {
+    const f = fixture({ mcpForegroundTimeoutMs: 300 });
+    const response = await f.worker.fetch(new Request(ORIGIN + path), {}, context);
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, "request_timeout");
+    f.release();
+  });
+}
 
 test("client cancellation retires a ready generation without claiming write failure", async () => {
   const f = fixture();
