@@ -767,7 +767,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "f73ca2b3d3f2f606f6c290682183de94c17e682b",
+      gitBlob: "f052608fe741aa5fd21c99ca7f3e9792bcd94399",
     },
     {
       surface: "plugin-label",
