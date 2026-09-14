@@ -991,7 +991,9 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /choose Read and write independently for every ordinary or Personal Mind/u);
   assert.match(codexHelpHtml, /Any Mind without a description needs your direct request for a specific write there/u);
   assert.match(codexHelpHtml, /This account-wide set is shared by every Connection and personal token/u);
-  assert.match(codexHelpHtml, /Automatically save durable facts\/decisions from this request to every matching Mind/u);
+  assert.match(codexHelpHtml, /Save durable facts\/decisions from this request to every matching Mind/u);
+  assert.match(codexHelpHtml, /For new notes use enqueue_note/u);
+  assert.match(codexHelpHtml, /continue without polling\/read-back/u);
   assert.match(codexHelpHtml, /Refresh list_minds before writing/u);
   assert.match(codexHelpHtml, /&#39;only&#39; limits destinations/u);
   assert.match(codexHelpHtml, /Updating this help page does not replace Custom Instructions you already saved/u);

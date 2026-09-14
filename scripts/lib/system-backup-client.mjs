@@ -606,8 +606,14 @@ function applyVerifiedPages(db, descriptor, receipt, onStage) {
         PRIMARY KEY(record_key, part_index)
       );
       CREATE TEMP TABLE backup_deletes (record_key TEXT PRIMARY KEY);`);
-    for (const page of db.prepare(`SELECT * FROM backup_pending_pages
-        ORDER BY page_index`).iterate()) {
+    // Fetch one page at a time: Node 22 can finalize a temporary statement
+    // while its iterator is active under allocation pressure.
+    const nextPage = db.prepare(`SELECT * FROM backup_pending_pages
+        WHERE page_index > ? ORDER BY page_index LIMIT 1`);
+    let pageIndex = -1;
+    for (let page = nextPage.get(pageIndex); page;
+      page = nextPage.get(pageIndex)) {
+      pageIndex = page.page_index;
       exact(sha(Buffer.from(page.payload_json, "utf8")), page.sha256,
         "page_digest_mismatch");
       exact(Buffer.byteLength(page.payload_json), page.byte_size,
