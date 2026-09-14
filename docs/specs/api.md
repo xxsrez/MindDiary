@@ -1,6 +1,6 @@
 # REST и MCP API Mind Diary
 
-## MD-453: асинхронный приём заметок (candidate, 2026-09-14)
+## MD-453: асинхронный приём заметок (implemented, UAT verified, 2026-09-14)
 
 `enqueue_note(mind, idempotency_key, title, text)` принимает одну добавочную
 заметку до 64 KiB. Сервер сам формирует Markdown в `raw/inbox/`, сохраняет

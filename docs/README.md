@@ -358,6 +358,7 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 - [Mind Diary без служебных отчётов](reports/2026-09-12-quiet-mind-diary.md) — инструкции аккаунта, MCP metadata, UAT159 и границы проверки ответов.
 - [Системный бэкап: локальное испытание, 2026-09-13](reports/2026-09-13-system-backup-drill.md)
 - [ChatGPT: восстановление сохранения, 2026-09-14](reports/2026-09-14-chatgpt-save-repair.md) — таймаут MCP, exact revision session и синтетическая проверка.
+- [MD-453: фоновая запись из ChatGPT, 2026-09-14](reports/2026-09-14-chatgpt-queued-notes.md) — durable очередь, UAT и проверка реального аккаунта.
   — одна синтетическая дельта, прерывание и повтор, offline restore всех Minds,
   измерения, hosted transport, первая пользовательская копия и автономное
   восстановление десяти Minds; ежедневный запуск отменён.

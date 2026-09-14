@@ -3,7 +3,7 @@
 MD-453 (2026-09-14) добавляет `enqueue_note` (content-write, exact writable Mind)
 и `get_note_status` (content-read, exact Mind и исходный principal).
 Старый `capture_knowledge` остаётся retired. Контракт приёма и ограничения
-Sites описаны в [REST и MCP API](api.md#md-453-асинхронный-приём-заметок-candidate-2026-09-14).
+Sites описаны в [REST и MCP API](api.md#md-453-асинхронный-приём-заметок-implemented-uat-verified-2026-09-14).
 
 > **Superseding disposition MD-373/MD-383, 2026-09-03.** Principal-owned
 > `disabled | read | read_write` заменяет credential target. Site меняет mode

@@ -1,6 +1,6 @@
 # Архитектура Mind Diary
 
-MD-453 candidate (2026-09-14): `NoteQueueService` принимает небольшие добавочные
+MD-453 implemented, UAT verified (2026-09-14): `NoteQueueService` принимает небольшие добавочные
 заметки через `enqueue_note`. Markdown bytes находятся в Space-scoped object
 storage; `queuedNotes` в durable metadata содержит digest, размер, квитанцию,
 исходного actor без bearer, write-generation fence и состояние попытки.

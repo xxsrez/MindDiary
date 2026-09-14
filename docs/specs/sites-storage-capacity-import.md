@@ -1,6 +1,6 @@
 # Sites storage, capacity и Markdown import
 
-MD-453 candidate (2026-09-14): incoming note queue допускает 32 незавершённые
+MD-453 implemented, UAT verified (2026-09-14): incoming note queue допускает 32 незавершённые
 заметки на Mind, до 64 KiB текста каждая. До object put резервируются canonical
 bytes и 2048 bytes metadata обычным capacity admission; при durable receipt
 резерв consume-ится. Незавершённые payloads включаются в canonical reachability
