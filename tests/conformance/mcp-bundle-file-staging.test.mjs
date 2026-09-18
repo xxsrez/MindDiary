@@ -234,7 +234,7 @@ test("bounded native transport validates every redirect host and never exposes p
   const transport = new OpenAiNativeFileTransport({
     maxBytes: 64,
     fetcher: async (input, init) => {
-      requested.push({ url: String(input), credentials: init.credentials, redirect: init.redirect });
+      requested.push({ url: String(input), init });
       if (requested.length === 1) {
         return new Response(null, {
           status: 302,
@@ -260,10 +260,13 @@ test("bounded native transport validates every redirect host and never exposes p
   assert.deepEqual(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))), Buffer.from(PNG));
   assert.equal(downloaded.fileName, "diagram.png");
   assert.equal(downloaded.mimeType, "image/png");
-  assert.deepEqual(requested.map(({ credentials, redirect }) => ({ credentials, redirect })), [
-    { credentials: "omit", redirect: "manual" },
-    { credentials: "omit", redirect: "manual" },
-  ]);
+  for (const request of requested) {
+    assert.equal(typeof request.url, "string");
+    assert.equal(request.init.redirect, "manual");
+    assert.equal("credentials" in request.init, false);
+    assert.equal("cache" in request.init, false);
+    assert.equal("referrerPolicy" in request.init, false);
+  }
 
   await assert.rejects(
     transport.download({
@@ -415,10 +418,10 @@ test("product adapter terminates provider metadata and returns only verified sta
           String(input),
           "https://files.oaiusercontent.com/file/temporary-secret",
         );
-        assert.equal(init.credentials, "omit");
         assert.equal(init.redirect, "manual");
-        assert.equal(init.cache, "no-store");
-        assert.equal(init.referrerPolicy, "no-referrer");
+        assert.equal("credentials" in init, false);
+        assert.equal("cache" in init, false);
+        assert.equal("referrerPolicy" in init, false);
         return new Response(PNG, { status: 200 });
       },
     }),

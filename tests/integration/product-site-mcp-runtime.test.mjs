@@ -1312,10 +1312,10 @@ test("Product Site publishes one modern file input and keeps exact transport ver
   );
   assert.equal(nativeFetches, 1);
   assert.equal(nativeFetchRequest.input, exactStageArguments.file.download_url);
-  assert.equal(nativeFetchRequest.init.credentials, "omit");
   assert.equal(nativeFetchRequest.init.redirect, "manual");
-  assert.equal(nativeFetchRequest.init.cache, "no-store");
-  assert.equal(nativeFetchRequest.init.referrerPolicy, "no-referrer");
+  assert.equal("credentials" in nativeFetchRequest.init, false);
+  assert.equal("cache" in nativeFetchRequest.init, false);
+  assert.equal("referrerPolicy" in nativeFetchRequest.init, false);
   assert.equal(staged.staged_file.sha256, nativeSha256);
   assert.equal(staged.staged_file.size, nativeBytes.byteLength);
   assert.equal(staged.staged_file.display_filename, "fixture.bin");

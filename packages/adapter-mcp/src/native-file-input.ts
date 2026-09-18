@@ -315,14 +315,11 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
       for (let redirect = 0; redirect <= this.#maxRedirects; redirect += 1) {
         try {
           response = await Promise.race([
-            this.#fetcher(target, {
+            this.#fetcher(target.href, {
               method: "GET",
               redirect: "manual",
-              credentials: "omit",
-              cache: "no-store",
-              referrerPolicy: "no-referrer",
               signal: controller.signal,
-              headers: Object.freeze({ accept: "application/octet-stream" }),
+              headers: { accept: "application/octet-stream" },
             }),
             deadline,
           ]);
