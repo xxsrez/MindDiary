@@ -133,7 +133,7 @@ read-back предыдущего, а не локальное предполож�
 
 ### Каталоги и discovery
 
-- Fresh write-capable modern client (`2026-07-28`) получает exact 25-tool
+- Fresh write-capable modern client (`2026-07-28`) получает exact 26-tool
   catalog, включая один `openai/fileParams` stage; compatibility client
   (`2025-11-25`) получает 23 names без native stage. Read-only grant получает
   exact 22-tool subset без `create_file_upload_intent` и native stage.

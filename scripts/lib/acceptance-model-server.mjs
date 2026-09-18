@@ -78,11 +78,18 @@ export class AcceptanceModelServer {
       this.waiters.push(waiter);
     });
   }
-  async thread({ model, tools, skill, customInstructions }) {
-    if ((typeof skill === "string") === (typeof customInstructions === "string")) {
+  async thread({ model, tools, skill, customInstructions, instructionMode }) {
+    const instructionSources = [
+      typeof skill === "string",
+      typeof customInstructions === "string",
+      instructionMode === "mcp-only",
+    ].filter(Boolean).length;
+    if (instructionSources !== 1) {
       throw new Error("exactly_one_model_instruction_source_required");
     }
-    const developerInstructions = typeof customInstructions === "string"
+    const developerInstructions = instructionMode === "mcp-only"
+      ? "Answer the user's request using only the available Mind Diary MCP tools. No optional Mind Diary skill or product Custom Instructions are installed. Discover current service guidance from the tool catalog."
+      : typeof customInstructions === "string"
       ? "Answer the user's request using the available Mind Diary tools. Treat the following text as the user's saved ChatGPT Custom Instructions, provided verbatim. No optional skill is installed.\n\n" + customInstructions
       : "Answer the user's request using the available Mind Diary tools. The following is the installed Mind Diary skill, provided verbatim.\n\n" + skill;
     const result = await this.rpc("thread/start", { model, cwd: this.directory, ephemeral: true, environments: [], approvalPolicy: "never", sandbox: "read-only",

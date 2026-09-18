@@ -67,6 +67,7 @@ export * from "./file-ingress-coordinator.js";
 export * from "./connector-ingress.js";
 
 export const CONTENT_QUERIES = [
+  "get_mind_diary_guidance",
   "list_minds",
   "resolve_mind",
   "get_mind_info",
@@ -108,6 +109,7 @@ export type McpPerformanceStage =
   | "stage_application"
   | "stage_total";
 export type McpPerformanceTool =
+  | "get_mind_diary_guidance"
   | "enqueue_note"
   | "get_note_status"
   | "get_personal_mind_configuration"

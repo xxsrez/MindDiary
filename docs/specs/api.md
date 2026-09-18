@@ -1413,7 +1413,8 @@ family revoke.
 
 Protected-resource metadata URL также публикуется в MCP
 `WWW-Authenticate` challenge. Read/export tools и
-`get_file_ingress_capabilities` объявляют OAuth2 `content:read`;
+`get_mind_diary_guidance`, `get_file_ingress_capabilities` объявляют OAuth2
+`content:read`;
 `create_file_upload_intent`, `stage_bundle_file`, `reconcile_file_stage`,
 `preflight_changeset`, `commit_changeset`, `reconcile_changeset` и
 `capture_knowledge` объявляют `content:write`.
@@ -1463,6 +1464,7 @@ principal/role/scopes. Полный contract находится в
 get_session
 get_account_deletion_impact
 get_mind_deletion_impact
+get_mind_diary_guidance
 list_minds
 resolve_mind_metadata
 resolve_mind
@@ -1949,6 +1951,7 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 
 | Tool | Scope | `readOnlyHint` | `destructiveHint` | `openWorldHint` |
 |---|---|:---:|:---:|:---:|
+| `get_mind_diary_guidance` | read | true | false | false |
 | `list_minds` | read | true | false | false |
 | `resolve_mind` | read | true | false | false |
 | `get_mind_info` | read | true | false | false |
@@ -2166,6 +2169,40 @@ Only own current-binding verified state is returned. Provider `file_id`,
 temporary URL, local path and bytes are absent.
 
 ## MCP tools
+
+### `get_mind_diary_guidance`
+
+Read-only self-contained service guide for an MCP-only client or an installed
+skill that needs the current server rules. Input is the exact empty object
+`{}`; additional fields are rejected. Output `data` contains:
+
+```json
+{
+  "guidance_version": "2026-09-18",
+  "service_guidance_sha256": "sha256:...",
+  "service_guidance_markdown": "# Mind Diary service guidance\n...",
+  "host_specific": {
+    "applicability": "conditional_on_client_tools",
+    "instructions": "Apply host-specific companion guidance only when the named local tools are actually present."
+  }
+}
+```
+
+Canonical source —
+`packages/adapter-mcp/guidance/service-guidance.md`; generated server constant
+и Marketplace `references/service-guidance.md` обязаны совпадать с ним
+byte-for-byte и по SHA-256. Guide покрывает fresh Mind selection,
+source-grounded reads, OKF file operations, full-bundle doctor,
+`preflight_changeset`, commit/read-back, recovery и incremental typed transfer.
+Отдельный host-specific раздел явно условен и не выдаёт macOS companion за
+service capability.
+
+Tool не читает Mind или иной corpus, не создаёт revision, не меняет mode,
+scopes, ACL или credential authority. Он объявляет `content:read` и read-only
+annotations. Server instructions и tool description рекомендуют один вызов на
+версию guide для клиента без skill, но это discovery guidance, а не
+обязательный protocol barrier: остальные разрешённые tools продолжают работать
+без предварительного вызова.
 
 ### `list_minds`
 

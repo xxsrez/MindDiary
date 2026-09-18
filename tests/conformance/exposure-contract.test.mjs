@@ -19,6 +19,7 @@ import {
 } from "@mind-diary/adapter-web";
 
 const expectedMcpTools = [
+  "get_mind_diary_guidance",
   "get_personal_mind_configuration",
   "set_personal_mind_description",
   "list_minds",

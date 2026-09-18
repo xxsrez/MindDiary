@@ -37,27 +37,39 @@ carrier релиза 0.1 уточнён
 Release 0.3 и не переносит исторические binding/export tools в будущий Content
 MCP.
 
-## Optional skill boundary Release 0.4
+## Self-contained guidance boundary Release 0.5
 
-Базовый hosted MCP workflow не зависит от skill: tool descriptions и schemas
-самодостаточно задают `list_minds`, bounded discovery/read, exact-revision file
-operations, history, validation, changeset commit и reconciliation. Отсутствие
-skill не является основанием просить пользователя установить его до обычного
-content call.
+Базовый hosted MCP workflow не зависит от skill. Read-only tool
+`get_mind_diary_guidance` возвращает полную переносимую service instruction из
+того же канонического Markdown, из которого генерируется portable reference
+Marketplace skill. Tool не читает corpus, не меняет content, mode, scopes или
+ACL и требует пустой input. Короткие server instructions и description tool
+делают его обнаружимым, но server не вводит обязательный call gate: отсутствие
+предварительного вызова не блокирует остальные операции.
 
-Marketplace skill остаётся optional advanced guidance. Его entrypoint — thin
-router с общими authority/privacy boundaries. Отдельный portable reference
-содержит только provenance-sensitive multi-Mind preservation и incremental
-typed OKF transfer на hosted tools. Инструкции bundled macOS local companion
-вынесены в другой reference и загружаются только когда текущий Codex host
-действительно публикует соответствующие local tools.
+Marketplace skill остаётся optional thin router. Его portable reference
+генерируется byte-for-byte из `packages/adapter-mcp/guidance/service-guidance.md`
+скриптом `sync-mind-diary-service-guidance.mjs`, поэтому common service rules не
+имеют второй независимо редактируемой копии. В guide входят selection,
+source-grounded reads, OKF file operations, doctor, preflight, commit,
+recovery, provenance-sensitive multi-Mind preservation и incremental typed OKF
+transfer. Инструкции bundled macOS local companion остаются в отдельном
+reference и применяются только когда текущий host действительно публикует
+соответствующие local tools.
 
-Portable reference предназначен для отдельного сравнительного теста
-skill-assisted и no-skill поведения. Его наличие не заявляет поддержку skill
-installation в ChatGPT Web, native file transport на другом host или
-переносимость macOS companion. Базовую корректность без skill доказывают
-server-side tool descriptions и независимый no-skill MCP journey; сложные
-workflow проверяются отдельно на exact Marketplace package.
+No-skill journey обязан сначала обнаружить guide в `tools/list`, прочитать его,
+а затем выбрать Mind, выполнить bounded read, dry-run, write, read-back и
+doctor через обычные hosted tools. Skill-assisted package отдельно проверяет
+тождество generated reference каноническому source. Ни один из этих тестов не
+заявляет переносимость macOS companion на другой host.
+
+Hosted evidence этого journey формирует
+`scripts/check-guidance-journey-hosted.mjs`: fresh ephemeral agent запускается
+без skill и product Custom Instructions, получает только target tool catalog,
+сначала читает `get_mind_diary_guidance`, затем выполняет exact synthetic
+selection/read/preflight/commit/read-back/doctor. Receipt и очищенный JSONL
+trace привязаны к exact candidate identity; cleanup обязан восстановить
+исходный acceptance inventory.
 
 ## Product authority Release 0.3
 
@@ -275,8 +287,9 @@ OAuth resource `https://mind-diary.example.invalid/api/mcp`. Это
 `/api/mcp/2025-11-25` не рекламируется current package и остаётся только для
 точечно проверенного старого клиента.
 
-Skill остаётся тонким interaction adapter и поставляет агенту полную целевую
-инструкцию Release 0.3. Перед релевантным workflow он получает fresh
+Skill остаётся тонким interaction adapter к канонической service guidance,
+которая также доступна через read-only `get_mind_diary_guidance`. Перед
+релевантным workflow агент получает fresh
 `list_minds`: прямое имя пользователя требует exact enabled Mind, а без прямого
 имени агент выбирает один или несколько readable Minds только по semantic fit
 недоверенных descriptions. Disabled/недоступный Mind, `/me`, похожее имя и

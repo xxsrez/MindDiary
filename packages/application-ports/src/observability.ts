@@ -75,6 +75,7 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "stage_authentication",
   "stage_application",
   "stage_total",
+  "get_mind_diary_guidance",
   "list_minds",
   "resolve_mind",
   "get_mind_info",

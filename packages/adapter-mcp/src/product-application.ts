@@ -18,6 +18,12 @@ import {
   NativeFileInputFailure,
 } from "./native-file-input.js";
 import {
+  MIND_DIARY_HOST_SPECIFIC_BOUNDARY,
+  MIND_DIARY_SERVICE_GUIDANCE_MARKDOWN,
+  MIND_DIARY_SERVICE_GUIDANCE_SHA256,
+  MIND_DIARY_SERVICE_GUIDANCE_VERSION,
+} from "./service-guidance.generated.js";
+import {
   MCP_TOOL_DEFINITIONS,
   MCP_MOVED_EXPORT_TOOLS,
   createMcpToolErrorResult,
@@ -674,6 +680,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
       return Object.freeze({ kind: "allowed" as const });
     }
     if (
+      request.name === "get_mind_diary_guidance" ||
       request.name === "get_personal_mind_configuration" ||
       request.name === "set_personal_mind_description" ||
       request.name === "start_export" ||
@@ -729,6 +736,27 @@ export class ProductMcpContentApplication implements McpContentApplication {
   async executeToolCall(request: Parameters<McpContentApplication["executeToolCall"]>[0]): Promise<unknown> {
     const input = toolInput(request.name, request.arguments);
     switch (request.name) {
+      case "get_mind_diary_guidance":
+        if (!hasExactKeys(input, [])) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_request",
+            "Mind Diary guidance arguments must be empty.",
+            false,
+          );
+        }
+        return createMcpToolSuccessResult(
+          snakeOutput({
+            guidanceVersion: MIND_DIARY_SERVICE_GUIDANCE_VERSION,
+            serviceGuidanceSha256: MIND_DIARY_SERVICE_GUIDANCE_SHA256,
+            serviceGuidanceMarkdown: MIND_DIARY_SERVICE_GUIDANCE_MARKDOWN,
+            hostSpecific: {
+              applicability: "conditional_on_client_tools",
+              instructions: MIND_DIARY_HOST_SPECIFIC_BOUNDARY,
+            },
+          }),
+          `Mind Diary service guidance ${MIND_DIARY_SERVICE_GUIDANCE_VERSION}.`,
+        );
       case "get_personal_mind_configuration":
       case "set_personal_mind_description": {
         if (!request.actor.authentication.effectiveScopes.some((scope) => scope === "personal:configure")) {

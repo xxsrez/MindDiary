@@ -433,7 +433,7 @@ test("all current MCP tools have a disposition and the target catalog is exact",
       "get_export_status",
     ],
   );
-  assert.equal(fixture.targetMcpCatalog.length, 25);
+  assert.equal(fixture.targetMcpCatalog.length, 26);
   for (const tool of fixture.mcpTools) {
     assertExactKeys(tool, ["name", "disposition", "profile", "mindScope", "owner"], tool.name);
     assert.ok(profiles.has(tool.profile), `${tool.name}: unknown profile`);
@@ -829,7 +829,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "685720fc44e5ee97a882cab63cc48bc2f6f1ab2c",
+          gitBlob: "5ab66b188de1a20820b63d6164107ef2425e986c",
         },
         {
           role: "installed-skill-probe-source",

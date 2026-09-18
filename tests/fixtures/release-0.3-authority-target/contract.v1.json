@@ -15,6 +15,7 @@
     "fetch",
     "get_bundle_file_download",
     "get_file_ingress_capabilities",
+    "get_mind_diary_guidance",
     "get_mind_info",
     "get_note_status",
     "get_personal_mind_configuration",

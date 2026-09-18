@@ -24,6 +24,8 @@
     "validate:fixtures": "npm run build --silent && node scripts/validate-okf-fixtures.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
     "generate:product-ui-assets": "node scripts/generate-product-ui-assets.mjs",
+    "generate:mind-diary-guidance": "node scripts/sync-mind-diary-service-guidance.mjs",
+    "check:mind-diary-guidance": "node scripts/sync-mind-diary-service-guidance.mjs --check",
     "generate:mcp-tool-inventories": "npm run build --silent && node scripts/generate-exact-mcp-tool-inventories.mjs",
     "check:product-site": "node scripts/generate-product-ui-assets.mjs --check && node scripts/check-product-site.mjs",
     "check:product-site-artifact": "node scripts/check-product-site-artifact.mjs",
@@ -56,7 +58,7 @@
     "uat:operator-directory-canary": "node scripts/run-uat-operator-directory-canary.mjs",
     "uat:provider-log-boundary": "node scripts/run-provider-request-log-boundary.mjs",
     "readiness:report": "node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json",
-    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && playwright test --config=playwright.config.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:backup-completeness && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
+    "check": "npm run check:mind-diary-guidance && npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && playwright test --config=playwright.config.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:backup-completeness && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
   },
   "dependencies": {
     "re2js": "2.8.6",

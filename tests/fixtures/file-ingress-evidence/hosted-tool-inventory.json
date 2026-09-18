@@ -45,6 +45,12 @@
       "output_schema_sha256": "sha256:2ceea74294db36405fa809e353a4bcd46aedfd7e998644c2f6c69d4043650a34"
     },
     {
+      "name": "get_mind_diary_guidance",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:71fc596a20f27da3dec80050e5d1f553eba34aea24c2853b853488a811e6b892",
+      "output_schema_sha256": "sha256:1f957674ffded8449ee9bde949592e5460ff29373d0e94ba966a9f48bfd0f846"
+    },
+    {
       "name": "get_mind_info",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:511d328773f67ec3f837a09498f1b0c206ea14c81919d21cd0c74768a8d5930f",

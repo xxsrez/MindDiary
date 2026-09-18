@@ -886,6 +886,13 @@
   ],
   "mcpTools": [
     {
+      "name": "get_mind_diary_guidance",
+      "disposition": "add",
+      "profile": "content-read",
+      "mindScope": "none",
+      "owner": "MD-472"
+    },
+    {
       "name": "list_minds",
       "disposition": "change",
       "profile": "content-read",
@@ -1090,6 +1097,7 @@
     }
   ],
   "targetMcpCatalog": [
+    "get_mind_diary_guidance",
     "get_personal_mind_configuration",
     "set_personal_mind_description",
     "list_minds",
@@ -1346,7 +1354,7 @@
         {
           "role": "accepted-skill-source-contract",
           "path": "docs/specs/plugin-connector.md",
-          "gitBlob": "685720fc44e5ee97a882cab63cc48bc2f6f1ab2c"
+          "gitBlob": "5ab66b188de1a20820b63d6164107ef2425e986c"
         },
         {
           "role": "installed-skill-probe-source",

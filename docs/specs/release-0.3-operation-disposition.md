@@ -175,7 +175,7 @@ indistinguishable `404` for every other actor.
 | `POST /oauth/authorize` | keep → OAuth | Explicit consent; account control is not granted |
 | `POST /oauth/token` | keep → OAuth | PKCE/refresh/resource/grant checks |
 | `POST /oauth/revoke` | keep → OAuth | Credential revoke; Site Connection UI remains product control |
-| `POST /api/mcp` | change → Content MCP modern | Enabled 25-tool projection, centralized instructions and one standard native file parameter; canonical OAuth resource unchanged. MD-376/MD-379/MD-470/ADR-0030 |
+| `POST /api/mcp` | change → Content MCP modern | Enabled 26-tool projection, centralized instructions, one self-contained guidance tool and one standard native file parameter; canonical OAuth resource unchanged. MD-376/MD-379/MD-470/MD-472/ADR-0030 |
 | `POST /api/mcp/2025-11-25` | change → Content MCP compatibility | Isolated legacy lifecycle, same enabled tool catalog and centralized instructions. MD-376 |
 | any `/mcp` | remove → none | Preserve explicit product `404 route_not_found`; never redirect a bearer request |
 
@@ -183,6 +183,7 @@ indistinguishable `404` for every other actor.
 
 | Current tool | Disposition → target | Schema/error delta, compatibility и migration owner |
 |---|---|---|
+| `get_mind_diary_guidance` | add → Content MCP | Read-only self-contained portable service guide from the canonical source shared with the optional skill; no Mind read, mutation or authority change. MD-472 |
 | `list_minds` | change → Content MCP | Lists only principal-enabled `read | read_write` Minds with effective capability, settings version and each current lane generation. At most one ordinary descriptor and independently Personal `/me` may expose `writable_mount.active=true`; `routing_profile` distinguishes them. MD-381/MD-386/MD-382 |
 | `resolve_mind` | change → Content MCP | Exact enabled handle only; explicit user request never bypasses disabled/scope/current access. MD-376 |
 | `get_mind_info` | change → Content MCP | Explicit enabled Mind/revision and effective capability; historical mode remains read-only. MD-376 |
@@ -211,13 +212,14 @@ indistinguishable `404` for every other actor.
 | `start_export` | move → Sites control | Omit from catalog; exact old call returns side-effect-free `operation_moved_to_sites` with the Sites REST route and never starts a job. MD-359/MD-361 |
 | `get_export_status` | move → Sites control | Omit from catalog; exact old call returns the same side-effect-free migration result; Site status/download only. MD-359/MD-361 |
 
-The complete modern target schema catalog contains 25 tools in stable order,
+The complete modern target schema catalog contains 26 tools in stable order,
 including the two ADR-0025 Personal-configuration tools, three MD-408 file
 operation tools and two managed note tools. Modern `/api/mcp` publishes the
 complete catalog. Compatibility omits only `stage_bundle_file` until its exact
 client/profile pair has separate native-file evidence.
 
 ```text
+get_mind_diary_guidance
 get_personal_mind_configuration
 set_personal_mind_description
 list_minds
@@ -255,7 +257,7 @@ Modern `2026-07-28`:
 | `resources/templates/list` | keep | Authenticated empty list; no implicit templates |
 | `resources/list` | change | Enumerate only authorized root `index` resources from current access, without binding |
 | `resources/read` | change | Reauthorize exact `okf://spaces/{space_id}/revisions/{revision_id}/...`; no HEAD or cross-Mind fallback |
-| `tools/list` | change | Advertise the complete 25-tool modern projection, including one standard native file tool |
+| `tools/list` | change | Advertise the complete 26-tool modern projection, including the guidance tool and one standard native file tool |
 | `tools/call` | change | Execute only advertised target tool and target schemas |
 | `initialize` | remove | Preserve explicit `Method not found`; modern profile never starts legacy lifecycle |
 | `ping` | remove | Preserve current `Method not found`; not silently added by this migration |
@@ -267,7 +269,7 @@ Compatibility `2025-11-25`:
 | `initialize` | change | Keep isolated negotiation; update instructions and advertised tool capability |
 | `notifications/initialized` | keep | `202` for exact notification |
 | `ping` | keep | Empty successful result |
-| `tools/list` | change | Advertise the 24-tool compatibility projection; omit native stage until exact client evidence |
+| `tools/list` | change | Advertise the 25-tool compatibility projection; omit native stage until exact client evidence |
 | `tools/call` | change | Same target schemas and authorization |
 | `resources/templates/list`, `resources/list`, `resources/read` | remove | Preserve compatibility `Method not found`; resources are not silently widened in this profile |
 | `server/discover` | remove | Preserve compatibility `Method not found` |
