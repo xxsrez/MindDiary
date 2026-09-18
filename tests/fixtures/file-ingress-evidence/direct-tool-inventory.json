@@ -99,6 +99,12 @@
       "output_schema_sha256": "sha256:2385212d2873dd5f1618563aa91583deb3959cc6f7a2f550ed87c1ac991b528e"
     },
     {
+      "name": "preflight_changeset",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:009c5a6e28881b5f209089979574d722d0a4886496970bf5099879e60c5d63b4",
+      "output_schema_sha256": "sha256:e529ad8b7e112f29378caf80e785b2715859c804365b3e5b5b14f52d923ceda7"
+    },
+    {
       "name": "read_files",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:777c83a50e07c5ac130db2d44829d571b64764282039b196d849316bf98453be",

@@ -602,6 +602,21 @@ test("mixed ingress commits real source services atomically and reconciles every
     })),
   ];
   const request = commitRequest(env, "commit-mixed-ingress", operations);
+  const checked = await env.commits.preflight({
+    actor: request.actor,
+    spaceId: request.spaceId,
+    expectedRevisionId: request.expectedRevisionId,
+    producerProfile: request.producerProfile,
+    operations: request.operations,
+  });
+  assert.equal(checked.kind, "ready");
+  assert.equal(await env.metadata.readHead(MINDS.ordinary.spaceId), REVISIONS.initial.revisionId);
+  for (const [_path, _bytes, record] of staged) {
+    assert.equal(
+      (await env.metadata.readStagedBundleFile(record.stagedFileId))?.state,
+      "verified",
+    );
+  }
   const beforeAudits = await env.metadata.listAuditEventsForTest();
   const committed = await env.ingress.commit(request);
   assert.equal(committed.kind, "committed");

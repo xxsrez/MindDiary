@@ -46,7 +46,7 @@ export interface ProductMcpApplicationDependencies {
   readonly search: Pick<MindSearchService, "searchEntries">;
   readonly history: Pick<MindHistoryService, "listRevisions" | "getRevision">;
   readonly validation: Pick<MindValidationService, "validateMind">;
-  readonly commits: Pick<ChangesetCommitService, "commit">;
+  readonly commits: Pick<ChangesetCommitService, "commit" | "preflight">;
   readonly staging?: Pick<BundleFileStagingService, "stageStream">;
   readonly uploadIntents?: Pick<LocalFileUploadIntentService, "create">;
   readonly uploadIntentUrl?: (capability: string) => string;
@@ -488,6 +488,36 @@ function validChangesetInput(input: Readonly<Record<string, unknown>>): boolean 
     ));
 }
 
+function validPreflightChangesetInput(input: Readonly<Record<string, unknown>>): boolean {
+  const keys = [
+    "mind",
+    "expectedRevision",
+    "operations",
+    ...(input.sourceReferences === undefined ? [] : ["sourceReferences"]),
+  ];
+  return hasExactKeys(input, keys) &&
+    stringValue(input.mind) !== null &&
+    stringValue(input.expectedRevision) !== null &&
+    Array.isArray(input.operations) && input.operations.length > 0 &&
+    (input.sourceReferences === undefined || (
+      Array.isArray(input.sourceReferences) &&
+      input.sourceReferences.length <= 8 &&
+      input.sourceReferences.every((reference) =>
+        reference !== null &&
+        typeof reference === "object" &&
+        !Array.isArray(reference) &&
+        hasExactKeys(reference as Readonly<Record<string, unknown>>, [
+          "mind",
+          "revision",
+          "path",
+        ]) &&
+        stringValue((reference as Readonly<Record<string, unknown>>).mind) !== null &&
+        stringValue((reference as Readonly<Record<string, unknown>>).revision) !== null &&
+        stringValue((reference as Readonly<Record<string, unknown>>).path) !== null
+      )
+    ));
+}
+
 /** Complete custom Mind-aware content application behind the MCP HTTP adapters. */
 export class ProductMcpContentApplication implements McpContentApplication {
   readonly #dependencies: ProductMcpApplicationDependencies;
@@ -654,7 +684,8 @@ export class ProductMcpContentApplication implements McpContentApplication {
     ) {
       return Object.freeze({ kind: "allowed" as const });
     }
-    const writeTool = request.name === "commit_changeset" ||
+    const writeTool = request.name === "preflight_changeset" ||
+      request.name === "commit_changeset" ||
       request.name === "enqueue_note" ||
       request.name === "reconcile_changeset" ||
       request.name === "create_file_upload_intent" ||
@@ -1238,6 +1269,79 @@ export class ProductMcpContentApplication implements McpContentApplication {
           request.actor.requestId,
           code,
           "The changeset was not committed.",
+          result.kind === "revision_conflict" ||
+            (result.kind === "denied" && result.decision.retryable),
+          output as Readonly<Record<string, unknown>>,
+        );
+      }
+      case "preflight_changeset": {
+        if (!validPreflightChangesetInput(input)) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_request",
+            "The changeset preflight arguments are invalid.",
+            false,
+          );
+        }
+        const writeMind = await this.#writeMindInfo(request.actor, input.mind);
+        if (writeMind.kind === "error") return writeMind.result;
+        let sourceReferences;
+        try {
+          sourceReferences = await this.#resolveSourceReferences(
+            request.actor,
+            input.sourceReferences,
+          );
+        } catch {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "mind_not_found",
+            "One or more source references are unavailable.",
+            false,
+          );
+        }
+        const result = await this.#dependencies.commits.preflight({
+          actor: request.actor,
+          spaceId: writeMind.info.mind.mindId,
+          expectedRevisionId: input.expectedRevision as never,
+          producerProfile: true,
+          operations: canonicalCommitOperations(input.operations) as never,
+          sourceReferences,
+        });
+        if (result.kind === "ready") {
+          return createMcpToolSuccessResult(
+            snakeOutput({
+              mind: writeMind.info.mind,
+              decision: "ready",
+              baseRevisionId: result.baseRevisionId,
+              changesetIdentity: result.changesetIdentity,
+              validationProfile: "strict_producer_2026-09-18",
+              validation: {
+                valid: result.validation.valid,
+                conforms: result.validation.conforms,
+                diagnostics: result.validation.diagnostics,
+                conformanceErrorCount: result.validation.conformanceErrors.length,
+                consistencyErrorCount: result.validation.envelopeErrors.filter(
+                  (diagnostic) => diagnostic.code.startsWith("markdown_"),
+                ).length,
+                qualityWarningCount: result.validation.qualityWarnings.length,
+              },
+              operationCount: result.operations.length,
+              resultingFileCount: result.candidateFiles.length,
+              stagedBundleFileCount: result.stagedBundleFileRecords.length,
+            }),
+            "The exact changeset passes the current commit gate without being saved.",
+          );
+        }
+        const output = snakeOutput(result);
+        const code = result.kind === "denied"
+          ? result.decision.code
+          : result.kind === "invalid"
+            ? result.error.code
+            : result.kind;
+        return createMcpToolErrorResult(
+          request.actor.requestId,
+          code,
+          "The changeset does not pass preflight and was not saved.",
           result.kind === "revision_conflict" ||
             (result.kind === "denied" && result.decision.retryable),
           output as Readonly<Record<string, unknown>>,

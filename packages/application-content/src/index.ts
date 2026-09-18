@@ -80,6 +80,7 @@ export const CONTENT_QUERIES = [
   "list_revisions",
   "get_revision",
   "validate_revision",
+  "preflight_changeset",
   "list_bundle_files",
   "reconcile_file_stage",
   "reconcile_changeset",
@@ -125,6 +126,7 @@ export type McpPerformanceTool =
   | "list_revisions"
   | "get_revision"
   | "validate_mind"
+  | "preflight_changeset"
   | "list_bundle_files"
   | "get_bundle_file_download"
   | "set_read_mind_binding"

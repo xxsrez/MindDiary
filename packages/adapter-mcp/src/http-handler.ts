@@ -1597,7 +1597,8 @@ export function createMcpHttpHandlerAtEndpoint(
     }
 
     if (
-      (name === "commit_changeset" ||
+      (name === "preflight_changeset" ||
+        name === "commit_changeset" ||
         name === "enqueue_note" ||
         name === "reconcile_changeset" ||
         name === "create_file_upload_intent" ||

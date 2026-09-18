@@ -175,7 +175,7 @@ indistinguishable `404` for every other actor.
 | `POST /oauth/authorize` | keep → OAuth | Explicit consent; account control is not granted |
 | `POST /oauth/token` | keep → OAuth | PKCE/refresh/resource/grant checks |
 | `POST /oauth/revoke` | keep → OAuth | Credential revoke; Site Connection UI remains product control |
-| `POST /api/mcp` | change → Content MCP modern | Enabled 24-tool projection, centralized instructions and one standard native file parameter; canonical OAuth resource unchanged. MD-376/MD-379/ADR-0030 |
+| `POST /api/mcp` | change → Content MCP modern | Enabled 25-tool projection, centralized instructions and one standard native file parameter; canonical OAuth resource unchanged. MD-376/MD-379/MD-470/ADR-0030 |
 | `POST /api/mcp/2025-11-25` | change → Content MCP compatibility | Isolated legacy lifecycle, same enabled tool catalog and centralized instructions. MD-376 |
 | any `/mcp` | remove → none | Preserve explicit product `404 route_not_found`; never redirect a bearer request |
 
@@ -204,13 +204,14 @@ indistinguishable `404` for every other actor.
 | `stage_bundle_file` | change → modern Content MCP | One top-level `openai/fileParams` input; provider envelope terminates at adapter and service pins current principal usage generation. ADR-0030/MD-379 |
 | `reconcile_file_stage` | change → Content MCP | Reconcile exact target/digest/idempotency payload without source selection under current principal usage generation. ADR-0030/MD-379 |
 | `get_bundle_file_download` | change → Content MCP | Exact enabled Mind/revision current read; usage is rechecked. MD-376 |
+| `preflight_changeset` | add → Content MCP | Read-only dry-run of the exact operations against an explicit writable Mind and expected HEAD; uses the commit producer profile and full resulting-bundle doctor, exposes exact base and prepared identity, and never reserves or saves. MD-470 |
 | `commit_changeset` | change → Content MCP | Canonical write: explicit target assertion, expected HEAD, idempotency, bounded operations and optional max-8 strict `source_references[{mind,revision,path}]`; service resolves the selected Mind's current ordinary or Personal `read_write` generation and reauthorizes target/source transactionally. MD-376/MD-379/MD-382 |
 | `reconcile_changeset` | change → Content MCP | Exact original commit payload including unchanged `source_references`; missing outcome performs no writes. MD-376/MD-379 |
 | `capture_knowledge` | remove → none | Omit from both catalogs/schemas; exact cached call is side-effect-free and directs the agent to canonical `commit_changeset`. MD-376 |
 | `start_export` | move → Sites control | Omit from catalog; exact old call returns side-effect-free `operation_moved_to_sites` with the Sites REST route and never starts a job. MD-359/MD-361 |
 | `get_export_status` | move → Sites control | Omit from catalog; exact old call returns the same side-effect-free migration result; Site status/download only. MD-359/MD-361 |
 
-The complete modern target schema catalog contains 24 tools in stable order,
+The complete modern target schema catalog contains 25 tools in stable order,
 including the two ADR-0025 Personal-configuration tools, three MD-408 file
 operation tools and two managed note tools. Modern `/api/mcp` publishes the
 complete catalog. Compatibility omits only `stage_bundle_file` until its exact
@@ -237,6 +238,7 @@ create_file_upload_intent
 stage_bundle_file
 reconcile_file_stage
 get_bundle_file_download
+preflight_changeset
 commit_changeset
 reconcile_changeset
 enqueue_note
@@ -253,7 +255,7 @@ Modern `2026-07-28`:
 | `resources/templates/list` | keep | Authenticated empty list; no implicit templates |
 | `resources/list` | change | Enumerate only authorized root `index` resources from current access, without binding |
 | `resources/read` | change | Reauthorize exact `okf://spaces/{space_id}/revisions/{revision_id}/...`; no HEAD or cross-Mind fallback |
-| `tools/list` | change | Advertise the complete 24-tool modern projection, including one standard native file tool |
+| `tools/list` | change | Advertise the complete 25-tool modern projection, including one standard native file tool |
 | `tools/call` | change | Execute only advertised target tool and target schemas |
 | `initialize` | remove | Preserve explicit `Method not found`; modern profile never starts legacy lifecycle |
 | `ping` | remove | Preserve current `Method not found`; not silently added by this migration |
@@ -265,7 +267,7 @@ Compatibility `2025-11-25`:
 | `initialize` | change | Keep isolated negotiation; update instructions and advertised tool capability |
 | `notifications/initialized` | keep | `202` for exact notification |
 | `ping` | keep | Empty successful result |
-| `tools/list` | change | Advertise the 23-tool compatibility projection; omit native stage until exact client evidence |
+| `tools/list` | change | Advertise the 24-tool compatibility projection; omit native stage until exact client evidence |
 | `tools/call` | change | Same target schemas and authorization |
 | `resources/templates/list`, `resources/list`, `resources/read` | remove | Preserve compatibility `Method not found`; resources are not silently widened in this profile |
 | `server/discover` | remove | Preserve compatibility `Method not found` |

@@ -174,7 +174,7 @@ function hostedObservation() {
   });
 }
 
-test("MD-344 contract fixture is closed and reuses the exact 21-tool direct inventory", async () => {
+test("MD-344 contract fixture is closed and reuses the current direct inventory", async () => {
   const fixture = JSON.parse(await readFile(
     new URL("../fixtures/release-0.3-authority-target/contract.v1.json", import.meta.url),
     "utf8",

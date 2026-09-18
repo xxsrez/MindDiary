@@ -1326,6 +1326,7 @@ export async function createProductSiteRuntime(
     ingress: fileIngress,
     bundleFileDownloads,
     commits: {
+      preflight: (request) => commits.preflight(request),
       commit: async (request) => {
         const result = await runWithCapturedWork(
           () => commits.commit(request),

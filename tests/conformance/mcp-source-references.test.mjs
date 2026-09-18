@@ -80,7 +80,7 @@ function argumentsValue(overrides = {}) {
 }
 
 function harness({ targetEnabled = true } = {}) {
-  const calls = { discovery: [], commit: [], reconcile: [] };
+  const calls = { discovery: [], preflight: [], commit: [], reconcile: [] };
   const application = new ProductMcpContentApplication({
     discovery: {
       async listMinds() { return { minds: [], nextCursor: null }; },
@@ -111,6 +111,34 @@ function harness({ targetEnabled = true } = {}) {
     history: { async listRevisions() { return {}; }, async getRevision() { return {}; } },
     validation: { async validateMind() { return {}; } },
     commits: {
+      async preflight(request) {
+        calls.preflight.push(request);
+        return {
+          kind: "ready",
+          baseRevisionId: "revision_target",
+          changesetIdentity: `sha256:${"b".repeat(64)}`,
+          producerProfile: true,
+          operations: request.operations,
+          candidateFiles: [{
+            kind: "markdown",
+            path: "concepts/synthesis.md",
+            mediaType: "text/markdown; charset=utf-8",
+            text: "fixture",
+            sha256: null,
+            size: 7,
+            writeRequired: true,
+          }],
+          stagedBundleFileRecords: [],
+          validation: {
+            valid: true,
+            conforms: true,
+            diagnostics: [],
+            conformanceErrors: [],
+            envelopeErrors: [],
+            qualityWarnings: [],
+          },
+        };
+      },
       async commit(request) {
         calls.commit.push(request);
         return { kind: "revision_conflict", currentRevisionId: "revision_target" };
@@ -169,6 +197,28 @@ test("commit and reconciliation resolve exact enabled source references to inter
   assert.deepEqual(env.calls.reconcile[0].sourceReferences, env.calls.commit[0].sourceReferences);
   assert.equal(JSON.stringify(commit).includes("space_source_internal"), false);
   assert.equal(JSON.stringify(reconcile).includes("space_source_internal"), false);
+});
+
+test("preflight resolves the same exact sources and returns a prepared identity without commit fields", async () => {
+  const env = harness();
+  const { idempotency_key: _key, summary: _summary, ...preflightArguments } = argumentsValue();
+  const checked = await env.application.executeToolCall({
+    actor,
+    name: "preflight_changeset",
+    arguments: preflightArguments,
+  });
+  assert.equal(checked.isError, false);
+  assert.equal(checked.structuredContent.data.decision, "ready");
+  assert.equal(
+    checked.structuredContent.data.changeset_identity,
+    `sha256:${"b".repeat(64)}`,
+  );
+  assert.deepEqual(env.calls.preflight[0].sourceReferences, [{
+    spaceId: "space_source_internal",
+    revisionId: "revision_source",
+    path: "concepts/source.md",
+  }]);
+  assert.equal(env.calls.commit.length, 0);
 });
 
 test("source references are strict, bounded, and fail closed before commit", async () => {

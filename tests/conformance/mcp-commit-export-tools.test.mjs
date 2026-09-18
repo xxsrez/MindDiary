@@ -214,9 +214,29 @@ test("publishes strict commit schemas and truthful annotations", () => {
     ]),
   );
   assert.deepEqual([...definitions.keys()], [
+    "preflight_changeset",
     "commit_changeset",
     "reconcile_changeset",
   ]);
+
+  const preflight = definitions.get("preflight_changeset");
+  assert.deepEqual(preflight.inputSchema.required, [
+    "mind",
+    "expected_revision",
+    "operations",
+  ]);
+  assert.equal(Object.hasOwn(preflight.inputSchema.properties, "idempotency_key"), false);
+  assert.equal(Object.hasOwn(preflight.inputSchema.properties, "summary"), false);
+  assert.deepEqual(preflight.annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    openWorldHint: false,
+  });
+  assert.deepEqual(preflight.securitySchemes, [
+    { type: "oauth2", scopes: ["content:write"] },
+  ]);
+  assert.match(preflight.description, /never creates a revision/u);
+  assert.match(preflight.description, /commit_changeset still rechecks/u);
 
   const commit = definitions.get("commit_changeset");
   assert.equal(commit.inputSchema.$schema, "https://json-schema.org/draft/2020-12/schema");
@@ -297,7 +317,7 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   const writable = await result(await fixture.send(rpc("tools/list")));
   assert.deepEqual(
     writable.tools.map((definition) => definition.name),
-    ["commit_changeset", "reconcile_changeset"],
+    ["preflight_changeset", "commit_changeset", "reconcile_changeset"],
   );
   assert.equal(writable.tools[0].inputSchema.additionalProperties, false);
 
@@ -306,23 +326,28 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   );
   assert.deepEqual(
     readable.tools.map((definition) => definition.name),
-    ["commit_changeset", "reconcile_changeset"],
+    ["preflight_changeset", "commit_changeset", "reconcile_changeset"],
   );
   assert.deepEqual(readable.tools[0].securitySchemes, [
     { type: "oauth2", scopes: ["content:write"] },
   ]);
 
-  const denied = await fixture.send(
-    rpc("tools/call", {
-      id: 3,
-      name: "commit_changeset",
-      arguments: commitArguments(),
-    }),
-    "read-token",
-  );
-  const deniedResult = await result(denied);
-  assert.equal(denied.status, 200);
-  assert.equal(deniedResult.structuredContent.error.code, "insufficient_scope");
+  for (const [id, name, argumentsValue] of [
+    [3, "preflight_changeset", {
+      mind: "research-notes",
+      expected_revision: "rev_1",
+      operations: commitArguments().operations,
+    }],
+    [4, "commit_changeset", commitArguments()],
+  ]) {
+    const denied = await fixture.send(
+      rpc("tools/call", { id, name, arguments: argumentsValue }),
+      "read-token",
+    );
+    const deniedResult = await result(denied);
+    assert.equal(denied.status, 200);
+    assert.equal(deniedResult.structuredContent.error.code, "insufficient_scope");
+  }
   assert.equal(fixture.state.authorizationCalls.length, 0);
   assert.equal(fixture.state.executionCalls.length, 0);
 });

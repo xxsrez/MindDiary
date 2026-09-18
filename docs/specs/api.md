@@ -1414,8 +1414,9 @@ family revoke.
 Protected-resource metadata URL также публикуется в MCP
 `WWW-Authenticate` challenge. Read/export tools и
 `get_file_ingress_capabilities` объявляют OAuth2 `content:read`;
-`create_file_upload_intent`, `stage_bundle_file`, `reconcile_file_stage`, `commit_changeset`,
-`reconcile_changeset` и `capture_knowledge` объявляют `content:write`.
+`create_file_upload_intent`, `stage_bundle_file`, `reconcile_file_stage`,
+`preflight_changeset`, `commit_changeset`, `reconcile_changeset` и
+`capture_knowledge` объявляют `content:write`.
 Reconcile tools сами не создают effect, но читают write-scoped idempotency
 namespace только после current write binding/ACL checks. Missing,
 malformed, expired и revoked bearer получают `401`. Valid read-only bearer при
@@ -1484,6 +1485,7 @@ validate_revision
 list_bundle_files
 get_export_status
 reconcile_file_stage
+preflight_changeset
 reconcile_changeset
 ```
 
@@ -1968,6 +1970,7 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 | `reconcile_file_stage` | write | true | false | false |
 | `list_bundle_files` | read | true | false | false |
 | `get_bundle_file_download` | read | false | false | true |
+| `preflight_changeset` | write | true | false | false |
 | `commit_changeset` | write | false | true | false |
 | `reconcile_changeset` | write | true | false | false |
 | `capture_knowledge` | write | false | false | false |
@@ -1987,7 +1990,9 @@ creates one-use bearer grant and is likewise non-read-only/open-world; it never
 places bytes in the tool result.
 
 `get_file_ingress_capabilities` is a privacy-safe deployed matrix, not a source
-locator. Both reconcile tools are read-only but deliberately write-scoped:
+locator. `preflight_changeset` and both reconcile tools are read-only but
+deliberately write-scoped: they inspect state from an effective writable lane
+without granting or reserving future write authority.
 they reauthorize the exact current write generation and inspect only the
 original stage/commit idempotency outcome. `missing` never uploads bytes,
 reserves capacity, writes an object or advances HEAD.
@@ -2797,6 +2802,60 @@ admission rejected by the allowed executor's host before any HTTP request is
 reported locally as `client_transport_unsupported`, not as a server defect or a
 successful download.
 
+### `preflight_changeset`
+
+Input uses the same `operations` and optional `source_references` as
+`commit_changeset`, but has no `summary` or `idempotency_key`:
+
+```json
+{
+  "mind": "research-notes",
+  "expected_revision": "rev_current",
+  "operations": [],
+  "source_references": []
+}
+```
+
+The tool resolves one explicit effective `read_write` Mind and requires
+`content:write`. It applies the exact file operations to the named base in
+memory, materializes the complete resulting bundle, and runs the same strict
+producer profile, consistency doctor, BundleFile limits and source-reference
+authorization used by `commit_changeset`. Links from unchanged Markdown files
+therefore participate in the result; a multi-file repair is evaluated
+atomically.
+
+Ready success returns the exact base, a deterministic SHA-256 identity of the
+prepared result and the full diagnostics/counts:
+
+```json
+{
+  "mind": {},
+  "decision": "ready",
+  "base_revision_id": "rev_current",
+  "changeset_identity": "sha256:...",
+  "validation_profile": "strict_producer_2026-09-18",
+  "validation": {
+    "valid": true,
+    "conforms": true,
+    "diagnostics": [],
+    "conformance_error_count": 0,
+    "consistency_error_count": 0,
+    "quality_warning_count": 0
+  },
+  "operation_count": 1,
+  "resulting_file_count": 4,
+  "staged_bundle_file_count": 0
+}
+```
+
+The call never creates an immutable revision, advances HEAD, consumes a commit
+idempotency key or consumes staged BundleFiles. Validation failures expose the
+same `okf_validation_failed` diagnostics and commit-gate decision as commit for
+the same base, payload and profile. A stale base returns `revision_conflict`;
+there is no merge or reservation. A later `commit_changeset` independently
+rechecks the credential, current ACL, effective writable generation, source
+access, limits and HEAD CAS, so ready is not authority to publish.
+
 ### `commit_changeset`
 
 Input:
@@ -2804,7 +2863,6 @@ Input:
 ```json
 {
   "mind": "research-notes",
-  "write_binding_id": "wbind_opaque",
   "expected_revision": "rev_current",
   "idempotency_key": "01J...",
   "summary": "Add API design",
@@ -2812,10 +2870,11 @@ Input:
 }
 ```
 
-`write_binding_id` обязан быть current active generation и указывать на exact
-`mind`; `expected_revision` обязана быть current HEAD. Historical selector
-отсутствует намеренно. Rebind перед transaction возвращает
-`write_binding_stale` и не перенаправляет payload.
+Server разрешает exact `mind` через current principal-owned `read_write`
+generation; client не передаёт внутренний binding ID. `expected_revision`
+обязана быть current HEAD. Historical selector отсутствует намеренно. Смена
+generation перед transaction возвращает `writable_mind_stale` и не
+перенаправляет payload.
 
 `operations` — non-empty tagged union:
 
@@ -2957,9 +3016,9 @@ Stale HEAD возвращает tool execution error `revision_conflict` с
 ### `reconcile_changeset`
 
 Input schema is exactly `commit_changeset`: the caller repeats the original
-Mind, write generation, expected HEAD, idempotency key, summary and full
-operations array. The server recalculates the same canonical payload hash after
-current token/binding/ACL checks. Success returns either
+Mind, expected HEAD, idempotency key, summary and full operations array. The
+server resolves the current effective writable generation and recalculates the
+same canonical payload hash after current token/generation/ACL checks. Success returns either
 `{ "status": "missing" }` or the original immutable result:
 
 ```json

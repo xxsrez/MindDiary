@@ -348,6 +348,50 @@ async function fixture() {
   return { objects, metadata, coordinator, grant, service, snapshot, usage };
 }
 
+test("changeset preflight is deterministic and leaves commit state untouched", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_preflight",
+    "request_preflight",
+  );
+  const service = env.service({
+    currentActor: editor,
+    nextRevisionId: "revision_after_preflight",
+  });
+  const before = await env.snapshot();
+  const request = {
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    producerProfile: true,
+    operations: changes("concepts/preflight.md", "Preflight"),
+  };
+  const first = await service.preflight(request);
+  const second = await service.preflight(request);
+  assert.equal(first.kind, "ready");
+  assert.equal(second.kind, "ready");
+  assert.equal(first.baseRevisionId, REVISIONS.initial.revisionId);
+  assert.match(first.changesetIdentity, /^sha256:[0-9a-f]{64}$/u);
+  assert.equal(second.changesetIdentity, first.changesetIdentity);
+  assert.equal(first.validation.valid, true);
+  assert.equal(first.validation.qualityWarnings.length, 0);
+  assert.deepEqual(await env.snapshot(), before);
+
+  const committed = await service.commit({
+    ...request,
+    idempotencyKey: "commit-after-preflight",
+    summary: "Commit the exact preflighted changeset",
+  });
+  assert.equal(committed.kind, "committed");
+  assert.equal(committed.envelope.revision.revisionId, "revision_after_preflight");
+  const afterCommit = await env.snapshot();
+  const stale = await service.preflight(request);
+  assert.equal(stale.kind, "revision_conflict");
+  assert.equal(stale.currentRevisionId, "revision_after_preflight");
+  assert.deepEqual(await env.snapshot(), afterCommit);
+});
+
 test("queued note is durable before background commit and exact retry is deduplicated", async () => {
   const env = await fixture();
   const editor = actor(PRINCIPALS.editor.principalId, "token_note", "request_note");
@@ -523,6 +567,18 @@ test("MCP producer proposal fails closed on warnings and round-trips a valid imm
     nextRevisionId: "revision_producer_round_trip",
   });
   const before = await env.snapshot();
+  const warningOperations = [{
+    type: "create_file",
+    path: "concepts/generated-warning.md",
+    text: "---\ntype: Generated Knowledge\nstatus: reviewed\n---\n\n# Warning\n",
+  }];
+  const warningPreflight = await service.preflight({
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    producerProfile: true,
+    operations: warningOperations,
+  });
   const warningBearing = await service.commit({
     actor: editor,
     spaceId: MINDS.ordinary.spaceId,
@@ -530,17 +586,19 @@ test("MCP producer proposal fails closed on warnings and round-trips a valid imm
     idempotencyKey: "producer-warning-rejected",
     summary: "Reject warning-bearing generated knowledge",
     producerProfile: true,
-    operations: [{
-      type: "create_file",
-      path: "concepts/generated-warning.md",
-      text: "---\ntype: Generated Knowledge\nstatus: reviewed\n---\n\n# Warning\n",
-    }],
+    operations: warningOperations,
   });
+  assert.equal(warningPreflight.kind, "invalid");
   assert.equal(warningBearing.kind, "invalid");
   assert.equal(warningBearing.error.code, "okf_validation_failed");
+  assert.equal(warningPreflight.error.code, warningBearing.error.code);
   assert.deepEqual(
     warningBearing.error.diagnostics.map((issue) => issue.code),
     ["invalid_lifecycle_status"],
+  );
+  assert.deepEqual(
+    warningPreflight.error.diagnostics,
+    warningBearing.error.diagnostics,
   );
   assert.deepEqual(await env.snapshot(), before);
 

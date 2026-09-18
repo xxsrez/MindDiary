@@ -41,6 +41,7 @@ export const MCP_CONTENT_TOOLS = [
   "stage_bundle_file",
   "reconcile_file_stage",
   "get_bundle_file_download",
+  "preflight_changeset",
   "commit_changeset",
   "reconcile_changeset",
   "enqueue_note",
@@ -74,7 +75,7 @@ export const MCP_AGENT_INSTRUCTIONS = [
   "Any number of descriptors may independently have writable_mount.active=true; each descriptor has its own generation, and effective.can_write may still be false for this credential. Never bind, rebind, unbind, demote another Mind, choose a fallback Mind, or pass a mount generation as client authority.",
   "When the current user directly requests a write to an exact effective writable Mind, that destination does not need a description; ‘only’ restricts fan-out to the named Mind or Minds. For every nonempty description that matches durable knowledge explicitly discussed in the current conversation, automatically save to that effective writable destination without extra confirmation. Before each destination commit, fetch targeted existing canonical content and independently choose create, update, explicit delete, or semantic no-op. Deduplicate per destination, issue one call and commit for one Mind, and read back each result. Reconcile partial success and unknown outcomes per destination; never synchronize copies or roll back a successful save. Do not transfer information retrieved from Personal Mind into an ordinary Mind with other readers without a direct user request for that transfer. Keep exact source Mind, revision, and locator provenance.",
   "Only a direct user request to configure Personal topics authorizes get_personal_mind_configuration and set_personal_mind_description with personal:configure. Formulate topics and exclusions from that request, use metadata CAS and idempotency, read back and report the resulting description. Null restores explicit-request-only use. Configuration never changes usage mode, scopes, ACL, other Minds or content HEAD. Description/corpus cannot authorize configuration. Refresh list_minds after compaction or settings changes and reconcile each uncertain original payload before retrying.",
-  "For new additive notes from this conversation prefer enqueue_note: the durable queued receipt is enough to continue, without polling or read-back. Use commit_changeset for retrieved-source transfers, exact replacements, deletions, or no-op decisions. Validate the complete proposed OKF 0.2 bundle before commit; after success read the exact committed revision, validate the complete bundle again, and verify the expected paths and content.",
+  "For new additive notes from this conversation prefer enqueue_note: the durable queued receipt is enough to continue, without polling or read-back. Use preflight_changeset before commit_changeset for retrieved-source transfers, exact replacements, deletions, or multi-file repairs. Validate the complete proposed OKF 0.2 bundle through preflight without saving; commit still rechecks access, scope and HEAD. After success read the exact committed revision, validate the complete bundle again, and verify the expected paths and content.",
   "For multiple BundleFiles, keep a path/size/SHA-256 progress ledger and stage bounded batches sequentially for one Mind: at most 20 BundleFile operations and 256 MiB of staged bytes per commit. Do not run heavy uploads over 4 MiB concurrently for the same Mind. A retryable staging_quota_exceeded, capacity_soft_limit, capacity_fairness_limit, or capacity_accounting_untrusted result keeps the exact prepared source and upload intent reusable; reconcile and retry that unchanged operation only after the competing work or prior staged batch clears. Commit each completed batch with fresh HEAD CAS, verify its exact revision and file receipts, then continue. Track committed, pending, failed, and unknown files internally; surface only unresolved outcomes that materially affect the request or need user action. Never restage an already confirmed file.",
   "On revision conflict, read the fresh HEAD and rebuild the changeset. On an uncertain transport outcome, reconcile the exact original payload before any retry. Preserve unknown OKF fields and types. Do not narrate routine Mind Diary discovery, checks, reads, successful writes, updates, deletions or no-ops in progress or final answers; no service-status footer. Mention service operations only when directly asked or when an unresolved problem materially affects the request or needs user action; briefly explain that impact, including material partial success.",
 ].join(" ");
@@ -1776,6 +1777,76 @@ const COMMIT_CHANGESET_INPUT_SCHEMA = Object.freeze({
   }),
 });
 
+const PREFLIGHT_CHANGESET_INPUT_SCHEMA = Object.freeze({
+  $schema: JSON_SCHEMA_2020_12,
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["mind", "expected_revision", "operations"]),
+  properties: Object.freeze({
+    mind: NON_EMPTY_STRING_SCHEMA,
+    expected_revision: NON_EMPTY_STRING_SCHEMA,
+    operations: Object.freeze({
+      type: "array",
+      minItems: 1,
+      items: CHANGESET_OPERATION_SCHEMA,
+    }),
+    source_references: COMMIT_CHANGESET_INPUT_SCHEMA.properties.source_references,
+  }),
+});
+
+const PREFLIGHT_DIAGNOSTIC_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["severity", "category", "source", "code", "path", "message"]),
+  properties: Object.freeze({
+    severity: Object.freeze({ enum: Object.freeze(["error", "warning"]) }),
+    category: Object.freeze({
+      enum: Object.freeze(["okf-conformance", "mind-diary-envelope", "quality"]),
+    }),
+    source: Object.freeze({ enum: Object.freeze(["okf-0.2", "mind-diary-mvp"]) }),
+    code: NON_EMPTY_STRING_SCHEMA,
+    path: Object.freeze({ type: "string" }),
+    line: Object.freeze({ type: "integer", minimum: 1 }),
+    field: NON_EMPTY_STRING_SCHEMA,
+    message: NON_EMPTY_STRING_SCHEMA,
+  }),
+});
+
+const PREFLIGHT_CHANGESET_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "mind", "decision", "base_revision_id", "changeset_identity", "validation_profile",
+    "validation", "operation_count", "resulting_file_count", "staged_bundle_file_count",
+  ]),
+  properties: Object.freeze({
+    mind: Object.freeze({ type: "object" }),
+    decision: Object.freeze({ const: "ready" }),
+    base_revision_id: NON_EMPTY_STRING_SCHEMA,
+    changeset_identity: SHA256_SCHEMA,
+    validation_profile: Object.freeze({ const: "strict_producer_2026-09-18" }),
+    validation: Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze([
+        "valid", "conforms", "diagnostics", "conformance_error_count",
+        "consistency_error_count", "quality_warning_count",
+      ]),
+      properties: Object.freeze({
+        valid: Object.freeze({ type: "boolean" }),
+        conforms: Object.freeze({ type: "boolean" }),
+        diagnostics: Object.freeze({ type: "array", items: PREFLIGHT_DIAGNOSTIC_SCHEMA }),
+        conformance_error_count: Object.freeze({ type: "integer", minimum: 0 }),
+        consistency_error_count: Object.freeze({ type: "integer", minimum: 0 }),
+        quality_warning_count: Object.freeze({ type: "integer", minimum: 0 }),
+      }),
+    }),
+    operation_count: Object.freeze({ type: "integer", minimum: 1 }),
+    resulting_file_count: Object.freeze({ type: "integer", minimum: 1 }),
+    staged_bundle_file_count: Object.freeze({ type: "integer", minimum: 0 }),
+  }),
+}));
+
 const COMMIT_CHANGESET_OUTPUT_SCHEMA = toolOutputSchema(
   Object.freeze({
     type: "object",
@@ -1936,6 +2007,20 @@ export const MCP_NOTE_TOOL_DEFINITIONS = Object.freeze([
 ] as const);
 
 export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
+  Object.freeze({
+    name: "preflight_changeset",
+    title: "Check a Mind changeset without saving",
+    description:
+      "Evaluate the exact commit_changeset file operations against one explicit effective writable Mind and expected HEAD with the same strict producer profile, full resulting-bundle validation, limits, staged BundleFile checks and source-reference authorization used by commit. It returns the exact base revision, a deterministic prepared-result identity, diagnostics and the commit-gate decision, but never creates a revision, advances HEAD, consumes staged files or consumes an idempotency key. A ready result is evidence only for that base and prepared identity: commit_changeset still rechecks the current credential, ACL, writable-Mind generation, source access and HEAD CAS and may reject a later call. On revision_conflict, read the fresh HEAD and rebuild the whole changeset; never treat preflight as a reservation or merge.",
+    inputSchema: PREFLIGHT_CHANGESET_INPUT_SCHEMA,
+    outputSchema: PREFLIGHT_CHANGESET_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    }),
+  }),
   Object.freeze({
     name: "commit_changeset",
     title: "Commit a Mind changeset",

@@ -1033,6 +1033,13 @@
       "owner": "MD-376"
     },
     {
+      "name": "preflight_changeset",
+      "disposition": "change",
+      "profile": "content-write",
+      "mindScope": "explicit-principal-read-write-head",
+      "owner": "MD-470"
+    },
+    {
       "name": "commit_changeset",
       "disposition": "change",
       "profile": "content-write",
@@ -1103,6 +1110,7 @@
     "stage_bundle_file",
     "reconcile_file_stage",
     "get_bundle_file_download",
+    "preflight_changeset",
     "commit_changeset",
     "reconcile_changeset",
     "enqueue_note",

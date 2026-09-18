@@ -24,6 +24,7 @@
     "list_files",
     "list_minds",
     "list_revisions",
+    "preflight_changeset",
     "read_files",
     "reconcile_changeset",
     "reconcile_file_stage",

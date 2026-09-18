@@ -102,6 +102,7 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "get_note_status",
   "start_export",
   "get_export_status",
+  "preflight_changeset",
   "commit_changeset",
   "reconcile_changeset",
   "revision_index",

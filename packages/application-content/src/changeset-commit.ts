@@ -69,6 +69,18 @@ export interface CommitChangesetRequest {
   readonly operations: unknown;
 }
 
+export interface PreflightChangesetRequest {
+  readonly actor: ActorContext;
+  readonly spaceId: SpaceId;
+  readonly expectedRevisionId: RevisionId | null;
+  /** Adapter-resolved exact sources; untrusted shape is validated here. */
+  readonly sourceReferences?: unknown;
+  /** Trusted application-only policy for agent/service-produced OKF. */
+  readonly producerProfile?: boolean;
+  /** Untrusted adapter input is validated by the shared changeset preflight. */
+  readonly operations: unknown;
+}
+
 type NonReadyPreflightResult = Exclude<
   ChangesetPreflightResult,
   { readonly kind: "ready" }
@@ -88,6 +100,13 @@ export type ReconcileChangesetResult =
   | { readonly kind: "missing" }
   | { readonly kind: "idempotency_conflict" }
   | Extract<CommitChangesetResult, { readonly kind: "committed" | "denied" | "invalid" }>;
+
+export type PreflightChangesetResult =
+  | (Extract<ChangesetPreflightResult, { readonly kind: "ready" }> & {
+      readonly changesetIdentity: Sha256Digest;
+      readonly producerProfile: boolean;
+    })
+  | NonReadyPreflightResult;
 
 export type ChangesetCommitFailureCode =
   | "invalid_actor"
@@ -367,6 +386,38 @@ function canonicalSourceReferencesSource(
   })))}\n`;
 }
 
+function sha256Source(value: string): Sha256Digest {
+  const digest = new IncrementalSha256();
+  digest.update(ENCODER.encode(value));
+  return digest.digest() as Sha256Digest;
+}
+
+function preflightCandidateIdentity(
+  result: Extract<ChangesetPreflightResult, { readonly kind: "ready" }>,
+  producerProfile: boolean,
+  sourceReferences: readonly Readonly<ValidatedSourceReference>[],
+): Sha256Digest {
+  return sha256Source(`${JSON.stringify({
+    format: "mind-diary-preflight-changeset-result-v1",
+    base_revision_id: result.baseRevisionId,
+    producer_profile: producerProfile,
+    files: result.candidateFiles.map((file) => ({
+      kind: file.kind,
+      path: file.path,
+      media_type: file.mediaType,
+      size: file.size,
+      sha256: file.kind === "markdown" && file.text !== undefined
+        ? sha256Source(file.text)
+        : file.sha256,
+    })),
+    source_references: sourceReferences.map((source) => ({
+      space_id: source.spaceId,
+      revision_id: source.revisionId,
+      path: source.path,
+    })),
+  })}\n`);
+}
+
 function deniedWritableMind(
   code: "writable_mind_required" | "writable_mind_stale",
   retryable = false,
@@ -422,6 +473,80 @@ export class ChangesetCommitService {
       clock: dependencies.clock,
       limits: this.#preflightLimits,
       stagedBundleFiles: dependencies.metadata,
+    });
+  }
+
+  /**
+   * Read-only commit-gate evaluation over the same preflight engine used by
+   * commit(). It never reserves capacity, writes objects, consumes staged
+   * files or idempotency state, or advances HEAD.
+   */
+  async preflight(request: PreflightChangesetRequest): Promise<PreflightChangesetResult> {
+    const initialAuthorization = await this.#authorizer.authorize({
+      actor: request.actor,
+      spaceId: request.spaceId,
+      capability: "content:write",
+      revisionMode: "head",
+    });
+    if (initialAuthorization.kind === "denied") {
+      return Object.freeze({ kind: "denied", decision: initialAuthorization });
+    }
+    if (request.actor.kind !== "registered_principal") {
+      throw new ChangesetCommitFailure(
+        "invalid_actor",
+        "an authorized content changeset must belong to a registered principal",
+      );
+    }
+    const resolvedWritePin = await this.#resolveWritePin(
+      request.actor.principalId,
+      request.spaceId,
+    );
+    if (resolvedWritePin.kind !== "resolved") {
+      return Object.freeze({
+        kind: "denied",
+        decision: deniedWritableMind(
+          resolvedWritePin.kind === "required"
+            ? "writable_mind_required"
+            : "writable_mind_stale",
+        ),
+      });
+    }
+    const operations = validateChangesetOperations(
+      request.operations,
+      this.#preflightLimits,
+    );
+    if (operations.kind === "invalid") return operations;
+    const sourceReferences = validateSourceReferences(request.sourceReferences);
+    if (sourceReferences === null) {
+      return invalid(
+        "invalid_source_references",
+        "source references must be at most eight distinct exact source locators",
+      );
+    }
+    const sourceAuthorization = await this.#authorizeSourceReferences(
+      request.actor,
+      sourceReferences,
+    );
+    if (sourceAuthorization.kind !== "authorized") return sourceAuthorization;
+    const producerProfile = request.producerProfile === true;
+    const result = await this.#preflight.preflight({
+      actor: request.actor,
+      spaceId: request.spaceId,
+      revisionMode: "head",
+      expectedRevisionId: request.expectedRevisionId,
+      writeUsagePin: resolvedWritePin.pin,
+      operations: operations.operations,
+      producerProfile,
+    });
+    if (result.kind !== "ready") return result;
+    return Object.freeze({
+      ...result,
+      changesetIdentity: preflightCandidateIdentity(
+        result,
+        producerProfile,
+        sourceReferences,
+      ),
+      producerProfile,
     });
   }
 
