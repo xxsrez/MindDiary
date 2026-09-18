@@ -158,7 +158,7 @@ try {
       { path: "raw/untouched.md", mode: "whole" },
     ],
   });
-  const initialIndex = initialRead.items.find((item) => item.path === "index.md")?.file?.text;
+  const initialIndex = initialRead.items.find((item) => item.file?.path === "index.md")?.file?.text;
   assert.equal(typeof initialIndex, "string", "workflow_index_missing");
   const finalIndex = initialIndex.endsWith("\n")
     ? `${initialIndex}- [Workflow acceptance](wiki/acceptance-workflow.md)\n`
@@ -311,9 +311,9 @@ try {
       }
       if (callIndex === 3) {
         assert.equal(data.resolved_revision.revision_id, initialRevision);
-        assert.equal(data.items.find((item) => item.path === "index.md")?.file?.text, initialIndex);
-        assert.equal(data.items.find((item) => item.path === "concepts/acceptance.md")?.file?.text, sourceText);
-        assert.equal(data.items.find((item) => item.path === "raw/untouched.md")?.file?.text, untouchedText);
+        assert.equal(data.items.find((item) => item.file?.path === "index.md")?.file?.text, initialIndex);
+        assert.equal(data.items.find((item) => item.file?.path === "concepts/acceptance.md")?.file?.text, sourceText);
+        assert.equal(data.items.find((item) => item.file?.path === "raw/untouched.md")?.file?.text, untouchedText);
       }
       if (callIndex === 5) {
         assert.equal(data.decision, "ready");
@@ -328,10 +328,10 @@ try {
       }
       if (callIndex === 7) {
         assert.equal(data.resolved_revision.revision_id, committedRevision);
-        assert.equal(data.items.find((item) => item.path === "wiki/acceptance-workflow.md")?.file?.text, fixedWorkflowText);
-        assert.equal(data.items.find((item) => item.path === "index.md")?.file?.text, finalIndex);
-        assert.equal(data.items.find((item) => item.path === "concepts/acceptance.md")?.file?.text, sourceText);
-        assert.equal(data.items.find((item) => item.path === "raw/untouched.md")?.file?.text, untouchedText);
+        assert.equal(data.items.find((item) => item.file?.path === "wiki/acceptance-workflow.md")?.file?.text, fixedWorkflowText);
+        assert.equal(data.items.find((item) => item.file?.path === "index.md")?.file?.text, finalIndex);
+        assert.equal(data.items.find((item) => item.file?.path === "concepts/acceptance.md")?.file?.text, sourceText);
+        assert.equal(data.items.find((item) => item.file?.path === "raw/untouched.md")?.file?.text, untouchedText);
       }
       if (callIndex === 8) {
         assert.equal(data.resolved_revision.revision_id, committedRevision);
@@ -419,9 +419,9 @@ try {
       { path: "raw/untouched.md", mode: "whole" },
     ],
   });
-  assert.equal(winner.items.find((item) => item.path === "concepts/acceptance.md")?.file?.text, conflictWinnerText);
-  assert.equal(winner.items.find((item) => item.path === "raw/conflict-marker.md")?.file?.text, rivalMarkerText);
-  assert.equal(winner.items.find((item) => item.path === "raw/untouched.md")?.file?.text, untouchedText);
+  assert.equal(winner.items.find((item) => item.file?.path === "concepts/acceptance.md")?.file?.text, conflictWinnerText);
+  assert.equal(winner.items.find((item) => item.file?.path === "raw/conflict-marker.md")?.file?.text, rivalMarkerText);
+  assert.equal(winner.items.find((item) => item.file?.path === "raw/untouched.md")?.file?.text, untouchedText);
   const historical = await client.mcp(token, "read_files", {
     mind,
     revision_selector: { kind: "revision", revision_id: initialRevision },
@@ -430,8 +430,8 @@ try {
       { path: "raw/untouched.md", mode: "whole" },
     ],
   });
-  assert.equal(historical.items.find((item) => item.path === "concepts/acceptance.md")?.file?.text, sourceText);
-  assert.equal(historical.items.find((item) => item.path === "raw/untouched.md")?.file?.text, untouchedText);
+  assert.equal(historical.items.find((item) => item.file?.path === "concepts/acceptance.md")?.file?.text, sourceText);
+  assert.equal(historical.items.find((item) => item.file?.path === "raw/untouched.md")?.file?.text, untouchedText);
   receipt.model_usage = server.usage;
   receipt.history_readback = initialRevision;
   receipt.conflict = "revision_conflict_without_retry";

@@ -134,7 +134,7 @@ try {
         assert.equal(data.resolved_revision.revision_id, beforeRevision);
         if (name === "read_files") {
           assert.ok(data.items.some((item) =>
-            item.path === "concepts/acceptance.md" &&
+            item.file?.path === "concepts/acceptance.md" &&
             item.file?.text === "---\ntype: Reference\n---\n\nSynthetic acceptance decision version two.\n"));
         }
       }
@@ -162,7 +162,7 @@ try {
       if (name === "read_files" && committedRevision !== undefined) {
         assert.equal(data.resolved_revision.revision_id, committedRevision);
         assert.ok(data.items.some((item) =>
-          item.path === "concepts/acceptance.md" && item.file?.text === expectedText));
+          item.file?.path === "concepts/acceptance.md" && item.file?.text === expectedText));
       }
       if (name === "validate_mind") {
         assert.equal(data.resolved_revision.revision_id, committedRevision);

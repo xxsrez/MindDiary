@@ -97,6 +97,27 @@ test("acceptance controller can complete a synthetic backup without a Product ke
   assert.equal(postCleanup.rows.md_backup_inventory, 0);
 });
 
+test("collaboration cleanup also reconciles an aged backup deletion barrier", async (t) => {
+  const runtime = await acceptanceRuntime(t);
+  const client = await new AcceptanceClient({
+    directory: join(runtime.directory, "collaboration-cleanup"),
+    platformToken: "test-platform",
+    controllerKey: runtime.controllerKey,
+    fetch: runtime.fetch,
+  }).open();
+  const baseline = await client.control("/_acceptance/inventory");
+  await createCollaborationFixture(client, {
+    revisionsPerMind: 1,
+    writeSharedContent: false,
+  });
+  await runtime.db.prepare(
+    "INSERT INTO md_backup_cleanup_ops (operation_id, started_at) VALUES (?1, ?2)",
+  ).bind(randomUUID(), new Date(Date.now() - 600_000).toISOString()).run();
+
+  assert.equal((await client.cleanup()).state, "cleaned");
+  assert.deepEqual(await client.control("/_acceptance/inventory"), baseline);
+});
+
 test("synthetic multi-principal fixture can start a hosted backup session", async (t) => {
   const runtime = await acceptanceRuntime(t);
   const list = runtime.bucket.list.bind(runtime.bucket);
