@@ -257,7 +257,7 @@ test("add_log_entry semantically inserts newest-first in the server UTC date gro
         type: "add_log_entry",
         path: "log.md",
         category: "Update",
-        message: "Added the [new concept](concepts/new.md).",
+        message: "Reviewed the [baseline concept](concepts/baseline.md).",
       },
     ]),
   );
@@ -267,7 +267,7 @@ test("add_log_entry semantically inserts newest-first in the server UTC date gro
   assert.equal(result.validation.valid, true);
   assert.equal(
     result.candidateFiles.find((file) => file.path === "log.md").text,
-    "# Fixture Log\n\n## 2026-08-06\n\n- **Update**: Added the [new concept](concepts/new.md).\n- **Create**: Seeded fixture.\n",
+    "# Fixture Log\n\n## 2026-08-06\n\n- **Update**: Reviewed the [baseline concept](concepts/baseline.md).\n- **Create**: Seeded fixture.\n",
   );
   assert.deepEqual(await env.snapshot(), before);
 });
@@ -676,4 +676,32 @@ test("producer profile rejects preserved quality warnings while consumer preflig
     ["invalid_lifecycle_status"],
   );
   assert.deepEqual(await producer.snapshot(), before);
+});
+
+test("Markdown section consistency blocks commit while an external-link advisory does not", async () => {
+  const missingSection = await fixture();
+  const invalid = await missingSection.service.preflight(
+    missingSection.request([{
+      type: "replace_index",
+      path: "index.md",
+      text: "---\nokf_version: \"0.2\"\n---\n\n# Fixture Mind\n\n[Missing section](concepts/baseline.md#absent)\n",
+      expected_sha256: digest(BASE_FILES[3].text),
+    }], { producerProfile: true }),
+  );
+  assert.equal(invalid.kind, "invalid");
+  assert.equal(invalid.error.code, "okf_validation_failed");
+  assert.ok(invalid.error.diagnostics.some(
+    (issue) => issue.code === "markdown_section_missing",
+  ));
+
+  const external = await fixture();
+  const ready = await external.service.preflight(
+    external.request([{
+      type: "replace_index",
+      path: "index.md",
+      text: "---\nokf_version: \"0.2\"\n---\n\n# Fixture Mind\n\n[External](https://example.invalid/source)\n",
+      expected_sha256: digest(BASE_FILES[3].text),
+    }], { producerProfile: true }),
+  );
+  assert.equal(ready.kind, "ready");
 });

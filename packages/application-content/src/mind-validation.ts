@@ -36,6 +36,11 @@ import {
 } from "./mind-discovery.js";
 import { analyzeBundleFileReferences } from "./bundle-file-references.js";
 import { IncrementalSha256 } from "./incremental-sha256.js";
+import {
+  MARKDOWN_CONSISTENCY_RULES_VERSION,
+  analyzeMarkdownConsistency,
+  type MarkdownConsistencyDiagnostic,
+} from "./markdown-consistency.js";
 
 export const VALIDATION_ISSUE_LIMIT = 100;
 export const VALIDATION_RESPONSE_BYTE_BUDGET = 64 * 1024;
@@ -101,21 +106,28 @@ export class MindValidationFailure extends Error {
 export interface ValidateMindQuery {
   readonly mind: unknown;
   readonly revisionSelector?: unknown;
+  readonly cursor?: unknown;
 }
 
 export interface MindValidationIssue {
   readonly severity: "error" | "warning";
-  readonly class: "conformance" | "quality";
+  readonly class: "conformance" | "consistency" | "advisory";
+  readonly blocksCommit: boolean;
   readonly code: string;
   readonly path: string;
   readonly line?: number;
   readonly field?: string;
+  readonly target?: string;
   readonly message: string;
+  readonly reason: string;
+  readonly recommendation: string;
 }
 
 export interface MindValidationIssueCounts {
   readonly conformanceErrors: number;
+  readonly consistencyErrors: number;
   readonly qualityWarnings: number;
+  readonly advisories: number;
 }
 
 export interface MindValidationResult {
@@ -124,10 +136,16 @@ export interface MindValidationResult {
   readonly revisionMode: RevisionMode;
   readonly readOnly: true;
   readonly valid: boolean;
+  readonly commitReady: boolean;
   readonly conformanceErrors: readonly Readonly<MindValidationIssue>[];
+  readonly consistencyErrors: readonly Readonly<MindValidationIssue>[];
   readonly qualityWarnings: readonly Readonly<MindValidationIssue>[];
+  readonly advisories: readonly Readonly<MindValidationIssue>[];
   readonly issueCounts: Readonly<MindValidationIssueCounts>;
   readonly issuesTruncated: boolean;
+  readonly nextCursor: string | null;
+  readonly validationComplete: true;
+  readonly validationRulesVersion: typeof MARKDOWN_CONSISTENCY_RULES_VERSION;
   readonly validatedOkfVersion: OkfVersion;
 }
 
@@ -147,21 +165,19 @@ function normalizeQuery(value: unknown): Readonly<ValidateMindQuery> {
   if (!isRecord(value) || !("mind" in value)) {
     throw new MindValidationFailure("invalid_request", "Validation request is invalid.");
   }
-  const keys = Object.keys(value).sort();
-  const expected = Object.hasOwn(value, "revisionSelector")
-    ? ["mind", "revisionSelector"]
-    : ["mind"];
-  if (
-    keys.length !== expected.length ||
-    keys.some((key, index) => key !== expected[index])
-  ) {
+  const keys = Object.keys(value);
+  if (keys.some((key) => !["mind", "revisionSelector", "cursor"].includes(key))) {
     throw new MindValidationFailure("invalid_request", "Validation request is invalid.");
+  }
+  if (Object.hasOwn(value, "cursor") && typeof value.cursor !== "string") {
+    throw new MindValidationFailure("invalid_request", "Validation cursor is invalid.");
   }
   return Object.freeze({
     mind: value.mind,
     ...(Object.hasOwn(value, "revisionSelector")
       ? { revisionSelector: value.revisionSelector }
       : {}),
+    ...(Object.hasOwn(value, "cursor") ? { cursor: value.cursor } : {}),
   });
 }
 
@@ -200,7 +216,7 @@ function sanitizeCode(value: string): string {
 
 function projectIssue(
   issue: Readonly<OkfDiagnostic>,
-  issueClass: "conformance" | "quality",
+  issueClass: "conformance" | "advisory",
 ): Readonly<MindValidationIssue> {
   const line =
     Number.isSafeInteger(issue.line) && (issue.line as number) > 0
@@ -213,6 +229,7 @@ function projectIssue(
   return Object.freeze({
     severity: issueClass === "conformance" ? "error" : "warning",
     class: issueClass,
+    blocksCommit: true,
     code: sanitizeCode(issue.code),
     path: sanitizeText(issue.path, VALIDATION_PATH_CHARACTER_LIMIT, "<bundle>"),
     ...(line === undefined ? {} : { line }),
@@ -222,7 +239,37 @@ function projectIssue(
       VALIDATION_MESSAGE_CHARACTER_LIMIT,
       issueClass === "conformance"
         ? "The bundle does not conform to the validation contract."
-        : "The bundle has a quality warning.",
+        : "The bundle has a producer-profile warning.",
+    ),
+    reason: issueClass === "conformance"
+      ? "The exact revision violates the OKF or Mind Diary envelope contract."
+      : "The existing strict producer profile treats this quality warning as blocking.",
+    recommendation: "Correct the reported file or field, then validate the complete exact revision again.",
+  });
+}
+
+function projectConsistencyIssue(
+  issue: Readonly<MarkdownConsistencyDiagnostic>,
+): Readonly<MindValidationIssue> {
+  return Object.freeze({
+    severity: issue.severity,
+    class: issue.class,
+    blocksCommit: issue.blocksCommit,
+    code: sanitizeCode(issue.code),
+    path: sanitizeText(issue.path, VALIDATION_PATH_CHARACTER_LIMIT, "<bundle>"),
+    ...(issue.line === undefined ? {} : { line: issue.line }),
+    ...(issue.field === undefined
+      ? {}
+      : { field: sanitizeText(issue.field, 80, "field") }),
+    ...(issue.target === undefined
+      ? {}
+      : { target: sanitizeText(issue.target, VALIDATION_PATH_CHARACTER_LIMIT, "<target>") }),
+    message: sanitizeText(issue.message, VALIDATION_MESSAGE_CHARACTER_LIMIT, "Revision consistency issue."),
+    reason: sanitizeText(issue.reason, VALIDATION_MESSAGE_CHARACTER_LIMIT, "The exact revision is inconsistent."),
+    recommendation: sanitizeText(
+      issue.recommendation,
+      VALIDATION_MESSAGE_CHARACTER_LIMIT,
+      "Correct the issue and validate the exact revision again.",
     ),
   });
 }
@@ -231,48 +278,99 @@ function issueByteCost(issue: Readonly<MindValidationIssue>): number {
   return encoder.encode(JSON.stringify(issue)).byteLength;
 }
 
+function issueCursor(input: Readonly<{
+  revisionId: string;
+  offset: number;
+}>): string {
+  const encoded = encoder.encode(JSON.stringify({
+    revisionId: input.revisionId,
+    rulesVersion: MARKDOWN_CONSISTENCY_RULES_VERSION,
+    offset: input.offset,
+  }));
+  let binary = "";
+  for (const byte of encoded) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/gu, "");
+}
+
+function cursorOffset(cursor: unknown, revisionId: string, issueCount: number): number {
+  if (cursor === undefined) return 0;
+  if (typeof cursor !== "string" || cursor.length === 0 || cursor.length > 2048) {
+    throw new MindValidationFailure("invalid_request", "Validation cursor is invalid.");
+  }
+  try {
+    const base64 = cursor.replace(/-/gu, "+").replace(/_/gu, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+    if (
+      !isRecord(value) ||
+      value.revisionId !== revisionId ||
+      value.rulesVersion !== MARKDOWN_CONSISTENCY_RULES_VERSION ||
+      !Number.isSafeInteger(value.offset) ||
+      (value.offset as number) <= 0 ||
+      (value.offset as number) >= issueCount
+    ) throw new Error("cursor mismatch");
+    return value.offset as number;
+  } catch {
+    throw new MindValidationFailure("invalid_request", "Validation cursor is invalid.");
+  }
+}
+
 function boundedIssues(
-  errors: readonly Readonly<OkfDiagnostic>[],
-  warnings: readonly Readonly<OkfDiagnostic>[],
+  issues: readonly Readonly<MindValidationIssue>[],
+  offset: number,
+  revisionId: string,
 ): Readonly<{
   conformanceErrors: readonly Readonly<MindValidationIssue>[];
+  consistencyErrors: readonly Readonly<MindValidationIssue>[];
   qualityWarnings: readonly Readonly<MindValidationIssue>[];
+  advisories: readonly Readonly<MindValidationIssue>[];
   issuesTruncated: boolean;
+  nextCursor: string | null;
 }> {
   const conformanceErrors: Readonly<MindValidationIssue>[] = [];
+  const consistencyErrors: Readonly<MindValidationIssue>[] = [];
   const qualityWarnings: Readonly<MindValidationIssue>[] = [];
+  const advisories: Readonly<MindValidationIssue>[] = [];
   let count = 0;
   let bytes = 0;
-
-  const append = (
-    source: readonly Readonly<OkfDiagnostic>[],
-    issueClass: "conformance" | "quality",
-    target: Readonly<MindValidationIssue>[],
-  ) => {
-    for (const diagnostic of source) {
-      const projected = projectIssue(diagnostic, issueClass);
-      const cost = issueByteCost(projected);
-      if (
-        count >= VALIDATION_ISSUE_LIMIT ||
-        bytes + cost > VALIDATION_RESPONSE_BYTE_BUDGET
-      ) {
-        break;
-      }
-      target.push(projected);
-      count += 1;
-      bytes += cost;
+  for (let index = offset; index < issues.length; index += 1) {
+    const issue = issues[index]!;
+    const cost = issueByteCost(issue) * (
+      issue.class === "advisory" && issue.blocksCommit ? 2 : 1
+    );
+    if (count >= VALIDATION_ISSUE_LIMIT || bytes + cost > VALIDATION_RESPONSE_BYTE_BUDGET) break;
+    if (issue.class === "conformance") conformanceErrors.push(issue);
+    else if (issue.class === "consistency") consistencyErrors.push(issue);
+    else {
+      advisories.push(issue);
+      if (issue.blocksCommit) qualityWarnings.push(issue);
     }
-  };
-
-  append(errors, "conformance", conformanceErrors);
-  append(warnings, "quality", qualityWarnings);
+    count += 1;
+    bytes += cost;
+  }
+  const nextOffset = offset + count;
+  const nextCursor = nextOffset < issues.length
+    ? issueCursor({ revisionId, offset: nextOffset })
+    : null;
   return Object.freeze({
     conformanceErrors: Object.freeze(conformanceErrors),
+    consistencyErrors: Object.freeze(consistencyErrors),
     qualityWarnings: Object.freeze(qualityWarnings),
-    issuesTruncated:
-      conformanceErrors.length < errors.length ||
-      qualityWarnings.length < warnings.length,
+    advisories: Object.freeze(advisories),
+    issuesTruncated: nextCursor !== null,
+    nextCursor,
   });
+}
+
+function localSourceReferences(frontmatter: Readonly<Record<string, unknown>> | null): readonly string[] {
+  if (frontmatter === null || !Array.isArray(frontmatter.sources)) return Object.freeze([]);
+  return Object.freeze(frontmatter.sources.flatMap((source) => {
+    if (typeof source === "string") return [source];
+    if (isRecord(source) && typeof source.resource === "string") return [source.resource];
+    return [];
+  }));
 }
 
 function mapDiscoveryFailure(error: unknown): never {
@@ -493,6 +591,21 @@ export class MindValidationService {
       markdown: referenceMarkdown,
       bundleFiles,
     });
+    const parsedByPath = new Map(okfValidation.files.map((file) => [file.path, file] as const));
+    const consistency = analyzeMarkdownConsistency({
+      markdown: referenceMarkdown.map((document) => {
+        const parsed = parsedByPath.get(document.path);
+        return Object.freeze({
+          ...document,
+          sourceReferences: parsed?.kind === "concept"
+            ? localSourceReferences(parsed.frontmatter)
+            : Object.freeze([]),
+        });
+      }),
+      availablePaths: manifest.entries.map((entry) => entry.path),
+      currentSpaceId: spaceId,
+      currentRevisionId: info.resolvedRevision.revisionId,
+    });
     const referenceErrors = referenceAnalysis.diagnostics.filter(
       (diagnostic) => diagnostic.severity === "error",
     );
@@ -504,24 +617,53 @@ export class MindValidationService {
       ...okfValidation.envelopeErrors,
       ...referenceErrors,
     ]);
-    const allWarnings = Object.freeze([
-      ...okfValidation.qualityWarnings,
+    const legacyWarnings = Object.freeze([
+      ...okfValidation.qualityWarnings.filter((warning) => warning.code !== "broken_cross_link"),
       ...referenceWarnings,
     ]);
-    const bounded = boundedIssues(allErrors, allWarnings);
+    const projected = Object.freeze([
+      ...allErrors.map((issue) => projectIssue(issue, "conformance")),
+      ...consistency.consistencyErrors.map(projectConsistencyIssue),
+      ...legacyWarnings.map((issue) => projectIssue(issue, "advisory")),
+      ...consistency.advisories.map(projectConsistencyIssue),
+    ].sort((left, right) =>
+      Number(right.blocksCommit) - Number(left.blocksCommit) ||
+      left.class.localeCompare(right.class) ||
+      left.path.localeCompare(right.path) ||
+      (left.line ?? 0) - (right.line ?? 0) ||
+      left.code.localeCompare(right.code) ||
+      (left.target ?? "").localeCompare(right.target ?? "")));
+    const offset = cursorOffset(
+      query.cursor,
+      info.resolvedRevision.revisionId,
+      projected.length,
+    );
+    const bounded = boundedIssues(projected, offset, info.resolvedRevision.revisionId);
+    const commitReady = projected.every((issue) => !issue.blocksCommit);
     return Object.freeze({
       mind: info.mind,
       resolvedRevision: info.resolvedRevision,
       revisionMode: info.revisionMode,
       readOnly: true,
-      valid: okfValidation.valid && referenceErrors.length === 0,
+      valid:
+        okfValidation.valid &&
+        referenceErrors.length === 0 &&
+        consistency.consistencyErrors.length === 0,
+      commitReady,
       conformanceErrors: bounded.conformanceErrors,
+      consistencyErrors: bounded.consistencyErrors,
       qualityWarnings: bounded.qualityWarnings,
+      advisories: bounded.advisories,
       issueCounts: Object.freeze({
         conformanceErrors: allErrors.length,
-        qualityWarnings: allWarnings.length,
+        consistencyErrors: consistency.consistencyErrors.length,
+        qualityWarnings: legacyWarnings.length,
+        advisories: legacyWarnings.length + consistency.advisories.length,
       }),
       issuesTruncated: bounded.issuesTruncated,
+      nextCursor: bounded.nextCursor,
+      validationComplete: true,
+      validationRulesVersion: MARKDOWN_CONSISTENCY_RULES_VERSION,
       validatedOkfVersion: okfValidation.version,
     });
   }

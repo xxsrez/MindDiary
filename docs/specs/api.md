@@ -2069,16 +2069,58 @@ bound к тому же `space_id + revision_id + path + range`; HEAD не под
 ```json
 {
   "severity": "error",
-  "class": "conformance",
-  "code": "missing_type",
+  "class": "consistency",
+  "blocks_commit": true,
+  "code": "markdown_section_missing",
   "path": "concepts/example.md",
-  "line": 2,
-  "message": "Concept frontmatter requires type."
+  "line": 12,
+  "target": "reference.md#exact-section",
+  "message": "A linked Markdown section is absent from the target file.",
+  "reason": "The normalized fragment does not match any generated heading anchor.",
+  "recommendation": "Update the fragment to an existing heading anchor or add the heading."
 }
 ```
 
-`class` — `conformance | quality`; quality warning сам по себе не делает
-`valid: false`.
+`class` — `conformance | consistency | advisory`. `conformance` означает
+нарушение OKF 0.2 или обязательного Mind Diary envelope; `consistency` —
+разрешимую внутри exact revision ошибку файла, Markdown section или локального
+source; `advisory` — проверку, которую нельзя либо не нужно превращать в
+детерминированный commit gate. `blocks_commit` задаётся серверным validation
+profile и не выводится клиентом только из severity: у сохранённых quality
+warnings прежнего producer profile остаётся `blocks_commit: true`, а новые
+doctor-рекомендации имеют `false`.
+
+`path`, опциональные `line`/`field` и `target`, стабильный `code`, `reason` и
+`recommendation` позволяют агенту исправить corpus без разбора свободного
+текста. Сообщения ограничены по размеру и не копируют target. Сам `target`
+возвращается только уже авторизованному читателю exact revision, нормализуется
+и ограничивается по длине.
+
+`validate_mind` всегда материализует и проверяет полный exact bundle. Помимо
+OKF и BundleFile envelope doctor структурно разбирает Markdown inline,
+reference и shortcut links/images, учитывает escaping, fenced/indented/inline
+code, относительные и root-relative пути, Unicode heading anchors и числовые
+суффиксы повторных headings. Он раздельно проверяет существование target file
+и section, exact local sources и достижимость Markdown из корневого
+`index.md`; циклы допустимы. `raw/`, `output/` и `log.md` не обязаны входить в
+пользовательскую навигацию.
+
+HTTP(S) и source targets другой revision/Mind автоматически не читаются. Они
+возвращаются как `external_link_unchecked` или `source_check_unsupported` с
+`class: advisory` и `blocks_commit: false`. Это не подтверждение доступности
+или содержания внешнего источника.
+
+Ответ сохраняет совместимые `conformance_errors` и `quality_warnings`, а также
+добавляет `consistency_errors`, `advisories`, полные `issue_counts`,
+`commit_ready`, `validation_complete`, `validation_rules_version`,
+`issues_truncated` и `next_cursor`. `valid` требует отсутствия conformance и
+consistency errors; `commit_ready` дополнительно учитывает блокирующие warnings
+producer profile. `validation_complete: true` означает, что весь bundle уже
+проверен, даже если diagnostics не помещаются в одну страницу. `next_cursor`
+листает только детерминированный отчёт, привязан к exact `revision_id` и
+`validation_rules_version`; после изменения HEAD или правил старый cursor
+отклоняется. Страница ограничена 100 issues и 64 KiB, клиент следует по cursor
+до `null`.
 
 ### `BundleFileDescriptor`
 

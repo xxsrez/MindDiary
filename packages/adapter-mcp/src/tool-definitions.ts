@@ -433,6 +433,7 @@ const GET_MIND_INFO_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
     revision_selector: REVISION_SELECTOR_SCHEMA,
+    cursor: OPAQUE_ID_SCHEMA,
   },
   ["mind"],
 );
@@ -755,7 +756,9 @@ const BUNDLE_FILE_DESCRIPTOR_SCHEMA = Object.freeze({
 const BUNDLE_REFERENCE_DIAGNOSTIC_SCHEMA = Object.freeze({
   type: "object",
   additionalProperties: false,
-  required: Object.freeze(["severity", "class", "code", "path", "message"]),
+  required: Object.freeze([
+    "severity", "class", "blocks_commit", "code", "path", "message", "reason", "recommendation",
+  ]),
   properties: Object.freeze({
     severity: Object.freeze({ type: "string", enum: Object.freeze(["error", "warning"]) }),
     class: Object.freeze({ type: "string", enum: Object.freeze(["conformance", "quality"]) }),
@@ -1135,13 +1138,31 @@ const VALIDATION_ISSUE_SCHEMA = Object.freeze({
     }),
     class: Object.freeze({
       type: "string",
-      enum: Object.freeze(["conformance", "quality"]),
+      enum: Object.freeze(["conformance", "consistency", "advisory"]),
     }),
+    blocks_commit: Object.freeze({ type: "boolean" }),
     code: NON_EMPTY_STRING_SCHEMA,
     path: Object.freeze({ type: "string" }),
     line: Object.freeze({ type: "integer", minimum: 1 }),
     field: NON_EMPTY_STRING_SCHEMA,
+    target: NON_EMPTY_STRING_SCHEMA,
     message: NON_EMPTY_STRING_SCHEMA,
+    reason: NON_EMPTY_STRING_SCHEMA,
+    recommendation: NON_EMPTY_STRING_SCHEMA,
+  }),
+});
+
+const VALIDATION_ISSUE_COUNTS_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "conformance_errors", "consistency_errors", "quality_warnings", "advisories",
+  ]),
+  properties: Object.freeze({
+    conformance_errors: Object.freeze({ type: "integer", minimum: 0 }),
+    consistency_errors: Object.freeze({ type: "integer", minimum: 0 }),
+    quality_warnings: Object.freeze({ type: "integer", minimum: 0 }),
+    advisories: Object.freeze({ type: "integer", minimum: 0 }),
   }),
 });
 
@@ -1152,16 +1173,36 @@ const VALIDATE_MIND_OUTPUT_SCHEMA = toolOutputSchema(
     required: Object.freeze([
       "mind",
       "resolved_revision",
+      "revision_mode",
+      "read_only",
       "valid",
+      "commit_ready",
       "conformance_errors",
+      "consistency_errors",
       "quality_warnings",
+      "advisories",
+      "issue_counts",
+      "issues_truncated",
+      "next_cursor",
+      "validation_complete",
+      "validation_rules_version",
       "validated_okf_version",
     ]),
     properties: Object.freeze({
       mind: MIND_DESCRIPTOR_SCHEMA,
       resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+      revision_mode: Object.freeze({
+        type: "string",
+        enum: Object.freeze(["head", "historical"]),
+      }),
+      read_only: Object.freeze({ const: true }),
       valid: Object.freeze({ type: "boolean" }),
+      commit_ready: Object.freeze({ type: "boolean" }),
       conformance_errors: Object.freeze({
+        type: "array",
+        items: VALIDATION_ISSUE_SCHEMA,
+      }),
+      consistency_errors: Object.freeze({
         type: "array",
         items: VALIDATION_ISSUE_SCHEMA,
       }),
@@ -1169,6 +1210,15 @@ const VALIDATE_MIND_OUTPUT_SCHEMA = toolOutputSchema(
         type: "array",
         items: VALIDATION_ISSUE_SCHEMA,
       }),
+      advisories: Object.freeze({
+        type: "array",
+        items: VALIDATION_ISSUE_SCHEMA,
+      }),
+      issue_counts: VALIDATION_ISSUE_COUNTS_SCHEMA,
+      issues_truncated: Object.freeze({ type: "boolean" }),
+      next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+      validation_complete: Object.freeze({ const: true }),
+      validation_rules_version: Object.freeze({ const: "2026-09-18" }),
       validated_okf_version: Object.freeze({ const: "0.2" }),
     }),
   }),
@@ -1303,7 +1353,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
     name: "validate_mind",
     title: "Validate one Mind revision",
     description:
-      "Validate the complete OKF 0.2 bundle for one enabled explicit Mind and resolved revision, separating conformance errors from quality warnings. Partial changed-file validation is never a commit gate.",
+      "Run the complete deterministic OKF 0.2 and Markdown consistency doctor for one enabled explicit Mind and exact revision. It separates conformance, blocking file/section consistency, strict producer-profile warnings, and non-blocking advisories; reports whether each issue blocks commit; never fetches external URLs; and paginates only the report with a revision-and-rules-bound cursor. Follow next_cursor until null. validation_complete means the whole revision was analyzed even when the report has more pages. Partial changed-file validation is never a commit gate.",
     inputSchema: VALIDATE_MIND_INPUT_SCHEMA,
     outputSchema: VALIDATE_MIND_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,

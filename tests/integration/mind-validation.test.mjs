@@ -281,8 +281,13 @@ test("validation is exact-revision-bound, strict across the whole bundle, and se
   assert.equal(head.conformanceErrors.length, 0);
   assert.deepEqual(
     head.qualityWarnings.map((issue) => [issue.code, issue.severity, issue.class]),
-    [["invalid_lifecycle_status", "warning", "quality"]],
+    [["invalid_lifecycle_status", "warning", "advisory"]],
   );
+  assert.equal(head.qualityWarnings[0].blocksCommit, true);
+  assert.equal(head.commitReady, false);
+  assert.equal(head.validationComplete, true);
+  assert.equal(head.validationRulesVersion, "2026-09-18");
+  assert.equal(head.nextCursor, null);
   assert.equal(head.issuesTruncated, false);
 });
 
@@ -327,16 +332,50 @@ test("validation response is bounded and issue messages do not echo untrusted li
   const result = await env.validation.validateMind(actor(owner.principalId), {
     mind: mind.handle,
   });
-  assert.equal(result.valid, true);
-  assert.equal(result.issueCounts.qualityWarnings, VALIDATION_ISSUE_LIMIT + 5);
-  assert.equal(result.qualityWarnings.length, VALIDATION_ISSUE_LIMIT);
+  assert.equal(result.valid, false);
+  assert.equal(result.commitReady, false);
+  assert.equal(result.validationComplete, true);
+  assert.equal(result.issueCounts.consistencyErrors, VALIDATION_ISSUE_LIMIT + 5);
+  assert.equal(result.consistencyErrors.length, VALIDATION_ISSUE_LIMIT);
   assert.equal(result.issuesTruncated, true);
+  assert.equal(typeof result.nextCursor, "string");
   assert.ok(
-    result.qualityWarnings.every(
+    result.consistencyErrors.every(
       (issue) =>
         issue.message.length <= VALIDATION_MESSAGE_CHARACTER_LIMIT &&
         !issue.message.includes(privateTarget),
     ),
+  );
+  const continuation = await env.validation.validateMind(actor(owner.principalId), {
+    mind: mind.handle,
+    cursor: result.nextCursor,
+  });
+  assert.equal(continuation.consistencyErrors.length, 5);
+  assert.equal(continuation.issuesTruncated, false);
+  assert.equal(continuation.nextCursor, null);
+  assert.deepEqual(
+    new Set([
+      ...result.consistencyErrors,
+      ...continuation.consistencyErrors,
+    ].map((issue) => issue.target)),
+    new Set(Array.from(
+      { length: VALIDATION_ISSUE_LIMIT + 5 },
+      (_, index) => `${privateTarget}-${index}.md`,
+    )),
+  );
+  await commitFiles(
+    env,
+    owner,
+    mind,
+    [{ path: "index.md", text: rootIndex("# Fresh HEAD\n") }],
+    "Move HEAD after validation pagination",
+  );
+  await assert.rejects(
+    env.validation.validateMind(actor(owner.principalId), {
+      mind: mind.handle,
+      cursor: result.nextCursor,
+    }),
+    expectValidationFailure("invalid_request"),
   );
 });
 

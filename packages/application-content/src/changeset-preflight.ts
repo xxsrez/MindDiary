@@ -34,6 +34,7 @@ import {
 import type { DeltaRevisionReader, HeadRevisionReader } from "./index.js";
 import { analyzeBundleFileReferences } from "./bundle-file-references.js";
 import { classifyBundleFileMediaType } from "./bundle-files.js";
+import { analyzeMarkdownConsistency } from "./markdown-consistency.js";
 import { materializeLogEntry } from "./reserved-content.js";
 
 export interface CreateFileOperation {
@@ -1386,16 +1387,39 @@ export class ChangesetPreflightService {
     const referenceWarnings = referenceAnalysis.diagnostics.filter(
       (diagnostic) => diagnostic.severity === "warning",
     );
+    const markdownConsistency = analyzeMarkdownConsistency({
+      markdown: referenceMarkdown,
+      availablePaths: candidateFiles.map((file) => file.path),
+      currentSpaceId: request.spaceId,
+      ...(currentRevisionId === null ? {} : { currentRevisionId }),
+    });
+    const consistencyErrors: readonly OkfDiagnostic[] = request.producerProfile === true
+      ? Object.freeze(markdownConsistency.consistencyErrors.map((diagnostic) => Object.freeze({
+        severity: "error" as const,
+        category: "mind-diary-envelope" as const,
+        source: "mind-diary-mvp" as const,
+        code: diagnostic.code,
+        path: diagnostic.path,
+        ...(diagnostic.line === undefined ? {} : { line: diagnostic.line }),
+        ...(diagnostic.field === undefined ? {} : { field: diagnostic.field }),
+        message: diagnostic.message,
+      })))
+      : Object.freeze([]);
     const validation: Readonly<OkfBundleValidation> = Object.freeze({
       ...okfValidation,
-      valid: okfValidation.valid && referenceErrors.length === 0,
+      valid:
+        okfValidation.valid &&
+        referenceErrors.length === 0 &&
+        consistencyErrors.length === 0,
       diagnostics: Object.freeze([
         ...okfValidation.diagnostics,
         ...referenceAnalysis.diagnostics,
+        ...consistencyErrors,
       ]),
       envelopeErrors: Object.freeze([
         ...okfValidation.envelopeErrors,
         ...referenceErrors,
+        ...consistencyErrors,
       ]),
       qualityWarnings: Object.freeze([
         ...okfValidation.qualityWarnings,
