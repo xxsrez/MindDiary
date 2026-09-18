@@ -121,9 +121,10 @@ deployment; automation не подменяет этот host/UI evidence.
 Mind Diary добавляется в существующий Srez Marketplace вторым plugin рядом с
 Task Manager. Для Codex Desktop/CLI pilot 0.1 принят следующий путь:
 
-1. Package сохраняет thin skill и проверенный Codex compatibility transport
-   `/api/mcp/2025-11-25`, а MCP Apps-capable integration использует отдельный
-   `/api/mcp/apps`; canonical OAuth resource/audience остаётся `/api/mcp`.
+1. Package сохраняет thin skill и использует canonical modern transport
+   `/api/mcp`, включая единый `openai/fileParams` input. Isolated
+   `/api/mcp/2025-11-25` остаётся только для exact legacy clients, которые ещё
+   требуют прежний initialize lifecycle.
 2. Установка с policy `AVAILABLE + ON_USE` завершается без product OAuth и без
    чтения private registered app.
 3. Первый content tool call запускает native OAuth discovery, DCR и PKCE к
@@ -154,8 +155,8 @@ Diary доступной после обновления каталога. Он�
 | --- | --- | --- |
 | Marketplace | `srez-marketplace` | тот же Marketplace |
 | Plugin package | `plugins/task-manager` | новый `plugins/mind-diary` |
-| Connection | direct production MCP в `.mcp.json` | проверенный Codex compatibility transport и отдельный canonical UAT OAuth resource в `.mcp.json` |
-| Transport profiles | public MCP URL в `.mcp.json` | exact `/api/mcp/2025-11-25` для default Codex; `/api/mcp/apps` для MCP Apps native picker; `/api/mcp` остаётся modern resource/audience |
+| Connection | direct production MCP в `.mcp.json` | canonical modern UAT OAuth resource `/api/mcp` в `.mcp.json` |
+| Transport profiles | public MCP URL в `.mcp.json` | `/api/mcp` для current Codex/ChatGPT; isolated `/api/mcp/2025-11-25` только для отдельно проверенного legacy client |
 | Installation | `AVAILABLE` + `ON_USE` | то же поведение |
 | OAuth | authorization code + PKCE, DCR | тот же protocol profile, но Mind Diary scopes и identity rules |
 | Data authorization | internal Task Manager user | internal immutable Mind Diary `principal_id` |
@@ -267,13 +268,12 @@ plugins/
 - категорию `Productivity`, пока каталог не подтвердит более точную knowledge
   category.
 
-`.app.json` отсутствует. `.mcp.json` содержит проверенный для default Codex
-transport `https://mind-diary.example.invalid/api/mcp/2025-11-25` и
-отдельный canonical `oauth_resource`
-`https://mind-diary.example.invalid/api/mcp`; это canonical Codex
-Desktop/CLI connection source. Такое разделение не меняет token audience:
-authorization и token exchange используют `/api/mcp`, а compatibility adapter
-изолирует только transport lifecycle клиента.
+`.app.json` отсутствует. `.mcp.json` использует canonical modern transport и
+OAuth resource `https://mind-diary.example.invalid/api/mcp`. Это
+даёт current Codex/ChatGPT один connection source и делает standard
+`openai/fileParams` tool видимым без отдельного Apps package. Legacy
+`/api/mcp/2025-11-25` не рекламируется current package и остаётся только для
+точечно проверенного старого клиента.
 
 Skill остаётся тонким interaction adapter и поставляет агенту полную целевую
 инструкцию Release 0.3. Перед релевантным workflow он получает fresh
@@ -454,15 +454,12 @@ internal `principal_id`.
 
 ## MCP endpoint decision
 
-Canonical resource/audience pilot-а — existing `POST /api/mcp` с profile
-`2026-07-28`. Текущая проверяемая пара `codex-cli 0.153.4` сохраняет
-изолированный compatibility lifecycle `2025-11-25`, поэтому `.mcp.json`
-задаёт transport URL `/api/mcp/2025-11-25` и отдельный `oauth_resource`
-`/api/mcp`. Это не fallback между lifecycle внутри request и не смена OAuth
-audience: compatibility adapter принимает тот же OAuth access token с audience
-`/api/mcp` и вызывает тот же content application contract. Opt-in modern client
-может работать непосредственно с `/api/mcp` только после отдельного
-client/adapter conformance.
+Canonical resource, audience и current package transport pilot-а — existing
+`POST /api/mcp` с profile `2026-07-28`. Exact modern client/adapter conformance
+проверяется в каждом release receipt. Compatibility adapter
+`/api/mcp/2025-11-25` принимает тот же OAuth audience и вызывает тот же content
+application contract, но подключается только для отдельно подтверждённого
+legacy клиента; automatic lifecycle fallback внутри request отсутствует.
 
 Смена canonical `oauth_resource` позднее считается package/client migration:
 новая plugin version, повторный consent и fresh-task validation, а не
@@ -470,11 +467,10 @@ client/adapter conformance.
 conformance на exact Codex build, но не должна автоматически менять resource
 audience.
 
-Все adapters вызывают существующий content application contract. Apps profile
-добавляет только route-specific picker/UI resource и app-only native stage;
-direct/compatibility catalogs их не наследуют. OAuth меняет
-authentication boundary и discovery, но не tool payload, ACL или revision
-semantics.
+Все adapters вызывают существующий content application contract. Modern
+profile публикует один standard native file tool; отдельного Apps profile,
+picker/UI resource или app-only stage нет. OAuth меняет authentication boundary
+и discovery, но не ACL или revision semantics.
 
 ## Sites и environments
 

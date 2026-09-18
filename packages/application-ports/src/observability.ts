@@ -82,7 +82,6 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "set_personal_mind_description",
   "get_mind_bindings",
   "get_file_ingress_capabilities",
-  "open_bundle_file_picker",
   "create_file_upload_intent",
   "browse_entries",
   "fetch",

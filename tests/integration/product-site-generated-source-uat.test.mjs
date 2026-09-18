@@ -309,13 +309,8 @@ test("restricted UAT installs one deterministic generated-source caller without 
     "get_file_ingress_capabilities",
     {},
   );
-  for (const sourceKind of ["bounded_in_memory", "server_generated"]) {
-    const row = publicCapabilities.sources.find(({ source_kind }) => source_kind === sourceKind);
-    assert.deepEqual(
-      [row.server_adapter_status, row.server_transport, row.max_bytes],
-      ["not_available", "none", 0],
-    );
-  }
+  assert.equal(publicCapabilities.source_selection_required, false);
+  assert.equal("sources" in publicCapabilities, false);
 
   const toolList = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",

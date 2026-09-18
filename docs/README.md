@@ -68,11 +68,13 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
    format-neutral contract: explicit manifest v4, arbitrary opaque files,
    256 MiB streaming, safe-raster preview, download-only containment, mixed
    atomic commits и Sites-owned import/export boundary Release 0.3.
-17. [Единый file-ingress contract](specs/file-ingress.md) — принятый portable
-   boundary, обязательный Release 0.2 readable-path profile через packaged
-   local companion и отложенная Release 0.3 matrix direct/provider, connector
-   и generated sources; implementation, installed-client и per-path evidence
-   разделены.
+17. [Единый file-ingress contract](specs/file-ingress.md) — один modern
+   `openai/fileParams` input, один companion fallback и общий bounded staging
+   без выбора происхождения.
+   [План упрощения загрузки файлов](specs/file-ingress-simplification-plan.md)
+   — обычный файловый вход без выбора шести источников, проверка host bridge,
+   совместимость companion и удаление лишних маршрутов; выполняемый Release 0.5
+   scope.
 18. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
    — принятый post-MVP Brain-scale contract: Space-scoped content addressing,
    canonical v4 manifests с чтением historical v1/v2/v3, reconstructable
@@ -265,10 +267,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
   — приняты отдельная constructor-only operator allowlist, compact success-only
   web/MCP activity summary, privacy-minimized read model и deletion boundary.
 - [ADR-0018: единый file-ingress contract](decisions/0018-file-ingress-contract-and-source-capability-matrix.md)
-  — приняты portable staged-ref boundary, шесть source kinds, explicit
-  capability negotiation, atomic multi-ref semantics и запрет silent fallback;
-  implementation остаётся source-specific; terminal 0.1 scope заменён ADR-0019,
-  closed BundleFile static policy — ADR-0021.
+  — историческое происхождение portable staged-ref boundary и source matrix;
+  fresh source selection и capability matrix заменены ADR-0030, atomic
+  multi-ref/security invariants сохранены.
 - [ADR-0019: Release 0.1 — Codex-first Markdown и small-data boundary](decisions/0019-release-0-1-codex-first-small-data-boundary.md)
   — terminal 0.1 возвращён к Markdown/OKF 0.2 first-user workflow;
   BundleFile, Brain-scale/import и universal ingress сохранены как post-MVP.
@@ -283,8 +284,7 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
   — historical early Release 0.3 credential target; principal-owned target
   semantics superseded ADR-0024.
 - [ADR-0023: отдельный MCP Apps профиль для native file ingress](decisions/0023-dedicated-mcp-apps-file-ingress-profile.md)
-  — route-specific `/api/mcp/apps`, app-only native stage, static picker UI и
-  обязательный внешний hosted receipt без fabricated activation assertion.
+  — исторический отдельный Apps route/picker; полностью заменён ADR-0030.
 - [ADR-0024: пользовательские режимы Mind и автоматическое сохранение](decisions/0024-principal-mind-usage-modes-and-automatic-save.md)
   — приняты principal-owned `disabled | read | read_write`, один writable Mind,
   description routing ordinary Minds, `personal_default` с записью только по
@@ -294,6 +294,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
   — singleton ordinary lane заменён per-Mind generations; несколько ordinary
   Minds и Personal могут независимо иметь `read_write`, automatic и direct
   destinations обрабатываются отдельными commits.
+- [ADR-0030: один файловый вход](decisions/0030-single-file-input.md)
+  — model-visible `fileParams` без выбора происхождения, единый streaming
+  staging и ограниченная совместимость прежних provenance-меток.
 
 ## Исследования
 
@@ -314,9 +317,8 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
   аудит отдельного официального repository, exact spec revision/hash,
   timestamp-with-offset delta и permissive-consumer/strict-producer boundary.
 - [Статус native file route на 2026-08-28](reports/2026-08-28-native-file-route-implementation-status.md)
-  — repository-кандидат MD-315/MD-316 с отдельным `/api/mcp/apps`, безопасным
-  picker/context handoff и точным внешним blocker: installed Apps package и
-  реальный hosted picker/stage flow ещё не доказаны.
+  — датированное состояние прежнего Apps-кандидата; актуальный единый input и
+  host-bridge probe описаны в отчёте 2026-09-18 и ADR-0030.
 - [Capability host-managed и same-host file transport на 2026-08-27](reports/2026-08-27-host-managed-file-transport-capability-probe.md)
   — live Codex Desktop matrix native provider parameter, host picker и packaged
   companion с closed assertions, exact synthetic hashes и typed unavailable

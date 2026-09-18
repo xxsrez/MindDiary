@@ -42,7 +42,6 @@ test("publishes strict native-file staging metadata and mixed commit operations"
     MCP_BUNDLE_FILE_TOOL_DEFINITIONS.map(({ name }) => name),
     [
       "get_file_ingress_capabilities",
-      "open_bundle_file_picker",
       "create_file_upload_intent",
       "stage_bundle_file",
       "reconcile_file_stage",
@@ -54,7 +53,6 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   );
   assert.deepEqual(intent.inputSchema.required, [
     "mind",
-    "source_kind",
     "display_filename",
     "expected_size",
     "expected_sha256",
@@ -82,27 +80,23 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   assert.deepEqual(capabilities.outputSchema.required, ["ok"]);
   const capabilityData = capabilities.outputSchema.properties.data;
   assert.deepEqual(capabilityData.required, [
-    "report_scope",
-    "client_companion_status",
-    "path_admission_status",
-    "native_file_parameter",
-    "sources",
+    "contract_version",
+    "source_selection_required",
+    "max_bytes",
+    "native_file_input",
+    "companion_upload",
   ]);
   assert.equal(
-    capabilityData.properties.native_file_parameter.properties.source_kind.const,
-    "session_attachment",
+    capabilityData.properties.source_selection_required.const,
+    false,
   );
   assert.equal(
-    capabilityData.properties.native_file_parameter.properties.transport.const,
-    "native_file_parameter",
+    capabilityData.properties.native_file_input.properties.transport.const,
+    "openai_file_parameter",
   );
-  assert.deepEqual(
-    capabilityData.properties.sources.items.properties.server_adapter_status.enum,
-    ["available", "not_available"],
-  );
-  assert.deepEqual(
-    capabilityData.properties.sources.items.properties.server_transport.enum,
-    ["native_file_parameter", "companion_upload_intent", "none"],
+  assert.equal(
+    capabilityData.properties.companion_upload.properties.transport.const,
+    "one_use_upload_intent",
   );
   assert.doesNotMatch(
     JSON.stringify(capabilities.outputSchema),
@@ -122,7 +116,6 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   assert.equal(stage.inputSchema.properties.file.additionalProperties, false);
   assert.deepEqual(stage._meta, {
     "openai/fileParams": ["file"],
-    ui: { visibility: ["app"] },
   });
   assert.deepEqual(stage.securitySchemes, [{ type: "oauth2", scopes: ["content:write"] }]);
   assert.deepEqual(stage.annotations, {
@@ -138,7 +131,6 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   );
   assert.deepEqual(reconcile.inputSchema.required, [
     "mind",
-    "source_kind",
     "display_filename",
     "media_type",
     "sha256",
@@ -213,8 +205,9 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   const uploadIntent = MCP_TOOL_DEFINITIONS.find(
     ({ name }) => name === "create_file_upload_intent",
   );
-  assert.match(uploadIntent.description, /upload sequentially within the same Mind/u);
-  assert.match(uploadIntent.description, /retryable quota, soft-capacity, fairness or accounting/u);
+  assert.match(uploadIntent.description, /client has no native file bridge/u);
+  assert.match(uploadIntent.description, /uncertain or retryable outcome/u);
+  assert.match(uploadIntent.description, /Never provide a local path, source class/u);
   assert.match(commit.description, /20 operations and 256 MiB of staged bytes/u);
   assert.match(commit.description, /Track committed, pending, failed and unknown files internally/u);
   assert.deepEqual(
@@ -627,51 +620,25 @@ test("product adapter terminates provider metadata and returns only verified sta
     arguments: {},
   });
   assert.equal(capabilities.isError, false);
-  assert.deepEqual(
-    capabilities.structuredContent.data.sources.map(({
-      source_kind,
-      server_adapter_status,
-      server_transport,
-      requires_writable_target,
-      max_bytes,
-    }) => [
-      source_kind,
-      server_adapter_status,
-      server_transport,
-      requires_writable_target,
-      max_bytes,
-    ]),
-    [
-      ["session_attachment", "available", "native_file_parameter", true, 67_108_864],
-      ["local_path", "not_available", "none", false, 0],
-      ["workspace/generated_artifact", "not_available", "none", false, 0],
-      ["connector_object", "not_available", "none", false, 0],
-      ["bounded_in_memory", "not_available", "none", false, 0],
-      ["server_generated", "not_available", "none", false, 0],
-    ],
-  );
-  assert.equal(
-    capabilities.structuredContent.data.report_scope,
-    "active_route_profile_and_hosted_server_adapters",
-  );
-  assert.deepEqual(capabilities.structuredContent.data.native_file_parameter, {
-    source_kind: "session_attachment",
-    transport: "native_file_parameter",
+  assert.equal(capabilities.structuredContent.data.contract_version, 2);
+  assert.equal(capabilities.structuredContent.data.source_selection_required, false);
+  assert.equal(capabilities.structuredContent.data.max_bytes, 268_435_456);
+  assert.deepEqual(capabilities.structuredContent.data.native_file_input, {
+    transport: "openai_file_parameter",
     status: "available",
     route_profile_id: "test-app-session-attachment-v1",
     verification_status: "verified",
-    host_rewrite_assertion_id: "test-receipt:host-rewrite:stage-bundle-file:v1",
-    host_rewrite_observed_at_utc: "2026-08-27T22:30:00.000Z",
   });
-  assert.equal(capabilities.structuredContent.data.client_companion_status, "not_reported");
-  assert.equal(capabilities.structuredContent.data.path_admission_status, "not_reported");
+  assert.deepEqual(capabilities.structuredContent.data.companion_upload, {
+    transport: "one_use_upload_intent",
+    status: "not_available",
+  });
 
   const reconciledStage = await application.executeToolCall({
     actor: ACTOR,
     name: "reconcile_file_stage",
     arguments: {
       mind: "bundle-stage",
-      source_kind: "session_attachment",
       display_filename: "diagram.png",
       claimed_media_type: "image/png",
       media_type: "image/png",
@@ -723,7 +690,7 @@ test("product adapter terminates provider metadata and returns only verified sta
   ]);
 });
 
-test("direct custom MCP omits native staging and fails closed before target or fetch work", async () => {
+test("a client profile without fileParams omits native staging and fails closed before target or fetch work", async () => {
   let touched = 0;
   const unused = new Proxy({}, {
     get() {
@@ -757,14 +724,11 @@ test("direct custom MCP omits native staging and fails closed before target or f
     name: "get_file_ingress_capabilities",
     arguments: {},
   });
-  assert.deepEqual(capabilities.structuredContent.data.native_file_parameter, {
-    source_kind: "session_attachment",
-    transport: "native_file_parameter",
+  assert.deepEqual(capabilities.structuredContent.data.native_file_input, {
+    transport: "openai_file_parameter",
     status: "not_available",
     route_profile_id: null,
     verification_status: "not_available",
-    host_rewrite_assertion_id: null,
-    host_rewrite_observed_at_utc: null,
   });
   const called = await application.executeToolCall({
     actor: ACTOR,
@@ -786,7 +750,7 @@ test("direct custom MCP omits native staging and fails closed before target or f
   assert.equal(touched, 0);
 });
 
-test("public capability projection requires hosted registry plus an accepted public route", async () => {
+test("public capability projection reports transports without exposing source classes", async () => {
   const application = new ProductMcpContentApplication({
     ingress: {
       capabilities() {
@@ -862,29 +826,17 @@ test("public capability projection requires hosted registry plus an accepted pub
     arguments: {},
   });
   assert.equal(capabilities.isError, false);
-  assert.deepEqual(
-    capabilities.structuredContent.data.sources.map(({
-      source_kind,
-      server_adapter_status,
-      server_transport,
-      requires_writable_target,
-      max_bytes,
-    }) => [
-      source_kind,
-      server_adapter_status,
-      server_transport,
-      requires_writable_target,
-      max_bytes,
-    ]),
-    [
-      ["session_attachment", "not_available", "none", false, 0],
-      ["local_path", "available", "companion_upload_intent", true, 67_108_864],
-      ["workspace/generated_artifact", "not_available", "none", false, 0],
-      ["connector_object", "not_available", "none", false, 0],
-      ["bounded_in_memory", "not_available", "none", false, 0],
-      ["server_generated", "not_available", "none", false, 0],
-    ],
-  );
+  assert.deepEqual(capabilities.structuredContent.data.native_file_input, {
+    transport: "openai_file_parameter",
+    status: "available",
+    route_profile_id: "test-local-only-session-attachment-v1",
+    verification_status: "verified",
+  });
+  assert.deepEqual(capabilities.structuredContent.data.companion_upload, {
+    transport: "one_use_upload_intent",
+    status: "available",
+  });
+  assert.equal("sources" in capabilities.structuredContent.data, false);
 });
 
 test("read-only catalog omits native staging and direct calls fail before execution", async () => {

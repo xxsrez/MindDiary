@@ -1633,13 +1633,12 @@ target/deployment обязан повторить route probe. В текущем
 `/mcp` не является alias, и server не redirect-ит с него request с
 `Authorization` header.
 
-Product source candidate публикует три намеренно раздельных endpoint:
+Product source candidate публикует два намеренно раздельных endpoint:
 
 | Endpoint | Protocol/lifecycle | Client gate |
 |---|---|---|
-| `POST /api/mcp` | pinned final `2026-07-28`, stateless и начиная с `server/discover` | MCP Inspector, modern clients и `codex-cli 0.147.0` с opt-in `mcp_2026_07_28` |
+| `POST /api/mcp` | pinned final `2026-07-28`, stateless и начиная с `server/discover`; публикует стандартный `openai/fileParams` tool | current Codex/ChatGPT и другие проверенные modern clients |
 | `POST /api/mcp/2025-11-25` | isolated initialize lifecycle предыдущей stable revision `2025-11-25` без server session | default `codex-cli 0.147.0` |
-| `POST /api/mcp/apps` | pinned final `2026-07-28`, stateless, с exact MCP Apps UI resource и native file route | OpenAI/MCP Apps host; support claim только после fresh hosted picker/stage receipt |
 
 Оба endpoint требуют один и тот же principal Bearer token и вызывают одну
 content application boundary. Authentication, token lifecycle/scopes и current
@@ -2450,96 +2449,47 @@ entries.
 
 ### `get_file_ingress_capabilities`
 
-Input is an empty object. Output is deliberately scoped to the hosted service.
-It contains exactly one privacy-safe server-adapter row for each accepted
-source kind:
+Input is an empty object. Output reports the current transports and shared
+limit, without a caller-selected source taxonomy:
 
 ```json
 {
-  "report_scope": "active_route_profile_and_hosted_server_adapters",
-  "client_companion_status": "not_reported",
-  "path_admission_status": "not_reported",
-  "native_file_parameter": {
-    "source_kind": "session_attachment",
-    "transport": "native_file_parameter",
-    "status": "not_available",
-    "route_profile_id": null,
-    "verification_status": "not_available",
-    "host_rewrite_assertion_id": null,
-    "host_rewrite_observed_at_utc": null
+  "contract_version": 2,
+  "source_selection_required": false,
+  "max_bytes": 268435456,
+  "native_file_input": {
+    "transport": "openai_file_parameter",
+    "status": "available",
+    "route_profile_id": "openai-file-params-v1",
+    "verification_status": "declared_unverified"
   },
-  "sources": [
-    {
-      "source_kind": "local_path",
-      "server_adapter_status": "available",
-      "server_transport": "companion_upload_intent",
-      "requires_writable_target": true,
-      "max_bytes": 268435456,
-      "fallback": "none"
-    }
-  ]
+  "companion_upload": {
+    "transport": "one_use_upload_intent",
+    "status": "available"
+  }
 }
 ```
 
-`server_adapter_status` is `available | not_available`. Для
-`session_attachment` `/api/mcp/apps` сообщает server adapter как `available`,
-но отдельный `verification_status: declared_unverified` сохраняется, пока fresh
-hosted receipt не подтвердит selection → provider object → staging на exact
-candidate/deployment. После такого receipt exact route может сообщить
-`verification_status: verified`. Direct и compatibility profiles сообщают
-`not_available`. Projection возвращает только safe route profile/state;
-provider ID, URL, filename и observation payload не возвращаются. Статическая
-schema, UI resource и repository tests hosted support не доказывают. Остальные
-rows подтверждают только deployed server boundary,
-current writable-target check и advertised byte limit. Response не доказывает,
-что packaged companion установлен в current client или что конкретный path
-пройдёт local admission; для этого нужны fresh installed inventory и companion
-call.
-
-Direct custom MCP routes сообщают `session_attachment` как `not_available` и не
-публикуют `stage_bundle_file`. Только exact Apps profile публикует app-only
-stage и model-visible picker.
-
-Release 0.2 reports only `local_path` and
-`workspace/generated_artifact` as `available`, both through
-`companion_upload_intent` and both requiring the exact active writable target.
-`session_attachment`, `connector_object`, `bounded_in_memory` and
-`server_generated` remain `not_available` with `server_transport: "none"`,
-`requires_writable_target: false` and `max_bytes: 0`. The response contains no
-provider identity, account, object locator, path, filename, temporary URL,
-credential or private content. A `not_available` row is terminal capability
-discovery for that deployed composition; the caller may not silently switch
-source kind or transport.
-
-The installed repository composition may expose a trusted in-process
-`server_generated` port to backend code while this public row remains
-`not_available`. That port is neither an MCP tool nor an HTTP route: it accepts
-only a cancellable producer stream plus an exact safe filename/media/size/SHA
-receipt, returns a staged ref, and requires the existing explicit atomic
-commit. It accepts no target authority: before invoking the producer it
-resolves the credential owner and exact active target generation from current
-server state, then reconciles that receipt in the
-owner/Space/exact-writable-target idempotency namespace: a matching uncertain
-retry returns the prior staged ref, while a mismatch fails without generation
-or object upload.
-Producer job/prompt identity, client path, URL and provider locator never enter
-the request or staged record. MCP export administration remains absent.
+`available` proves only the deployed server surface. Native
+`verification_status` remains `declared_unverified` until a fresh exact
+client/candidate/deployment receipt passes; static schema and repository tests
+do not prove the host bridge. The response contains no provider identity,
+account, object locator, path, filename, temporary URL, credential or private
+content. Trusted in-process generated ports remain internal and add no
+capability row, MCP/REST tool, route or export surface.
 
 ### `create_file_upload_intent`
 
 This write-scoped MCP tool exists in both the modern `2026-07-28` and isolated
 compatibility `2025-11-25` catalogs. Read-only credentials neither list nor
-execute it. Initial repository composition permits only a current OAuth access
-record whose grant owns the exact active write binding; personal bearer tokens
-cannot mint a companion upload capability.
+execute it. Server resolves and pins the exact current principal-owned
+`read_write` Mind generation.
 
 Input:
 
 ```json
 {
   "mind": "/me",
-  "write_binding_id": "wbind_opaque",
-  "source_kind": "local_path",
   "display_filename": "fixture.epub",
   "claimed_media_type": "application/epub+zip",
   "expected_size": 4567,
@@ -2548,7 +2498,6 @@ Input:
 }
 ```
 
-`source_kind` is exactly `local_path | workspace/generated_artifact`.
 `expected_size` is inclusive through 268,435,456 bytes. MIME is advisory and
 normalized to a header-safe essence; missing/invalid/unknown evidence becomes
 `application/octet-stream`. Absolute/local path, bytes, bearer, native
@@ -2566,13 +2515,11 @@ Success returns versioned metadata only:
 ```
 
 The capability is a domain-separated HMAC, lives for 600 seconds and is never
-stored or emitted by application logs in usable form. Exact key/payload replay before expiry returns
-the same URL; changed metadata conflicts. When the OAuth grant rotates its
-short-lived access record, exact replay atomically refreshes only the durable
-token reference after principal, grant, binding, Mind and body identity match;
-all other intent fields remain immutable. Current token, grant, write binding,
-Mind and `content:write` authority are rechecked when creating, reconciling and
-uploading, so revoke/rebind invalidates an outstanding capability.
+stored or emitted by application logs in usable form. Exact key/payload replay
+before expiry returns the same URL; changed metadata conflicts. Current token,
+principal usage generation, Mind, ACL and `content:write` authority are
+rechecked when creating, reconciling and uploading, so revoke or mode/generation
+change invalidates an outstanding capability.
 
 ### Companion upload HTTP
 
@@ -2690,32 +2637,12 @@ Input:
 }
 ```
 
-Tool definition advertises `_meta["openai/fileParams"] = ["file"]` and Apps UI
-visibility `app`. Он появляется только в fresh `/api/mcp/apps` catalog. Direct
-и compatibility invocation возвращает non-retryable
-`native_file_input_unsupported` до target resolution или fetch. Local schema и
-unit/conformance execution не доказывают hosted support.
-
-Apps route — sealed compile-time composition, не env/request configuration.
-Он создаёт fixed-allowlist transport внутри composition root; raw transport,
-client hints или arbitrary endpoint не могут включить native staging. Отдельный
-model-visible `open_bundle_file_picker` связан с
-`ui://mind-diary/file-ingress/v1.html`; resource read возвращает
-`text/html;profile=mcp-app` и не проходит через OKF URI parser.
-
-Widget получает `mind`, точный target `path` и `idempotency_key` в tool input,
-так что место будущего commit выбрано до открытия picker. Он feature-detects
-`selectFiles`, использует explicit `uploadFile` fallback, получает temporary URL
-через `getFileDownloadUrl` и вызывает app-only stage через `tools/call`. Каждый
-вызов возвращает независимый opaque staged ref; несколько ref можно объединить
-в один atomic changeset. После успешного stage widget вызывает
-`ui/update-model-context` с закрытым payload
-`{schema, action, mind, path, staged_file_ref}`; это переносит только
-service-owned receipt и уже model-visible target intent, не выполняя commit.
-Widget не передаёт provider `file_name`, а Apps server независимо закрепляет
-neutral `display_filename = selected-file` и игнорирует входной override.
-Поэтому File ID/URL/bytes/private filename не попадают в model context, durable
-state, widget state, DOM attributes, result metadata или logs.
+Tool definition advertises `_meta["openai/fileParams"] = ["file"]` and appears
+in the ordinary fresh modern `/api/mcp` catalog. Compatible hosts create the
+file object from a user-selected file; the model does not construct it.
+Compatibility `/api/mcp/2025-11-25` omits the tool until that exact lifecycle
+and client pair has separate evidence. Schema/conformance execution alone does
+not prove host support.
 
 `file_id`/`download_url` are current OpenAI adapter transport inputs and never
 cross the portable application port or durable record. Local path, base64 and
@@ -2726,8 +2653,9 @@ aborts with `bundle_file_size_limit_exceeded`. Missing/untrusted
 `Content-Length` is enforced by a counting stream; no adapter/application port
 may require a full-file `arrayBuffer` or concatenated resident buffer.
 
-Server requires exact active write binding/current write ACL, streams SHA-256,
-normalizes open advisory media and applies the 60-minute/quota contract.
+Server resolves the exact current principal-owned `read_write` Mind generation,
+checks current ACL/scope, streams SHA-256, normalizes open advisory media and
+applies the 60-minute/quota contract.
 Unknown/missing/conflicting detection succeeds as `application/octet-stream`.
 Safe raster may become inline-eligible after separate verification; DOCX,
 HEIC, EPUB, OPUS, HTML, notebook, ZIP and unknown binary remain download-only.
@@ -2738,16 +2666,16 @@ Success:
 ```
 
 Same stage key/exact bytes/metadata returns the same ref; changed payload is
-`idempotency_conflict`. Ref is pinned to binding owner + Space + exact write
+`idempotency_conflict`. Ref is pinned to principal + Space + exact usage
 generation. It is not reader-visible and no canonical revision is created.
 
 ### `reconcile_file_stage`
 
-Input repeats the exact safe receipt of the uncertain stage: `mind`, current
-`write_binding_id`, `source_kind`, canonical display filename, canonical
-`media_type`, SHA-256, size and original `idempotency_key`, plus the original
-optional claimed MIME/expected size/digest when supplied. It never accepts raw
-bytes or a provider/local locator.
+Input repeats the exact safe receipt of the uncertain stage: `mind`, canonical
+display filename, canonical `media_type`, SHA-256, size and original
+`idempotency_key`, plus original optional claimed MIME/expected size/digest when
+supplied. It never accepts raw bytes, `source_kind`, binding identity or a
+provider/local locator.
 
 Success returns either `{ "status": "missing" }` or
 `{ "status": "staged", "staged_file": {} }`. Exact replay returns the

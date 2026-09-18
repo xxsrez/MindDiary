@@ -49,7 +49,6 @@
     "gate:oauth-direct-plugin": "npm run build --silent && node scripts/run-oauth-direct-plugin-probe.mjs",
     "gate:release-0.3-authority-target": "npm run build --silent && node scripts/run-release-0.3-authority-target-local-gate.mjs",
     "join:release-0.3-authority-target": "node scripts/join-release-0.3-authority-target-uat.mjs",
-    "gate:file-ingress-local": "npm run build --silent && node scripts/run-file-ingress-local-gate.mjs --sha HEAD --output build/file-ingress/local-receipt.json",
     "gate:file-operations-differential": "npm run build --silent && node scripts/run-file-operations-differential.mjs",
     "gate:performance": "npm run build --silent && node scripts/benchmark-runtime-performance.mjs",
     "benchmark:local-mind-scale": "npm run build --silent && node scripts/benchmark-local-mind-scale.mjs",
@@ -57,8 +56,6 @@
     "uat:operator-directory-canary": "node scripts/run-uat-operator-directory-canary.mjs",
     "uat:provider-log-boundary": "node scripts/run-provider-request-log-boundary.mjs",
     "readiness:report": "node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json",
-    "readiness:file-ingress": "node scripts/generate-file-ingress-matrix-report.mjs --sha HEAD --local-receipt build/file-ingress/local-receipt.json --output build/file-ingress/matrix-report.json --require-complete",
-    "report:file-ingress": "node scripts/generate-file-ingress-matrix-report.mjs --sha HEAD --local-receipt build/file-ingress/local-receipt.json --output build/file-ingress/matrix-report.json",
     "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && playwright test --config=playwright.config.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:backup-completeness && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
   },
   "dependencies": {

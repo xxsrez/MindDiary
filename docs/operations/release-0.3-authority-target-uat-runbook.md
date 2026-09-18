@@ -133,11 +133,12 @@ read-back предыдущего, а не локальное предполож�
 
 ### Каталоги и discovery
 
-- Fresh write-capable modern client (`2026-07-28`) и compatibility client
-  (`2025-11-25`) получают ровно 17 names из direct contract fixture. Read-only
-  grant получает exact 16-tool subset без `create_file_upload_intent`. Отдельный
-  Apps profile имеет 19-tool projection, но его hosted picker/stage receipt
-  проверяется по MD-315/MD-316 и не подменяется direct catalog observation.
+- Fresh write-capable modern client (`2026-07-28`) получает exact 24-tool
+  catalog, включая один `openai/fileParams` stage; compatibility client
+  (`2025-11-25`) получает 23 names без native stage. Read-only grant получает
+  exact 22-tool subset без `create_file_upload_intent` и native stage.
+  Отдельного Apps profile или picker нет; host bridge проверяется отдельным
+  fresh client receipt.
 - `get_mind_bindings`, `set_read_mind_binding`,
   `set_write_mind_binding`, `start_export`, `get_export_status` отсутствуют в
   обоих catalogs. Exact cached calls возвращают принятый bounded compatibility

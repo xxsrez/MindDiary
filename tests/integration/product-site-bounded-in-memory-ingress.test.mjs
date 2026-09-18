@@ -249,17 +249,8 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
     {},
     observedBodies,
   );
-  assert.deepEqual(
-    capabilitiesBefore.sources
-      .filter(({ source_kind }) => source_kind === "bounded_in_memory")
-      .map(({ source_kind, server_adapter_status, server_transport, max_bytes }) => [
-        source_kind,
-        server_adapter_status,
-        server_transport,
-        max_bytes,
-      ]),
-    [["bounded_in_memory", "not_available", "none", 0]],
-  );
+  assert.equal(capabilitiesBefore.source_selection_required, false);
+  assert.equal("sources" in capabilitiesBefore, false);
 
   const beforeRejectedObjects = stagedObjectCount(bucket);
   const objectKeysBeforeOversized = [...bucket.records.keys()].sort();
@@ -456,17 +447,8 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
     {},
     observedBodies,
   );
-  const boundedCapability = capabilitiesAfter.sources.find(
-    ({ source_kind }) => source_kind === "bounded_in_memory",
-  );
-  assert.deepEqual(
-    [
-      boundedCapability.server_adapter_status,
-      boundedCapability.server_transport,
-      boundedCapability.max_bytes,
-    ],
-    ["not_available", "none", 0],
-  );
+  assert.equal(capabilitiesAfter.source_selection_required, false);
+  assert.equal("sources" in capabilitiesAfter, false);
   const privacySurface = JSON.stringify({
     telemetryLines,
     observedBodies,

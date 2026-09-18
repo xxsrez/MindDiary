@@ -175,8 +175,7 @@ indistinguishable `404` for every other actor.
 | `POST /oauth/authorize` | keep → OAuth | Explicit consent; account control is not granted |
 | `POST /oauth/token` | keep → OAuth | PKCE/refresh/resource/grant checks |
 | `POST /oauth/revoke` | keep → OAuth | Credential revoke; Site Connection UI remains product control |
-| `POST /api/mcp` | change → Content MCP modern | Enabled projection, centralized agent instructions and schema changes below; canonical OAuth resource unchanged. MD-376/MD-379 |
-| `POST /api/mcp/apps` | change → Content MCP Apps | Isolated modern route profile for the static file picker and app-only native staging; same canonical OAuth audience `/api/mcp`; MD-315/MD-316 |
+| `POST /api/mcp` | change → Content MCP modern | Enabled 24-tool projection, centralized instructions and one standard native file parameter; canonical OAuth resource unchanged. MD-376/MD-379/ADR-0030 |
 | `POST /api/mcp/2025-11-25` | change → Content MCP compatibility | Isolated legacy lifecycle, same enabled tool catalog and centralized instructions. MD-376 |
 | any `/mcp` | remove → none | Preserve explicit product `404 route_not_found`; never redirect a bearer request |
 
@@ -200,11 +199,10 @@ indistinguishable `404` for every other actor.
 | `list_bundle_files` | change → Content MCP | Explicit Mind/revision, no binding; metadata only |
 | `set_read_mind_binding` | remove → none | Omit from both catalogs/schemas; exact cached call directs the user to per-Mind usage on Site and has no side effect. MD-376 |
 | `set_write_mind_binding` | remove → none | Omit from both catalogs/schemas; exact cached call directs the user to the single principal `read_write` mode on Site and has no side effect. MD-376 |
-| `get_file_ingress_capabilities` | change → Content MCP | Read-only deployed-adapter report; rename output `requires_write_binding` to `requires_writable_target`; no client/path promise |
-| `open_bundle_file_picker` | change → Content MCP Apps | Model-visible preflight for one explicit writable Mind; links the static MCP Apps UI resource and exposes no provider file ID, URL or bytes. Direct and compatibility profiles omit it. MD-316 |
-| `create_file_upload_intent` | change → Content MCP | No client binding/generation; explicit `mind` is an assertion against the current principal `read_write` Mind. MD-379 |
-| `stage_bundle_file` | change → Content MCP | Native provider object terminates at adapter; service resolves and pins the current principal mount generation. MD-379 |
-| `reconcile_file_stage` | change → Content MCP | Reconcile exact original target/source/digest/idempotency payload under the current principal mount. MD-379 |
+| `get_file_ingress_capabilities` | change → Content MCP | Read-only transport/limit report; no source selection, client/path promise or provider data. ADR-0030 |
+| `create_file_upload_intent` | change → Content MCP | One companion fallback; no source/binding/generation selector. Explicit `mind` is an assertion against current principal `read_write` state. ADR-0030/MD-379 |
+| `stage_bundle_file` | change → modern Content MCP | One top-level `openai/fileParams` input; provider envelope terminates at adapter and service pins current principal usage generation. ADR-0030/MD-379 |
+| `reconcile_file_stage` | change → Content MCP | Reconcile exact target/digest/idempotency payload without source selection under current principal usage generation. ADR-0030/MD-379 |
 | `get_bundle_file_download` | change → Content MCP | Exact enabled Mind/revision current read; usage is rechecked. MD-376 |
 | `commit_changeset` | change → Content MCP | Canonical write: explicit target assertion, expected HEAD, idempotency, bounded operations and optional max-8 strict `source_references[{mind,revision,path}]`; service resolves the selected Mind's current ordinary or Personal `read_write` generation and reauthorizes target/source transactionally. MD-376/MD-379/MD-382 |
 | `reconcile_changeset` | change → Content MCP | Exact original commit payload including unchanged `source_references`; missing outcome performs no writes. MD-376/MD-379 |
@@ -212,13 +210,11 @@ indistinguishable `404` for every other actor.
 | `start_export` | move → Sites control | Omit from catalog; exact old call returns side-effect-free `operation_moved_to_sites` with the Sites REST route and never starts a job. MD-359/MD-361 |
 | `get_export_status` | move → Sites control | Omit from catalog; exact old call returns the same side-effect-free migration result; Site status/download only. MD-359/MD-361 |
 
-The complete target schema catalog therefore contains 23 tools, in stable order,
-including the two ADR-0025 Personal-configuration tools and three MD-408 file
-operation tools. Endpoint profiles publish only their exact safe projection:
-direct modern and
-compatibility omit both `open_bundle_file_picker` and `stage_bundle_file`, a
-constructor-verified native route may publish `stage_bundle_file` without the
-picker, and `/api/mcp/apps` publishes the complete catalog.
+The complete modern target schema catalog contains 24 tools in stable order,
+including the two ADR-0025 Personal-configuration tools, three MD-408 file
+operation tools and two managed note tools. Modern `/api/mcp` publishes the
+complete catalog. Compatibility omits only `stage_bundle_file` until its exact
+client/profile pair has separate native-file evidence.
 
 ```text
 get_personal_mind_configuration
@@ -237,13 +233,14 @@ get_revision
 validate_mind
 list_bundle_files
 get_file_ingress_capabilities
-open_bundle_file_picker
 create_file_upload_intent
 stage_bundle_file
 reconcile_file_stage
 get_bundle_file_download
 commit_changeset
 reconcile_changeset
+enqueue_note
+get_note_status
 ```
 
 ## MCP Resources и protocol profiles
@@ -256,7 +253,7 @@ Modern `2026-07-28`:
 | `resources/templates/list` | keep | Authenticated empty list; no implicit templates |
 | `resources/list` | change | Enumerate only authorized root `index` resources from current access, without binding |
 | `resources/read` | change | Reauthorize exact `okf://spaces/{space_id}/revisions/{revision_id}/...`; no HEAD or cross-Mind fallback |
-| `tools/list` | change | Advertise the 21-tool direct projection; omit the Apps picker and native stage |
+| `tools/list` | change | Advertise the complete 24-tool modern projection, including one standard native file tool |
 | `tools/call` | change | Execute only advertised target tool and target schemas |
 | `initialize` | remove | Preserve explicit `Method not found`; modern profile never starts legacy lifecycle |
 | `ping` | remove | Preserve current `Method not found`; not silently added by this migration |
@@ -268,18 +265,15 @@ Compatibility `2025-11-25`:
 | `initialize` | change | Keep isolated negotiation; update instructions and advertised tool capability |
 | `notifications/initialized` | keep | `202` for exact notification |
 | `ping` | keep | Empty successful result |
-| `tools/list` | change | Same 21-tool direct projection; no legacy-only authority or Apps file picker |
+| `tools/list` | change | Advertise the 23-tool compatibility projection; omit native stage until exact client evidence |
 | `tools/call` | change | Same target schemas and authorization |
 | `resources/templates/list`, `resources/list`, `resources/read` | remove | Preserve compatibility `Method not found`; resources are not silently widened in this profile |
 | `server/discover` | remove | Preserve compatibility `Method not found` |
 
-MCP Apps `/api/mcp/apps` uses the same modern `2026-07-28` lifecycle, publishes
-the complete 23-tool catalog, and additionally serves the exact static
-`ui://mind-diary/file-ingress/v1.html` resource. `stage_bundle_file` remains
-app-only through `_meta.ui.visibility`; its provider file object and full stage
-result are not projected into model-visible `structuredContent`. После stage
-widget передаёт через `ui/update-model-context` только explicit `mind`/target
-`path` и opaque `staged_file_ref`, необходимые следующему явному changeset.
+Отдельного MCP Apps endpoint, picker resource или app-only tool projection нет.
+Host bridge формирует standard file object, а modern adapter возвращает только
+privacy-safe staged receipt. Provider envelope и bytes не входят в durable
+content или model-visible metadata.
 
 Resource URI grammar remains exact and token-free:
 
@@ -302,7 +296,7 @@ company-knowledge claim.
 | `/settings/mcp` | keep | Registered `GET`/`HEAD` stays `308` to Advanced MCP; signed-out safe shell unchanged |
 | `/help/codex` | change | `MD-376`: install → authenticate → read enabled explicit Minds by user request/description → configure per-Mind usage on Site; automatic save uses `commit_changeset` |
 | `/help` | change | `integration-owner`: starter/concierge copy must not call removed binding/export tools |
-| Marketplace package `mind-diary@srez-marketplace` | change | Keep `AVAILABLE + ON_USE`, compatibility transport `/api/mcp/2025-11-25` and canonical OAuth resource `/api/mcp`; `integration-owner` publishes a new immutable package version for catalog/schema change |
+| Marketplace package `mind-diary@srez-marketplace` | change | Keep `AVAILABLE + ON_USE`, switch current transport to canonical modern `/api/mcp`, and publish a new immutable package version for the catalog/schema change |
 | Bundled Mind Diary skill | change | `integration-owner`: remove binding/capture/export-tool instructions; use enabled descriptions for reads, one exact Mind/revision per call, automatic save of explicitly discussed matching knowledge through `commit_changeset`, OKF validation/read-back/conflict reconciliation and user notification |
 | Plugin card/help label `Mind Diary UAT` | keep | `integration-owner`: UAT remains explicit; no production/public-directory claim |
 
@@ -330,8 +324,8 @@ MD-376 — MCP projection/guidance, MD-379 — write pin и transactional rechec
   `reconcile_changeset`;
 - remove `capture_knowledge` from the fresh catalog and accept only its exact
   cached name through the side-effect-free retired dispatcher;
-- rename `requires_write_binding` to `requires_writable_target` in every
-  `get_file_ingress_capabilities.sources[]` row;
+- replace the old source matrix in `get_file_ingress_capabilities` with one
+  native transport, one companion transport and the common byte limit;
 - keep required explicit `mind` on every target-sensitive content operation;
 - remove `get_mind_bindings`, `set_read_mind_binding`,
   `set_write_mind_binding`, `start_export`, `get_export_status` from both tool

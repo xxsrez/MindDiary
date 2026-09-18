@@ -7,7 +7,6 @@ import type { Sha256Digest, SpaceId, StagedBundleFileId } from "@mind-diary/doma
 import {
   BUNDLE_FILE_LIMITS,
   BundleFileStagingService,
-  type StageBundleFileRequest,
   type StageBundleFileStreamResult,
   type StageBundleFileResult,
 } from "./bundle-files.js";
@@ -128,10 +127,10 @@ function mapStreamResult(result: StageBundleFileStreamResult): GeneratedArtifact
  * adapter and byte transport differ.
  */
 export class GeneratedArtifactIngressService {
-  readonly #staging: Pick<BundleFileStagingService, "stage" | "stageStream">;
+  readonly #staging: Pick<BundleFileStagingService, "stageStream">;
 
   constructor(dependencies: {
-    readonly staging: Pick<BundleFileStagingService, "stage" | "stageStream">;
+    readonly staging: Pick<BundleFileStagingService, "stageStream">;
   }) {
     this.#staging = dependencies.staging;
   }
@@ -192,12 +191,19 @@ export class GeneratedArtifactIngressService {
       });
     }
 
-    const stageRequest: StageBundleFileRequest = {
+    const bytes = Uint8Array.from(request.bytes);
+    const stream = Object.freeze({
+      async *[Symbol.asyncIterator](): AsyncGenerator<Uint8Array> {
+        yield bytes;
+      },
+    });
+    return mapStreamResult(await this.#staging.stageStream({
       actor: request.actor,
       spaceId: request.spaceId,
       displayFilename: request.displayFilename,
       claimedMediaType: request.claimedMediaType,
-      bytes: request.bytes,
+      stream,
+      maxBytes,
       idempotencyKey: request.idempotencyKey,
       sourceKind,
       ...(request.expectedSize === undefined ? {} : { expectedSize: request.expectedSize }),
@@ -205,8 +211,8 @@ export class GeneratedArtifactIngressService {
       ...(request.expectedMediaType === undefined
         ? {}
         : { expectedMediaType: request.expectedMediaType }),
-    };
-    return this.#staging.stage(stageRequest, expectedWritePin);
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    }, expectedWritePin));
   }
 
   stageBoundedInMemory(

@@ -1,6 +1,10 @@
 # ADR-0018: единый file-ingress contract и source capability matrix
 
-Статус: accepted technical contract, 2026-08-23. Portable boundary и security
+Статус: superseded in part by [ADR-0030](0030-single-file-input.md), 2026-09-18.
+Portable boundary, security, integrity и atomic commit invariants сохраняются;
+обязательная six-source capability matrix и model-visible closed
+`source_kind` заменены одним file input и internal-only compatibility
+provenance. Исходное решение принято 2026-08-23. Portable boundary и security
 invariants сохраняются; closed BundleFile allowlist/64 MiB static-policy часть
 заменена [ADR-0021](0021-format-neutral-bundle-files.md). Включение universal
 file ingress в terminal Release 0.1 ранее частично заменено

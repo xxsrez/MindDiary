@@ -11,7 +11,6 @@ import {
 } from "@mind-diary/adapter-background";
 import { SitesMindLocatorCodec } from "@mind-diary/adapter-locator-sites";
 import {
-  MCP_APPS_ENDPOINT,
   MCP_ENDPOINT,
   FILE_UPLOAD_INTENT_ROUTE_PREFIX,
   MCP_LEGACY_CODEX_ENDPOINT,
@@ -20,7 +19,6 @@ import {
   createFileUploadIntentHttpHandler,
   createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
-  createMcpHttpHandlerAtEndpoint,
   type McpRequestIdGenerator,
 } from "@mind-diary/adapter-mcp";
 import {
@@ -139,7 +137,7 @@ import {
   type BoundedInMemoryIngressPort,
 } from "./bounded-in-memory-ingress.js";
 import {
-  createOpenAiMcpAppsNativeFileParameterComposition,
+  createOpenAiFileParameterComposition,
   createVerifiedNativeFileParameterComposition,
   type ProductSiteVerifiedNativeFileParameterRouteOptions,
 } from "./native-file-route.js";
@@ -786,8 +784,7 @@ export async function createProductSiteRuntime(
     options.verifiedNativeFileParameterRoute,
   );
   const nativeFileRoute = nativeFileComposition.route;
-  const mcpAppsNativeFileComposition =
-    createOpenAiMcpAppsNativeFileParameterComposition();
+  const standardNativeFileComposition = createOpenAiFileParameterComposition();
   const host = canonicalHost(options.publicOrigin);
   const identityBindingProvider = options.identityBindingProvider ?? SITES_IDENTITY_PROVIDER;
   if (!/^[a-z][a-z0-9-]{0,63}$/u.test(identityBindingProvider)) {
@@ -1344,16 +1341,20 @@ export async function createProductSiteRuntime(
   const directMcpApplication = new ProductMcpContentApplication(
     mcpApplicationDependencies,
   );
-  const nativeMcpApplication = nativeFileRoute === undefined
-    ? null
-    : new ProductMcpContentApplication({
+  const modernNativeMcpApplication = new ProductMcpContentApplication({
+    ...mcpApplicationDependencies,
+    nativeFileRoute: nativeFileRoute !== undefined &&
+        nativeFileComposition.mcpProfiles.includes("modern")
+      ? nativeFileRoute
+      : standardNativeFileComposition.route,
+  });
+  const compatibilityNativeMcpApplication = nativeFileRoute !== undefined &&
+      nativeFileComposition.mcpProfiles.includes("compatibility")
+    ? new ProductMcpContentApplication({
         ...mcpApplicationDependencies,
         nativeFileRoute,
-      });
-  const mcpAppsMcpApplication = new ProductMcpContentApplication({
-    ...mcpApplicationDependencies,
-    nativeFileRoute: mcpAppsNativeFileComposition.route,
-  });
+      })
+    : null;
   const resolveIdentity = async (
     request: Request,
   ): Promise<ProductSitesIdentityResolution> => {
@@ -1492,22 +1493,19 @@ export async function createProductSiteRuntime(
   };
   const handleMcp = async (
     request: Request,
-    profile: "modern" | "compatibility" | "apps",
+    profile: "modern" | "compatibility",
     deferActivity?: (promise: Promise<unknown>) => void,
   ): Promise<Response> => {
-    const mcpApplication = profile === "apps"
-      ? mcpAppsMcpApplication
-      : nativeMcpApplication !== null &&
-          nativeFileComposition.mcpProfiles.includes(profile)
-        ? nativeMcpApplication
-        : directMcpApplication;
+    const mcpApplication = profile === "modern"
+      ? modernNativeMcpApplication
+      : compatibilityNativeMcpApplication ?? directMcpApplication;
     const startedAt = performance.now();
     const requestId = requestIds().nextRequestId();
     const performanceCorrelationId = benchmarkCorrelationId(request);
     if (performanceCorrelationId !== null) {
       benchmarkCorrelations.set(requestId, performanceCorrelationId);
     }
-    const performanceProfile = profile === "modern" || profile === "apps"
+    const performanceProfile = profile === "modern"
       ? "mcp_modern" as const
       : "mcp_compatibility" as const;
     const timedAuthenticator: McpBearerAuthenticator = Object.freeze({
@@ -1651,9 +1649,7 @@ export async function createProductSiteRuntime(
     try {
       response = await (profile === "compatibility"
         ? createLegacyCodexMcpHttpHandler(dependencies)(request)
-        : profile === "apps"
-          ? createMcpHttpHandlerAtEndpoint(dependencies, MCP_APPS_ENDPOINT)(request)
-          : createMcpHttpHandler(dependencies)(request));
+        : createMcpHttpHandler(dependencies)(request));
     } finally {
       benchmarkCorrelations.delete(requestId);
     }
@@ -2358,7 +2354,6 @@ export async function createProductSiteRuntime(
       const oauthResponse = await oauth.fetch(request);
       if (oauthResponse !== null) return oauthResponse;
       if (path === MCP_ENDPOINT) return handleMcp(request, "modern", deferActivity);
-      if (path === MCP_APPS_ENDPOINT) return handleMcp(request, "apps", deferActivity);
       if (path === MCP_LEGACY_CODEX_ENDPOINT) {
         return handleMcp(request, "compatibility", deferActivity);
       }

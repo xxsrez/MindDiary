@@ -11,17 +11,12 @@ import type {
   MindSearchService,
   MindValidationService,
   NoteQueueService,
+  ReconcileStageBundleFileResult,
 } from "@mind-diary/application-content";
 import {
   NativeFileParameterRoute,
   NativeFileInputFailure,
 } from "./native-file-input.js";
-import {
-  FILE_INGRESS_WIDGET_HTML,
-  FILE_INGRESS_WIDGET_META,
-  FILE_INGRESS_WIDGET_URI,
-  MCP_APPS_RESOURCE_MIME_TYPE,
-} from "./file-ingress-widget.js";
 import {
   MCP_TOOL_DEFINITIONS,
   MCP_MOVED_EXPORT_TOOLS,
@@ -386,17 +381,6 @@ function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): bo
       (typeof input.expectedSha256 === "string" && SHA256.test(input.expectedSha256)));
 }
 
-function validOpenBundleFilePickerInput(
-  input: Readonly<Record<string, unknown>>,
-): boolean {
-  return hasExactKeys(input, ["mind", "path", "idempotencyKey"]) &&
-    stringValue(input.mind) !== null &&
-    typeof input.path === "string" &&
-    input.path.length > 0 &&
-    input.path.length <= 1_024 &&
-    idempotencyKeyValue(input.idempotencyKey);
-}
-
 function validReconcileFileStageInput(input: Readonly<Record<string, unknown>>): boolean {
   const allowed = new Set([
     "mind",
@@ -412,8 +396,9 @@ function validReconcileFileStageInput(input: Readonly<Record<string, unknown>>):
   ]);
   return Object.keys(input).every((key) => allowed.has(key)) &&
     stringValue(input.mind) !== null &&
-    typeof input.sourceKind === "string" &&
-    FILE_INGRESS_SOURCE_KINDS.has(input.sourceKind) &&
+    (input.sourceKind === undefined ||
+      (typeof input.sourceKind === "string" &&
+        FILE_INGRESS_SOURCE_KINDS.has(input.sourceKind))) &&
     stringValue(input.displayFilename) !== null &&
     (input.claimedMediaType === undefined ||
       (typeof input.claimedMediaType === "string" && input.claimedMediaType.length <= 256)) &&
@@ -583,15 +568,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
     const nativeFileParameter =
       this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute &&
       this.#dependencies.staging !== undefined;
-    const mcpAppsProfile = nativeFileParameter &&
-      this.#dependencies.nativeFileRoute?.routeKind === "openai_mcp_apps";
     return Object.freeze(
       MCP_TOOL_DEFINITIONS.filter(
         (definition) =>
           (this.#dependencies.notes !== undefined || !["enqueue_note", "get_note_status"].includes(definition.name)) &&
           (hostedUploadIntents || definition.name !== "create_file_upload_intent") &&
-          (nativeFileParameter || definition.name !== "stage_bundle_file") &&
-          (mcpAppsProfile || definition.name !== "open_bundle_file_picker"),
+          (nativeFileParameter || definition.name !== "stage_bundle_file"),
       ).map((definition) =>
         definition.name === "stage_bundle_file" &&
         this.#dependencies.nativeFileRoute?.routeKind === "verified_host_rewrite"
@@ -630,17 +612,6 @@ export class ProductMcpContentApplication implements McpContentApplication {
     readonly actor: AuthenticatedActor;
     readonly uri: string;
   }): Promise<Readonly<McpImmutableResourceRead>> {
-    if (
-      request.uri === FILE_INGRESS_WIDGET_URI &&
-      this.#dependencies.nativeFileRoute?.routeKind === "openai_mcp_apps"
-    ) {
-      return Object.freeze({
-        uri: FILE_INGRESS_WIDGET_URI,
-        mimeType: MCP_APPS_RESOURCE_MIME_TYPE,
-        text: FILE_INGRESS_WIDGET_HTML,
-        _meta: FILE_INGRESS_WIDGET_META,
-      });
-    }
     const result = await this.#dependencies.browse.readResource(
       request.actor,
       request.uri,
@@ -650,11 +621,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
 
   async authorizeToolCall(request: Parameters<McpContentApplication["authorizeToolCall"]>[0]) {
     if (
-      (request.name === "stage_bundle_file" || request.name === "open_bundle_file_picker") &&
+      request.name === "stage_bundle_file" &&
       (!(this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute) ||
-        this.#dependencies.staging === undefined ||
-        (request.name === "open_bundle_file_picker" &&
-          this.#dependencies.nativeFileRoute.routeKind !== "openai_mcp_apps"))
+        this.#dependencies.staging === undefined)
     ) {
       return Object.freeze({ kind: "allowed" as const });
     }
@@ -674,8 +643,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
       request.name === "reconcile_changeset" ||
       request.name === "create_file_upload_intent" ||
       request.name === "stage_bundle_file" ||
-      request.name === "reconcile_file_stage" ||
-      request.name === "open_bundle_file_picker";
+      request.name === "reconcile_file_stage";
     try {
       const input = toolInput(request.name, request.arguments);
       if (request.name === "resolve_mind") {
@@ -758,104 +726,41 @@ export class ProductMcpContentApplication implements McpContentApplication {
           const hostedUploadIntents =
             this.#dependencies.uploadIntents !== undefined &&
             this.#dependencies.uploadIntentUrl !== undefined;
-          const nativeCapability = hostedRegistryCapability(
-            capabilityRegistry,
-            "session_attachment",
-            "native_file_parameter",
-          );
-          const nativeFileRoute = nativeCapability !== null &&
+          const companionAvailable = hostedUploadIntents &&
+            (hostedRegistryCapability(
+              capabilityRegistry,
+              "local_path",
+              "local_companion",
+            ) !== null || hostedRegistryCapability(
+              capabilityRegistry,
+              "workspace/generated_artifact",
+              "local_companion",
+            ) !== null);
+          const nativeFileRoute =
             this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute &&
-            this.#dependencies.staging !== undefined
+              this.#dependencies.staging !== undefined
               ? this.#dependencies.nativeFileRoute
               : null;
-          const sources = Object.freeze([
-            "session_attachment",
-            "local_path",
-            "workspace/generated_artifact",
-            "connector_object",
-            "bounded_in_memory",
-            "server_generated",
-          ].map((sourceKind) => {
-            const nativeAvailable =
-              sourceKind === "session_attachment" && nativeFileRoute !== null;
-            const companionCapability = sourceKind === "local_path" ||
-                sourceKind === "workspace/generated_artifact"
-              ? hostedRegistryCapability(
-                  capabilityRegistry,
-                  sourceKind,
-                  "local_companion",
-                )
-              : null;
-            const companionAvailable = hostedUploadIntents &&
-              companionCapability !== null &&
-              (sourceKind === "local_path" || sourceKind === "workspace/generated_artifact");
-            const available = nativeAvailable || companionAvailable;
-            const maxBytes = nativeAvailable
-              ? nativeCapability?.maxBytes ?? 0
-              : companionAvailable
-                ? companionCapability?.maxBytes ?? 0
-                : 0;
-            return Object.freeze({
-              sourceKind,
-              serverAdapterStatus: available ? "available" : "not_available",
-              serverTransport: nativeAvailable
-                ? "native_file_parameter"
-                : companionAvailable
-                  ? "companion_upload_intent"
-                  : "none",
-              requiresWritableTarget: available,
-              maxBytes,
-              fallback: "none",
-            });
-          }));
         return createMcpToolSuccessResult(
           snakeOutput({
-            reportScope: "active_route_profile_and_hosted_server_adapters",
-            clientCompanionStatus: "not_reported",
-            pathAdmissionStatus: "not_reported",
-            nativeFileParameter: {
-              sourceKind: "session_attachment",
-              transport: "native_file_parameter",
+            contractVersion: 2,
+            sourceSelectionRequired: false,
+            maxBytes: 268_435_456,
+            nativeFileInput: {
+              transport: "openai_file_parameter",
               status: nativeFileRoute === null ? "not_available" : "available",
               routeProfileId: nativeFileRoute?.profileId ?? null,
               verificationStatus:
                 nativeFileRoute?.verificationStatus ?? "not_available",
-              hostRewriteAssertionId: nativeFileRoute?.hostRewriteAssertionId ?? null,
-              hostRewriteObservedAtUtc:
-                nativeFileRoute?.hostRewriteObservedAtUtc ?? null,
             },
-            sources,
+            companionUpload: {
+              transport: "one_use_upload_intent",
+              status: companionAvailable ? "available" : "not_available",
+            },
           }),
-          "Read the active route profile and hosted server-adapter matrix; client inventory and path admission are not reported.",
+          "Read the available file transports and shared byte limit. File origin is not a caller-selected capability.",
         );
         }
-      case "open_bundle_file_picker": {
-        if (
-          this.#dependencies.nativeFileRoute?.routeKind !== "openai_mcp_apps" ||
-          this.#dependencies.staging === undefined
-        ) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "native_file_input_unsupported",
-            "This deployed route profile has no private MCP Apps file picker.",
-            false,
-          );
-        }
-        if (!validOpenBundleFilePickerInput(input)) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "invalid_request",
-            "The file picker arguments are invalid.",
-            false,
-          );
-        }
-        const writeMind = await this.#writeMindInfo(request.actor, input.mind);
-        if (writeMind.kind === "error") return writeMind.result;
-        return createMcpToolSuccessResult(
-          { status: "ready" },
-          "Opened the private file picker for the selected writable Mind.",
-        );
-      }
       case "create_file_upload_intent": {
         if (
           this.#dependencies.uploadIntents === undefined ||
@@ -871,7 +776,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
         if (
           !hasExactKeys(input, [
             "mind",
-            "sourceKind",
+            ...(input.sourceKind === undefined ? [] : ["sourceKind"]),
             "displayFilename",
             ...(input.claimedMediaType === undefined
               ? []
@@ -880,6 +785,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
             "expectedSha256",
             "idempotencyKey",
           ])
+          || (input.sourceKind !== undefined &&
+            input.sourceKind !== "local_path" &&
+            input.sourceKind !== "workspace/generated_artifact")
         ) {
           return createMcpToolErrorResult(
             request.actor.requestId,
@@ -893,8 +801,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
         const { info } = writeMind;
         const {
           mind: _mind,
-          ...intentArguments
+          ...providedIntentArguments
         } = request.arguments;
+        const intentArguments = Object.freeze({
+          source_kind: "local_path",
+          ...providedIntentArguments,
+        });
         const created = await this.#dependencies.uploadIntents.create(
           request.actor,
           info.mind.mindId,
@@ -1031,9 +943,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
           actor: request.actor,
           spaceId: info.mind.mindId,
           sourceKind: "session_attachment",
-          displayFilename: nativeFileRoute.routeKind === "openai_mcp_apps"
-            ? "selected-file"
-            : input.displayFilename ?? downloaded.fileName,
+          displayFilename: input.displayFilename ?? downloaded.fileName ?? "uploaded-file",
           claimedMediaType: downloaded.mimeType,
           stream: downloaded.stream,
           maxBytes: 268_435_456,
@@ -1114,19 +1024,47 @@ export class ProductMcpContentApplication implements McpContentApplication {
         const writeMind = await this.#writeMindInfo(request.actor, input.mind);
         if (writeMind.kind === "error") return writeMind.result;
         const { info } = writeMind;
-        const reconciled = await this.#dependencies.ingress.reconcileStage({
-          actor: request.actor,
-          spaceId: info.mind.mindId,
-          sourceKind: input.sourceKind,
-          displayFilename: input.displayFilename,
-          claimedMediaType: input.claimedMediaType,
-          mediaType: input.mediaType,
-          sha256: input.sha256,
-          size: input.size,
-          idempotencyKey: input.idempotencyKey,
-          expectedSize: input.expectedSize,
-          expectedSha256: input.expectedSha256,
-        });
+        const compatibilitySourceKinds = input.sourceKind === undefined
+          ? Object.freeze([
+              "session_attachment",
+              "local_path",
+              "workspace/generated_artifact",
+            ])
+          : Object.freeze([input.sourceKind]);
+        let reconciled: ReconcileStageBundleFileResult | null = null;
+        for (const sourceKind of compatibilitySourceKinds) {
+          const attempt = await this.#dependencies.ingress.reconcileStage({
+            actor: request.actor,
+            spaceId: info.mind.mindId,
+            sourceKind,
+            displayFilename: input.displayFilename,
+            claimedMediaType: input.claimedMediaType,
+            mediaType: input.mediaType,
+            sha256: input.sha256,
+            size: input.size,
+            idempotencyKey: input.idempotencyKey,
+            expectedSize: input.expectedSize,
+            expectedSha256: input.expectedSha256,
+          });
+          if (attempt.kind === "staged" || attempt.kind === "denied") {
+            reconciled = attempt;
+            break;
+          }
+          if (attempt.kind === "missing") {
+            reconciled ??= attempt;
+            continue;
+          }
+          if (attempt.code !== "idempotency_conflict") {
+            reconciled = attempt;
+            break;
+          }
+          if (reconciled === null || reconciled.kind === "missing") {
+            reconciled = attempt;
+          }
+        }
+        if (reconciled === null) {
+          throw new Error("file stage reconciliation produced no result");
+        }
         if (reconciled.kind === "missing") {
           return createMcpToolSuccessResult(
             { status: "missing" },

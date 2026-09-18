@@ -83,7 +83,7 @@ test("operator backup route may complete after the ordinary foreground deadline"
   assert.equal(await response.text(), "generation-1");
 });
 
-for (const path of ["/api/mcp", "/api/mcp/2025-11-25", "/api/mcp/apps"]) {
+for (const path of ["/api/mcp", "/api/mcp/2025-11-25"]) {
   test(`MCP budget lets ${path} finish beyond the navigation deadline`, async () => {
     const f = fixture({ mcpForegroundTimeoutMs: 300 });
     const pending = f.worker.fetch(new Request(ORIGIN + path, {

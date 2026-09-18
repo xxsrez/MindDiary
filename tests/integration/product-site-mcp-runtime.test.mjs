@@ -12,9 +12,6 @@ import {
   serializeRevisionManifest,
 } from "@mind-diary/domain";
 import {
-  FILE_INGRESS_WIDGET_URI,
-  MCP_APPS_ENDPOINT,
-  MCP_APPS_RESOURCE_MIME_TYPE,
   MCP_ENDPOINT,
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_LEGACY_CODEX_PROTOCOL,
@@ -895,26 +892,6 @@ async function modernMcp(runtime, secret, body, benchmarkCorrelationId) {
   }));
 }
 
-async function appsMcp(runtime, secret, body) {
-  const name = body.method === "resources/read"
-    ? body.params?.uri
-    : body.method === "tools/call"
-      ? body.params?.name
-      : undefined;
-  return responseFrom(runtime, new Request(`${ORIGIN}${MCP_APPS_ENDPOINT}`, {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${secret}`,
-      "content-type": "application/json; charset=utf-8",
-      "mcp-method": body.method,
-      "mcp-protocol-version": MCP_TARGET_PROTOCOL,
-      ...(typeof name === "string" ? { "mcp-name": name } : {}),
-    },
-    body: JSON.stringify(body),
-  }));
-}
-
 async function modernTool(runtime, secret, id, name, args, benchmarkCorrelationId) {
   const response = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
@@ -1108,7 +1085,7 @@ test("operator recovery requires existing allowlist, Sites identity, exact Origi
   assert.equal((await responseFrom(runtime, request())).status, 404);
 });
 
-test("Product Site activates native staging only for an exact verified route composition", async () => {
+test("Product Site publishes one modern file input and keeps exact transport verification separate", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
   const nativeBytes = Uint8Array.from([0x4d, 0x44, 0x33, 0x31, 0x35]);
@@ -1247,69 +1224,22 @@ test("Product Site activates native staging only for an exact verified route com
     expected_sha256: nativeSha256,
   };
   const directTools = await listTools(directRuntime, "native-direct-list");
-  assert.equal(directTools.some(({ name }) => name === "stage_bundle_file"), false);
-  const directStage = await modernMcp(directRuntime, secret, {
-    jsonrpc: "2.0",
-    id: "native-direct-stage",
-    method: "tools/call",
-    params: {
-      name: "stage_bundle_file",
-      arguments: exactStageArguments,
-      _meta: meta,
-    },
-  });
-  const directStageBody = await directStage.json();
-  assert.equal(directStageBody.result.isError, true);
-  assert.equal(
-    directStageBody.result.structuredContent.error.code,
-    "native_file_input_unsupported",
+  const directStageDefinition = directTools.find(({ name }) => name === "stage_bundle_file");
+  assert.deepEqual(directStageDefinition._meta, { "openai/fileParams": ["file"] });
+  const directCapabilities = await modernTool(
+    directRuntime,
+    secret,
+    "native-direct-capabilities",
+    "get_file_ingress_capabilities",
+    {},
   );
-
-  const appsList = await appsMcp(directRuntime, secret, {
-    jsonrpc: "2.0",
-    id: "native-apps-list",
-    method: "tools/list",
-    params: { _meta: meta },
+  assert.deepEqual(directCapabilities.native_file_input, {
+    transport: "openai_file_parameter",
+    status: "available",
+    route_profile_id: "openai-file-params-v1",
+    verification_status: "declared_unverified",
   });
-  assert.equal(appsList.status, 200);
-  const appsTools = (await appsList.json()).result.tools;
-  assert.equal(appsTools.some(({ name }) => name === "open_bundle_file_picker"), true);
-  assert.equal(appsTools.some(({ name }) => name === "stage_bundle_file"), true);
-
-  const appsCapabilities = await appsMcp(directRuntime, secret, {
-    jsonrpc: "2.0",
-    id: "native-apps-capabilities",
-    method: "tools/call",
-    params: {
-      name: "get_file_ingress_capabilities",
-      arguments: {},
-      _meta: meta,
-    },
-  });
-  assert.equal(appsCapabilities.status, 200);
-  assert.deepEqual(
-    (await appsCapabilities.json()).result.structuredContent.data.native_file_parameter,
-    {
-      source_kind: "session_attachment",
-      transport: "native_file_parameter",
-      status: "available",
-      route_profile_id: "openai-mcp-apps-v1",
-      verification_status: "declared_unverified",
-      host_rewrite_assertion_id: null,
-      host_rewrite_observed_at_utc: null,
-    },
-  );
-
-  const appsResource = await appsMcp(directRuntime, secret, {
-    jsonrpc: "2.0",
-    id: "native-apps-resource",
-    method: "resources/read",
-    params: { uri: FILE_INGRESS_WIDGET_URI, _meta: meta },
-  });
-  assert.equal(appsResource.status, 200);
-  const appsResourceBody = await appsResource.json();
-  assert.equal(appsResourceBody.result.contents[0].mimeType, MCP_APPS_RESOURCE_MIME_TYPE);
-  assert.equal(appsResourceBody.result.contents[0]._meta.ui.prefersBorder, true);
+  assert.equal(directCapabilities.source_selection_required, false);
 
   let nativeFetches = 0;
   let nativeFetchRequest = null;
@@ -1366,14 +1296,11 @@ test("Product Site activates native staging only for an exact verified route com
     "get_file_ingress_capabilities",
     {},
   );
-  assert.deepEqual(capabilities.native_file_parameter, {
-    source_kind: "session_attachment",
-    transport: "native_file_parameter",
+  assert.deepEqual(capabilities.native_file_input, {
+    transport: "openai_file_parameter",
     status: "available",
     route_profile_id: "test-product-site-native-v1",
     verification_status: "verified",
-    host_rewrite_assertion_id: "test-receipt:product-site-native:v1",
-    host_rewrite_observed_at_utc: "2026-08-28T00:00:00.000Z",
   });
 
   const staged = await modernTool(
@@ -1404,7 +1331,6 @@ test("Product Site activates native staging only for an exact verified route com
     "reconcile_file_stage",
     {
       mind: "/me",
-      source_kind: "session_attachment",
       display_filename: staged.staged_file.display_filename,
       claimed_media_type: "application/octet-stream",
       media_type: staged.staged_file.media_type,

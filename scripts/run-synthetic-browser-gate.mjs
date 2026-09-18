@@ -22,7 +22,10 @@ import {
   createSyntheticBrowserComposition,
   SYNTHETIC_BROWSER_BINDING_NAMESPACE,
 } from "./lib/synthetic-browser-composition.mjs";
-import { matchesExactDefaultMcpToolInventory } from "./lib/exact-mcp-tool-inventory.mjs";
+import {
+  matchesExactDefaultMcpToolInventory,
+  matchesExactVerifiedNativeMcpToolInventory,
+} from "./lib/exact-mcp-tool-inventory.mjs";
 import { assertNoSyntheticProductAuthority } from "./lib/synthetic-product-negative.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -177,7 +180,10 @@ async function assertExactMcpCatalogs(context, secret) {
       },
     }),
   });
-  if (modern.status !== 200 || !matchesExactDefaultMcpToolInventory(modern.body?.result?.tools)) {
+  if (
+    modern.status !== 200 ||
+    !matchesExactVerifiedNativeMcpToolInventory(modern.body?.result?.tools)
+  ) {
     fail("mcp_modern_catalog_mismatch", { status: modern.status });
   }
 

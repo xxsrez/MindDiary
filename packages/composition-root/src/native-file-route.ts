@@ -1,7 +1,7 @@
 import {
   NativeFileParameterRoute,
   type NativeFileParameterRouteOptions,
-  type OpenAiMcpAppsNativeFileParameterRouteOptions,
+  type OpenAiFileParameterRouteOptions,
 } from "@mind-diary/adapter-mcp";
 
 export type ProductSiteMcpProfile = "modern" | "compatibility";
@@ -31,11 +31,11 @@ export function createVerifiedNativeFileParameterComposition(
   });
 }
 
-/** Exact compile-time profile owned solely by `/api/mcp/apps`. */
-export function createOpenAiMcpAppsNativeFileParameterComposition(
-  options: OpenAiMcpAppsNativeFileParameterRouteOptions = {},
+/** Standard modern OpenAI fileParams profile for the ordinary MCP route. */
+export function createOpenAiFileParameterComposition(
+  options: OpenAiFileParameterRouteOptions = {},
 ): Readonly<{ route: NativeFileParameterRoute }> {
   return Object.freeze({
-    route: NativeFileParameterRoute.createOpenAiMcpApps(options),
+    route: NativeFileParameterRoute.createOpenAiFileParameter(options),
   });
 }

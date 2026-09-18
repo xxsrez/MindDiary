@@ -162,8 +162,7 @@ test("fresh modern and compatibility discovery omit retired binding/capture muta
 
   const env = harness();
   const advertisedNames = MCP_CONTENT_TOOLS.filter(
-    (name) => name !== "open_bundle_file_picker" &&
-      name !== "create_file_upload_intent" &&
+    (name) => name !== "create_file_upload_intent" &&
       name !== "stage_bundle_file",
   );
   const discover = (await payload(await env.sendModern(

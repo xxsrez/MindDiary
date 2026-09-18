@@ -71,8 +71,8 @@ test("bounded in-memory artifacts use the shared stage pipeline", async () => {
   const env = fakeStaging();
   const result = await env.service.stageBoundedInMemory({ ...COMMON, bytes: PNG });
   assert.equal(result.kind, "staged");
-  assert.equal(env.requests[0].sourceKind, "bounded_in_memory");
-  assert.deepEqual(env.requests[0].bytes, PNG);
+  assert.equal(env.streamRequests[0].sourceKind, "bounded_in_memory");
+  assert.deepEqual(env.streamRequests[0].receivedChunks, [PNG]);
 });
 
 test("server-generated ReadableStream is assembled with chunk validation", async () => {
@@ -151,6 +151,6 @@ test("stageMany stops before a changeset can publish partial refs", async () => 
   ]);
   assert.equal(result.kind, "invalid");
   assert.equal(result.index, 1);
-  assert.equal(env.streamRequests.length, 1);
-  assert.equal(env.requests.length, 1);
+  assert.equal(env.streamRequests.length, 2);
+  assert.equal(env.requests.length, 0);
 });

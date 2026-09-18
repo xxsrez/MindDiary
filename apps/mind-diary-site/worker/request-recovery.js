@@ -257,7 +257,7 @@ export function createMindDiaryProductWorker(options) {
       let activeHandle;
       const expire = diagnostics.expirationHandler();
       const pathname = new URL(request.url).pathname;
-      const isMcp = ["/api/mcp", "/api/mcp/2025-11-25", "/api/mcp/apps"].includes(pathname);
+      const isMcp = ["/api/mcp", "/api/mcp/2025-11-25"].includes(pathname);
       const deadlineMs = pathname.startsWith(
         "/api/v1/internal/system-backup/",
       ) ? backupForegroundTimeoutMs : isMcp ? mcpForegroundTimeoutMs : foregroundTimeoutMs;

@@ -43,7 +43,7 @@ export interface NativeFileParameterRouteOptions {
   readonly timeoutMs?: number;
 }
 
-export interface OpenAiMcpAppsNativeFileParameterRouteOptions {
+export interface OpenAiFileParameterRouteOptions {
   readonly fetcher?: typeof fetch;
   readonly maxRedirects?: number;
   readonly timeoutMs?: number;
@@ -79,7 +79,7 @@ function validHostRewriteAssertion(
  * make the tool appear in a direct custom-MCP catalog.
  */
 export class NativeFileParameterRoute {
-  readonly routeKind: "verified_host_rewrite" | "openai_mcp_apps";
+  readonly routeKind: "verified_host_rewrite" | "openai_file_parameter";
   readonly profileId: string;
   readonly verificationStatus: "declared_unverified" | "verified";
   readonly hostRewriteAssertionId: string | null;
@@ -91,7 +91,7 @@ export class NativeFileParameterRoute {
   private constructor(
     construction: symbol,
     profile: Readonly<{
-      routeKind: "verified_host_rewrite" | "openai_mcp_apps";
+      routeKind: "verified_host_rewrite" | "openai_file_parameter";
       profileId: string;
       verificationStatus: "declared_unverified" | "verified";
       hostRewriteAssertionId: string | null;
@@ -136,17 +136,18 @@ export class NativeFileParameterRoute {
   }
 
   /**
-   * Sealed route published only by the exact MCP Apps endpoint. The declaration
-   * permits a real host probe; it is deliberately not a hosted-support receipt.
+   * Standard OpenAI file-parameter route. Publication follows the documented
+   * fileParams contract; whether a particular client supplies a file remains
+   * client-specific acceptance evidence rather than a server route gate.
    */
-  static createOpenAiMcpApps(
-    options: OpenAiMcpAppsNativeFileParameterRouteOptions = {},
+  static createOpenAiFileParameter(
+    options: OpenAiFileParameterRouteOptions = {},
   ): NativeFileParameterRoute {
     return new NativeFileParameterRoute(
       NATIVE_FILE_ROUTE_CONSTRUCTION,
       Object.freeze({
-        routeKind: "openai_mcp_apps" as const,
-        profileId: "openai-mcp-apps-v1",
+        routeKind: "openai_file_parameter" as const,
+        profileId: "openai-file-params-v1",
         verificationStatus: "declared_unverified" as const,
         hostRewriteAssertionId: null,
         hostRewriteObservedAtUtc: null,

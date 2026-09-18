@@ -51,10 +51,10 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
     source.indexOf("#reconciliation.reconcile") <
       source.indexOf("request.producer(Object.freeze"),
   );
-  assert.match(specification, /Exact 268,435,456 bytes remain permitted/u);
+  assert.match(specification, /Exact 268,435,456 bytes remain\s+permitted/u);
   assert.match(specification, /byte 268,435,457[\s\S]*fail closed/u);
-  assert.match(specification, /600-second producer lease/u);
-  assert.match(specification, /uncertain same-key retry performs[\s\S]*no generation/u);
+  assert.match(specification, /600-second producer\s+lease/u);
+  assert.match(specification, /uncertain\s+same-key retry performs[\s\S]*no generation/u);
   assert.match(specification, /MIME essence[\s\S]*before `upload\.complete`/u);
   assert.ok(
     stagingSource.indexOf("expectedMediaType !== detected") <

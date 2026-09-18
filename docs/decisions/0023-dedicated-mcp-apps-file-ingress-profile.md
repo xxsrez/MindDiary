@@ -1,6 +1,9 @@
 # ADR-0023: отдельный MCP Apps профиль для native file ingress
 
-Статус: accepted, 2026-08-28. Решение MD-315/MD-316 задаёт Release 0.3
+Статус: superseded by [ADR-0030](0030-single-file-input.md), 2026-09-18.
+Отдельный `/api/mcp/apps`, обязательный picker и app-only staging больше не
+являются активным контрактом; документ остаётся историей решения и evidence.
+Исходное решение принято 2026-08-28. Решение MD-315/MD-316 задавало Release 0.3
 контракт публикации native file route и picker. Оно разрешает repository/UAT
 implementation, но само по себе не утверждает, что конкретный host уже
 переписал file parameter или что hosted staging прошёл.

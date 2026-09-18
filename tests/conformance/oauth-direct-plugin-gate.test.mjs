@@ -34,8 +34,8 @@ const SKILL_DESCRIPTION = "Use Mind Diary through its connected content MCP.";
 const SKILL_ROOT = "/private/tmp/fresh/plugins/cache/marketplace";
 const INSTALLED_ROOT = "/private/tmp/fresh/plugins/cache/marketplace/mind-diary/version";
 
-test("Codex plugin uses the isolated compatibility transport with the canonical OAuth resource", () => {
-  assert.equal(CODEX_PLUGIN_MCP_URL, `${CODEX_PLUGIN_OAUTH_RESOURCE}/2025-11-25`);
+test("Codex plugin uses the canonical modern transport and OAuth resource", () => {
+  assert.equal(CODEX_PLUGIN_MCP_URL, CODEX_PLUGIN_OAUTH_RESOURCE);
   assert.equal(assertDirectPackageServer({
     type: "http",
     url: CODEX_PLUGIN_MCP_URL,
@@ -44,13 +44,13 @@ test("Codex plugin uses the isolated compatibility transport with the canonical 
   for (const server of [
     {
       type: "http",
-      url: CODEX_PLUGIN_OAUTH_RESOURCE,
+      url: `${CODEX_PLUGIN_OAUTH_RESOURCE}/2025-11-25`,
       oauth_resource: CODEX_PLUGIN_OAUTH_RESOURCE,
     },
     {
       type: "http",
       url: CODEX_PLUGIN_MCP_URL,
-      oauth_resource: CODEX_PLUGIN_MCP_URL,
+      oauth_resource: `${CODEX_PLUGIN_OAUTH_RESOURCE}/wrong`,
     },
   ]) {
     assert.throws(
@@ -74,7 +74,10 @@ test("fresh Codex MCP projection identifies an OAuth-capable server without clai
       auth_status: "not_logged_in",
     },
     {
-      transport: { type: "streamable_http", url: CODEX_PLUGIN_OAUTH_RESOURCE },
+      transport: {
+        type: "streamable_http",
+        url: `${CODEX_PLUGIN_OAUTH_RESOURCE}/2025-11-25`,
+      },
       auth_status: "o_auth",
     },
     {
@@ -90,38 +93,31 @@ test("fresh Codex MCP projection identifies an OAuth-capable server without clai
   }
 });
 
-test("full schema inventory stays closed while the deployed default catalog omits native staging", () => {
+test("full schema inventory stays closed while compatibility omits modern fileParams", () => {
   const current = MCP_TOOL_DEFINITIONS.map(({ name, inputSchema, outputSchema }) => ({
     name,
     inputSchema,
     outputSchema,
   }));
-  assert.equal(current.length, 25);
+  assert.equal(current.length, 24);
   const nativeIngress = current.find(({ name }) => name === "get_file_ingress_capabilities");
   assert.deepEqual(
-    nativeIngress?.outputSchema?.properties?.data?.properties?.native_file_parameter?.required,
+    nativeIngress?.outputSchema?.properties?.data?.properties?.native_file_input?.required,
     [
-      "source_kind",
       "transport",
       "status",
       "route_profile_id",
       "verification_status",
-      "host_rewrite_assertion_id",
-      "host_rewrite_observed_at_utc",
     ],
   );
-  const verifiedNativeCatalog = current.filter(
-    ({ name }) => name !== "open_bundle_file_picker",
-  );
+  const verifiedNativeCatalog = current;
   assert.equal(verifiedNativeCatalog.length, 24);
   assert.equal(assertCodexCompatibleVerifiedNativeCatalog(verifiedNativeCatalog), true);
-  const defaultWriteCatalog = current.filter(({ name }) =>
-    name !== "open_bundle_file_picker" && name !== "stage_bundle_file");
+  const defaultWriteCatalog = current.filter(({ name }) => name !== "stage_bundle_file");
   assert.equal(defaultWriteCatalog.length, 23);
   assert.equal(assertCodexCompatibleDefaultWriteCatalog(defaultWriteCatalog), true);
   assert.equal(assertCodexCompatibleReadCatalog(current.filter(
-    ({ name }) => name !== "open_bundle_file_picker" &&
-      name !== "create_file_upload_intent" &&
+    ({ name }) => name !== "create_file_upload_intent" &&
       name !== "stage_bundle_file",
   )), true);
   const mismatches = [

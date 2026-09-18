@@ -216,17 +216,9 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
     "get_file_ingress_capabilities",
     {},
   );
-  assert.deepEqual(
-    capabilities.sources.find(({ source_kind }) => source_kind === "server_generated"),
-    {
-      source_kind: "server_generated",
-      server_adapter_status: "not_available",
-      server_transport: "none",
-      requires_writable_target: false,
-      max_bytes: 0,
-      fallback: "none",
-    },
-  );
+  assert.equal(capabilities.source_selection_required, false);
+  assert.equal(capabilities.max_bytes, 268_435_456);
+  assert.equal("sources" in capabilities, false);
   const listedTools = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: "generated-tool-list",

@@ -2,11 +2,8 @@ import {
   CONTENT_COMMANDS,
   CONTENT_QUERIES,
 } from "@mind-diary/application-content";
-import { FILE_INGRESS_WIDGET_URI } from "./file-ingress-widget.js";
-
 export const MCP_TARGET_PROTOCOL = "2026-07-28" as const;
 export const MCP_ENDPOINT = "/api/mcp" as const;
-export const MCP_APPS_ENDPOINT = "/api/mcp/apps" as const;
 export const MCP_LEGACY_CODEX_PROTOCOL = "2025-11-25" as const;
 export const MCP_LEGACY_CODEX_ENDPOINT = "/api/mcp/2025-11-25" as const;
 export const MCP_RETIRED_SITES_ENDPOINT = "/mcp" as const;
@@ -40,7 +37,6 @@ export const MCP_CONTENT_TOOLS = [
   "validate_mind",
   "list_bundle_files",
   "get_file_ingress_capabilities",
-  "open_bundle_file_picker",
   "create_file_upload_intent",
   "stage_bundle_file",
   "reconcile_file_stage",
@@ -1337,18 +1333,6 @@ const NATIVE_FILE_INPUT_SCHEMA = Object.freeze({
   }),
 });
 
-const FILE_INGRESS_SOURCE_KIND_SCHEMA = Object.freeze({
-  type: "string",
-  enum: Object.freeze([
-    "session_attachment",
-    "local_path",
-    "workspace/generated_artifact",
-    "connector_object",
-    "bounded_in_memory",
-    "server_generated",
-  ]),
-});
-
 const FILE_INGRESS_MEDIA_TYPE_SCHEMA = Object.freeze({
   type: "string",
   minLength: 3,
@@ -1369,33 +1353,27 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
     type: "object",
     additionalProperties: false,
     required: Object.freeze([
-      "report_scope",
-      "client_companion_status",
-      "path_admission_status",
-      "native_file_parameter",
-      "sources",
+      "contract_version",
+      "source_selection_required",
+      "max_bytes",
+      "native_file_input",
+      "companion_upload",
     ]),
     properties: Object.freeze({
-      report_scope: Object.freeze({
-        const: "active_route_profile_and_hosted_server_adapters",
-      }),
-      client_companion_status: Object.freeze({ const: "not_reported" }),
-      path_admission_status: Object.freeze({ const: "not_reported" }),
-      native_file_parameter: Object.freeze({
+      contract_version: Object.freeze({ const: 2 }),
+      source_selection_required: Object.freeze({ const: false }),
+      max_bytes: Object.freeze({ const: 268_435_456 }),
+      native_file_input: Object.freeze({
         type: "object",
         additionalProperties: false,
         required: Object.freeze([
-          "source_kind",
           "transport",
           "status",
           "route_profile_id",
           "verification_status",
-          "host_rewrite_assertion_id",
-          "host_rewrite_observed_at_utc",
         ]),
         properties: Object.freeze({
-          source_kind: Object.freeze({ const: "session_attachment" }),
-          transport: Object.freeze({ const: "native_file_parameter" }),
+          transport: Object.freeze({ const: "openai_file_parameter" }),
           status: Object.freeze({
             type: "string",
             enum: Object.freeze(["available", "not_available"]),
@@ -1412,15 +1390,6 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
               "verified",
               "not_available",
             ]),
-          }),
-          host_rewrite_assertion_id: Object.freeze({
-            type: Object.freeze(["string", "null"]),
-            minLength: 1,
-            maxLength: 256,
-          }),
-          host_rewrite_observed_at_utc: Object.freeze({
-            type: Object.freeze(["string", "null"]),
-            format: "date-time",
           }),
         }),
         allOf: Object.freeze([
@@ -1440,62 +1409,20 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
               properties: Object.freeze({
                 route_profile_id: Object.freeze({ type: "null" }),
                 verification_status: Object.freeze({ const: "not_available" }),
-                host_rewrite_assertion_id: Object.freeze({ type: "null" }),
-                host_rewrite_observed_at_utc: Object.freeze({ type: "null" }),
-              }),
-            }),
-          }),
-          Object.freeze({
-            if: Object.freeze({
-              properties: Object.freeze({
-                verification_status: Object.freeze({ const: "verified" }),
-              }),
-            }),
-            then: Object.freeze({
-              properties: Object.freeze({
-                host_rewrite_assertion_id: Object.freeze({ type: "string" }),
-                host_rewrite_observed_at_utc: Object.freeze({ type: "string" }),
               }),
             }),
           }),
         ]),
       }),
-      sources: Object.freeze({
-        type: "array",
-        minItems: 6,
-        maxItems: 6,
-        items: Object.freeze({
-          type: "object",
-          additionalProperties: false,
-          required: Object.freeze([
-            "source_kind",
-            "server_adapter_status",
-            "server_transport",
-            "requires_writable_target",
-            "max_bytes",
-            "fallback",
-          ]),
-          properties: Object.freeze({
-            source_kind: FILE_INGRESS_SOURCE_KIND_SCHEMA,
-            server_adapter_status: Object.freeze({
-              type: "string",
-              enum: Object.freeze(["available", "not_available"]),
-            }),
-            server_transport: Object.freeze({
-              type: "string",
-              enum: Object.freeze([
-                "native_file_parameter",
-                "companion_upload_intent",
-                "none",
-              ]),
-            }),
-            requires_writable_target: Object.freeze({ type: "boolean" }),
-            max_bytes: Object.freeze({
-              type: "integer",
-              minimum: 0,
-              maximum: 268_435_456,
-            }),
-            fallback: Object.freeze({ const: "none" }),
+      companion_upload: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze(["transport", "status"]),
+        properties: Object.freeze({
+          transport: Object.freeze({ const: "one_use_upload_intent" }),
+          status: Object.freeze({
+            type: "string",
+            enum: Object.freeze(["available", "not_available"]),
           }),
         }),
       }),
@@ -1503,33 +1430,9 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
   }),
 );
 
-const OPEN_BUNDLE_FILE_PICKER_INPUT_SCHEMA = strictInputSchema({
-  mind: MIND_SELECTOR_SCHEMA,
-  path: Object.freeze({ type: "string", minLength: 1, maxLength: 1_024 }),
-  idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
-}, ["mind", "path", "idempotency_key"]);
-
-const OPEN_BUNDLE_FILE_PICKER_OUTPUT_SCHEMA = toolOutputSchema(
-  Object.freeze({
-    type: "object",
-    additionalProperties: false,
-    required: Object.freeze(["status"]),
-    properties: Object.freeze({
-      status: Object.freeze({ const: "ready" }),
-    }),
-  }),
-);
-
 const CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
-    source_kind: Object.freeze({
-      type: "string",
-      enum: Object.freeze([
-        "local_path",
-        "workspace/generated_artifact",
-      ]),
-    }),
     display_filename: Object.freeze({
       type: "string",
       minLength: 1,
@@ -1549,7 +1452,6 @@ const CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA = strictInputSchema(
   },
   [
     "mind",
-    "source_kind",
     "display_filename",
     "expected_size",
     "expected_sha256",
@@ -1638,7 +1540,6 @@ const STAGE_BUNDLE_FILE_OUTPUT_SCHEMA = toolOutputSchema(
 const RECONCILE_FILE_STAGE_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
-    source_kind: FILE_INGRESS_SOURCE_KIND_SCHEMA,
     display_filename: Object.freeze({ type: "string", minLength: 1, maxLength: 255 }),
     claimed_media_type: FILE_INGRESS_MEDIA_HINT_SCHEMA,
     media_type: FILE_INGRESS_MEDIA_TYPE_SCHEMA,
@@ -1654,7 +1555,6 @@ const RECONCILE_FILE_STAGE_INPUT_SCHEMA = strictInputSchema(
   },
   [
     "mind",
-    "source_kind",
     "display_filename",
     "media_type",
     "sha256",
@@ -1890,31 +1790,10 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     }),
   }),
   Object.freeze({
-    name: "open_bundle_file_picker",
-    title: "Choose one file to stage",
-    description:
-      "Open the private MCP Apps file picker for one explicit Mind, exact target path and operation key. The picker keeps provider file identifiers, temporary URLs, private filenames and bytes outside model-visible content, then calls the app-only staging tool after an explicit selection. Use the returned opaque staged_file_ref at the requested path; separate picker calls may be combined in one atomic changeset.",
-    inputSchema: OPEN_BUNDLE_FILE_PICKER_INPUT_SCHEMA,
-    outputSchema: OPEN_BUNDLE_FILE_PICKER_OUTPUT_SCHEMA,
-    securitySchemes: WRITE_SECURITY_SCHEMES,
-    annotations: Object.freeze({
-      readOnlyHint: true,
-      destructiveHint: false,
-      openWorldHint: false,
-    }),
-    _meta: Object.freeze({
-      ui: Object.freeze({
-        resourceUri: FILE_INGRESS_WIDGET_URI,
-        visibility: Object.freeze(["model", "app"]),
-      }),
-      "openai/outputTemplate": FILE_INGRESS_WIDGET_URI,
-    }),
-  }),
-  Object.freeze({
     name: "create_file_upload_intent",
     title: "Create a one-use companion upload intent",
     description:
-      "Create or exactly replay one versioned 10-minute same-origin upload capability for one verified local or workspace-generated regular-file snapshot. The principal's exact current read_write lane for the selected Mind, mount generation, and current credential are rechecked server-side. For a batch, upload sequentially within the same Mind, keep the exact path/size/SHA-256 receipt, and reuse this intent after a retryable quota, soft-capacity, fairness or accounting result; do not mint a changed request or run heavy files over 4 MiB concurrently. Return only the capability URL to the trusted companion; never provide a local path, bearer, provider locator, arbitrary URL or base64 bytes.",
+      "Create or exactly replay one versioned 10-minute same-origin upload capability for one verified readable regular-file snapshot when the client has no native file bridge. The principal's exact current read_write lane, mount generation and credential are rechecked server-side. Reuse the exact intent after an uncertain or retryable outcome; return only its URL to the trusted companion. Never provide a local path, source class, bearer, provider locator, arbitrary URL or base64 bytes.",
     inputSchema: CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA,
     outputSchema: CREATE_FILE_UPLOAD_INTENT_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,
@@ -1928,7 +1807,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     name: "stage_bundle_file",
     title: "Stage one BundleFile",
     description:
-      "Download exactly one client-native file through the provider transport, verify its bounded bytes and metadata, and create one expiring staged_file_ref pinned to the principal's exact current read_write mount generation. The provider file ID, temporary URL and bytes are never returned or persisted as content. Reuse the same idempotency_key for an uncertain outcome; changed bytes or metadata conflict.",
+      "Read exactly one host-provided file, verify its bounded bytes and metadata, and create one expiring staged_file_ref pinned to the selected Mind and current read_write mount generation. The client may choose an attachment, readable local file or generated artifact; do not classify its origin. The remote server receives the OpenAI file object, never a local path. Reuse the same idempotency_key for an uncertain outcome; changed bytes or metadata conflict.",
     inputSchema: STAGE_BUNDLE_FILE_INPUT_SCHEMA,
     outputSchema: STAGE_BUNDLE_FILE_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,
@@ -1939,14 +1818,13 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     }),
     _meta: Object.freeze({
       "openai/fileParams": Object.freeze(["file"]),
-      ui: Object.freeze({ visibility: Object.freeze(["app"]) }),
     }),
   }),
   Object.freeze({
     name: "reconcile_file_stage",
     title: "Reconcile one file stage",
     description:
-      "Read one exact stage idempotency outcome from its safe source receipt without uploading bytes or reserving capacity. Use the original source kind, key, digest, size and canonical metadata; changed payloads conflict.",
+      "Read one exact stage idempotency outcome from its safe file receipt without uploading bytes or reserving capacity. Use the original key, digest, size and canonical metadata; the server resolves compatibility provenance internally and changed payloads conflict.",
     inputSchema: RECONCILE_FILE_STAGE_INPUT_SCHEMA,
     outputSchema: RECONCILE_FILE_STAGE_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,
@@ -2118,9 +1996,7 @@ export interface McpRootResourcePage {
 
 export interface McpImmutableResourceRead {
   readonly uri: string;
-  readonly mimeType:
-    | "text/markdown; charset=utf-8"
-    | "text/html;profile=mcp-app";
+  readonly mimeType: "text/markdown; charset=utf-8";
   readonly text: string;
   readonly _meta?: Readonly<Record<string, unknown>>;
 }

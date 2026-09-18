@@ -50,8 +50,11 @@ input остаётся explicit, adapter-owned и server-approved, а commit —
 current ACL/scope/HEAD. Такая подготовка не создаёт control-plane authority или
 второй bulk import surface.
 
-Historical `stage_bundle_file`, reconcile, binding and export tool descriptions
-below document 0.1/0.2 compatibility, not the Release 0.3 operation register.
+ADR-0030 replaces the historical model-visible source classification below.
+Fresh ingress has one modern `openai/fileParams` stage tool and one companion
+fallback; internal `sourceKind` survives only as legacy provenance. Historical
+`stage_bundle_file`, reconcile, binding and export descriptions document
+0.1/0.2 compatibility, not the current operation register.
 Historical MD-339 target/binding contract remains evidence of that older
 surface. ADR-0024 supersedes it for fresh Release 0.3 staging: runtime neither
 advertises nor accepts client binding fields, while exact cached legacy calls
@@ -99,12 +102,13 @@ revisions, ACL или export container для произвольных bytes. Т
 transcription, archive import/extraction, granular file ACL и production release
 в этот slice не входят.
 
-Все source kinds проходят один adapter-to-application boundary. Adapter
+Все file transports проходят один adapter-to-application boundary. Adapter
 заканчивает provider ID/temporary URL, absolute path или connector credential;
-application получает exact bytes и безопасные canonical metadata, а staging
-записывает safe `source_kind` рядом с digest/size/media type. Source kind не
-является частью authorization identity или manifest path; нормативные детали
-этой границы находятся в [file-ingress specification](file-ingress.md).
+application получает exact bytes и безопасные canonical metadata. Fresh API не
+принимает source selector. Existing records могут сохранять внутренний
+`sourceKind` как legacy provenance; он не является частью authorization
+identity или manifest path. Нормативные детали находятся в
+[file-ingress specification](file-ingress.md).
 
 ## Revision manifest v4
 
@@ -282,10 +286,9 @@ claimed.
 ### Application generated ingress
 
 Backend and workspace producers use the same service-owned staging pipeline as
-native attachments. The portable application boundary carries only a safe
-`source_kind` label: `session_attachment`, `local_path`,
-`workspace/generated_artifact`, `connector_object`, `bounded_in_memory` or
-`server_generated`. Provider IDs, URLs, local paths, prompt text, secrets and
+native file input. The portable application boundary carries verified bytes
+and safe canonical metadata, without a caller-selected source kind. Provider
+IDs, URLs, local paths, prompt text, secrets and
 other transport provenance terminate in the source adapter and are never part
 of a staged record or its idempotency payload.
 

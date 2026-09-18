@@ -57,7 +57,7 @@ const MAX_CODEX_PROMPT_INPUT_BYTES = 2 * 1024 * 1024;
 const MODERN_PROTOCOL = "2026-07-28";
 const COMPAT_PROTOCOL = "2025-11-25";
 export const CODEX_PLUGIN_MCP_URL =
-  "https://mind-diary.example.invalid/api/mcp/2025-11-25";
+  "https://mind-diary.example.invalid/api/mcp";
 export const CODEX_PLUGIN_OAUTH_RESOURCE =
   "https://mind-diary.example.invalid/api/mcp";
 

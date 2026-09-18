@@ -33,13 +33,12 @@ import {
   readPrivateReceipt,
 } from "../../scripts/join-release-0.3-access-admin-uat.mjs";
 
-test("default Product Site catalog omits the Apps picker and unverified native stage", () => {
-  assert.equal(EXPECTED_DEFAULT_MCP_TOOL_NAMES.includes("open_bundle_file_picker"), false);
+test("compatibility catalog omits modern fileParams but keeps companion upload", () => {
   assert.equal(EXPECTED_DEFAULT_MCP_TOOL_NAMES.includes("stage_bundle_file"), false);
   assert.equal(EXPECTED_DEFAULT_MCP_TOOL_NAMES.includes("create_file_upload_intent"), true);
   assert.deepEqual(
     EXPECTED_MCP_TOOL_NAMES.filter((name) =>
-      name !== "open_bundle_file_picker" && name !== "stage_bundle_file"),
+      name !== "stage_bundle_file"),
     EXPECTED_DEFAULT_MCP_TOOL_NAMES,
   );
 });

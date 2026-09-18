@@ -10,7 +10,6 @@ import {
 } from "../../packages/application-content/dist/index.js";
 import {
   FILE_UPLOAD_INTENT_ROUTE_PREFIX,
-  MCP_APPS_ENDPOINT,
   MCP_CONTENT_TOOLS,
   MCP_ENDPOINT,
   MCP_LEGACY_CODEX_ENDPOINT,
@@ -371,7 +370,6 @@ test("auxiliary capability, delivery, OAuth, MCP, and retired Sites routes are e
     "POST /oauth/token",
     "POST /oauth/revoke",
     `POST ${MCP_ENDPOINT}`,
-    `POST ${MCP_APPS_ENDPOINT}`,
     `POST ${MCP_LEGACY_CODEX_ENDPOINT}`,
     `ANY ${MCP_RETIRED_SITES_ENDPOINT}`,
   ]);
@@ -435,7 +433,7 @@ test("all current MCP tools have a disposition and the target catalog is exact",
       "get_export_status",
     ],
   );
-  assert.equal(fixture.targetMcpCatalog.length, 25);
+  assert.equal(fixture.targetMcpCatalog.length, 24);
   for (const tool of fixture.mcpTools) {
     assertExactKeys(tool, ["name", "disposition", "profile", "mindScope", "owner"], tool.name);
     assert.ok(profiles.has(tool.profile), `${tool.name}: unknown profile`);
@@ -533,14 +531,15 @@ test("machine-readable schema diff removes binding fields without removing expli
   );
   assert.deepEqual(capabilityDiff, {
     operation: "get_file_ingress_capabilities",
-    outputRenames: {
-      "sources[].requires_write_binding": "sources[].requires_writable_target",
-    },
+    outputContract: "transport_summary_v2",
   });
-  assert.match(
-    JSON.stringify(definitions.get("get_file_ingress_capabilities").outputSchema),
-    /requires_writable_target/u,
+  const capabilitySchema = JSON.stringify(
+    definitions.get("get_file_ingress_capabilities").outputSchema,
   );
+  assert.match(capabilitySchema, /source_selection_required/u);
+  assert.match(capabilitySchema, /openai_file_parameter/u);
+  assert.match(capabilitySchema, /one_use_upload_intent/u);
+  assert.doesNotMatch(capabilitySchema, /sources\[\]|requires_writable_target/u);
   const usageDiff = fixture.schemaDiffs.find(
     ({ operation }) => operation === "PUT /api/v1/minds/{mind_ref}/usage",
   );
@@ -802,14 +801,14 @@ test("plugin/help migration has closed owners and exact current source evidence"
       requirements: [
         "AVAILABLE",
         "ON_USE",
-        "transport:/api/mcp/2025-11-25",
+        "transport:/api/mcp",
         "oauth_resource:/api/mcp",
         "new_immutable_version",
       ],
       sourceEvidence: [{
         role: "package-probe-source",
         path: "scripts/run-oauth-direct-plugin-probe.mjs",
-        gitBlob: "397a933db517f0ed1e106e80bd5d880a40fe8242",
+        gitBlob: "50e984f5085d1f8fa8ad532da1069484dcf781e4",
       }],
     },
     {
@@ -830,12 +829,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "ab18d11562c956189fe4f059c1bbbe1e4a3aa633",
+          gitBlob: "685720fc44e5ee97a882cab63cc48bc2f6f1ab2c",
         },
         {
           role: "installed-skill-probe-source",
           path: "scripts/run-oauth-direct-plugin-probe.mjs",
-          gitBlob: "397a933db517f0ed1e106e80bd5d880a40fe8242",
+          gitBlob: "50e984f5085d1f8fa8ad532da1069484dcf781e4",
         },
       ],
     },

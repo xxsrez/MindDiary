@@ -1,8 +1,4 @@
 import {
-  FILE_INGRESS_WIDGET_URI,
-  MCP_APPS_RESOURCE_MIME_TYPE,
-} from "./file-ingress-widget.js";
-import {
   MindBrowseFailure,
   MindDiscoveryFailure,
   MindHistoryFailure,
@@ -937,8 +933,7 @@ function listedTools(
         (name) =>
           available.has(name) &&
           ((name !== "stage_bundle_file" &&
-            name !== "create_file_upload_intent" &&
-            name !== "open_bundle_file_picker") ||
+            name !== "create_file_upload_intent") ||
             tokenAllowsWrite(actor)),
       )
       .map((name) => available.get(name))
@@ -979,7 +974,7 @@ function exactResourceReadUri(
     keys.length !== 2 ||
     keys[0] !== "_meta" ||
     keys[1] !== "uri" ||
-    (parseMcpResourceUri(params.uri) === null && params.uri !== FILE_INGRESS_WIDGET_URI)
+    parseMcpResourceUri(params.uri) === null
   ) {
     return null;
   }
@@ -1053,12 +1048,8 @@ function normalizedResourceRead(
   if (
     !isRecord(value) ||
     value.uri !== expectedUri ||
-    !(
-      (parseMcpResourceUri(value.uri) !== null &&
-        value.mimeType === "text/markdown; charset=utf-8") ||
-      (value.uri === FILE_INGRESS_WIDGET_URI &&
-        value.mimeType === MCP_APPS_RESOURCE_MIME_TYPE)
-    ) ||
+    parseMcpResourceUri(value.uri) === null ||
+    value.mimeType !== "text/markdown; charset=utf-8" ||
     typeof value.text !== "string" ||
     (value._meta !== undefined && !isRecord(value._meta))
   ) {
@@ -1610,7 +1601,6 @@ export function createMcpHttpHandlerAtEndpoint(
         name === "enqueue_note" ||
         name === "reconcile_changeset" ||
         name === "create_file_upload_intent" ||
-        name === "open_bundle_file_picker" ||
         name === "stage_bundle_file" ||
         name === "reconcile_file_stage") &&
       !tokenAllowsWrite(actor)

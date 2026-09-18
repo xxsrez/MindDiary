@@ -800,12 +800,6 @@
       "owner": "MD-376"
     },
     {
-      "key": "POST /api/mcp/apps",
-      "disposition": "change",
-      "profile": "mcp-transport",
-      "owner": "MD-316"
-    },
-    {
       "key": "POST /api/mcp/2025-11-25",
       "disposition": "change",
       "profile": "mcp-transport",
@@ -1011,13 +1005,6 @@
       "owner": "MD-376"
     },
     {
-      "name": "open_bundle_file_picker",
-      "disposition": "change",
-      "profile": "content-ingress",
-      "mindScope": "explicit-principal-read-write",
-      "owner": "MD-379"
-    },
-    {
       "name": "create_file_upload_intent",
       "disposition": "change",
       "profile": "content-ingress",
@@ -1112,7 +1099,6 @@
     "validate_mind",
     "list_bundle_files",
     "get_file_ingress_capabilities",
-    "open_bundle_file_picker",
     "create_file_upload_intent",
     "stage_bundle_file",
     "reconcile_file_stage",
@@ -1126,11 +1112,11 @@
     {
       "operation": "create_file_upload_intent",
       "removeRequired": [
-        "write_binding_id"
+        "write_binding_id",
+        "source_kind"
       ],
       "keepRequired": [
         "mind",
-        "source_kind",
         "display_filename",
         "expected_size",
         "expected_sha256",
@@ -1153,11 +1139,11 @@
     {
       "operation": "reconcile_file_stage",
       "removeRequired": [
-        "write_binding_id"
+        "write_binding_id",
+        "source_kind"
       ],
       "keepRequired": [
         "mind",
-        "source_kind",
         "display_filename",
         "media_type",
         "sha256",
@@ -1200,9 +1186,7 @@
     },
     {
       "operation": "get_file_ingress_capabilities",
-      "outputRenames": {
-        "sources[].requires_write_binding": "sources[].requires_writable_target"
-      }
+      "outputContract": "transport_summary_v2"
     },
     {
       "operation": "PUT /api/v1/minds/{mind_ref}/usage",
@@ -1324,7 +1308,7 @@
       "requirements": [
         "AVAILABLE",
         "ON_USE",
-        "transport:/api/mcp/2025-11-25",
+        "transport:/api/mcp",
         "oauth_resource:/api/mcp",
         "new_immutable_version"
       ],
@@ -1332,7 +1316,7 @@
         {
           "role": "package-probe-source",
           "path": "scripts/run-oauth-direct-plugin-probe.mjs",
-          "gitBlob": "397a933db517f0ed1e106e80bd5d880a40fe8242"
+          "gitBlob": "50e984f5085d1f8fa8ad532da1069484dcf781e4"
         }
       ]
     },
@@ -1354,12 +1338,12 @@
         {
           "role": "accepted-skill-source-contract",
           "path": "docs/specs/plugin-connector.md",
-          "gitBlob": "ab18d11562c956189fe4f059c1bbbe1e4a3aa633"
+          "gitBlob": "685720fc44e5ee97a882cab63cc48bc2f6f1ab2c"
         },
         {
           "role": "installed-skill-probe-source",
           "path": "scripts/run-oauth-direct-plugin-probe.mjs",
-          "gitBlob": "397a933db517f0ed1e106e80bd5d880a40fe8242"
+          "gitBlob": "50e984f5085d1f8fa8ad532da1069484dcf781e4"
         }
       ]
     },

@@ -344,8 +344,7 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
   assert.deepEqual(
     result.tools.map(({ name }) => name),
     MCP_CONTENT_TOOLS.filter(
-      (name) => name !== "open_bundle_file_picker" &&
-        name !== "stage_bundle_file" &&
+      (name) => name !== "stage_bundle_file" &&
         name !== "create_file_upload_intent",
     ),
   );

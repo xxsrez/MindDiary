@@ -111,11 +111,9 @@ export function verifySettingsConnectionsCatalogProfiles() {
     outputSchema,
   }));
   const apps = full;
-  const verifiedNative = full.filter(({ name }) => name !== "open_bundle_file_picker");
-  const defaultWrite = full.filter(({ name }) =>
-    name !== "open_bundle_file_picker" && name !== "stage_bundle_file");
+  const verifiedNative = full;
+  const defaultWrite = full.filter(({ name }) => name !== "stage_bundle_file");
   const readOnly = full.filter(({ name }) =>
-    name !== "open_bundle_file_picker" &&
     name !== "create_file_upload_intent" &&
     name !== "stage_bundle_file");
   if (!matchesExactDefaultMcpToolInventory(defaultWrite) ||
@@ -201,7 +199,7 @@ async function verifyFreshInstall(snapshot) {
     try {
       assertFreshOAuthMcpServerProjection(
         server,
-        "https://mind-diary.example.invalid/api/mcp/2025-11-25",
+        "https://mind-diary.example.invalid/api/mcp",
       );
     } catch {
       fail("settings_connections_mcp_resolution_mismatch");

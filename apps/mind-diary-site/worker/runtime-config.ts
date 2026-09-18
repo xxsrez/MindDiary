@@ -19,8 +19,9 @@ export interface ProductEnv {
 
 /**
  * Deployed Worker configuration deliberately has no request/env-selectable
- * native-file route field. `/api/mcp/apps` is a sealed compile-time Product
- * Site profile; external receipts change evidence state, not request authority.
+ * native-file route field. The ordinary modern `/api/mcp` profile publishes
+ * the documented OpenAI file parameter; external receipts change evidence
+ * state, not request authority.
  */
 export interface ProductWorkerRuntimeConfig {
   readonly publicOrigin: string;

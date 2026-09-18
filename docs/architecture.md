@@ -733,25 +733,18 @@ sequenceDiagram
     end
 ```
 
-Native branch закрыт на обычном MCP edge. `/api/mcp` и isolated compatibility
-`/api/mcp/2025-11-25` не публикуют `stage_bundle_file` и возвращают
-`native_file_input_unsupported` до target lookup или fetch. Отдельный modern
-`/api/mcp/apps` создаёт sealed compile-time `NativeFileParameterRoute`,
-публикует app-only stage и exact picker UI resource. Route нельзя выбрать через
-env, `userAgent`, session или request `_meta`; static endpoint принадлежит
-composition root.
+Обычный modern `/api/mcp` публикует один `stage_bundle_file` с
+`openai/fileParams`; isolated compatibility `/api/mcp/2025-11-25` не заявляет
+native support без отдельного client proof. Отдельного Apps endpoint, picker
+resource и app-only projection нет.
 
-Provider file object на Apps edge остаётся недоверенным envelope. OAuth scope,
-current ACL, Mind и exact Site-selected writable target проверяются до fetch;
-затем fixed OpenAI HTTPS allowlist, no-credential redirects, timeout и counting
-stream защищают transport. Provider ID/URL обрываются на edge, а native и
-companion routes используют общий privacy-safe `staged_file_ref`, reconcile и
-atomic commit lifecycle. Apps widget переносит в model context только этот
-opaque ref и уже явные `mind`/target path через `ui/update-model-context`;
-полный app-only stage result и provider envelope туда не попадают. Реальный
-host picker/rewrite receipt остаётся UAT evidence и не заменяется compile-time
-profile, schema или tests. Поэтому repository wiring само по себе не превращает MD-317
-`not_available` observation в deployment claim.
+Provider file object на modern edge остаётся недоверенным envelope. OAuth scope,
+current ACL, Mind и exact principal-owned writable generation проверяются до
+fetch; затем fixed OpenAI HTTPS allowlist, no-credential redirects, timeout и
+counting stream защищают transport. Provider ID/URL обрываются на edge, а
+native и companion routes используют общий privacy-safe `staged_file_ref`,
+reconcile и atomic commit lifecycle. Реальный host bridge receipt остаётся UAT
+evidence и не заменяется schema или repository tests.
 
 Отдельного persisted draft, diff approval и approval token нет. Authorization
 проверяется до validation/object read и повторно внутри transactional boundary,
@@ -990,7 +983,7 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   Данный предел относится к очереди, а не заменяет end-to-end deadline
   пользовательского запроса или предел внешнего I/O внутри callback.
   Product Worker ограничивает ожидание страниц и обычного REST 10 секундами,
-  а exact MCP routes `/api/mcp`, `/api/mcp/2025-11-25` и `/api/mcp/apps` —
+  а exact MCP routes `/api/mcp` и `/api/mcp/2025-11-25` —
   30 секундами от входа в fetch, включая инициализацию, очередь и callback.
   MCP budget учитывает полную producer validation и durable commit, которые
   на hosted storage могут превышать navigation budget даже для малой записи.
