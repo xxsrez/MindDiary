@@ -381,6 +381,22 @@ function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): bo
       (typeof input.expectedSha256 === "string" && SHA256.test(input.expectedSha256)));
 }
 
+function stageBundleFileInputShape(input: Readonly<Record<string, unknown>>): string {
+  const file = input.file;
+  const fileType = file === null
+    ? "null"
+    : Array.isArray(file)
+      ? "array"
+      : typeof file;
+  const fileKeys = fileType === "object"
+    ? Object.keys(file as Readonly<Record<string, unknown>>).sort().join(",")
+    : "";
+  const keys = Object.keys(input).sort().join(",");
+  return `Received keys [${keys}] and file type ${fileType}${
+    fileKeys.length === 0 ? "" : ` with keys [${fileKeys}]`
+  }.`;
+}
+
 function validReconcileFileStageInput(input: Readonly<Record<string, unknown>>): boolean {
   const allowed = new Set([
     "mind",
@@ -913,7 +929,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
           return createMcpToolErrorResult(
             request.actor.requestId,
             "invalid_request",
-            "The native file staging arguments are invalid.",
+            `The native file staging arguments are invalid. ${stageBundleFileInputShape(input)}`,
             false,
           );
         }
