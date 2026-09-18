@@ -1,7 +1,7 @@
 # Проверка простого файлового входа
 
-Дата: 2026-09-18. Статус: P1/P3 evidence; Codex bridge подтверждён,
-ChatGPT Work session attachment на текущем клиенте не доходит до MCP-вызова.
+Дата: 2026-09-18. Статус: P1/P3 evidence; простой native file flow
+подтверждён в Codex Desktop и ChatGPT Work UAT до commit и точного read-back.
 
 ## Причинный вывод
 
@@ -14,7 +14,8 @@ Codex wrapper.
 
 ## Первичный контракт
 
-OpenAI Plugins reference на дату проверки требует:
+[OpenAI Plugins reference](https://developers.openai.com/plugins/reference)
+на дату проверки требует:
 
 - top-level field в `_meta["openai/fileParams"]`;
 - все четыре schema properties: `download_url`, `file_id`, `mime_type`,
@@ -48,35 +49,50 @@ Codex/Task Manager. Оно не раскрывает remote server локаль�
 
 ## ChatGPT Work
 
-Modern UAT catalog опубликован в Sites version `173` из product candidate
-`dd25c83faff195a4aa43360e443d6afaff57fa39`, provider source
-`721b8de46c76ae567678994376d605b12b0a59c6`, deployment
-`appgdep_example46c5386c7cdc7f53`. В developer plugin
-`Mind Diary UAT Modern` (`asdk_app_example7751478055590638`)
-выполнен `Refresh`; каталог показал обновлённый `stage_bundle_file` с
-`$defs.OpenAIFile`, ссылкой `file: {"$ref":"#/$defs/OpenAIFile"}` и описанием,
-запрещающим подставлять local path.
+Modern UAT catalog публикует `stage_bundle_file` с `$defs.OpenAIFile`, ссылкой
+`file: {"$ref":"#/$defs/OpenAIFile"}` и `_meta["openai/fileParams"]`. Свежий
+Work host сформировал официальный runtime object и вызвал MCP; ранний вывод о
+pre-MCP несовместимости оказался неверным и исправлен последующими live runs.
 
-Fresh Work conversation
-`https://example.invalid/private-conversation` получил одно
-session attachment `mind-diary-chatgpt-native-dd25c83.txt`: 138 bytes,
-SHA-256 `e883cb5ebcce841cc5f223e72a202f82f057fbef6aff4aa5ed89e391c101792d`.
-`list_minds` дошёл до UAT и вернул HEAD
-`revision_00000000-0000-4000-8000-97775b151c45`. Следующий единственный
-`stage_bundle_file` остановился внутри клиента: ChatGPT попытался разрешить
-native file identifier как local path и получил `No such file or directory`.
-Worker logs за тот же run содержат `tools/list` и `tools/call list_minds`, но
-не содержат `tools/call stage_bundle_file`. Значит, отказ возник до remote MCP
-server, а не в ACL, schema validation, fetch, staging или commit Mind Diary.
-Новая revision не создана.
+Три серверных дефекта проявились последовательно:
 
-Первый probe с inline object schema завершился так же. Замена на точную форму
-из OpenAI Plugins reference устранила schema drift и видна после `Refresh`, но
-не исправила текущий Work host. Поэтому результат — проверенная внешняя
-несовместимость текущего ChatGPT Work file-parameter bridge, а не доказанная
-ошибка server implementation и не повод возвращать six-source taxonomy.
-Chat surface отдельно не заявляется проверенной: developer plugin запускает
-этот workflow в Work.
+1. корневой normalizer должен был преобразовать runtime `download_url`/
+   `file_id` в внутренний camelCase object;
+2. сохранённый как private field `globalThis.fetch` вызывался с неверным
+   receiver, поэтому Cloudflare Worker возвращал `Illegal invocation`;
+3. после успешного fetch неизвестная приложению длина создавала обычный
+   `TransformStream`, тогда как R2 staging требовал `FixedLengthStream`.
+
+Финальная реализация bind-ит default fetch к `globalThis`, читает валидный
+`Content-Length` ответа провайдера как транспортную длину и передаёт её в
+общий streaming staging. Агенту по-прежнему не требуется передавать
+`expected_size`, выбирать происхождение или конструировать file object.
+
+Финальный UAT опубликован в Sites version `180` из product candidate
+`be169e0dabb75c138d4bd10a5267094bd9155e4e`, provider source
+`6713669336fa91327ac0c863bb4117bce8527903`, deployment
+`appgdep_example8ce6b119631eb53c`. Work conversation
+`https://example.invalid/private-conversation` передал attachment
+`mind-diary-native-uat-174(2).txt` без `expected_size` и
+`expected_sha256`. `stage_bundle_file` вернул:
+
+| Поле | Значение |
+|---|---|
+| staged ref | `staged_00000000-0000-4000-8000-22d0d2731f3b` |
+| state | `verified` |
+| size | `163` |
+| SHA-256 | `cf3cb4754f87b6ac12c1d4ed82bb84cdc27785b417435ea67de15841f1b95461` |
+
+Один `commit_changeset` с одной `create_bundle_file` создал
+`assets/chatgpt-native-uat-180.txt` и продвинул HEAD с
+`revision_00000000-0000-4000-8000-97775b151c45` на
+`revision_00000000-0000-4000-8000-26f0595ec2af`. `list_bundle_files` подтвердил
+path, 163 bytes и тот же SHA-256. `read_files` по exact revision вернул полный
+диапазон `0..163` и точный исходный текст. `get_revision` и `validate_mind`
+подтвердили exact revision, OKF `0.2`, ноль conformance errors и ноль quality
+warnings. Первый read-back получил transient `metadata_queue_timeout`; один
+повтор только read-only операции прошёл. Commit был однозначно успешным,
+поэтому reconcile не требовался.
 
 ## Keep / remove / compatibility
 
@@ -92,7 +108,7 @@ Modern `/api/mcp` публикует один model-visible `stage_bundle_file`.
 native bridge предоставляет файл напрямую; клиент без него использует один
 companion upload-intent route. Оба маршрута заканчиваются в общем bounded
 staging и возвращают один opaque ref. Происхождение байтов не выбирается
-моделью и не меняет authorization или commit semantics. На текущем ChatGPT
-Work native bridge объявлен официальным metadata contract, но live session
-attachment не проходит его pre-MCP resolution; до исправления хоста рабочим
-fallback остаётся companion, без повторного деления на происхождение файла.
+моделью и не меняет authorization или commit semantics. Текущий ChatGPT Work
+native bridge подтверждён live staging, commit и exact read-back. Companion
+остаётся единственным fallback для клиентов без native fileParams, без
+повторного деления на происхождение файла.
