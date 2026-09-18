@@ -3,11 +3,15 @@
 Статус: dated verification report, 2026-08-23. Документ не меняет accepted
 contract и не является production evidence.
 
-Историческая оговорка: capability interpretation этого отчёта superseded
-disk-first контрактом Release 0.2 и
-[разделяющим отчётом 2026-08-26](2026-08-26-disk-first-ingress-capability-layers.md).
-Repository evidence ниже остаётся датированным фактом своего candidate, но не
-описывает текущий release selector и не доказывает current hosted support.
+Историческая оговорка: capability interpretation этого отчёта сначала была
+заменена disk-first контрактом Release 0.2 и
+[разделяющим отчётом 2026-08-26](2026-08-26-disk-first-ingress-capability-layers.md),
+а затем окончательно заменена
+[ADR-0030](../decisions/0030-single-file-input.md). Repository evidence ниже
+остаётся датированным фактом своего candidate. Удалённые registry, fixtures,
+Apps resource и matrix scripts упоминаются только как история; актуальный
+контракт и probe зафиксированы в
+[отчёте 2026-09-18](2026-09-18-file-input-contract-probe.md).
 
 ## Ответ
 
@@ -42,14 +46,14 @@ UAT deployment фиксируются отдельным release receipt, пот
 `not-available` является честным terminal result одной matrix row, но не
 делает release-blocking aggregate acceptance успешной.
 
-## Исполняемый evidence contract Release 0.3 (MD-314)
+## Архивный evidence contract Release 0.3 (MD-314)
 
-MD-314 заменяет ручную интерпретацию этой таблицы машинным join, но не меняет
-исторические hosted observations выше и не превращает их в success. Его
-versioned registry находится в
-[`tests/fixtures/file-ingress-evidence/registry.json`](../../tests/fixtures/file-ingress-evidence/registry.json),
-а deterministic streamed fixtures — в
-[`tests/fixtures/file-ingress-evidence/synthetic-fixtures.json`](../../tests/fixtures/file-ingress-evidence/synthetic-fixtures.json).
+MD-314 заменял ручную интерпретацию этой таблицы машинным join, но не менял
+исторические hosted observations выше и не превращал их в success. Его
+versioned registry `tests/fixtures/file-ingress-evidence/registry.json` и
+deterministic streamed fixtures
+`tests/fixtures/file-ingress-evidence/synthetic-fixtures.json` удалены при
+переходе на ADR-0030.
 Registry v3 больше не строит ложное полное произведение source × client.
 Каждый source связывается только с теми hosted compositions, которые обязаны
 дать положительное доказательство, и с обязательными отрицательными
@@ -63,8 +67,8 @@ Direct 17-tool и Apps 19-tool inventories закреплены раздельн
 [`direct-tool-inventory.json`](../../tests/fixtures/file-ingress-evidence/direct-tool-inventory.json)
 и
 [`hosted-tool-inventory.json`](../../tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json).
-Exact Apps UI resource имеет отдельный digest в
-[`apps-resource-inventory.json`](../../tests/fixtures/file-ingress-evidence/apps-resource-inventory.json).
+Exact Apps UI resource имел отдельный digest в удалённом
+`apps-resource-inventory.json`.
 Compatibility package и modern Codex config pinned repository contract-ом;
 OpenAI App registration и restricted provider grant принимаются только из fresh external receipt с
 privacy-safe identity/fingerprint. Неизвестный `plugin_asdk_app` ID не
