@@ -6,10 +6,10 @@ export class NativeFileInputFailure extends Error {
   readonly code: NativeFileInputFailureCode;
   readonly retryable: boolean;
 
-  constructor(code: NativeFileInputFailureCode, retryable = false) {
+  constructor(code: NativeFileInputFailureCode, retryable = false, safeMessage?: string) {
     super(code === "bundle_file_size_limit_exceeded"
       ? "The native file exceeds the staging byte limit."
-      : "The client native file input could not be read safely.");
+      : safeMessage ?? "The client native file input could not be read safely.");
     this.name = "NativeFileInputFailure";
     this.code = code;
     this.retryable = retryable;
@@ -263,9 +263,21 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
       parsed.protocol !== "https:" ||
       parsed.username !== "" ||
       parsed.password !== "" ||
-      (parsed.port !== "" && parsed.port !== "443") ||
-      !allowed
-    ) throw new NativeFileInputFailure("native_file_input_unsupported");
+      (parsed.port !== "" && parsed.port !== "443")
+    ) {
+      throw new NativeFileInputFailure(
+        "native_file_input_unsupported",
+        false,
+        "The client native file temporary URL is not safe HTTPS.",
+      );
+    }
+    if (!allowed) {
+      throw new NativeFileInputFailure(
+        "native_file_input_unsupported",
+        false,
+        "The client native file download host is not allowlisted.",
+      );
+    }
     return parsed;
   }
 
@@ -305,7 +317,11 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
           ]);
         } catch (error) {
           if (error instanceof NativeFileInputFailure) throw error;
-          throw new NativeFileInputFailure("native_file_input_unsupported", true);
+          throw new NativeFileInputFailure(
+            "native_file_input_unsupported",
+            true,
+            "The client native file could not be fetched from its temporary URL.",
+          );
         }
         if (!REDIRECT_STATUSES.has(response.status)) break;
         const location = response.headers.get("location");
@@ -320,6 +336,11 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
         throw new NativeFileInputFailure(
           "native_file_input_unsupported",
           response !== null && response.status >= 500,
+          response === null
+            ? "The client native file request produced no response."
+            : response.body === null
+              ? `The client native file temporary URL returned HTTP ${response.status} without a body.`
+              : `The client native file temporary URL returned HTTP ${response.status}.`,
         );
       }
       const declaredLength = response.headers.get("content-length");
