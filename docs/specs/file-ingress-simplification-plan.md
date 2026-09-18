@@ -1,10 +1,11 @@
 # Загрузка доступного файла без классификации источников
 
-Статус: выполняется, 2026-09-18. P1 контракт принят в
-[ADR-0030](../decisions/0030-single-file-input.md), Codex host bridge подтверждён
-в [отчёте](../reports/2026-09-18-file-input-contract-probe.md). P2/P3 и
-ChatGPT UAT ещё не завершены. Состояние задач ведёт Task Manager, а не этот
-документ.
+Статус: P1/P2 реализованы, P3 ожидает внешнюю приёмку, 2026-09-18. Контракт
+принят в [ADR-0030](../decisions/0030-single-file-input.md), Codex host bridge
+подтверждён в [отчёте](../reports/2026-09-18-file-input-contract-probe.md),
+obsolete six-source surface удалена. UAT version 173 опубликована, но свежий
+ChatGPT Work session attachment остановился в клиенте до MCP-вызова. Состояние
+задач ведёт Task Manager, а не этот документ.
 
 ## Результат и требования пользователя
 
@@ -150,6 +151,14 @@ P2 блокирует P3: удаление и финальная проверк�
 Epic завершён, когда пользовательский путь работает и obsolete mechanisms
 удалены либо имеют конкретного действующего потребителя и причину сохранения.
 Unavailable требуемый клиент остаётся явным пробелом, не превращается в pass.
+
+На candidate `dd25c83faff195a4aa43360e443d6afaff57fa39` этот пробел наблюдается
+в ChatGPT Work: обновлённая официальная `$defs.OpenAIFile`/`fileParams` schema
+видна после `Refresh`, но session attachment преобразуется клиентом в попытку
+чтения local path. UAT server получает предшествующий `list_minds`, но не
+получает `stage_bundle_file`. Поэтому P3 остаётся на внешней приёмке; добавлять
+обратно source taxonomy, Apps picker или новый transport facade ради обхода
+этого pre-MCP сбоя нельзя.
 
 ## Task Manager и пересечения
 
