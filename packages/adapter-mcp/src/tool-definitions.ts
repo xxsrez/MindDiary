@@ -1486,10 +1486,13 @@ const STAGE_BUNDLE_FILE_INPUT_SCHEMA = Object.freeze({
   $schema: JSON_SCHEMA_2020_12,
   type: "object",
   additionalProperties: false,
+  $defs: Object.freeze({
+    OpenAIFile: NATIVE_FILE_INPUT_SCHEMA,
+  }),
   required: Object.freeze(["mind", "file", "idempotency_key"]),
   properties: Object.freeze({
     mind: MIND_SELECTOR_SCHEMA,
-    file: NATIVE_FILE_INPUT_SCHEMA,
+    file: Object.freeze({ $ref: "#/$defs/OpenAIFile" }),
     idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
     display_filename: Object.freeze({ type: "string", minLength: 1, maxLength: 255 }),
     expected_size: Object.freeze({
@@ -1807,7 +1810,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     name: "stage_bundle_file",
     title: "Stage one BundleFile",
     description:
-      "Read exactly one host-provided file, verify its bounded bytes and metadata, and create one expiring staged_file_ref pinned to the selected Mind and current read_write mount generation. The client may choose an attachment, readable local file or generated artifact; do not classify its origin. The remote server receives the OpenAI file object, never a local path. Reuse the same idempotency_key for an uncertain outcome; changed bytes or metadata conflict.",
+      "Stage exactly one user-provided file and return an expiring staged_file_ref pinned to the selected Mind and current read_write mount generation. ChatGPT fills the top-level file parameter from the attached or selected file; never construct that object, substitute a local path, or classify the file's origin. Reuse the same idempotency_key for an uncertain outcome; changed bytes or metadata conflict.",
     inputSchema: STAGE_BUNDLE_FILE_INPUT_SCHEMA,
     outputSchema: STAGE_BUNDLE_FILE_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,

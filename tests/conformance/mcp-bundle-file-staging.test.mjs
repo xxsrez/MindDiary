@@ -112,8 +112,9 @@ test("publishes strict native-file staging metadata and mixed commit operations"
     "idempotency_key",
   ]);
   assert.equal(stage.inputSchema.additionalProperties, false);
-  assert.deepEqual(stage.inputSchema.properties.file.required, ["file_id", "download_url"]);
-  assert.equal(stage.inputSchema.properties.file.additionalProperties, false);
+  assert.deepEqual(stage.inputSchema.properties.file, { $ref: "#/$defs/OpenAIFile" });
+  assert.deepEqual(stage.inputSchema.$defs.OpenAIFile.required, ["file_id", "download_url"]);
+  assert.equal(stage.inputSchema.$defs.OpenAIFile.additionalProperties, false);
   assert.deepEqual(stage._meta, {
     "openai/fileParams": ["file"],
   });
@@ -519,7 +520,10 @@ test("product adapter terminates provider metadata and returns only verified sta
   assert.deepEqual(nativeDefinition._meta, {
     "openai/fileParams": ["file"],
   });
-  assert.deepEqual(nativeDefinition.inputSchema.properties.file.required, [
+  assert.deepEqual(nativeDefinition.inputSchema.properties.file, {
+    $ref: "#/$defs/OpenAIFile",
+  });
+  assert.deepEqual(nativeDefinition.inputSchema.$defs.OpenAIFile.required, [
     "file_id",
     "download_url",
   ]);
