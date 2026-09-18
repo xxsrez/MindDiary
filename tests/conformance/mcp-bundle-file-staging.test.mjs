@@ -337,6 +337,29 @@ test("bounded native transport validates every redirect host and never exposes p
   );
 });
 
+test("native transport reports a privacy-safe runtime fetch category", async () => {
+  const transport = new OpenAiNativeFileTransport({
+    maxBytes: 64,
+    fetcher: async () => {
+      throw new TypeError("The 'cache' field on 'RequestInitializerDict' is not implemented.");
+    },
+  });
+  await assert.rejects(
+    transport.download({
+      fileId: "provider-secret-id",
+      downloadUrl: "https://files.oaiusercontent.com/file/temporary-secret",
+    }),
+    (error) => {
+      assert.ok(error instanceof NativeFileInputFailure);
+      assert.equal(error.code, "native_file_input_unsupported");
+      assert.equal(error.retryable, true);
+      assert.match(error.message, /category: unsupported_fetch_option/u);
+      assert.doesNotMatch(error.message, /provider-secret|temporary-secret|oaiusercontent/iu);
+      return true;
+    },
+  );
+});
+
 test("native route activation requires an exact externally observed rewrite assertion", () => {
   assert.throws(
     () => NativeFileParameterRoute.create({

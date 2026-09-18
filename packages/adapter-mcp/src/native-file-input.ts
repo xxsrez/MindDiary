@@ -190,6 +190,17 @@ function boundedString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
 
+function safeFetchFailureCategory(error: unknown): string {
+  if (error instanceof Error) {
+    if (/cache|RequestInitializerDict|referrerPolicy|credentials/iu.test(error.message)) {
+      return "unsupported_fetch_option";
+    }
+    if (error.name === "AbortError") return "aborted";
+    if (error instanceof TypeError) return "runtime_type_error";
+  }
+  return "runtime_fetch_error";
+}
+
 function exactNativeFile(value: unknown): Readonly<{
   fileId: string;
   downloadUrl: string;
@@ -320,7 +331,7 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
           throw new NativeFileInputFailure(
             "native_file_input_unsupported",
             true,
-            "The client native file could not be fetched from its temporary URL.",
+            `The client native file could not be fetched from its temporary URL (category: ${safeFetchFailureCategory(error)}).`,
           );
         }
         if (!REDIRECT_STATUSES.has(response.status)) break;
