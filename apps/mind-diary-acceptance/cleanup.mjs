@@ -93,11 +93,13 @@ export async function cleanupRun(store, runId, productCall, resumeDeletion, faul
       if (active.count !== 0) throw new Error("backup_cleanup_active");
       if (operations.count > 0) {
         if (bucket === null || operations.count > 16) throw new Error("backup_cleanup_unreconciled");
-        const rows = await store.statement("SELECT started_at FROM md_backup_cleanup_ops").all();
-        if (rows.results.length !== operations.count || rows.results.some(({ started_at }) =>
-          !Number.isFinite(Date.parse(started_at)) ||
-          store.now() - Date.parse(started_at) < 300_000)) {
-          throw new Error("backup_cleanup_still_uncertain");
+        if (run.profile === "operator") {
+          const rows = await store.statement("SELECT started_at FROM md_backup_cleanup_ops").all();
+          if (rows.results.length !== operations.count || rows.results.some(({ started_at }) =>
+            !Number.isFinite(Date.parse(started_at)) ||
+            store.now() - Date.parse(started_at) < 300_000)) {
+            throw new Error("backup_cleanup_still_uncertain");
+          }
         }
         const inventory = await acceptanceInventory({ DB: store.db, MIND_DIARY_BUCKET: bucket });
         if (!inventory.complete || inventory.principals !== 0 ||
