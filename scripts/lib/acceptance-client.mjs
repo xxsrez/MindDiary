@@ -153,7 +153,11 @@ export class AcceptanceClient {
   }
   async mcp(token, name, args = {}) {
     const envelope = await this.mcpEnvelope(token, "tools/call", { name, arguments: args }), result = envelope.result;
-    if (envelope.error || result?.isError || !result?.structuredContent?.ok) throw new Error("mcp_tool_failed:" + (result?.structuredContent?.error?.code ?? "protocol_error"));
+    if (envelope.error || result?.isError || !result?.structuredContent?.ok) {
+      const error = new Error("mcp_tool_failed:" + (result?.structuredContent?.error?.code ?? "protocol_error"));
+      error.productError = result?.structuredContent?.error;
+      throw error;
+    }
     return result.structuredContent.data;
   }
   async commit(name, token, payload) {

@@ -7,7 +7,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
-import { createCollaborationFixture } from "./lib/acceptance-fixture.mjs";
 import { AcceptanceModelServer } from "./lib/acceptance-model-server.mjs";
 
 const [tag, identityFile] = process.argv.slice(2);
@@ -40,7 +39,7 @@ const sourceText = [
   "description: Source entry for the file workflow.",
   "recorded_by: acceptance-fixture",
   "sources:",
-  "  - local-fixture:acceptance-source",
+  "  - resource: local-fixture:acceptance-source",
   "producer_extension:",
   "  retained_unknown: true",
   "---",
@@ -131,14 +130,89 @@ const receipt = {
   calls: [],
 };
 
+async function createWorkflowFixture(client) {
+  const run = await client.setup();
+  const owner = run.actors[0];
+  const retry = async (label, action) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await action();
+      } catch (error) {
+        if (!error.message.endsWith("_http_503") || attempt === 2) throw error;
+        receipt.fixture_retries ??= [];
+        receipt.fixture_retries.push(label);
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+    }
+    throw new Error(`workflow_fixture_retry_exhausted:${label}`);
+  };
+  const csrf = async (path = "/settings/account") => {
+    return retry(`csrf:${path}`, async () => {
+      const response = await client.request(path, {
+        headers: { cookie: client.state.actors[owner.actor_id].cookie },
+      });
+      if (!response.ok) throw new Error(`workflow_fixture_page_http_${response.status}`);
+      const token = /name="mind-diary-csrf-token" content="([^"]+)"/u
+        .exec(await response.text())?.[1];
+      if (!token) throw new Error("workflow_fixture_csrf_missing");
+      return token;
+    });
+  };
+  const mutate = async (name, request, token) => retry(name, () => client.mutation(
+    name, owner.actor_id, { ...request, csrf: token },
+  ));
+
+  await client.session(owner.actor_id);
+  await client.reconcileBootstrap("bootstrap:owner", owner.actor_id);
+  const bootstrapCsrf = await csrf("/");
+  await mutate(
+    "bootstrap:owner",
+    { path: "/api/v1/account", body: { action: "create_isolated_account" } },
+    bootstrapCsrf,
+  );
+  const ownerCsrf = await csrf();
+  const handle = `uat-${run.run_id}`;
+  await mutate("create:workflow", {
+    path: "/api/v1/minds",
+    body: {
+      name: "Synthetic OKF workflow",
+      handle,
+      description: "Synthetic agent-authored OKF workflow acceptance.",
+    },
+  }, ownerCsrf);
+  await mutate("usage:workflow", {
+    path: `/api/v1/minds/${handle}/usage`,
+    method: "PUT",
+    body: { usage_mode: "read_write", expected_usage_version: 0 },
+  }, ownerCsrf);
+  const issued = await mutate("token:owner", {
+    path: "/api/v1/mcp-tokens",
+    body: { name: "Synthetic OKF workflow", scopes: ["content:write"] },
+  }, ownerCsrf);
+  const token = issued.data.secret;
+  const mind = `/${handle}`;
+  const head = (await client.mcp(token, "list_minds")).minds
+    .find((candidate) => candidate.route === mind)?.head?.revision_id;
+  if (!head) throw new Error("workflow_fixture_mind_missing");
+  const seed = await client.commit("md471:seed", token, {
+    mind,
+    expected_revision: head,
+    summary: "Seed synthetic OKF workflow fixture",
+    operations: [{
+      type: "create_file",
+      path: "concepts/acceptance.md",
+      text: "---\ntype: Reference\n---\n\nSynthetic acceptance decision version one.\n",
+    }],
+  });
+  return { handle, token, fixtureRevision: seed.revision.revision_id };
+}
+
 let server;
 try {
-  const fixture = await createCollaborationFixture(client);
-  const token = client.state.operations["token:owner"].result.data.secret;
+  const fixture = await createWorkflowFixture(client);
+  const token = fixture.token;
   const mind = `/${fixture.handle}`;
-  const fixtureRevision = (await client.mcp(token, "list_minds")).minds
-    .find((candidate) => candidate.route === mind)?.head?.revision_id;
-  assert.ok(fixtureRevision, "workflow_fixture_mind_missing");
+  const fixtureRevision = fixture.fixtureRevision;
   const setup = await client.commit("md471:setup", token, {
     mind,
     expected_revision: fixtureRevision,
@@ -205,7 +279,7 @@ try {
   let rivalRevision;
   server = new AcceptanceModelServer({
     directory,
-    maxTokens: 240_000,
+    maxTokens: 300_000,
     maxCalls: expectedCalls.length,
     onTrace: (event) => appendFile(
       join(directory, "events.jsonl"),
@@ -440,6 +514,7 @@ try {
   receipt.status = "failed";
   receipt.failure = error.name;
   receipt.failure_code = error.message;
+  if (error.productError) receipt.failure_product_error = error.productError;
   receipt.model_usage = server?.usage;
   process.exitCode = 1;
 } finally {

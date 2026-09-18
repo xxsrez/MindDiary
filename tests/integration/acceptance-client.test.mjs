@@ -112,3 +112,30 @@ test("fixture deadline retries are bounded and retain a pending operation", asyn
   for (const call of calls) assert.deepEqual(call.arguments, calls[0].arguments);
   assert.equal(client.state.operations["mcp:fixture"].phase, "pending");
 });
+
+test("MCP tool failures retain their structured product error for private diagnostics", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "acceptance-tool-error-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const productError = {
+    code: "okf_validation_failed",
+    details: { kind: "invalid", diagnostics: [{ code: "invalid_sources_signal" }] },
+  };
+  const client = await new AcceptanceClient({
+    directory,
+    platformToken: "synthetic",
+    controllerKey: "synthetic",
+    fetch: async () => Response.json({
+      result: {
+        isError: true,
+        structuredContent: { ok: false, error: productError },
+      },
+    }),
+  }).open();
+  client.state.run = { run_id: "synthetic-run" };
+
+  await assert.rejects(client.mcp("synthetic", "preflight_changeset", {}), error => {
+    assert.equal(error.message, "mcp_tool_failed:okf_validation_failed");
+    assert.deepEqual(error.productError, productError);
+    return true;
+  });
+});
