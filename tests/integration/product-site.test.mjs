@@ -994,6 +994,8 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /Save durable facts\/decisions from this request to every matching Mind/u);
   assert.match(codexHelpHtml, /For new notes use enqueue_note/u);
   assert.match(codexHelpHtml, /continue without polling\/read-back/u);
+  assert.match(codexHelpHtml, /get_mind_diary_guidance/u);
+  assert.match(codexHelpHtml, /preflight_changeset, then commit_changeset/u);
   assert.match(codexHelpHtml, /Refresh list_minds before writing/u);
   assert.match(codexHelpHtml, /&#39;only&#39; limits destinations/u);
   assert.match(codexHelpHtml, /Updating this help page does not replace Custom Instructions you already saved/u);

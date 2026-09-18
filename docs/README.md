@@ -119,6 +119,10 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
     — контракт MD-444 для полной локальной копии, классификация durable state,
     фиксированные дельты и offline recovery; synthetic hosted transport и
     локальный offline restore и первая копия пользовательских Minds подтверждены.
+30. [Операции над Memory без знания OKF](specs/managed-memory-operations-plan.md)
+    — отменённый 2026-09-18 план серверного сокрытия OKF (superseded);
+    сохранён для истории. Текущие задачи MD-469–MD-472 оставляют редактирование
+    файлов агенту и добавляют серверную диагностику и MCP-руководство.
 
 ## Руководства
 

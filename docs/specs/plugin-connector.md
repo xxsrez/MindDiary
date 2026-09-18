@@ -71,6 +71,23 @@ selection/read/preflight/commit/read-back/doctor. Receipt и очищенный 
 trace привязаны к exact candidate identity; cleanup обязан восстановить
 исходный acceptance inventory.
 
+Полный файловый acceptance формирует
+`scripts/check-okf-workflow-hosted.mjs`. Новый MCP-only agent сначала читает
+каноническое руководство, затем на одной synthetic ordinary Mind выполняет
+fresh selection, exact list/read, намеренно ошибочный dry-run, исправляет
+`markdown_section_missing` по фактическому heading, повторяет dry-run, атомарно
+публикует исправленный changeset и читает точную committed revision с полным
+`validate_mind`. Проверка сопоставляет исходные и итоговые байты, включая
+`sources`, неизвестный `producer_extension`, неизменённый файл и старую
+immutable revision.
+
+Отдельный turn того же fresh agent выполняет successful preflight, после
+которого test controller продвигает HEAD конкурирующей ревизией. Единственная
+попытка commit обязана получить `revision_conflict`; скрытый retry, merge или
+перезапись нового HEAD запрещены. Journey использует только реальный hosted
+MCP target и run-owned synthetic data, хранит receipt и очищенный trace в
+private acceptance directory и в конце восстанавливает пустой inventory.
+
 ## Product authority Release 0.3
 
 - Site создаёт и показывает Connections, отзывает их, управляет principal-owned
