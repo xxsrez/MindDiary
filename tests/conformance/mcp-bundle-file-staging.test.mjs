@@ -384,6 +384,30 @@ test("native transport reports a privacy-safe runtime fetch category", async () 
   );
 });
 
+test("default native transport preserves the hosted fetch receiver", async () => {
+  const originalFetch = globalThis.fetch;
+  let observedReceiver = null;
+  globalThis.fetch = async function (_input, init) {
+    observedReceiver = this;
+    assert.equal(init.redirect, "manual");
+    return new Response(PNG, { status: 200 });
+  };
+  let transport;
+  try {
+    transport = new OpenAiNativeFileTransport({ maxBytes: 64 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const downloaded = await transport.download({
+    fileId: "provider-secret-id",
+    downloadUrl: "https://files.oaiusercontent.com/file/temporary-secret",
+  });
+  const chunks = [];
+  for await (const chunk of downloaded.stream) chunks.push(chunk);
+  assert.equal(observedReceiver, globalThis);
+  assert.deepEqual(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))), Buffer.from(PNG));
+});
+
 test("native route activation requires an exact externally observed rewrite assertion", () => {
   assert.throws(
     () => NativeFileParameterRoute.create({

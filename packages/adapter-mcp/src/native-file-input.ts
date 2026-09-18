@@ -256,11 +256,11 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
       throw new TypeError("native file timeoutMs must be between one and 120000 milliseconds");
     }
-    const fetcher = options.fetcher ?? globalThis.fetch;
-    if (typeof fetcher !== "function") {
+    const defaultFetcher = globalThis.fetch;
+    if (options.fetcher === undefined && typeof defaultFetcher !== "function") {
       throw new TypeError("native file fetch capability is unavailable");
     }
-    this.#fetcher = fetcher;
+    this.#fetcher = options.fetcher ?? defaultFetcher.bind(globalThis);
     this.#maxBytes = options.maxBytes;
     this.#maxRedirects = maxRedirects;
     this.#timeoutMs = timeoutMs;
