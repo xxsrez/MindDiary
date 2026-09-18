@@ -357,7 +357,28 @@ test("native transport reports a privacy-safe runtime fetch category", async () 
       assert.equal(error.code, "native_file_input_unsupported");
       assert.equal(error.retryable, true);
       assert.match(error.message, /category: unsupported_fetch_option/u);
+      assert.match(error.message, /detail: The 'cache' field/u);
       assert.doesNotMatch(error.message, /provider-secret|temporary-secret|oaiusercontent/iu);
+      return true;
+    },
+  );
+
+  const redacted = new OpenAiNativeFileTransport({
+    maxBytes: 64,
+    fetcher: async () => {
+      throw new TypeError(
+        "fetch failed for https://files.oaiusercontent.com/file/provider-secret-id?sig=secret at /workspace/private/file",
+      );
+    },
+  });
+  await assert.rejects(
+    redacted.download({
+      fileId: "provider-secret-id",
+      downloadUrl: "https://files.oaiusercontent.com/file/temporary-secret",
+    }),
+    (error) => {
+      assert.match(error.message, /detail: fetch failed for \[url\]/u);
+      assert.doesNotMatch(error.message, /oaiusercontent|provider-secret|workspace|sig=/iu);
       return true;
     },
   );

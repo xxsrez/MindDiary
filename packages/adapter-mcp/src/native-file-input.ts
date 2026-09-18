@@ -201,6 +201,18 @@ function safeFetchFailureCategory(error: unknown): string {
   return "runtime_fetch_error";
 }
 
+function safeFetchFailureDetail(error: unknown): string | null {
+  if (!(error instanceof Error) || error.message.length === 0) return null;
+  const redacted = error.message
+    .replace(/https?:\/\/\S+/giu, "[url]")
+    .replace(/(?:^|\s)[/\\]\S+/gu, " [path]")
+    .replace(/[A-Za-z0-9_-]{24,}/gu, "[opaque]")
+    .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return redacted.length === 0 ? null : redacted.slice(0, 160);
+}
+
 function exactNativeFile(value: unknown): Readonly<{
   fileId: string;
   downloadUrl: string;
@@ -325,10 +337,11 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
           ]);
         } catch (error) {
           if (error instanceof NativeFileInputFailure) throw error;
+          const detail = safeFetchFailureDetail(error);
           throw new NativeFileInputFailure(
             "native_file_input_unsupported",
             true,
-            `The client native file could not be fetched from its temporary URL (category: ${safeFetchFailureCategory(error)}).`,
+            `The client native file could not be fetched from its temporary URL (category: ${safeFetchFailureCategory(error)}${detail === null ? "" : `; detail: ${detail}`}).`,
           );
         }
         if (!REDIRECT_STATUSES.has(response.status)) break;
