@@ -467,7 +467,10 @@ test("product adapter terminates provider metadata and returns only verified sta
         assert.equal("credentials" in init, false);
         assert.equal("cache" in init, false);
         assert.equal("referrerPolicy" in init, false);
-        return new Response(PNG, { status: 200 });
+        return new Response(PNG, {
+          status: 200,
+          headers: { "content-length": String(PNG.byteLength) },
+        });
       },
     }),
     staging: {
@@ -610,7 +613,6 @@ test("product adapter terminates provider metadata and returns only verified sta
         mime_type: "image/png",
       },
       idempotency_key: "stage-diagram",
-      expected_size: PNG.byteLength,
     },
   });
   assert.equal(result.isError, false);
@@ -626,6 +628,7 @@ test("product adapter terminates provider metadata and returns only verified sta
   assert.equal("file" in portableRequest, false);
   assert.equal(portableRequest.sourceKind, "session_attachment");
   assert.equal(portableRequest.maxBytes, 268_435_456);
+  assert.equal(portableRequest.expectedSize, PNG.byteLength);
   assert.equal(portableRequest.spaceId, "space_bundle_stage");
   assert.equal("writeBindingId" in portableRequest, false);
   const serialized = JSON.stringify(result);

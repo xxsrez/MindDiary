@@ -964,7 +964,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
           stream: downloaded.stream,
           maxBytes: 268_435_456,
           idempotencyKey: input.idempotencyKey,
-          expectedSize: input.expectedSize,
+          expectedSize: input.expectedSize ?? downloaded.size,
           expectedSha256: input.expectedSha256,
         });
         if (staged.kind === "denied") {

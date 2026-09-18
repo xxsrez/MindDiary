@@ -18,6 +18,8 @@ export class NativeFileInputFailure extends Error {
 
 export interface VerifiedNativeFileDownload {
   readonly stream: AsyncIterable<Uint8Array>;
+  /** Exact transport length when the provider supplied a valid Content-Length. */
+  readonly size?: number;
   readonly fileName?: string;
   readonly mimeType?: string;
 }
@@ -365,12 +367,14 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
         );
       }
       const declaredLength = response.headers.get("content-length");
+      let transportSize: number | undefined;
       if (declaredLength !== null) {
         const size = Number(declaredLength);
         if (Number.isFinite(size) && size > this.#maxBytes) {
           void response.body.cancel().catch(() => undefined);
           throw new NativeFileInputFailure("bundle_file_size_limit_exceeded");
         }
+        if (Number.isSafeInteger(size) && size >= 0) transportSize = size;
       }
       const body = response.body;
       const maxBytes = this.#maxBytes;
@@ -406,6 +410,7 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
             }
           },
         }),
+        ...(transportSize === undefined ? {} : { size: transportSize }),
         ...(input.fileName === undefined ? {} : { fileName: input.fileName }),
         ...(input.mimeType === undefined ? {} : { mimeType: input.mimeType }),
       });
