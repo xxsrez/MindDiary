@@ -45,4 +45,4 @@ jobs:
       - name: Audit service and Product Site dependencies
         run: npm audit --audit-level=high && npm --prefix apps/mind-diary-site audit --audit-level=high
       - name: Build and verify the deployable Product Site
-        run: npm --prefix apps/mind-diary-site run build && npm run check:product-site-artifact -- --candidate-sha "$GITHUB_SHA"
+        run: npm --prefix apps/mind-diary-site run build && node scripts/package-product-site.mjs build/product-site.tgz "$GITHUB_SHA"

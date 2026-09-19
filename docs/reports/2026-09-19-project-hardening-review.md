@@ -1,6 +1,7 @@
 # Ревью проекта и укрепление проверок — 2026-09-19
 
-Статус: инженерное ревью и первый пакет исправлений. База:
+Статус: инженерное ревью; runtime исправления опубликованы в UAT, версия 185.
+База:
 `7a73bd3e1eee8a30696ae93da382b1844fbc2c79`. Это не заключение об отсутствии
 дефектов и не приёмка production.
 
@@ -57,6 +58,7 @@
 | --- | --- | --- |
 | MCP acceptance | Полный write каталог из 26 tools не проходил устаревшее ожидание default из 25. Изменение visibility, scopes или `fileParams` не меняло сравниваемые schema hashes | Один write inventory, отдельная существующая read-scope проекция из 24; hash полного descriptor; negative tests для metadata/security/annotations и настоящий HTTP `tools/list`. OAuth scenario действительно вызывается в conformance suite |
 | Release artifact | Receipt хешировал только `server/index.js`; изменение импортируемого chunk, CSS, migration или hosting metadata не обнаруживалось | Manifest v2 перечисляет размер и SHA-256 каждого файла. Проверка отклоняет изменение, добавление, удаление и symlink. Упаковка выполняется после завершения Vinext: прежний `closeBundle` hook срабатывал до появления финальных manifests |
+| Sites upload archive | Упаковка зависела от helper установленного плагина; плоский архив содержимого `dist/` был отклонён реальным Sites как неподдерживаемый entrypoint | Проверен и сохранён правильный архив: root hosting metadata плюс `dist/server/index.js`. Добавлена собственная команда упаковки и тест формата без source/`.env`; CI создаёт такой архив после сборки |
 | CI и зависимости | Root gate не устанавливал и не собирал отдельный Site. Его lockfile имел 23 отмеченных audit узла: 16 high, 6 moderate, 1 low | Обновлены согласованные Vite/Vinext/Cloudflare/RSC зависимости; удалены неиспользуемые Drizzle и ESLint plugins. CI устанавливает оба активных dependency trees, проверяет audit, lint, реальную сборку Site и artifact manifest |
 | Site lint | Команда существовала, но всегда завершалась ошибкой: ESLint 9 config отсутствовал | Добавлен flat config и запуск в CI; локальный lint проходит |
 | Native file lifecycle | Отказ staging до начала iteration оставлял download открытым. Ожидание зависшего `cancel()` отменяло смысл timeout; provider exception мог раскрыть короткие частные значения | Явный идемпотентный `dispose`, освобождение в `finally`, cancellation без ожидания, наблюдаемый deadline и только фиксированные категории ошибок. Тесты quota rejection, HTTP failure, late response и зависшего cancel |
@@ -172,5 +174,51 @@ Homebrew Node выявил 6 failures: один stale documentation hash, два
 clean source и три проверки переносимости Node. Hash обновлён по проверенному
 содержимому; условия clean/portable source не ослаблены.
 
-Окончательный CI и UAT результат добавляется после проверки закоммиченного
-candidate. До этого этот раздел не утверждает успешную публикацию.
+Следующий чистый локальный прогон на официальном Node 22.13.0 выявил один
+регрессионный сценарий восстановления lexical index. Исправление сохранило
+безопасный rebuild из полного набора text rows; три targeted search tests
+прошли. Остальные Mac backup tests в чистом checkout прошли, проверки clean
+source и переносимости Node не ослаблялись.
+
+### Exact candidate и CI
+
+- [PR №1](https://github.com/xxsrez/MindDiary/pull/1) слит.
+- Runtime candidate: `2fc113f01956a880a506770de271e3b2f56b0428`.
+- [CI на точном candidate](https://github.com/xxsrez/MindDiary/actions/runs/35469985151):
+  success; 1291 tests, 1288 passed, 3 platform skips, 0 failed;
+  70 browser tests passed. Также прошли fixtures, architecture, documentation,
+  secrets, separate acceptance artifact, Site install/lint/build и полный
+  artifact manifest. Root/Site audit: 0 известных findings.
+- Project-docs validator: 125 документов, 597 локальных ссылок; diff check passed.
+- Новый unit test upload archive прошёл локально; command включён в последующие CI.
+
+### UAT и provenance
+
+- Project: `appgprj_example1428fe59b5d8381c`.
+- Source mirror: `273fa6c8cbc18d0ca0153a63aeb6f93660ec10ab`;
+  tree `4dcc441f8847c875ade9149ba8dc59228c9c3990` совпадает с
+  `candidate:apps/mind-diary-site`.
+- Artifact manifest v2: 82 файла, включая chunks, static assets, hosting и SQL.
+- Local upload SHA-256:
+  `d85e5f3f5f0bd11d91c7cd7b61cfa24d14624b754a7e1817273b3fe274507e19`.
+- Saved version 185:
+  `appgprj_example1428fe59b5d8381c~appgver_exampleb57293b283d125e2`.
+- Provider archive: 84 файла, 3082240 bytes, SHA-256
+  `4c8de8fbd8b9e3d51a9f20f19a49775323cabd7ebc42a793abd4844c53ba7c93`;
+  save и get-version read-back совпадают. Provider нормализует upload archive,
+  поэтому его hash не равен hash локального gzip.
+- Deployment `appgdep_example9d898c43abca3bc3`: succeeded,
+  2026-09-19 21:25:26 UTC; [UAT](https://mind-diary.example.invalid).
+  Существующая audience policy сохранена. Production не затронут.
+
+После deployment встроенный Browser подтвердил authenticated Home, завершение
+загрузки списка, те же 7 ready HEAD summaries и открытие Help. Настоящие MCP
+вызовы `get_file_ingress_capabilities` и `get_mind_diary_guidance` вернули
+`ok: true`; доступен один native file transport и один companion fallback,
+`source_selection_required: false`.
+
+Это проверка реального подключения, web runtime и доступности сохранённых
+summaries после deployment. Новая загрузка/commit пользовательского файла,
+инъекция отказа в hosted storage и межпользовательская матрица здесь не
+выполнялись. Stream failure и partial-index recovery проверены локально;
+они не выдаются за hosted fault injection. Пользовательские Minds не менялись.

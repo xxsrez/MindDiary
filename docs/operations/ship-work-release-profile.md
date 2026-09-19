@@ -1479,6 +1479,14 @@ Sites project использует отдельный source repository, сод�
 Несовпадение mirror subject/tree с candidate fail closed и не компенсируется
 archive hash либо release metadata.
 
+Для локальной упаковки используется собственная проверяемая команда
+`node scripts/package-product-site.mjs <absolute-archive.tgz> <candidate-sha>`.
+Она проверяет clean candidate и полный manifest, затем включает root
+`.openai/hosting.json` и `dist/`, в том числе `dist/server/index.js`.
+Архив содержимого `dist/` без этого префикса не распознаётся Sites.
+Исходники, `.env` и зависимости в upload archive не включаются. Этот путь
+не требует helper из установленного cache плагина.
+
 Sites connector нормализует переданный `.tgz` и в `archive_storage` сообщает
 identity своего provider `tar`, а не исходные bytes upload archive. Release
 evidence поэтому фиксирует две разные identity: локальные hash/size exact

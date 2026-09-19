@@ -69,6 +69,7 @@ dependencies участвуют в исполняемом Worker. Неиспол
 | Полный локальный gate | `npm run check` |
 | Product Site package/build | `cd apps/mind-diary-site && npm ci && npm run build` |
 | Product Site lint | `npm --prefix apps/mind-diary-site run lint` |
+| Готовый Sites upload archive | `node scripts/package-product-site.mjs /absolute/output/site.tgz <exact-HEAD-sha>` после сборки в чистом checkout |
 
 `test:conformance` проверяет только repository contracts: разрешённый browser
 route manifest, custom Mind-aware MCP tool list, target version

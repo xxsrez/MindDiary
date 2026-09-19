@@ -1,0 +1,32 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { createSiteArtifactManifest } from "../../apps/mind-diary-site/tools/artifact-manifest.mjs";
+import { packageProductSiteArchive } from "../../scripts/lib/product-site-archive.mjs";
+
+test("Sites upload archive keeps the supported entrypoint layout and excludes project source", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mind-diary-site-archive-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = join(root, "site");
+  for (const path of [".openai", "dist/.openai", "dist/server"]) await mkdir(join(app, path), { recursive: true });
+  for (const path of [".openai/hosting.json", "dist/.openai/hosting.json"]) await writeFile(join(app, path), '{"project_id":"fixture"}');
+  await writeFile(join(app, "dist/server/index.js"), "export default {};\n");
+  await writeFile(join(app, ".env"), "synthetic-local-setting");
+  await writeFile(join(app, "package.json"), "{}");
+  const manifest = await createSiteArtifactManifest(join(app, "dist"), "a".repeat(40), "b".repeat(40));
+  await writeFile(join(app, "dist/.openai/release.json"), JSON.stringify(manifest));
+  const output = join(root, "site.tgz");
+  const receipt = await packageProductSiteArchive(app, output);
+  assert.match(receipt.sha256, /^[a-f0-9]{64}$/);
+  const members = execFileSync("tar", ["-tzf", output], { encoding: "utf8" }).trim().split("\n");
+  assert(members.includes("dist/server/index.js"));
+  assert(members.includes(".openai/hosting.json"));
+  assert(members.includes("dist/.openai/release.json"));
+  assert(!members.some((path) => path.includes(".env") || path.includes("package.json")));
+  await assert.rejects(packageProductSiteArchive(app, join(app, "dist/recursive.tgz")), /outside/);
+  await writeFile(join(app, ".openai/hosting.json"), "changed");
+  await assert.rejects(packageProductSiteArchive(app, output), /hosting metadata differ/);
+});
