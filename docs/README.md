@@ -20,6 +20,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 
 ## Начать отсюда
 
+- [Один MCP endpoint: UAT 2026-09-19](reports/2026-09-19-single-mcp-endpoint-uat.md)
+  — удаление legacy, exact artifact и перенос активного ChatGPT подключения.
+
 1. [Обзор продукта](overview.md) — зачем нужен Mind Diary, какую проблему он
    решает, как Mind становится адресуемой knowledge surface и где проходят
    границы продукта.
