@@ -15,7 +15,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out source
         uses: actions/checkout@v5
@@ -27,6 +27,9 @@ jobs:
         with:
           node-version: 22.13.0
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/mind-diary-site/package-lock.json
       - name: Install locked dependencies
         run: npm ci
       - name: Install Chromium system dependencies
@@ -35,3 +38,11 @@ jobs:
         run: npm run check
       - name: Build and verify separate acceptance artifact
         run: npm --prefix apps/mind-diary-acceptance run build && npm --prefix apps/mind-diary-acceptance run verify
+      - name: Install locked Product Site dependencies
+        run: npm --prefix apps/mind-diary-site ci
+      - name: Lint Product Site source
+        run: npm --prefix apps/mind-diary-site run lint
+      - name: Audit service and Product Site dependencies
+        run: npm audit --audit-level=high && npm --prefix apps/mind-diary-site audit --audit-level=high
+      - name: Build and verify the deployable Product Site
+        run: npm --prefix apps/mind-diary-site run build && npm run check:product-site-artifact -- --candidate-sha "$GITHUB_SHA"

@@ -220,7 +220,7 @@ delivery profile и ADR-0008/ADR-0009
   Исторические receipts не задают текущий каталог или требования поддержки.
 - `dev` — полный локальный запуск приложения на `localhost` с изолированными
   local/test данными. Перед UAT release проверяйте затронутые сценарии по
-  соразмерному плану из delivery profile revision 9; весь набор web/control,
+  соразмерному плану из актуального раздела «Обычный UAT release» delivery profile; весь набор web/control,
   persistence и MCP flows каждый раз не требуется. Локальный smoke не является
   hosted evidence.
 - `UAT` (`User Acceptance Testing`) — текущая prod-like тестовая OpenAI Site
@@ -260,7 +260,7 @@ delivery profile и ADR-0008/ADR-0009
   checks, exact candidate, соразмерный project-profile smoke, configured
   remote/CI, publish в UAT target и read-back изменённого поведения. Полный gate
   и расширенные матрицы не обязательны для каждого cut: применимость определяет
-  раздел «Обычный UAT release» в delivery profile revision 9. Он заменяет
+  раздел «Обычный UAT release» в актуальном delivery profile. Он заменяет
   прежние безусловные требования полноты в delivery docs/ADR для текущих runs;
   безопасность, точность evidence и запрет Production сохраняются.
 - Отдельное пользовательское разрешение на каждый UAT release не требуется.

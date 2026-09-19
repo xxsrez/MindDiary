@@ -1014,18 +1014,24 @@ export class ProductMcpContentApplication implements McpContentApplication {
             true,
           );
         }
-        const staged = await staging.stageStream({
-          actor: request.actor,
-          spaceId: info.mind.mindId,
-          sourceKind: "session_attachment",
-          displayFilename: input.displayFilename ?? downloaded.fileName ?? "uploaded-file",
-          claimedMediaType: downloaded.mimeType,
-          stream: downloaded.stream,
-          maxBytes: 268_435_456,
-          idempotencyKey: input.idempotencyKey,
-          expectedSize: input.expectedSize ?? downloaded.size,
-          expectedSha256: input.expectedSha256,
-        });
+        let staged;
+        try {
+          staged = await staging.stageStream({
+            actor: request.actor,
+            spaceId: info.mind.mindId,
+            sourceKind: "session_attachment",
+            displayFilename: input.displayFilename ?? downloaded.fileName ?? "uploaded-file",
+            claimedMediaType: downloaded.mimeType,
+            stream: downloaded.stream,
+            maxBytes: 268_435_456,
+            idempotencyKey: input.idempotencyKey,
+            expectedSize: input.expectedSize ?? downloaded.size,
+            expectedSha256: input.expectedSha256,
+            ...(request.signal === undefined ? {} : { signal: request.signal }),
+          });
+        } finally {
+          downloaded.dispose();
+        }
         if (staged.kind === "denied") {
           const decision = staged.decision as Readonly<{
             code?: unknown;

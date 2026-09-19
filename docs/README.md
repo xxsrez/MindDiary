@@ -302,11 +302,16 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
   Minds и Personal могут независимо иметь `read_write`, automatic и direct
   destinations обрабатываются отдельными commits.
 - [ADR-0030: один файловый вход](decisions/0030-single-file-input.md)
-- [ADR-0031: один MCP endpoint](decisions/0031-single-mcp-endpoint.md)
   — model-visible `fileParams` без выбора происхождения, единый streaming
   staging и ограниченная совместимость прежних provenance-меток.
+- [ADR-0031: один MCP endpoint](decisions/0031-single-mcp-endpoint.md)
+  — один `/api/mcp`, протокол `2026-07-28`, без отдельного legacy/Apps endpoint.
 
 ## Исследования
+
+- [Ревью проекта и укрепление проверок, 2026-09-19](reports/2026-09-19-project-hardening-review.md)
+  — история MCP, исправленные runtime/CI/artifact дефекты и приоритетный
+  оставшийся долг OAuth, удаления данных, фонового восстановления и масштаба.
 
 - [Проверка интерфейса и скорости UAT, 2026-09-05](reports/2026-09-05-ui-performance.md)
 - [Файловые операции: evidence MD-418, 2026-09-09](reports/2026-09-09-file-operations-acceptance.md)

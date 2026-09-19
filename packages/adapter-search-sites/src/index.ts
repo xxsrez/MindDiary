@@ -462,6 +462,11 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
     if (membershipCount === 0 || indexedCount !== membershipCount) {
       const legacy = await this.readExactRevision(spaceId, revisionId);
       if (legacy.kind !== "ready") return legacy;
+      // Complete stored text can rebuild a missing lexical projection. A partial
+      // document JOIN cannot: replacing membership would conceal its damage.
+      if (membershipCount > 0 && legacy.documents.length !== membershipCount) {
+        return Object.freeze({ kind: "unavailable" });
+      }
       if (legacy.documents.length === 0) {
         return Object.freeze({
           kind: "ready" as const,

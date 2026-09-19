@@ -1453,8 +1453,16 @@ stale и не deploy-ится. Если Sites дедуплицировал saved
 использованному `commit_sha`, сначала нужен новый exact candidate SHA, а не
 повторный save другого archive под прежним source identity.
 
-Каждый vinext build также создаёт `dist/.openai/release.json` с exact Git SHA,
-tree SHA и SHA-256 server bundle. Перед упаковкой release checkout должен быть
+`npm --prefix apps/mind-diary-site run build` после завершения всех vinext
+environments создаёт `dist/.openai/release.json` формата
+`mind-diary/site-artifact/v2` с exact Git SHA, tree SHA и полным отсортированным
+manifest всех обычных файлов `dist/`, кроме самого receipt: path, размер и
+SHA-256. Проверяются server chunks, client assets, hosting metadata и миграции;
+изменение, удаление, добавление файла или symlink отклоняются. Receipt v1 с
+хешем только `server/index.js` недостаточен для нового cut. Упаковка выполняется
+отдельным завершающим шагом, поскольку `closeBundle` отдельного environment
+предшествует созданию итоговых vinext manifests.
+Перед упаковкой release checkout должен быть
 чистым, а `npm run check:product-site-artifact -- --candidate-sha
 <exact-HEAD-sha>` обязан подтвердить совпадение metadata, текущего checkout и
 `dist/server/index.js`. Это отдельный artifact gate после сборки, а не часть

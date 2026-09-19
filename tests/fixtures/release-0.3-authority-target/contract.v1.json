@@ -32,6 +32,7 @@
     "resolve_mind",
     "search",
     "set_personal_mind_description",
+    "stage_bundle_file",
     "validate_mind"
   ],
   "removedOrMovedTools": [

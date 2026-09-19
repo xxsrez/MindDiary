@@ -499,11 +499,28 @@ async function readLimitedText(request: Request, maximum: number): Promise<strin
   if (Number.isFinite(declared) && declared > maximum) {
     throw new OAuthProtocolError("invalid_request", "Request body is too large");
   }
-  const text = await request.text();
-  if (text.length > maximum) {
-    throw new OAuthProtocolError("invalid_request", "Request body is too large");
+  const reader = request.body?.getReader();
+  if (reader === undefined) return "";
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  let bytes = 0;
+  let completed = false;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) { completed = true; break; }
+      bytes += next.value.byteLength;
+      if (bytes > maximum) {
+        throw new OAuthProtocolError("invalid_request", "Request body is too large");
+      }
+      parts.push(decoder.decode(next.value, { stream: true }));
+    }
+    parts.push(decoder.decode());
+    return parts.join("");
+  } finally {
+    if (!completed) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
-  return text;
 }
 
 function escapeHtml(value: string): string {

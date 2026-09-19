@@ -7,7 +7,7 @@ const INVENTORY_PATH = new URL(
   "../../tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
   import.meta.url,
 );
-const EXPECTED_SCHEMA = "mind-diary/file-ingress-hosted-tool-inventory/v1";
+const EXPECTED_SCHEMA = "mind-diary/mcp-tool-inventory/v2";
 const EXPECTED_SOURCE = "mind-diary-hosted-mcp-tools-list";
 const EXPECTED_TOOL_COUNT = 26;
 
@@ -42,7 +42,7 @@ export const EXPECTED_MCP_TOOL_NAMES = Object.freeze(
   EXPECTED_MCP_TOOL_INVENTORY.map(({ name }) => name),
 );
 export const EXPECTED_DEFAULT_MCP_TOOL_NAMES = Object.freeze(
-  EXPECTED_MCP_TOOL_NAMES.filter((name) => name !== "stage_bundle_file"),
+  EXPECTED_MCP_TOOL_NAMES,
 );
 export const EXPECTED_VERIFIED_NATIVE_MCP_TOOL_NAMES = Object.freeze(
   EXPECTED_MCP_TOOL_NAMES,
@@ -72,6 +72,7 @@ function matchesInventory(tools, expected) {
       source: EXPECTED_SOURCE,
       input_schema_sha256: schemaHash(tool.inputSchema),
       output_schema_sha256: schemaHash(tool.outputSchema),
+      descriptor_sha256: schemaHash(tool),
     }));
   }
   entries.sort((left, right) => left.name.localeCompare(right.name));
@@ -86,21 +87,13 @@ export function matchesExactVerifiedNativeMcpToolInventory(tools) {
   return matchesInventory(tools, EXPECTED_MCP_TOOL_INVENTORY);
 }
 
-// Compatibility clients keep the upload intent but omit the modern fileParams
-// tool until that client/profile is tested separately.
+// Existing receipt field names are retained; ADR-0031 has one product catalog.
+// The read-only projection below preserves the existing two-upload-tool mask.
 export function matchesExactDefaultMcpToolInventory(tools) {
-  return matchesInventory(
-    tools,
-    EXPECTED_MCP_TOOL_INVENTORY.filter(({ name }) =>
-      name !== "stage_bundle_file"),
-  );
+  return matchesExactMcpToolInventory(tools);
 }
 
 export function matchesExactReadOnlyMcpToolInventory(tools) {
-  return matchesInventory(
-    tools,
-    EXPECTED_MCP_TOOL_INVENTORY.filter(({ name }) =>
-      name !== "create_file_upload_intent" &&
-      name !== "stage_bundle_file"),
-  );
+  return matchesInventory(tools, EXPECTED_MCP_TOOL_INVENTORY.filter(({ name }) =>
+    name !== "create_file_upload_intent" && name !== "stage_bundle_file"));
 }

@@ -96,7 +96,7 @@ test("MD-358 local gate CLI accepts only exact candidate, private output and opt
 
 test("MD-358 owns the current default, read-only, and verified-native catalog profiles", () => {
   assert.deepEqual(verifySettingsConnectionsCatalogProfiles(), {
-    default_product_site_write: 25,
+    default_product_site_write: 26,
     read_only: 24,
     verified_native: 26,
   });
