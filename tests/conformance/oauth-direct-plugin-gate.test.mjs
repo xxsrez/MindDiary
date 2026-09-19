@@ -28,11 +28,20 @@ import {
   parseCli,
   parseCodexSkillDiscovery,
   readCodexPromptInput,
+  runOAuthScenario,
 } from "../../scripts/run-oauth-direct-plugin-probe.mjs";
 
 const SKILL_DESCRIPTION = "Use Mind Diary through its connected content MCP.";
 const SKILL_ROOT = "/private/tmp/fresh/plugins/cache/marketplace";
 const INSTALLED_ROOT = "/private/tmp/fresh/plugins/cache/marketplace/mind-diary/version";
+
+test("OAuth acceptance scenario executes against product composition", async () => {
+  const assertions = new Set();
+  await runOAuthScenario({ assertions, nowState: { value: new Date("2026-09-19T00:00:00.000Z") } });
+  for (const id of OAUTH_DIRECT_PLUGIN_ASSERTION_IDS.filter((id) => id.startsWith("oauth.") || id.startsWith("personal-token."))) {
+    assert.equal(assertions.has(id), true, `missing exercised assertion: ${id}`);
+  }
+});
 
 test("Codex plugin uses the canonical modern transport and OAuth resource", () => {
   assert.equal(CODEX_PLUGIN_MCP_URL, CODEX_PLUGIN_OAUTH_RESOURCE);
@@ -93,12 +102,8 @@ test("fresh Codex MCP projection identifies an OAuth-capable server without clai
   }
 });
 
-test("full schema inventory stays closed while compatibility omits modern fileParams", () => {
-  const current = MCP_TOOL_DEFINITIONS.map(({ name, inputSchema, outputSchema }) => ({
-    name,
-    inputSchema,
-    outputSchema,
-  }));
+test("one exact descriptor inventory covers read and write credentials", () => {
+  const current = MCP_TOOL_DEFINITIONS;
   assert.equal(current.length, 26);
   const nativeIngress = current.find(({ name }) => name === "get_file_ingress_capabilities");
   assert.deepEqual(
@@ -113,13 +118,11 @@ test("full schema inventory stays closed while compatibility omits modern filePa
   const verifiedNativeCatalog = current;
   assert.equal(verifiedNativeCatalog.length, 26);
   assert.equal(assertCodexCompatibleVerifiedNativeCatalog(verifiedNativeCatalog), true);
-  const defaultWriteCatalog = current.filter(({ name }) => name !== "stage_bundle_file");
-  assert.equal(defaultWriteCatalog.length, 25);
+  const defaultWriteCatalog = current;
+  assert.equal(defaultWriteCatalog.length, 26);
   assert.equal(assertCodexCompatibleDefaultWriteCatalog(defaultWriteCatalog), true);
-  assert.equal(assertCodexCompatibleReadCatalog(current.filter(
-    ({ name }) => name !== "create_file_upload_intent" &&
-      name !== "stage_bundle_file",
-  )), true);
+  assert.equal(assertCodexCompatibleReadCatalog(current.filter(({ name }) =>
+    name !== "create_file_upload_intent" && name !== "stage_bundle_file")), true);
   const mismatches = [
     verifiedNativeCatalog.slice(1),
     [...verifiedNativeCatalog, {
@@ -132,6 +135,16 @@ test("full schema inventory stays closed while compatibility omits modern filePa
       ...structuredClone(tool),
       inputSchema: { ...structuredClone(tool.inputSchema), description: "runtime drift" },
     } : tool),
+    current.map((tool) => tool.name === "stage_bundle_file" ? {
+      ...tool, _meta: { "openai/fileParams": ["file"], ui: { visibility: ["app"] } },
+    } : tool),
+    current.map((tool) => tool.name === "stage_bundle_file" ? { ...tool, _meta: {} } : tool),
+    current.map((tool) => tool.name === "commit_changeset" ? {
+      ...tool, annotations: { ...tool.annotations, readOnlyHint: true },
+    } : tool),
+    current.map((tool) => tool.name === "commit_changeset" ? {
+      ...tool, securitySchemes: [{ type: "noauth" }],
+    } : tool),
   ];
   for (const mismatch of mismatches) {
     assert.throws(
@@ -141,7 +154,7 @@ test("full schema inventory stays closed while compatibility omits modern filePa
     );
   }
   assert.throws(
-    () => assertCodexCompatibleDefaultWriteCatalog(current),
+    () => assertCodexCompatibleDefaultWriteCatalog(current.filter(({ name }) => name !== "stage_bundle_file")),
     (error) => error instanceof ProbeFailure &&
       error.code === "codex_default_write_catalog_incompatible",
   );

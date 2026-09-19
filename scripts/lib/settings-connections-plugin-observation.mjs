@@ -105,17 +105,12 @@ async function codexJson(codexHome, args, code) {
 }
 
 export function verifySettingsConnectionsCatalogProfiles() {
-  const full = MCP_TOOL_DEFINITIONS.map(({ name, inputSchema, outputSchema }) => ({
-    name,
-    inputSchema,
-    outputSchema,
-  }));
+  const full = MCP_TOOL_DEFINITIONS;
   const apps = full;
   const verifiedNative = full;
-  const defaultWrite = full.filter(({ name }) => name !== "stage_bundle_file");
+  const defaultWrite = full;
   const readOnly = full.filter(({ name }) =>
-    name !== "create_file_upload_intent" &&
-    name !== "stage_bundle_file");
+    name !== "create_file_upload_intent" && name !== "stage_bundle_file");
   if (!matchesExactDefaultMcpToolInventory(defaultWrite) ||
       !matchesExactReadOnlyMcpToolInventory(readOnly) ||
       !matchesExactVerifiedNativeMcpToolInventory(verifiedNative) ||

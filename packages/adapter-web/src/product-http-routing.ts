@@ -5,6 +5,41 @@ import {
   ENCODER,
 } from "./product-http-request-helpers.js";
 
+async function readBoundedBody(
+  request: Request,
+  maxBytes: number,
+  tooLarge = "request body is too large",
+): Promise<Uint8Array<ArrayBuffer>> {
+  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new TypeError(tooLarge);
+  }
+  const reader = request.body?.getReader();
+  if (reader === undefined) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let bodyBytes = 0;
+  let completed = false;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) { completed = true; break; }
+      bodyBytes += next.value.byteLength;
+      if (bodyBytes > maxBytes) throw new TypeError(tooLarge);
+      chunks.push(next.value);
+    }
+  } finally {
+    if (!completed) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(bodyBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
 export async function readInput(
   request: Request,
   maxBytes = MAX_JSON_BYTES,
@@ -17,14 +52,7 @@ export async function readInput(
     });
     return Object.freeze(query);
   }
-  const declaredLength = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    throw new TypeError("request body is too large");
-  }
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > maxBytes) {
-    throw new TypeError("request body is too large");
-  }
+  const text = new TextDecoder().decode(await readBoundedBody(request, maxBytes));
   if (text.length === 0) return Object.freeze({});
   const value: unknown = JSON.parse(text);
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -43,26 +71,8 @@ export async function readImportBatchInput(
   if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data")) {
     return readInput(request);
   }
-  const reader = request.body?.getReader();
-  if (reader === undefined) throw new TypeError("import batch body is missing");
-  const chunks: Uint8Array[] = [];
-  let bodyBytes = 0;
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
-    bodyBytes += next.value.byteLength;
-    if (bodyBytes > MAX_IMPORT_BATCH_BODY_BYTES) {
-      await reader.cancel();
-      throw new TypeError("import batch body is too large");
-    }
-    chunks.push(next.value);
-  }
-  const boundedBody = new Uint8Array(bodyBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    boundedBody.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  if (request.body === null) throw new TypeError("import batch body is missing");
+  const boundedBody = await readBoundedBody(request, MAX_IMPORT_BATCH_BODY_BYTES, "import batch body is too large");
   const boundedRequest = new Request(request.url, {
     method: request.method,
     headers: { "content-type": request.headers.get("content-type") ?? "" },

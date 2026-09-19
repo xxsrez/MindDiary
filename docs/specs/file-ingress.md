@@ -65,6 +65,10 @@ Mind, current `read_write` usage generation, token scope и ACL. Затем он
 - повторяет allowlist check на каждом redirect;
 - не передаёт bearer, cookies, referrer или provider credentials;
 - применяет общий timeout и counting stream;
+- освобождает provider response и таймер при любом исходе, включая отказ
+  staging до начала чтения; зависший provider `cancel()` не продлевает timeout;
+- возвращает только фиксированную категорию ошибки fetch, без произвольного
+  текста исключения провайдера, который может содержать частные данные;
 - игнорирует private source filename, если оно небезопасно;
 - вычисляет exact SHA-256, size и safe media metadata самостоятельно.
 

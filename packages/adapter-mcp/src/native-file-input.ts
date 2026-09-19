@@ -18,6 +18,8 @@ export class NativeFileInputFailure extends Error {
 
 export interface VerifiedNativeFileDownload {
   readonly stream: AsyncIterable<Uint8Array>;
+  /** Release the response even when staging rejects before consuming it. */
+  dispose(): void;
   /** Exact transport length when the provider supplied a valid Content-Length. */
   readonly size?: number;
   readonly fileName?: string;
@@ -77,8 +79,8 @@ function validHostRewriteAssertion(
 /**
  * One server-side route profile backed by an external receipt that the host
  * rewrites the native `file` parameter before this adapter sees the request.
- * Construction is intentionally closed so a raw transport cannot accidentally
- * make the tool appear in a direct custom-MCP catalog.
+ * Retained for clients with historical host-rewrite receipts. The standard
+ * route below publishes fileParams independently of such acceptance evidence.
  */
 export class NativeFileParameterRoute {
   readonly routeKind: "verified_host_rewrite" | "openai_file_parameter";
@@ -194,6 +196,7 @@ function boundedString(value: unknown, maxLength: number): value is string {
 
 function safeFetchFailureCategory(error: unknown): string {
   if (error instanceof Error) {
+    if (/Illegal invocation/iu.test(error.message)) return "illegal_invocation";
     if (/cache|RequestInitializerDict|referrerPolicy|credentials/iu.test(error.message)) {
       return "unsupported_fetch_option";
     }
@@ -201,18 +204,6 @@ function safeFetchFailureCategory(error: unknown): string {
     if (error instanceof TypeError) return "runtime_type_error";
   }
   return "runtime_fetch_error";
-}
-
-function safeFetchFailureDetail(error: unknown): string | null {
-  if (!(error instanceof Error) || error.message.length === 0) return null;
-  const redacted = error.message
-    .replace(/https?:\/\/\S+/giu, "[url]")
-    .replace(/(?:^|\s)[/\\]\S+/gu, " [path]")
-    .replace(/[A-Za-z0-9_-]{24,}/gu, "[opaque]")
-    .replace(/[\u0000-\u001f\u007f]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
-  return redacted.length === 0 ? null : redacted.slice(0, 160);
 }
 
 function exactNativeFile(value: unknown): Readonly<{
@@ -323,7 +314,22 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
         once: true,
       });
     });
-    const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    // The response may be rejected by staging before its iterator starts.
+    // Keep the deadline rejection observed during that handoff gap as well.
+    void deadline.catch(() => undefined);
+    let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    let disposed = false;
+    const timeout = setTimeout(() => dispose(), this.#timeoutMs);
+    function dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      clearTimeout(timeout);
+      controller.abort();
+      // Some transports never settle cancel(); cleanup must not defeat the
+      // deadline or hold the caller after a quota/authorization rejection.
+      void (activeReader === null ? response?.body?.cancel() : activeReader.cancel())
+        ?.catch(() => undefined);
+    }
     let handedOff = false;
     try {
       for (let redirect = 0; redirect <= this.#maxRedirects; redirect += 1) {
@@ -334,16 +340,21 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
               redirect: "manual",
               signal: controller.signal,
               headers: { accept: "application/octet-stream" },
+            }).then((received) => {
+              if (controller.signal.aborted) {
+                void received.body?.cancel().catch(() => undefined);
+                throw deadlineFailure;
+              }
+              return received;
             }),
             deadline,
           ]);
         } catch (error) {
           if (error instanceof NativeFileInputFailure) throw error;
-          const detail = safeFetchFailureDetail(error);
           throw new NativeFileInputFailure(
             "native_file_input_unsupported",
             true,
-            `The client native file could not be fetched from its temporary URL (category: ${safeFetchFailureCategory(error)}${detail === null ? "" : `; detail: ${detail}`}).`,
+            `The client native file could not be fetched from its temporary URL (category: ${safeFetchFailureCategory(error)}).`,
           );
         }
         if (!REDIRECT_STATUSES.has(response.status)) break;
@@ -381,11 +392,13 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
       let consumed = false;
       handedOff = true;
       return Object.freeze({
+        dispose,
         stream: Object.freeze({
           async *[Symbol.asyncIterator]() {
-            if (consumed) throw new NativeFileInputFailure("native_file_input_unsupported");
+            if (consumed || disposed) throw new NativeFileInputFailure("native_file_input_unsupported");
             consumed = true;
             const reader = body.getReader();
+            activeReader = reader;
             let total = 0;
             try {
               while (true) {
@@ -404,9 +417,9 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
                 yield next.value;
               }
             } finally {
-              clearTimeout(timeout);
-              await reader.cancel().catch(() => undefined);
+              dispose();
               reader.releaseLock();
+              activeReader = null;
             }
           },
         }),
@@ -415,7 +428,7 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
         ...(input.mimeType === undefined ? {} : { mimeType: input.mimeType }),
       });
     } finally {
-      if (!handedOff) clearTimeout(timeout);
+      if (!handedOff) dispose();
     }
   }
 }

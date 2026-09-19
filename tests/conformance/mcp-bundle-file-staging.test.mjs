@@ -357,7 +357,7 @@ test("native transport reports a privacy-safe runtime fetch category", async () 
       assert.equal(error.code, "native_file_input_unsupported");
       assert.equal(error.retryable, true);
       assert.match(error.message, /category: unsupported_fetch_option/u);
-      assert.match(error.message, /detail: The 'cache' field/u);
+      assert.doesNotMatch(error.message, /detail:|RequestInitializerDict/u);
       assert.doesNotMatch(error.message, /provider-secret|temporary-secret|oaiusercontent/iu);
       return true;
     },
@@ -367,7 +367,7 @@ test("native transport reports a privacy-safe runtime fetch category", async () 
     maxBytes: 64,
     fetcher: async () => {
       throw new TypeError(
-        "fetch failed for https://files.oaiusercontent.com/file/provider-secret-id?sig=secret at /workspace/private/file",
+        "fetch failed for private@example.invalid key=short-secret at https://files.oaiusercontent.com/file/provider-secret-id?sig=secret at /workspace/private/file",
       );
     },
   });
@@ -377,11 +377,85 @@ test("native transport reports a privacy-safe runtime fetch category", async () 
       downloadUrl: "https://files.oaiusercontent.com/file/temporary-secret",
     }),
     (error) => {
-      assert.match(error.message, /detail: fetch failed for \[url\]/u);
-      assert.doesNotMatch(error.message, /oaiusercontent|provider-secret|workspace|sig=/iu);
+      assert.match(error.message, /category: runtime_type_error/u);
+      assert.doesNotMatch(error.message, /oaiusercontent|provider-secret|workspace|sig=|private@|short-secret/iu);
       return true;
     },
   );
+});
+
+test("native download deadline cannot be extended by a hanging cancellation", { timeout: 1_000 }, async () => {
+  let cancelled = 0;
+  const transport = new OpenAiNativeFileTransport({
+    maxBytes: 64,
+    timeoutMs: 10,
+    fetcher: async () => new Response(new ReadableStream({
+      cancel() { cancelled += 1; return new Promise(() => {}); },
+    })),
+  });
+  const downloaded = await transport.download({
+    fileId: "synthetic",
+    downloadUrl: "https://files.oaiusercontent.com/synthetic",
+  });
+  await assert.rejects(async () => {
+    for await (const _chunk of downloaded.stream) { /* wait for deadline */ }
+  }, (error) => error instanceof NativeFileInputFailure && error.retryable);
+  assert.equal(cancelled, 1);
+});
+
+test("native download cancels a response arriving after its deadline", { timeout: 1_000 }, async () => {
+  let deliver;
+  let canceled = false;
+  const transport = new OpenAiNativeFileTransport({
+    maxBytes: 64,
+    timeoutMs: 10,
+    fetcher: () => new Promise((resolve) => { deliver = resolve; }),
+  });
+  await assert.rejects(transport.download({ fileId: "late-file", downloadUrl: "https://files.openai.com/late" }));
+  deliver(new Response(new ReadableStream({ cancel() { canceled = true; } })));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(canceled, true);
+});
+
+test("native response closes on staging rejection before iteration and on provider failure", async () => {
+  let cancelled = 0;
+  let signal;
+  const fetcher = async (_url, options) => {
+    signal = options.signal;
+    return new Response(new ReadableStream({
+      cancel() { cancelled += 1; },
+    }));
+  };
+  const application = new ProductMcpContentApplication({
+    discovery: {
+      async getMindInfo() {
+        return { mind: { mindId: "space_bundle_stage" }, contentCapabilities: ["commit"] };
+      },
+    },
+    nativeFileRoute: NativeFileParameterRoute.createOpenAiFileParameter({ fetcher, timeoutMs: 10 }),
+    staging: { async stageStream() { return { kind: "invalid", code: "capacity_hard_limit" }; } },
+  });
+  const result = await application.executeToolCall({
+    actor: ACTOR,
+    name: "stage_bundle_file",
+    arguments: {
+      mind: "bundle-stage",
+      file: { file_id: "synthetic", download_url: "https://files.oaiusercontent.com/synthetic" },
+      idempotency_key: "rejected-before-read",
+    },
+  });
+  assert.equal(result.isError, true);
+  assert.equal(cancelled, 1);
+  assert.equal(signal.aborted, true);
+
+  const transport = new OpenAiNativeFileTransport({
+    maxBytes: 64,
+    fetcher: async () => new Response(new ReadableStream({ cancel() { cancelled += 1; } }), { status: 503 }),
+  });
+  await assert.rejects(transport.download({
+    fileId: "synthetic", downloadUrl: "https://files.oaiusercontent.com/synthetic",
+  }), (error) => error instanceof NativeFileInputFailure && error.retryable);
+  assert.equal(cancelled, 2);
 });
 
 test("default native transport preserves the hosted fetch receiver", async () => {
@@ -428,6 +502,7 @@ test("native route activation requires an exact externally observed rewrite asse
 
 test("product adapter terminates provider metadata and returns only verified staged metadata", async () => {
   let portableRequest = null;
+  const stagedChunks = [];
   let listRequest = null;
   let downloadRequest = null;
   let reconcileStageRequest = null;
@@ -476,6 +551,7 @@ test("product adapter terminates provider metadata and returns only verified sta
     staging: {
       async stageStream(request) {
         portableRequest = request;
+        for await (const chunk of request.stream) stagedChunks.push(chunk);
         return {
           kind: "staged",
           replayed: false,
@@ -617,10 +693,6 @@ test("product adapter terminates provider metadata and returns only verified sta
   });
   assert.equal(result.isError, false);
   assert.equal(result.structuredContent.data.staged_file.staged_file_ref, "staged_safe_ref");
-  const stagedChunks = [];
-  for await (const chunk of portableRequest.stream) {
-    stagedChunks.push(chunk);
-  }
   assert.deepEqual(
     Buffer.concat(stagedChunks.map((chunk) => Buffer.from(chunk))),
     Buffer.from(PNG),

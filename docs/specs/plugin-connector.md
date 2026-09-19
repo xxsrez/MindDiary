@@ -5,6 +5,17 @@
 обслуживается только `/api/mcp` с протоколом `2026-07-28`. Legacy handler,
 Apps endpoint и выбор профиля удалены. Датированные отчёты сохраняют историю проверок.
 
+Текущая проверка каталога сравнивает полный descriptor каждого инструмента:
+имя, title/description, input/output schemas, annotations, securitySchemes и
+`_meta`. Потеря `openai/fileParams` или возврат app-only visibility должны
+проваливать gate. Product composition публикует один каталог; read-only
+credentials сохраняют существующую маску без двух upload tools. Это проекция
+по scope, не отдельный MCP endpoint. Право выполнить операцию проверяется
+отдельно на сервере. Урезанный default write каталог без `stage_bundle_file`
+не является текущим ожидаемым результатом.
+Regression test получает `tools/list` через настоящий product HTTP dispatcher,
+а не конструирует ожидаемый ответ фильтрацией тех же constants.
+
 > **ADR-0028, 2026-09-11; локальная multi-Mind реализация подтверждена, UAT ещё нет.**
 > Mode задаёт разрешённые действия, nullable description — темы автоматического
 > использования Personal и ordinary Minds. Любой enabled Mind без description

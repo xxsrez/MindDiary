@@ -18,6 +18,7 @@ import {
 } from "../../packages/adapter-mcp/dist/index.js";
 import { MIND_DIARY_STARTER_OKF_TEMPLATE } from "../../packages/adapter-web/dist/index.js";
 import { createProductSiteRuntime } from "../../packages/composition-root/dist/index.js";
+import { matchesExactMcpToolInventory, matchesExactReadOnlyMcpToolInventory } from "../../scripts/lib/exact-mcp-tool-inventory.mjs";
 import {
   createMindDiaryProductWorker,
   RequestRecoveryCoordinator,
@@ -1206,6 +1207,7 @@ test("Product Site publishes one modern file input and keeps exact transport ver
     expected_sha256: nativeSha256,
   };
   const directTools = await listTools(directRuntime, "native-direct-list");
+  assert.equal(matchesExactMcpToolInventory(directTools), true, "product HTTP catalog must match all descriptors");
   const directStageDefinition = directTools.find(({ name }) => name === "stage_bundle_file");
   assert.deepEqual(directStageDefinition._meta, { "openai/fileParams": ["file"] });
   const directCapabilities = await modernTool(
@@ -1388,6 +1390,7 @@ test("Product Site persists success-only web/MCP activity and hides the UAT dire
     },
   });
   assert.equal(listed.status, 200);
+  assert.equal(matchesExactReadOnlyMcpToolInventory((await listed.json()).result.tools), true, "read credentials retain the scope projection of the product catalog");
   assert.equal(deferredActivity.length, 1);
   await Promise.all(deferredActivity);
 

@@ -1385,6 +1385,10 @@ Pilot DCR принимает только public clients, response type `code`, 
 `authorization_code` и `refresh_token`, exact non-empty HTTPS redirect URIs
 (loopback development profile допускается только test/dev configuration) и
 token endpoint authentication method `none`. Client secret не выдаётся.
+Размер OAuth input проверяется по фактически прочитанным UTF-8 bytes, до
+полного накопления и разбора: 64 КиБ для DCR и 16 КиБ для form requests.
+Отсутствующий или неверный `Content-Length` не отменяет ограничение; при
+превышении reader отменяется без ожидания завершения upstream cancellation.
 Pilot metadata намеренно не рекламирует
 `client_id_metadata_document_supported`: ChatGPT должен использовать
 проверенный public-client DCR. Внутренний allowlisted parser Client ID Metadata
@@ -2414,6 +2418,11 @@ Search covers title, description, tags, headings и body. `score` значим �
 index отсутствует, server возвращает `search_index_unavailable`; fallback на
 HEAD запрещён.
 
+Частично утраченный производный индекс также считается недоступным. Поиск
+не должен заменять состав ревизии строками, оставшимися после неполного SQL
+JOIN: это скрывает повреждение от фонового восстановления. Восстановление
+заново индексирует канонические документы точной ревизии.
+
 ### `fetch`
 
 Input: `{ "id": "entry-or-continuation-opaque" }`.
@@ -3194,6 +3203,9 @@ capacity_fairness_limit
 Implementation must keep current generic request/body limits for ordinary
 routes and add explicit streaming multipart limits here. UI admission does not
 raise the accepted per-file/Mind/principal/Site limits.
+Ограничение применяется во время чтения stream, включая запросы без
+`Content-Length`; переполненное тело не дочитывается в память. Ошибка чтения
+освобождает reader, а зависшая upstream cancellation не задерживает отказ.
 
 ### Sites `POST /api/v1/minds/{mind_ref}/exports`
 

@@ -1,6 +1,6 @@
 # Локальная разработка и проверки
 
-Статус: engineering baseline, обновлено 2026-08-09. Команды, package graph и
+Статус: engineering baseline, обновлено 2026-09-19. Команды, package graph и
 Product Site реализованы; single-principal UAT deployment и обязательный Codex
 smoke подтверждены отдельно. Локальный build по-прежнему не является заменой
 exact Sites/Codex UAT evidence.
@@ -33,6 +33,25 @@ integration, conformance, OKF fixture, dependency graph, documentation и
 secret/config hygiene gates. Generated output остаётся в `packages/*/dist`
 этого checkout и не коммитится.
 
+Полный gate включает упаковку offline recovery kit: запускать его нужно из
+чистого закоммиченного checkout, поскольку kit архивирует именно `HEAD`.
+Во время редактирования используются targeted tests; финальную проверку
+чистого candidate выполняет CI. На macOS переносимый Node для backup tests
+должен линковаться только с системными библиотеками. Если рабочий Node
+установлен через Homebrew, задайте `MIND_DIARY_BACKUP_RUNTIME_NODE` абсолютным
+путём к официальному standalone Node нужной версии; проверка переносимости
+не отключается.
+
+Product Site имеет собственный lockfile, поэтому root gate не проверяет его
+dependency graph и сборку автоматически. GitHub CI дополнительно выполняет
+`npm --prefix apps/mind-diary-site ci`, аудит обоих активных lockfiles с
+`--audit-level=high`, ESLint, сборку Site и проверку полного artifact manifest на SHA
+CI checkout. `apps/sites-probe` — исторический отдельный probe, не deployable
+product. Обновление зависимостей Site требует его clean build и применимого
+hosted smoke; `npm audit --omit=dev` недостаточен, поскольку bundler и RSC
+dependencies участвуют в исполняемом Worker. Неиспользуемые Drizzle packages
+удалены; SQL migrations по-прежнему версионируются в `drizzle/`.
+
 ## Канонические команды
 
 | Проверка | Команда |
@@ -49,6 +68,7 @@ secret/config hygiene gates. Generated output остаётся в `packages/*/di
 | Secrets и local config hygiene | `npm run check:secrets` |
 | Полный локальный gate | `npm run check` |
 | Product Site package/build | `cd apps/mind-diary-site && npm ci && npm run build` |
+| Product Site lint | `npm --prefix apps/mind-diary-site run lint` |
 
 `test:conformance` проверяет только repository contracts: разрешённый browser
 route manifest, custom Mind-aware MCP tool list, target version

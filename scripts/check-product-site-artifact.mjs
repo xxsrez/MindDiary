@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { verifySiteArtifactManifest } from "../apps/mind-diary-site/tools/artifact-manifest.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const app = resolve(root, "apps/mind-diary-site");
@@ -16,20 +16,12 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 const metadata = JSON.parse(await readFile(resolve(app, "dist/.openai/release.json"), "utf8"));
-const server = await readFile(resolve(app, "dist/server/index.js"));
 const head = git("rev-parse", "HEAD");
 const tree = git("rev-parse", "HEAD^{tree}");
 const status = git("status", "--porcelain", "--untracked-files=all");
 
-assert(metadata.schema === "mind-diary/site-artifact/v1", "unexpected product Site artifact schema");
-assert(metadata.candidate_sha === head, `artifact candidate ${metadata.candidate_sha} differs from HEAD ${head}`);
-assert(metadata.candidate_tree_sha === tree, `artifact tree ${metadata.candidate_tree_sha} differs from HEAD tree ${tree}`);
-assert(metadata.server_sha256 === sha256(server), "artifact server hash differs from dist/server/index.js");
+await verifySiteArtifactManifest(resolve(app, "dist"), metadata, head, tree);
 assert(status === "", `release checkout is not clean:\n${status}`);
 if (expectedCandidate !== null) {
   assert(/^[0-9a-f]{40}$/u.test(expectedCandidate), "--candidate-sha must be a full 40-hex Git SHA");

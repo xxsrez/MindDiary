@@ -33,12 +33,11 @@ import {
   readPrivateReceipt,
 } from "../../scripts/join-release-0.3-access-admin-uat.mjs";
 
-test("compatibility catalog omits modern fileParams but keeps companion upload", () => {
-  assert.equal(EXPECTED_DEFAULT_MCP_TOOL_NAMES.includes("stage_bundle_file"), false);
+test("the product catalog includes native files and the companion upload", () => {
+  assert.equal(EXPECTED_DEFAULT_MCP_TOOL_NAMES.includes("stage_bundle_file"), true);
   assert.equal(EXPECTED_DEFAULT_MCP_TOOL_NAMES.includes("create_file_upload_intent"), true);
   assert.deepEqual(
-    EXPECTED_MCP_TOOL_NAMES.filter((name) =>
-      name !== "stage_bundle_file"),
+    EXPECTED_MCP_TOOL_NAMES,
     EXPECTED_DEFAULT_MCP_TOOL_NAMES,
   );
 });

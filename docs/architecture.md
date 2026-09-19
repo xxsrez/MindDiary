@@ -6,6 +6,13 @@
 Apps endpoint и выбор профиля удалены. Исторические описания двух профилей
 ниже не задают текущую реализацию и не требуют legacy smoke.
 
+Для текущих изменений исходная точка — работающий код и датированная
+[приёмка единого MCP](reports/2026-09-19-single-mcp-endpoint-uat.md), а не
+исторические ограничения первых релизов ниже. В коде используются manifest v4,
+format-neutral BundleFiles до 256 МиБ и стандартный `fileParams` ingress с
+одним companion fallback. Инженерные ограничения и незакрытые риски сведены в
+[ревью 2026-09-19](reports/2026-09-19-project-hardening-review.md).
+
 MD-453 implemented, UAT verified (2026-09-14): `NoteQueueService` принимает небольшие добавочные
 заметки через `enqueue_note`. Markdown bytes находятся в Space-scoped object
 storage; `queuedNotes` в durable metadata содержит digest, размер, квитанцию,
@@ -46,8 +53,8 @@ first-user UAT receipt.
 
 ADR-0015 сохраняет immutable/staged versioned `BundleFile` architecture.
 ADR-0021 принимает для Release 0.2 manifest v4, arbitrary opaque files,
-open advisory media и 256 MiB streaming. Текущий core/UAT остаётся legacy
-manifest v1/v2/v3 + raster/PDF/ZIP + 64 MiB baseline; MD-304 владеет runtime
+open advisory media и 256 MiB streaming. Ранний core/UAT использовал legacy
+manifest v1/v2/v3 + raster/PDF/ZIP + 64 MiB baseline; MD-304 владел runtime
 replacement. Native MCP ingress, exact-revision list/download, Markdown
 references и dual export имеют local legacy evidence, но не доказывают
 format-neutral candidate или real-client UAT.

@@ -371,6 +371,28 @@ async function authorize(connector, clientId, scopes = "content:read") {
   return tokens.json();
 }
 
+test("OAuth rejects an unbounded stream at its byte limit without waiting for cancellation", { timeout: 2_000 }, async () => {
+  const { connector, database } = await environment();
+  let pulls = 0;
+  let canceled = false;
+  const body = new ReadableStream({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(new TextEncoder().encode("я".repeat(16_384)));
+    },
+    cancel() { canceled = true; return new Promise(() => {}); },
+  }, { highWaterMark: 0 });
+  const response = await connector.fetch(new Request(`${ORIGIN}/oauth/register`, {
+    method: "POST", body, duplex: "half", headers: { "content-type": "application/json" },
+  }));
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, "invalid_request");
+  assert.equal(pulls, 3);
+  assert.equal(canceled, true);
+  assert.equal(body.locked, false);
+  assert.equal(database.clients.size, 0);
+});
+
 test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", async () => {
   const {
     connector,

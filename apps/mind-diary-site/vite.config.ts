@@ -1,7 +1,6 @@
 import vinext from "vinext";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
-import { sites } from "./tools/sites-vite-plugin";
 
 const PLACEHOLDER_DATABASE_ID = "00000000-0000-4000-8000-000000000000";
 const isCodexSeatbelt = process.env.CODEX_SANDBOX === "seatbelt";
@@ -15,7 +14,6 @@ export default defineConfig(async () => {
     server: isCodexSeatbelt ? { watch: { useFsEvents: false, usePolling: true } } : undefined,
     plugins: [
       vinext(),
-      sites(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         config: {
