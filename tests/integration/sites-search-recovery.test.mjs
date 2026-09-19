@@ -17,8 +17,15 @@ for (const missingTable of ["md_search_documents", "md_search_document_lexical"]
     )`).bind(spaceId).run();
 
     assert.equal((await index.inspectExactRevision(spaceId, revisionId)).kind, "unavailable");
-    assert.deepEqual(await index.queryExactRevision(spaceId, revisionId, ["searchable"]), { kind: "unavailable" });
-    assert.equal((await index.inspectExactRevision(spaceId, revisionId)).kind, "unavailable");
+    const queried = await index.queryExactRevision(spaceId, revisionId, ["searchable"]);
+    if (missingTable === "md_search_documents") {
+      assert.deepEqual(queried, { kind: "unavailable" });
+      assert.equal((await index.inspectExactRevision(spaceId, revisionId)).kind, "unavailable");
+    } else {
+      // Missing lexical rows are safely recoverable when all document text remains.
+      assert.equal(queried.kind, "ready");
+      assert.deepEqual(queried.documents, documents);
+    }
     assert.equal((await index.readStorageMetricsForTest(spaceId)).membershipCount, 3);
 
     // Restart plus a rebuild from canonical documents restores all results.

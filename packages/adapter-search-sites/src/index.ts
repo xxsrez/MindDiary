@@ -459,15 +459,14 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
       .all<SearchProjectionCountRow>();
     const membershipCount = Number(counts.results?.[0]?.membership_count ?? 0);
     const indexedCount = Number(counts.results?.[0]?.indexed_count ?? 0);
-    if (membershipCount > 0 && indexedCount !== membershipCount) {
-      // A partial JOIN is not an authoritative revision. Replacing membership
-      // from its surviving rows would conceal the damage from recovery probes.
-      // Leave the projection unavailable until the canonical revision rebuilds it.
-      return Object.freeze({ kind: "unavailable" });
-    }
-    if (membershipCount === 0) {
+    if (membershipCount === 0 || indexedCount !== membershipCount) {
       const legacy = await this.readExactRevision(spaceId, revisionId);
       if (legacy.kind !== "ready") return legacy;
+      // Complete stored text can rebuild a missing lexical projection. A partial
+      // document JOIN cannot: replacing membership would conceal its damage.
+      if (membershipCount > 0 && legacy.documents.length !== membershipCount) {
+        return Object.freeze({ kind: "unavailable" });
+      }
       if (legacy.documents.length === 0) {
         return Object.freeze({
           kind: "ready" as const,
