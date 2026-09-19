@@ -199,7 +199,7 @@ test("Advanced MCP alone exposes bounded token history and protocol details", ()
   assert.match(active, /Advanced MCP/);
   assert.match(active, /content:read, content:write/);
   assert.match(active, /Modern MCP 2026-07-28/);
-  assert.match(active, /Compatibility MCP 2025-11-25/);
+  assert.doesNotMatch(active, /Compatibility MCP|2025-11-25/);
   assert.match(active, /Next tokens/);
   assert.match(active, /Credential scope/);
   assert.match(active, /Account-wide Mind modes/);

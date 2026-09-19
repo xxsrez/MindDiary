@@ -1,5 +1,10 @@
 # Профиль `ship-work-release` для Mind Diary
 
+
+Текущий MCP contract (2026-09-19): по [ADR-0031](../decisions/0031-single-mcp-endpoint.md)
+обслуживается только `/api/mcp` с протоколом `2026-07-28`. Legacy handler,
+Apps endpoint и выбор профиля удалены. Датированные отчёты сохраняют историю проверок.
+
 Статус: accepted project configuration, revision 10, 2026-09-10.
 
 ## Обычный UAT release: соразмерная приёмка
@@ -514,7 +519,6 @@ dev:
     - dev.authenticated-web-control
     - dev.persistence-restart
     - dev.mcp-modern
-    - dev.mcp-compat
     - dev.synthetic-multi-principal
     - dev.synthetic-browser
     - dev.oauth-direct-plugin
@@ -675,7 +679,6 @@ uat:
     - uat.authenticated-web-control
     - uat.persistence-redeploy
     - uat.mcp-modern
-    - uat.mcp-compat
     - uat.mind-bindings
     - uat.changed-surface
     - uat.multi-principal
@@ -808,29 +811,6 @@ evidence:
         inputs:
           scenario: { literal: mcp-modern-2026-07-28 }
           route: { literal: /api/mcp }
-          base_url: { value_from: dev.resolved_url }
-          actor_class: { literal: synthetic-owner }
-      success: { path: /status, operator: eq, value: passed }
-      artifact:
-        schema: mind-diary/mcp-smoke-evidence/v1
-        media_type: application/json
-        storage: content-addressed-reference
-        max_bytes: 1048576
-        required_fields: [status, candidate_sha, protocol_version, route, assertions, artifact_sha256]
-      redaction_policy: release-evidence-default
-    - id: dev.mcp-compat
-      stage: dev
-      requirement: conditional
-      when:
-        any:
-          - { fact: run.changed_capabilities, operator: contains, value: mcp.compat.2025-11-25 }
-          - { fact: run.scope_required_capabilities, operator: contains, value: mcp.compat.2025-11-25 }
-      probe:
-        kind: runtime_capability
-        capability: mind-diary/dev-smoke/v1
-        inputs:
-          scenario: { literal: mcp-compat-2025-11-25 }
-          route: { literal: /api/mcp/2025-11-25 }
           base_url: { value_from: dev.resolved_url }
           actor_class: { literal: synthetic-owner }
       success: { path: /status, operator: eq, value: passed }
@@ -1062,30 +1042,6 @@ evidence:
         max_bytes: 1048576
         required_fields: [status, candidate_sha, deployment_id, client, client_version, protocol_version, route, assertions, artifact_sha256]
       redaction_policy: release-evidence-default
-    - id: uat.mcp-compat
-      stage: uat
-      requirement: conditional
-      when:
-        any:
-          - { fact: run.changed_capabilities, operator: contains, value: mcp.compat.2025-11-25 }
-          - { fact: run.scope_required_capabilities, operator: contains, value: mcp.compat.2025-11-25 }
-      probe:
-        kind: runtime_capability
-        capability: mind-diary/uat-mcp-smoke/v1
-        inputs:
-          scenario: { literal: codex-compat-2025-11-25 }
-          route: { literal: /api/mcp/2025-11-25 }
-          base_url: { literal: "https://mind-diary.example.invalid" }
-          actor_class: { literal: single-principal-owner }
-          credential_ref: { literal: provider-session/openai-sites-current-principal }
-      success: { path: /status, operator: eq, value: passed }
-      artifact:
-        schema: mind-diary/mcp-smoke-evidence/v1
-        media_type: application/json
-        storage: content-addressed-reference
-        max_bytes: 1048576
-        required_fields: [status, candidate_sha, deployment_id, client, client_version, protocol_version, route, assertions, artifact_sha256]
-      redaction_policy: release-evidence-default
     - id: uat.mind-bindings
       stage: uat
       requirement: required
@@ -1100,7 +1056,7 @@ evidence:
           actor_class: { literal: single-principal-owner }
           credential_ref: { literal: fresh-installed-marketplace-plugin }
           targets: { literal: two-clearly-synthetic-private-minds }
-          routes: { literal: [/api/mcp, /api/mcp/2025-11-25] }
+          routes: { literal: [/api/mcp] }
         required_assertion_ids:
           - bindings.read-two-exact-targets
           - bindings.target-a-commit-and-capture

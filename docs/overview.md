@@ -372,10 +372,9 @@ landing требуют отдельного принятого scope.
 - **Product Site:** shared application core, authenticated browser/control
   routes, Streamable HTTP MCP, D1/R2 adapters и Worker background jobs собраны
   в отдельном Sites-compatible приложении и развёрнуты как UAT.
-- **Sites MVP UAT:** обязательный Codex gate пройден на двух endpoint:
-  `/api/mcp/2025-11-25` для default lifecycle и `/api/mcp` для opt-in modern
-  profile. Exact `/mcp` остаётся platform-reserved path и не принадлежит
-  product router.
+- **Sites MVP UAT:** единственный endpoint `/api/mcp` использует
+  протокол `2026-07-28`; legacy endpoint удалён по ADR-0031.
+  Exact `/mcp` остаётся platform-reserved path и не принадлежит product router.
 - **Primary post-MVP AWS path:** Bedrock AgentCore Runtime, S3 canonical objects,
   DynamoDB transactional metadata и optional derived OpenSearch index. Это
   будущая основная infrastructure direction и учебная цель, не текущая release

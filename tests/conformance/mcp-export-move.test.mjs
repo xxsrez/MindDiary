@@ -3,10 +3,8 @@ import test from "node:test";
 
 import {
   MCP_CONTENT_TOOLS,
-  MCP_LEGACY_CODEX_PROTOCOL,
   MCP_TARGET_PROTOCOL,
   ProductMcpContentApplication,
-  createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
 } from "../../packages/adapter-mcp/dist/index.js";
 
@@ -71,19 +69,6 @@ function modernRequest(method, params, id = 1) {
   });
 }
 
-function compatibilityRequest(method, params, id = 1) {
-  return new Request("https://mind-diary.invalid/api/mcp/2025-11-25", {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: "Bearer export-move-token",
-      "content-type": "application/json",
-      "mcp-protocol-version": MCP_LEGACY_CODEX_PROTOCOL,
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-  });
-}
-
 function assertMoved(result, operation, replacementRoute) {
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent.schema, "mind-diary/mcp-operation-moved/v1");
@@ -100,7 +85,7 @@ function assertMoved(result, operation, replacementRoute) {
   );
 }
 
-test("modern and compatibility catalogs omit administrative export", async () => {
+test("modern catalog omit administrative export", async () => {
   assert.equal(MCP_CONTENT_TOOLS.includes("start_export"), false);
   assert.equal(MCP_CONTENT_TOOLS.includes("get_export_status"), false);
 
@@ -111,15 +96,6 @@ test("modern and compatibility catalogs omit administrative export", async () =>
   assert.equal(modernNames.includes("start_export"), false);
   assert.equal(modernNames.includes("get_export_status"), false);
 
-  const compatibility = createLegacyCodexMcpHttpHandler(dependencies());
-  const compatibilityResponse = await compatibility(
-    compatibilityRequest("tools/list", {}),
-  );
-  assert.equal(compatibilityResponse.status, 200);
-  const compatibilityNames = (await compatibilityResponse.json()).result.tools
-    .map(({ name }) => name);
-  assert.equal(compatibilityNames.includes("start_export"), false);
-  assert.equal(compatibilityNames.includes("get_export_status"), false);
 });
 
 test("removed export names return the same side-effect-free moved result", async () => {
@@ -127,10 +103,6 @@ test("removed export names return the same side-effect-free moved result", async
     {
       handler: createMcpHttpHandler(dependencies()),
       request: modernRequest,
-    },
-    {
-      handler: createLegacyCodexMcpHttpHandler(dependencies()),
-      request: compatibilityRequest,
     },
   ];
   for (const profile of profiles) {
@@ -163,10 +135,4 @@ test("unknown tools and profile-specific removed methods keep protocol errors", 
   assert.equal(modernPing.status, 404);
   assert.equal((await modernPing.json()).error.code, -32601);
 
-  const compatibility = createLegacyCodexMcpHttpHandler(dependencies());
-  const legacyResources = await compatibility(
-    compatibilityRequest("resources/list", {}),
-  );
-  assert.equal(legacyResources.status, 404);
-  assert.equal((await legacyResources.json()).error.code, -32601);
 });

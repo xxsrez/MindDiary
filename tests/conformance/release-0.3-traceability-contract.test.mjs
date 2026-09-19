@@ -103,13 +103,13 @@ test("export cutover source evidence is hashed and bound to the authority assert
       assertionId: "r03.transfer.web-authority",
       role: "site-export-authority-conformance",
       path: "tests/conformance/import-export-authority-delta.test.mjs",
-      gitBlob: "4c55bad74314a681ab8ec36c6b43900b2ac326b7",
+      gitBlob: "1b0170b8f216bc4c73676eb32519005fb2ae0950",
     },
     {
       assertionId: "r03.transfer.web-authority",
       role: "mcp-export-cutover-conformance",
       path: "tests/conformance/mcp-export-move.test.mjs",
-      gitBlob: "0d68a3a701fab6d747d824fadac5b1f9f5640eec",
+      gitBlob: "389aca85f3a4dbea4abbbcb05db57dc4449f92e1",
     },
   ]);
   const assertionIds = new Set(fixture.requirements.map(({ assertionId }) => assertionId));
@@ -193,7 +193,7 @@ test("local evidence rows are exact runnable commands with existing tests and fi
   }
 });
 
-test("local transfer evidence proves Site export and both MCP moved-compatibility profiles", () => {
+test("local transfer evidence proves Site export and MCP moved-compatibility response", () => {
   const transfer = fixture.evidence.find(({ id }) => id === "L-TRANSFER");
   assert.ok(transfer.testPaths.includes("tests/conformance/import-export-authority-delta.test.mjs"));
   assert.ok(transfer.testPaths.includes("tests/conformance/mcp-export-move.test.mjs"));

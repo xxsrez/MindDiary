@@ -68,9 +68,7 @@ Mind, current `read_write` usage generation, token scope и ACL. Затем он
 - игнорирует private source filename, если оно небезопасно;
 - вычисляет exact SHA-256, size и safe media metadata самостоятельно.
 
-Обычный `POST /api/mcp` публикует этот tool. Compatibility endpoint
-`POST /api/mcp/2025-11-25` сохраняется для реально проверенного legacy
-lifecycle и не заявляет native file support без отдельного client proof.
+Единственный `POST /api/mcp` публикует этот tool.
 Отдельного Apps endpoint и обязательного picker resource нет.
 
 ## Companion fallback

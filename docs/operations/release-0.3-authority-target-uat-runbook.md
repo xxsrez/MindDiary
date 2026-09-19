@@ -75,10 +75,10 @@ clean worktree до и после проб. Он последовательно 
   credential; прежняя строка `not_logged_in` считается несовместимой проекцией,
   а не доказательством более безопасного состояния;
 - constructor-only synthetic verified-native profile для exact 22-tool
-  modern/compat catalogs; его fail-closed fetcher не читает bytes и не является
+  modern catalog; его fail-closed fetcher не читает bytes и не является
   hosted route evidence;
 - credential target contract и persisted-state migration tests;
-- exact direct modern/compat 21-tool catalog, который не рекламирует
+- exact direct modern catalog, который не рекламирует
   MCP Apps picker или unverified native stage, retired binding tools и moved
   export tests;
 - stale HEAD и wrong Mind zero-side-effect assertions.
@@ -134,8 +134,7 @@ read-back предыдущего, а не локальное предполож�
 ### Каталоги и discovery
 
 - Fresh write-capable modern client (`2026-07-28`) получает exact 26-tool
-  catalog, включая один `openai/fileParams` stage; compatibility client
-  (`2025-11-25`) получает 23 names без native stage. Read-only grant получает
+  catalog, включая один `openai/fileParams` stage. Read-only grant получает
   exact 22-tool subset без `create_file_upload_intent` и native stage.
   Отдельного Apps profile или picker нет; host bridge проверяется отдельным
   fresh client receipt.

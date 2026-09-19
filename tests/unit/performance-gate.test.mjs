@@ -103,7 +103,7 @@ test("profile receipt verifies observed Minds, revisions, files and bytes and re
 test("scenario is exact-SHA/deployment scoped and forbids inline credentials and declared matrix", () => {
   const receipt = profileReceipt();
   const scenario = validatePerformanceScenario(rawScenario(), receipt);
-  assert.equal(scenario.requests.length, 19);
+  assert.equal(scenario.requests.length, 10);
   assert.equal(
     verifyPerformanceScenarioCredentialBindings(scenario, receipt, credentialEnvironment()),
     true,
@@ -116,13 +116,13 @@ test("scenario is exact-SHA/deployment scoped and forbids inline credentials and
   );
   const staleShape = { ...rawScenario(), profile_matrix: { mind_counts: [1, 10, 100] } };
   assert.throws(() => validatePerformanceScenario(staleShape, receipt), /invalid_scenario/u);
-  const missingCompatibility = rawScenario();
-  missingCompatibility.requests = missingCompatibility.requests.filter(
-    ({ profile: profileName }) => profileName !== "mcp_compatibility",
+  const missingMcp = rawScenario();
+  missingMcp.requests = missingMcp.requests.filter(
+    ({ profile: profileName }) => profileName !== "mcp_modern",
   );
   assert.throws(
-    () => validatePerformanceScenario(missingCompatibility, receipt),
-    /scenario_coverage_incomplete:profile_coverage_missing:mcp_compatibility/u,
+    () => validatePerformanceScenario(missingMcp, receipt),
+    /scenario_coverage_incomplete:profile_coverage_missing:mcp_modern/u,
   );
   const missingTransport = rawScenario();
   delete missingTransport.requests[1].headers["mcp-protocol-version"];
@@ -146,17 +146,17 @@ test("scenario is exact-SHA/deployment scoped and forbids inline credentials and
   );
 });
 
-test("performance gate passes only correlated web, modern and compatibility cold plus warm evidence", () => {
+test("performance gate passes only correlated web, modern cold plus warm evidence", () => {
   assert.ok(PERFORMANCE_BUDGETS_MS.server.list_minds > 0);
   const report = evaluatePerformanceGate(fixture());
   assert.equal(report.status, "passed", JSON.stringify(report.failures));
   assert.deepEqual(report.failures, []);
-  assert.equal(report.connector.length, 19);
+  assert.equal(report.connector.length, 10);
   assert.ok(report.connector.every(({ telemetry_correlated_requests }) =>
     telemetry_correlated_requests === 21));
-  assert.equal(report.server.length, 14);
+  assert.equal(report.server.length, 7);
   assert.ok(report.server.every(({ warm }) => warm.samples >= 20));
-  assert.deepEqual(report.history_growth.map(({ ratio }) => ratio), [1.1, 1.1]);
+  assert.deepEqual(report.history_growth.map(({ ratio }) => ratio), [1.1]);
   assert.deepEqual(verifyPerformanceGateArtifact(report), report);
 });
 
@@ -164,10 +164,10 @@ test("gate fails closed on missing profile, stale telemetry, negative values and
   const input = fixture();
   input.scenario = {
     ...input.scenario,
-    requests: input.scenario.requests.filter(({ profile }) => profile !== "mcp_compatibility"),
+    requests: input.scenario.requests.filter(({ profile }) => profile !== "mcp_modern"),
   };
-  input.connector_results = input.connector_results.filter(({ profile }) => profile !== "mcp_compatibility");
-  input.server_telemetry = input.server_telemetry.filter(({ operation }) => operation !== "mcp_compatibility");
+  input.connector_results = input.connector_results.filter(({ profile }) => profile !== "mcp_modern");
+  input.server_telemetry = input.server_telemetry.filter(({ operation }) => operation !== "mcp_modern");
   input.connector_results[0] = {
     ...input.connector_results[0],
     observed_cold_ms: 6_000,
@@ -181,15 +181,15 @@ test("gate fails closed on missing profile, stale telemetry, negative values and
   const report = evaluatePerformanceGate(input);
   assert.equal(report.status, "failed");
   for (const failure of [
-    "profile_coverage_missing:mcp_compatibility",
-    "operation_coverage_missing:mcp_compatibility:list_minds",
-    "fixture_profile_unexercised:mcp_compatibility:starter",
+    "profile_coverage_missing:mcp_modern",
+    "operation_coverage_missing:mcp_modern:list_minds",
+    "fixture_profile_unexercised:mcp_modern:starter",
     "observed_cold_budget_exceeded:web.home",
     "connector_samples_incomplete:web.home",
     "connector_p95_budget_exceeded:web.home",
     "telemetry_schema_invalid:0",
-    "history_comparison_missing:mcp_compatibility",
-    "server_samples_below_20:mcp_compatibility:list_minds",
+    "history_comparison_missing:mcp_modern",
+    "server_samples_below_20:mcp_modern:list_minds",
   ]) assert.ok(report.failures.includes(failure), failure);
 });
 

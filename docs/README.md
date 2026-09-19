@@ -299,6 +299,7 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
   Minds и Personal могут независимо иметь `read_write`, automatic и direct
   destinations обрабатываются отдельными commits.
 - [ADR-0030: один файловый вход](decisions/0030-single-file-input.md)
+- [ADR-0031: один MCP endpoint](decisions/0031-single-mcp-endpoint.md)
   — model-visible `fileParams` без выбора происхождения, единый streaming
   staging и ограниченная совместимость прежних provenance-меток.
 

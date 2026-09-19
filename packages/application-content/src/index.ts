@@ -103,7 +103,7 @@ export type McpObservabilityOutcome =
   | "tool_completed"
   | "internal_error";
 
-export type McpPerformanceProfile = "mcp_modern" | "mcp_compatibility";
+export type McpPerformanceProfile = "mcp_modern";
 export type McpPerformanceStage =
   | "stage_authentication"
   | "stage_application"

@@ -36,7 +36,7 @@ function plugin() {
     plugin_snapshot_sha256: digest("f"),
     client: "codex-cli",
     client_version: "0.153.4",
-    routes: ["/api/mcp", "/api/mcp/2025-11-25"],
+    routes: ["/api/mcp"],
     catalog_profiles: {
       default_product_site_write: 21,
       read_only: 20,

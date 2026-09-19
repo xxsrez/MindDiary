@@ -800,12 +800,6 @@
       "owner": "MD-376"
     },
     {
-      "key": "POST /api/mcp/2025-11-25",
-      "disposition": "change",
-      "profile": "mcp-transport",
-      "owner": "MD-376"
-    },
-    {
       "key": "ANY /mcp",
       "disposition": "remove",
       "profile": "compat-removed",
@@ -1282,24 +1276,6 @@
         "initialize",
         "ping"
       ]
-    },
-    "2025-11-25": {
-      "endpoint": "/api/mcp/2025-11-25",
-      "keep": [
-        "notifications/initialized",
-        "ping"
-      ],
-      "change": [
-        "initialize",
-        "tools/list",
-        "tools/call"
-      ],
-      "removeWithMethodNotFound": [
-        "server/discover",
-        "resources/templates/list",
-        "resources/list",
-        "resources/read"
-      ]
     }
   },
   "resources": {
@@ -1308,7 +1284,6 @@
       "resources/read",
       "resources/templates/list-empty"
     ],
-    "compatibility": [],
     "uriPatterns": [
       "okf://spaces/{space-id}/revisions/{revision-id}/index",
       "okf://spaces/{space-id}/revisions/{revision-id}/entries/{path}"
@@ -1332,7 +1307,7 @@
         {
           "role": "package-probe-source",
           "path": "scripts/run-oauth-direct-plugin-probe.mjs",
-          "gitBlob": "50e984f5085d1f8fa8ad532da1069484dcf781e4"
+          "gitBlob": "e51eb5b70f428afc2e54ea36a0a63044bd15565f"
         }
       ]
     },
@@ -1354,12 +1329,12 @@
         {
           "role": "accepted-skill-source-contract",
           "path": "docs/specs/plugin-connector.md",
-          "gitBlob": "575d1e3067602ad7ff8cc26e5ed3d0cd0217ba7a"
+          "gitBlob": "62872ecc90801dfa3d20f53a2e4b7b0b654fb2d5"
         },
         {
           "role": "installed-skill-probe-source",
           "path": "scripts/run-oauth-direct-plugin-probe.mjs",
-          "gitBlob": "50e984f5085d1f8fa8ad532da1069484dcf781e4"
+          "gitBlob": "e51eb5b70f428afc2e54ea36a0a63044bd15565f"
         }
       ]
     },
@@ -1378,7 +1353,7 @@
         {
           "role": "help-renderer-source",
           "path": "packages/adapter-web/src/connections.ts",
-          "gitBlob": "f45629a629c0ad539be2d48b49bc294396bca737"
+          "gitBlob": "26ef9faf57822a9ab959f2cfc6a6b4ee0c530856"
         }
       ]
     },
@@ -1394,7 +1369,7 @@
         {
           "role": "help-playbook-source",
           "path": "packages/adapter-web/src/token-management.ts",
-          "gitBlob": "cf31fa2f523d4bed48759671da4d068b117f27f6"
+          "gitBlob": "10a2a48d93df43685ee659cb30377bc4e948de56"
         },
         {
           "role": "help-route-source",

@@ -153,7 +153,7 @@ function hostedObservation() {
     ],
     catalogs: {
       modern: catalog("2026-07-28"),
-      compatibility: catalog("2025-11-25"),
+
     },
     credentialCases: passed(RELEASE_03_HOSTED_CREDENTIAL_CASE_IDS),
     authorityCases: passed(RELEASE_03_HOSTED_AUTHORITY_CASE_IDS),
@@ -272,7 +272,7 @@ test("hosted observation requires both web surfaces, all credential cases, and i
       ],
       catalogs: {
         modern: catalog("2026-07-28"),
-        compatibility: catalog("2025-11-25"),
+
       },
       credentialCases: passed(RELEASE_03_HOSTED_CREDENTIAL_CASE_IDS),
       authorityCases: passed(RELEASE_03_HOSTED_AUTHORITY_CASE_IDS),

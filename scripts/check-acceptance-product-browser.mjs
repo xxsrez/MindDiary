@@ -114,7 +114,7 @@ try {
     });
     page.on("response", async response => {
       const url = new URL(response.url());
-      if (url.origin !== origin || !["/api/v1/account", "/api/v1/mcp-tokens", "/api/v1/session", "/api/mcp", "/api/mcp/2025-11-25", "/oauth/authorize"].includes(url.pathname)) return;
+      if (url.origin !== origin || !["/api/v1/account", "/api/v1/mcp-tokens", "/api/v1/session", "/api/mcp", "/oauth/authorize"].includes(url.pathname)) return;
       let body; try { body = await response.json(); } catch {}
       const code = body?.error?.code ?? body?.result?.structuredContent?.error?.code;
       diagnostics.push({ path: url.pathname, status: response.status(), ...(typeof code === "string" && /^[a-z_]{1,80}$/.test(code) ? { code } : {}) });

@@ -5,17 +5,14 @@ import { CAPABILITIES } from "@mind-diary/domain";
 import {
   MCP_CONTENT_TOOLS,
   MCP_AGENT_INSTRUCTIONS,
-  MCP_LEGACY_CODEX_PROTOCOL,
   MCP_MOVED_EXPORT_TOOLS,
   MCP_RETIRED_BINDING_TOOLS,
   MCP_RETIRED_CAPTURE_TOOLS,
   MCP_TOOL_DEFINITIONS,
-  createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
 } from "../../packages/adapter-mcp/dist/index.js";
 
 const MODERN = "2026-07-28";
-const COMPAT = "2025-11-25";
 const NOW = "2026-08-27T22:00:00.000Z";
 
 function protocolMeta() {
@@ -97,7 +94,6 @@ function harness() {
     content,
   };
   const modern = createMcpHttpHandler(dependencies);
-  const compatibility = createLegacyCodexMcpHttpHandler(dependencies);
 
   async function sendModern(body) {
     const name = body.method === "tools/call" ? body.params.name : null;
@@ -115,25 +111,7 @@ function harness() {
     }));
   }
 
-  async function sendCompatibility(body) {
-    return compatibility(new Request(
-      "https://mind-diary.invalid/api/mcp/2025-11-25",
-      {
-        method: "POST",
-        headers: {
-          accept: "application/json, text/event-stream",
-          authorization: "Bearer read-token",
-          "content-type": "application/json",
-          ...(body.method === "initialize"
-            ? {}
-            : { "mcp-protocol-version": COMPAT }),
-        },
-        body: JSON.stringify(body),
-      },
-    ));
-  }
-
-  return { calls, sendModern, sendCompatibility };
+  return { calls, sendModern };
 }
 
 async function payload(response, status = 200) {
@@ -149,7 +127,7 @@ function assertNoApplicationCalls(calls) {
   });
 }
 
-test("fresh modern and compatibility discovery omit retired binding/capture mutations and export admin", async () => {
+test("fresh modern discovery omit retired binding/capture mutations and export admin", async () => {
   assert.deepEqual(MCP_TOOL_DEFINITIONS.map(({ name }) => name), MCP_CONTENT_TOOLS);
   for (const retired of [
     ...MCP_RETIRED_BINDING_TOOLS,
@@ -176,30 +154,6 @@ test("fresh modern and compatibility discovery omit retired binding/capture muta
   const modern = (await payload(await env.sendModern(modernRpc("tools/list")))).result;
   assert.deepEqual(modern.tools.map(({ name }) => name), advertisedNames);
 
-  const initialize = (await payload(await env.sendCompatibility({
-    jsonrpc: "2.0",
-    id: 0,
-    method: "initialize",
-    params: {
-      protocolVersion: MCP_LEGACY_CODEX_PROTOCOL,
-      capabilities: {},
-      clientInfo: { name: "codex-mcp-client", version: "0.147.0" },
-    },
-  }))).result;
-  assert.equal(initialize.protocolVersion, MCP_LEGACY_CODEX_PROTOCOL);
-  assert.equal(initialize.instructions, MCP_AGENT_INSTRUCTIONS);
-  assert.match(initialize.instructions, /current access/u);
-  assert.match(initialize.instructions, /writable_mount\.active=true/u);
-  assert.doesNotMatch(initialize.instructions, /get_mind_bindings|set_read_mind_binding|set_write_mind_binding|capture_knowledge/u);
-
-  const compatibility = (await payload(await env.sendCompatibility({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "tools/list",
-    params: {},
-  }))).result;
-  assert.deepEqual(compatibility.tools.map(({ name }) => name), advertisedNames);
-  assert.deepEqual(compatibility.tools, modern.tools);
   assertNoApplicationCalls(env.calls);
 });
 
@@ -226,16 +180,8 @@ test("exact cached binding and capture calls return the same versioned fail-clos
     const modern = (await payload(await env.sendModern(
       modernRpc("tools/call", { id: ++id, name, arguments: args }),
     ))).result;
-    const compatibility = (await payload(await env.sendCompatibility({
-      jsonrpc: "2.0",
-      id: ++id,
-      method: "tools/call",
-      params: { name, arguments: args },
-    }))).result;
-
     assert.equal(modern.resultType, "complete");
-    assert.equal("resultType" in compatibility, false);
-    for (const result of [modern, compatibility]) {
+    for (const result of [modern]) {
       assert.equal(result.isError, true);
       assert.deepEqual(result.structuredContent, {
         schema: "mind-diary/mcp-operation-retired/v1",
@@ -266,13 +212,5 @@ test("unknown near-miss names remain protocol errors and never reach the applica
   assert.equal(modern.error.code, -32602);
   assert.equal(modern.error.message, "Invalid params");
 
-  const compatibility = await payload(await env.sendCompatibility({
-    jsonrpc: "2.0",
-    id: 32,
-    method: "tools/call",
-    params: { name: "set_write_mind_bindings", arguments: {} },
-  }), 400);
-  assert.equal(compatibility.error.code, -32602);
-  assert.equal(compatibility.error.message, "Invalid params");
   assertNoApplicationCalls(env.calls);
 });

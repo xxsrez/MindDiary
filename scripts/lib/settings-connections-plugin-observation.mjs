@@ -30,7 +30,7 @@ const execFileAsync = promisify(execFile);
 const SCHEMA = "mind-diary/settings-connections-plugin-observation/v1";
 const CLIENT = "codex-cli";
 const CLIENT_VERSION = "0.153.4";
-const ROUTES = Object.freeze(["/api/mcp", "/api/mcp/2025-11-25"]);
+const ROUTES = Object.freeze(["/api/mcp"]);
 
 function sha256Bytes(value) {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;

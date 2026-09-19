@@ -13,8 +13,6 @@ import {
 } from "@mind-diary/domain";
 import {
   MCP_ENDPOINT,
-  MCP_LEGACY_CODEX_ENDPOINT,
-  MCP_LEGACY_CODEX_PROTOCOL,
   MCP_RETIRED_SITES_ENDPOINT,
   MCP_TARGET_PROTOCOL,
 } from "../../packages/adapter-mcp/dist/index.js";
@@ -834,24 +832,8 @@ async function responseFrom(runtime, request) {
   return response;
 }
 
-async function legacyMcp(runtime, secret, body) {
-  const headers = new Headers({
-    accept: "application/json, text/event-stream",
-    authorization: `Bearer ${secret}`,
-    "content-type": "application/json; charset=utf-8",
-    ...(body.method === "initialize"
-      ? {}
-      : { "mcp-protocol-version": MCP_LEGACY_CODEX_PROTOCOL }),
-  });
-  return responseFrom(runtime, new Request(`${ORIGIN}${MCP_LEGACY_CODEX_ENDPOINT}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  }));
-}
-
-async function legacyTool(runtime, secret, id, progressToken, name, args) {
-  const response = await legacyMcp(runtime, secret, {
+async function progressTool(runtime, secret, id, progressToken, name, args) {
+  const response = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id,
     method: "tools/call",
@@ -888,7 +870,12 @@ async function modernMcp(runtime, secret, body, benchmarkCorrelationId) {
         ? { "mcp-name": body.params.name }
         : {}),
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, params: { ...body.params, _meta: {
+      ...body.params?._meta,
+      "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+      "io.modelcontextprotocol/clientInfo": { name: "runtime-test", version: "1" },
+      "io.modelcontextprotocol/clientCapabilities": {},
+    } } }),
   }));
 }
 
@@ -1116,7 +1103,7 @@ test("Product Site publishes one modern file input and keeps exact transport ver
     createProductSiteRuntime({
       ...baseOptions,
       verifiedNativeFileParameterRoute: {
-        mcpProfiles: ["modern"],
+
         assertion: {
           profileId: "test-product-site-native-v1",
           assertionId: "test-receipt:product-site-native:v1",
@@ -1130,26 +1117,21 @@ test("Product Site publishes one modern file input and keeps exact transport ver
     }),
     /exact host rewrite assertion/u,
   );
-  await assert.rejects(
-    createProductSiteRuntime({
-      ...baseOptions,
-      verifiedNativeFileParameterRoute: {
-        mcpProfiles: [],
-        assertion: {
-          profileId: "test-product-site-native-v1",
-          assertionId: "test-receipt:product-site-native:v1",
-          observedAtUtc: "2026-08-28T00:00:00.000Z",
-          toolName: "stage_bundle_file",
-          parameterName: "file",
-          sourceKind: "session_attachment",
-          transport: "native_file_parameter",
-        },
-      },
-    }),
-    /exact unique MCP profiles/u,
-  );
-
   const directRuntime = await createProductSiteRuntime(baseOptions);
+  for (const path of ["/api/mcp/2025-11-25", "/api/mcp/apps"]) {
+    for (const method of ["GET", "POST", "DELETE"]) {
+      const removed = await responseFrom(directRuntime, new Request(`${ORIGIN}${path}`, {
+        method,
+        ...(method === "POST" ? { headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) } : {}),
+      }));
+      assert.equal(removed.status, 404, `${method} ${path}`);
+      assert.equal(removed.headers.has("location"), false);
+      assert.equal(removed.headers.has("www-authenticate"), false);
+      assert.equal((await removed.json()).code, "route_not_found");
+    }
+  }
+
   const registration = await responseFrom(directRuntime, new Request(`${ORIGIN}/`));
   const registrationCsrf = csrfFromHtml(await registration.text());
   const bootstrap = await responseFrom(directRuntime, new Request(`${ORIGIN}/api/v1/account`, {
@@ -1246,7 +1228,7 @@ test("Product Site publishes one modern file input and keeps exact transport ver
   const configuredRuntime = await createProductSiteRuntime({
     ...baseOptions,
     verifiedNativeFileParameterRoute: {
-      mcpProfiles: ["modern"],
+
       assertion: {
         profileId: "test-product-site-native-v1",
         assertionId: "test-receipt:product-site-native:v1",
@@ -1268,26 +1250,6 @@ test("Product Site publishes one modern file input and keeps exact transport ver
   assert.deepEqual(stageDefinition._meta, {
     "openai/fileParams": ["file"],
   });
-
-  const legacyInitialize = await legacyMcp(configuredRuntime, secret, {
-    jsonrpc: "2.0",
-    id: "native-compat-initialize",
-    method: "initialize",
-    params: {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "native-route-compat-test", version: "0.0.0" },
-    },
-  });
-  assert.equal(legacyInitialize.status, 200);
-  const legacyList = await legacyMcp(configuredRuntime, secret, {
-    jsonrpc: "2.0",
-    id: "native-compat-list",
-    method: "tools/list",
-    params: {},
-  });
-  const legacyTools = (await legacyList.json()).result.tools;
-  assert.equal(legacyTools.some(({ name }) => name === "stage_bundle_file"), false);
 
   const capabilities = await modernTool(
     configuredRuntime,
@@ -2527,7 +2489,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   assert.equal(settings.status, 200);
   const settingsHtml = await settings.text();
-  assert.match(settingsHtml, new RegExp(`${ORIGIN.replaceAll(".", "\\.")}\\/api\\/mcp\\/2025-11-25`, "u"));
+  assert.match(settingsHtml, new RegExp(`${ORIGIN.replaceAll(".", "\\.")}\\/api\\/mcp`, "u"));
   assert.match(settingsHtml, new RegExp(`${ORIGIN.replaceAll(".", "\\.")}\\/api\\/mcp`, "u"));
   assert.match(settingsHtml, /data-run-mcp-self-check disabled/u);
   assert.doesNotMatch(settingsHtml, /Create the first useful Memory|Restore as a new revision and export/u);
@@ -2807,26 +2769,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(await runtime.fetch(new Request(`${ORIGIN}${MCP_RETIRED_SITES_ENDPOINT}/`)), null);
   assert.equal(await runtime.fetch(new Request(`${ORIGIN}/MCP`)), null);
 
-  const initialize = await legacyMcp(runtime, secret, {
-    jsonrpc: "2.0",
-    id: 0,
-    method: "initialize",
-    params: {
-      protocolVersion: "2025-06-18",
-      capabilities: { elicitation: { form: {}, url: {} } },
-      clientInfo: { name: "codex-mcp-client", title: "Codex", version: "0.147.0" },
-    },
-  });
-  assert.equal(initialize.status, 200);
-  assert.equal((await initialize.json()).result.protocolVersion, MCP_LEGACY_CODEX_PROTOCOL);
-
-  const initialized = await legacyMcp(runtime, secret, {
-    jsonrpc: "2.0",
-    method: "notifications/initialized",
-  });
-  assert.equal(initialized.status, 202);
-
-  const tools = await legacyMcp(runtime, secret, {
+  const tools = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: 1,
     method: "tools/list",
@@ -2835,7 +2778,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(tools.status, 200);
   assert.equal((await tools.json()).result.tools.some((tool) => tool.name === "list_minds"), true);
 
-  const listed = await legacyMcp(runtime, secret, {
+  const listed = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: 2,
     method: "tools/call",
@@ -2873,52 +2816,52 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     JSON.stringify(personalMind),
   );
 
-  const compatibilityRevision = personalMind.head.revision_id;
-  const compatibilityList = await legacyTool(
+  const selectedRevision = personalMind.head.revision_id;
+  const fileList = await progressTool(
     runtime,
     secret,
-    "compatibility-list-files",
+    "modern-list-files",
     20,
     "list_files",
     {
       mind: "/me",
-      revision_selector: { kind: "revision", revision_id: compatibilityRevision },
+      revision_selector: { kind: "revision", revision_id: selectedRevision },
       include_globs: ["**/*.md"],
     },
   );
-  assert.ok(compatibilityList.files.some(({ path }) => path === "index.md"));
-  const compatibilityGrep = await legacyTool(
+  assert.ok(fileList.files.some(({ path }) => path === "index.md"));
+  const fileGrep = await progressTool(
     runtime,
     secret,
-    "compatibility-grep-files",
+    "modern-grep-files",
     21,
     "grep_files",
     {
       mind: "/me",
-      revision_selector: { kind: "revision", revision_id: compatibilityRevision },
+      revision_selector: { kind: "revision", revision_id: selectedRevision },
       paths: ["index.md"],
       patterns: ["first Memory"],
       output: "files_with_matches",
     },
   );
-  assert.deepEqual(compatibilityGrep.files.map(({ path }) => path), ["index.md"]);
-  const compatibilityRead = await legacyTool(
+  assert.deepEqual(fileGrep.files.map(({ path }) => path), ["index.md"]);
+  const fileRead = await progressTool(
     runtime,
     secret,
-    "compatibility-read-files",
+    "modern-read-files",
     22,
     "read_files",
     {
       mind: "/me",
-      revision_selector: { kind: "revision", revision_id: compatibilityRevision },
+      revision_selector: { kind: "revision", revision_id: selectedRevision },
       requests: [{ path: "index.md", mode: "head", count: 2 }],
     },
   );
-  assert.equal(compatibilityRead.items.length, 1);
-  assert.match(compatibilityRead.items[0].file.text, /okf_version/u);
+  assert.equal(fileRead.items.length, 1);
+  assert.match(fileRead.items[0].file.text, /okf_version/u);
 
-  const previousRevisionId = compatibilityRevision;
-  const committed = await legacyMcp(runtime, secret, {
+  const previousRevisionId = selectedRevision;
+  const committed = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
@@ -2953,7 +2896,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   await runtime.recoverBackground();
 
   const scheduledCountBeforeReplay = scheduled.length;
-  const replay = await legacyMcp(runtime, secret, {
+  const replay = await modernMcp(runtime, secret, {
     jsonrpc: "2.0", id: "commit-replay-after-index", method: "tools/call",
     params: { name: "commit_changeset", arguments: {
       mind: "/me", expected_revision: previousRevisionId,
@@ -2969,7 +2912,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(replayData.revision.revision_id, committedBody.result.structuredContent.data.revision.revision_id);
   assert.equal(scheduled.length, scheduledCountBeforeReplay);
 
-  const listedAfterCommit = await legacyMcp(runtime, secret, {
+  const listedAfterCommit = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: 4,
     method: "tools/call",
@@ -2992,7 +2935,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     committedBody.result.structuredContent.data.revision.revision_id,
   );
 
-  const revisions = await legacyMcp(runtime, secret, {
+  const revisions = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: "history-after-write",
     method: "tools/call",
@@ -3011,7 +2954,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     [advancedMind.head.revision_id, previousRevisionId],
   );
 
-  const historical = await legacyMcp(runtime, secret, {
+  const historical = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: "exact-history-before-restore",
     method: "tools/call",
@@ -3029,7 +2972,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     previousRevisionId,
   );
 
-  const staleRestore = await legacyMcp(runtime, secret, {
+  const staleRestore = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: "stale-restore",
     method: "tools/call",
@@ -3057,7 +3000,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     advancedMind.head.revision_id,
   );
 
-  const restored = await legacyMcp(runtime, secret, {
+  const restored = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: "confirmed-restore",
     method: "tools/call",
@@ -3081,7 +3024,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.notEqual(restoredRevisionId, previousRevisionId);
   assert.notEqual(restoredRevisionId, advancedMind.head.revision_id);
 
-  const validatedRestore = await legacyMcp(runtime, secret, {
+  const validatedRestore = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: "validate-restored-revision",
     method: "tools/call",
@@ -3191,7 +3134,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(revoked.status, 200);
   assert.equal((await revoked.json()).data.token.state, "revoked");
 
-  const afterRevoke = await legacyMcp(runtime, secret, {
+  const afterRevoke = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: 5,
     method: "tools/list",
@@ -4671,7 +4614,7 @@ test("note receipt survives a Sites runtime restart and background dispatch comm
   assert.match(JSON.stringify(read), /Paper lighthouse: amber/u);
 });
 
-test("Personal configuration MCP is scoped, metadata-only, CAS protected and shared by both profiles", async () => {
+test("Personal configuration MCP is scoped, metadata-only, CAS protected and available on the single MCP endpoint", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
   const options = { database, bucket, publicOrigin: ORIGIN, schedule() {}, observabilityWriter: { write() {} },
@@ -4693,8 +4636,8 @@ test("Personal configuration MCP is scoped, metadata-only, CAS protected and sha
   };
   const oldToken = await issue(["content:write"], "configuration-old");
   const token = await issue(["personal:configure"], "configuration-only");
-  const call = async (secret, name, args, compat = false) => {
-    const response = await (compat ? legacyMcp : modernMcp)(runtime, secret, {
+  const call = async (secret, name, args) => {
+    const response = await modernMcp(runtime, secret, {
       jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args,
         _meta: { "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
           "io.modelcontextprotocol/clientInfo": { name: "configuration-test", version: "1" },
@@ -4719,10 +4662,10 @@ test("Personal configuration MCP is scoped, metadata-only, CAS protected and sha
   const stale = await call(token, "set_personal_mind_description", { ...request, description: "Other", idempotency_key: "configuration-stale" });
   assert.equal(stale.structuredContent.error.code, "metadata_conflict");
   runtime = await createProductSiteRuntime(options);
-  const replay = await call(token, "set_personal_mind_description", request, true);
+  const replay = await call(token, "set_personal_mind_description", request);
   assert.equal(replay.isError, false, JSON.stringify(replay));
   assert.equal(replay.structuredContent.data.replayed, true);
-  const readBack = await call(token, "get_personal_mind_configuration", {}, true);
+  const readBack = await call(token, "get_personal_mind_configuration", {});
   assert.equal(readBack.structuredContent.data.description, request.description);
   const cleared = await call(token, "set_personal_mind_description", {
     description: "   ", expected_metadata_version: readBack.structuredContent.data.metadata_version,

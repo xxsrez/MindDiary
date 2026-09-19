@@ -5,7 +5,7 @@
 [credential writable-target contract](credential-write-target.md), а exact
 operation disposition ожидает MD-337. Локальные
 durable state/application/persistence (`MD-231`), одинаковый binding tool
-surface для modern/compatibility MCP (`MD-230`) и hard content enforcement
+surface для modern MCP (`MD-230`) и hard content enforcement
 (`MD-232`) подтверждены. Product UI и exact Marketplace plugin guidance
 (`MD-233`) подтверждены локально. Canonical release profile содержит blocking
 `dev.mind-bindings` и `uat.mind-bindings` join (`MD-235`); UAT evidence остаётся
@@ -60,9 +60,7 @@ Client не передаёт owner, principal, role или internal `space_id`. 
 каждом из них действует singleton write invariant. Reconnect создаёт новый
 grant и новый пустой binding set, а не оживляет прежний.
 
-MCP protocol profile не является owner. Modern `2026-07-28` и isolated
-compatibility `2025-11-25` разрешают один и тот же binding owner и вызывают один
-application contract, сохраняя разный transport lifecycle.
+MCP protocol profile не является owner. MCP `2026-07-28` разрешает binding owner и вызывает application contract.
 
 ## Service records
 

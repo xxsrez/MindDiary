@@ -1,5 +1,10 @@
 # Plugin и OAuth Mind Diary
 
+
+Текущий MCP contract (2026-09-19): по [ADR-0031](../decisions/0031-single-mcp-endpoint.md)
+обслуживается только `/api/mcp` с протоколом `2026-07-28`. Legacy handler,
+Apps endpoint и выбор профиля удалены. Датированные отчёты сохраняют историю проверок.
+
 > **ADR-0028, 2026-09-11; локальная multi-Mind реализация подтверждена, UAT ещё нет.**
 > Mode задаёт разрешённые действия, nullable description — темы автоматического
 > использования Personal и ordinary Minds. Любой enabled Mind без description
@@ -128,7 +133,7 @@ Repository candidate уже содержит:
 - read-first grant и `content:write` step-up;
 - dual `mdp_v1_`/`mdo_access_` MCP authentication, tool
   `securitySchemes` и OAuth challenges;
-- одинаковые modern `2026-07-28` и compatibility `2025-11-25` definitions и
+- modern `2026-07-28` definitions и
   application semantics для `get_mind_bindings`,
   `set_read_mind_binding`, `set_write_mind_binding`; strict schemas не
   допускают array write targets или unknown fields;
@@ -151,9 +156,7 @@ Mind Diary добавляется в существующий Srez Marketplace �
 Task Manager. Для Codex Desktop/CLI pilot 0.1 принят следующий путь:
 
 1. Package сохраняет thin skill и использует canonical modern transport
-   `/api/mcp`, включая единый `openai/fileParams` input. Isolated
-   `/api/mcp/2025-11-25` остаётся только для exact legacy clients, которые ещё
-   требуют прежний initialize lifecycle.
+   `/api/mcp`, включая единый `openai/fileParams` input.
 2. Установка с policy `AVAILABLE + ON_USE` завершается без product OAuth и без
    чтения private registered app.
 3. Первый content tool call запускает native OAuth discovery, DCR и PKCE к
@@ -185,7 +188,7 @@ Diary доступной после обновления каталога. Он�
 | Marketplace | `srez-marketplace` | тот же Marketplace |
 | Plugin package | `plugins/task-manager` | новый `plugins/mind-diary` |
 | Connection | direct production MCP в `.mcp.json` | canonical modern UAT OAuth resource `/api/mcp` в `.mcp.json` |
-| Transport profiles | public MCP URL в `.mcp.json` | `/api/mcp` для current Codex/ChatGPT; isolated `/api/mcp/2025-11-25` только для отдельно проверенного legacy client |
+| Transport | public MCP URL в `.mcp.json` | Только `/api/mcp`, протокол `2026-07-28` |
 | Installation | `AVAILABLE` + `ON_USE` | то же поведение |
 | OAuth | authorization code + PKCE, DCR | тот же protocol profile, но Mind Diary scopes и identity rules |
 | Data authorization | internal Task Manager user | internal immutable Mind Diary `principal_id` |
@@ -300,9 +303,7 @@ plugins/
 `.app.json` отсутствует. `.mcp.json` использует canonical modern transport и
 OAuth resource `https://mind-diary.example.invalid/api/mcp`. Это
 даёт current Codex/ChatGPT один connection source и делает standard
-`openai/fileParams` tool видимым без отдельного Apps package. Legacy
-`/api/mcp/2025-11-25` не рекламируется current package и остаётся только для
-точечно проверенного старого клиента.
+`openai/fileParams` tool видимым без отдельного Apps package.
 
 Skill остаётся тонким interaction adapter к канонической service guidance,
 которая также доступна через read-only `get_mind_diary_guidance`. Перед
@@ -486,10 +487,7 @@ internal `principal_id`.
 
 Canonical resource, audience и current package transport pilot-а — existing
 `POST /api/mcp` с profile `2026-07-28`. Exact modern client/adapter conformance
-проверяется в каждом release receipt. Compatibility adapter
-`/api/mcp/2025-11-25` принимает тот же OAuth audience и вызывает тот же content
-application contract, но подключается только для отдельно подтверждённого
-legacy клиента; automatic lifecycle fallback внутри request отсутствует.
+проверяется в каждом release receipt. Старый compatibility adapter удалён по ADR-0031.
 
 Смена canonical `oauth_resource` позднее считается package/client migration:
 новая plugin version, повторный consent и fresh-task validation, а не

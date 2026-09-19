@@ -11,7 +11,7 @@ test("performance profiles are provisioned through ordinary APIs and read back a
   try {
     const fixture = await createAcceptancePerformanceFixture(client, { candidate_sha: "a".repeat(40), project_id: "appgprj_test", deployment_id: "appgdep_test", site_version_id: "appgver_test", archive_sha256: "b".repeat(64) }, "synthetic-binding-key-at-least-32-bytes");
     assert.deepEqual(fixture.profileReadback.profiles.map(p => p.observed.revisions), [1, 1, 10]);
-    assert.equal(fixture.scenario.requests.length, 19);
+    assert.equal(fixture.scenario.requests.length, 10);
     assert.equal(fixture.scenario.requests[0].cookie_env, "MD_PERF_COOKIE");
     assert.equal(fixture.scenario.warm_samples, 20);
     assert.equal(fixture.profileReadback.profiles[0].fixture_fingerprint, fixture.profileReadback.profiles[1].fixture_fingerprint);

@@ -92,7 +92,7 @@ inference, profiling и content-derived dimensions отсутствуют.
 3. Классифицировать incident:
    - `401`/auth denied: проверить exact audience и named token state; не просить
      token у участника;
-   - MCP-only: проверить exact `/api/mcp` либо `/api/mcp/2025-11-25`, protocol,
+   - MCP-only: проверить exact `/api/mcp`, protocol,
      status и opaque request ID;
    - repeated `503`, storage/background unavailable или runtime stage:
      проверить D1/R2 binding, current deployment и bounded index/export job;
@@ -164,8 +164,7 @@ last-good version. Для rollback:
 3. Deploy exact saved version с compare/reconcile against current deployment.
    Не пересобирать старый SHA и не сохранять новый version под видом rollback.
 4. Дождаться terminal deployment status. Выполнить
-   `rollback.authenticated-web-control` и `rollback.mcp-modern`; при затронутом
-   compatibility profile также default Codex smoke.
+   `rollback.authenticated-web-control` и `rollback.mcp-modern`.
 5. Rollback code не откатывает уже committed immutable revisions или access
    mutations. Если state несовместим, оставить pilot stopped и открыть
    forward-only defect; не обещать recovery.

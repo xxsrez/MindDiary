@@ -342,6 +342,6 @@ external oracle. Общий repository suite пропускает только d
 версия остаётся ошибкой.
 
 UAT acceptance additionally binds exact Git SHA, Sites version/deployment,
-modern/compat catalogs and a fresh installed plugin journey. It records only
+modern catalogs and a fresh installed plugin journey. It records only
 hashes, counts, timings (`p50`/`p95`), I/O and response sizes; synthetic corpus
 bytes and paths stay out of durable evidence.

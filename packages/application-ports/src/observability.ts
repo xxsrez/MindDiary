@@ -71,7 +71,6 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "home",
   "authentication",
   "mcp_modern",
-  "mcp_compatibility",
   "stage_authentication",
   "stage_application",
   "stage_total",

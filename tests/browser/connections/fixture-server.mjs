@@ -344,8 +344,7 @@ const server = createServer(async (request, response) => {
     }
     if (
       url.pathname === "/api/v1/session" ||
-      url.pathname === "/api/mcp" ||
-      url.pathname === "/api/mcp/2025-11-25"
+      url.pathname === "/api/mcp"
     ) {
       json(response, 401, { error: { code: "fixture_diagnostic_denied" } });
       return;

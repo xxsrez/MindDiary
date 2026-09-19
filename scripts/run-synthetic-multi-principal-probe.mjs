@@ -42,7 +42,6 @@ const EVIDENCE_SCHEMA = "mind-diary/synthetic-multi-principal-evidence/v1";
 const BINDING_NAMESPACE = "synthetic-test";
 const ACTOR_CLASS = "synthetic-principal";
 const MODERN_PROTOCOL = "2026-07-28";
-const COMPAT_PROTOCOL = "2025-11-25";
 
 function opaque(prefix, bytes = randomBytes) {
   return `${prefix}-${bytes(16).toString("hex")}`;
@@ -156,59 +155,7 @@ async function assertExactMcpCatalogs(actor) {
     fail("mcp_modern_catalog_mismatch", { status: modern.status });
   }
 
-  const initialized = await actor.request("/api/mcp/2025-11-25", {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${actor.mcpToken}`,
-      "content-type": "application/json; charset=utf-8",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: `${actor.actorClass}-compat-initialize`,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-06-18",
-        capabilities: {},
-        clientInfo: { name: "synthetic-multi-principal-probe", version: "1" },
-      },
-    }),
-  });
-  if (
-    initialized.status !== 200 ||
-    initialized.body?.result?.protocolVersion !== COMPAT_PROTOCOL
-  ) fail("mcp_compat_initialize_failed", { status: initialized.status });
 
-  const notified = await actor.request("/api/mcp/2025-11-25", {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${actor.mcpToken}`,
-      "content-type": "application/json; charset=utf-8",
-      "mcp-protocol-version": COMPAT_PROTOCOL,
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-  });
-  if (notified.status !== 202) fail("mcp_compat_initialized_failed", { status: notified.status });
-
-  const compat = await actor.request("/api/mcp/2025-11-25", {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${actor.mcpToken}`,
-      "content-type": "application/json; charset=utf-8",
-      "mcp-protocol-version": COMPAT_PROTOCOL,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: `${actor.actorClass}-compat-tools-list`,
-      method: "tools/list",
-      params: {},
-    }),
-  });
-  if (compat.status !== 200 || !matchesExactDefaultMcpToolInventory(compat.body?.result?.tools)) {
-    fail("mcp_compat_catalog_mismatch", { status: compat.status });
-  }
 }
 
 function createEvidence({ candidate, startedAt, completedAt, runFingerprint, actorFingerprints, passed }) {

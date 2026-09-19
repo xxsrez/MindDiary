@@ -12,7 +12,6 @@ import {
   MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE,
   MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP,
   MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE,
-  MIND_DIARY_MCP_COMPATIBILITY_PATH,
   MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER,
   MIND_DIARY_MCP_MODERN_PATH,
   mindDiaryCodexConfig,
@@ -100,7 +99,7 @@ test("Codex instructions reference bearer_token_env_var without placing a token 
   );
   assert.equal(
     MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER,
-    "https://<your-mind-diary-site>/api/mcp/2025-11-25",
+    "https://<your-mind-diary-site>/api/mcp",
   );
   assert.equal(
     MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP,
@@ -112,7 +111,6 @@ test("Codex instructions reference bearer_token_env_var without placing a token 
   );
   assert.match(MIND_DIARY_CODEX_CONFIG, /bearer_token_env_var = "MIND_DIARY_TOKEN"/);
   assert.equal(MIND_DIARY_MCP_MODERN_PATH, "/api/mcp");
-  assert.equal(MIND_DIARY_MCP_COMPATIBILITY_PATH, "/api/mcp/2025-11-25");
   assert.match(
     MIND_DIARY_CODEX_CONFIG,
     /OAI-Sites-Authorization = "MIND_DIARY_SITES_AUTHORIZATION"/,
@@ -120,11 +118,10 @@ test("Codex instructions reference bearer_token_env_var without placing a token 
   assert.doesNotMatch(MIND_DIARY_CODEX_CONFIG, /mdp_v1_[A-Za-z0-9_-]{20,}/);
 
   const html = renderMcpTokenManagement(model({ kind: "empty" }));
-  assert.match(html, /https:\/\/mind-diary\.example\/api\/mcp\/2025-11-25/);
+  assert.doesNotMatch(html, /2025-11-25|compatibility-config/);
   assert.match(html, /https:\/\/mind-diary\.example\/api\/mcp/);
   assert.doesNotMatch(html, /&lt;your-mind-diary-site&gt;/);
-  assert.equal((html.match(/required = true/gu) ?? []).length, 2);
-  assert.match(html, /data-copy-code="mind-diary-compatibility-config"/);
+  assert.equal((html.match(/required = true/gu) ?? []).length, 1);
   assert.match(html, /data-copy-code="mind-diary-modern-config"/);
   assert.match(html, /Keep the secret outside your repository and Codex config/);
   assert.match(html, /complete <code>Bearer &lt;secret&gt;<\/code> header value/);
@@ -217,24 +214,17 @@ test("revoked credentials expose history without a stale Mind target or mode con
   assert.doesNotMatch(html, /data-binding-form|data-binding-action|data-principal-mind-usage-notice/);
 });
 
-test("exact-origin Codex configs keep modern and compatibility lifecycles separate", () => {
+test("exact-origin Codex config uses the single modern endpoint", () => {
   assert.equal(
-    mindDiaryMcpEndpoint("https://mind-diary.example", "modern"),
+    mindDiaryMcpEndpoint("https://mind-diary.example"),
     "https://mind-diary.example/api/mcp",
   );
   assert.equal(
-    mindDiaryMcpEndpoint("http://localhost:3000", "compatibility"),
-    "http://localhost:3000/api/mcp/2025-11-25",
+    mindDiaryMcpEndpoint("http://localhost:3000"),
+    "http://localhost:3000/api/mcp",
   );
-  const modern = mindDiaryCodexConfig("https://mind-diary.example", "modern");
-  const compatibility = mindDiaryCodexConfig(
-    "https://mind-diary.example",
-    "compatibility",
-  );
-  assert.match(modern, /url = "https:\/\/mind-diary\.example\/api\/mcp"/);
-  assert.doesNotMatch(modern, /2025-11-25/);
-  assert.match(compatibility, /api\/mcp\/2025-11-25/);
-  for (const config of [modern, compatibility]) {
+  const modern = mindDiaryCodexConfig("https://mind-diary.example");
+  for (const config of [modern]) {
     assert.match(config, /required = true/);
     assert.match(config, /bearer_token_env_var = "MIND_DIARY_TOKEN"/);
     assert.doesNotMatch(config, /mdp_v1_[A-Za-z0-9_-]{20,}/);
@@ -244,7 +234,7 @@ test("exact-origin Codex configs keep modern and compatibility lifecycles separa
     "https://mind-diary.example/path",
     "https://user:password@mind-diary.example",
   ]) {
-    assert.throws(() => mindDiaryCodexConfig(unsafe, "modern"), /canonical HTTPS/u);
+    assert.throws(() => mindDiaryCodexConfig(unsafe), /canonical HTTPS/u);
   }
 });
 
@@ -354,13 +344,12 @@ test("show-once and revoke dialogs have confirmation, live status, and keyboard-
   );
 });
 
-test("production redacted self-check covers both auth boundaries and both MCP profiles without telemetry or raw output", () => {
+test("production redacted self-check covers both auth boundaries and the single MCP endpoint without telemetry or raw output", () => {
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /fetch\("\/api\/v1\/session"/);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /server\/discover/);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/mcp\/2025-11-25/);
+  assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /2025-11-25/);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /name:"list_minds"/);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /notifications\/initialized/);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /method:"tools\/list"/);
+  assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /notifications\/initialized/);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /Site audience access failed before Mind Diary/);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /Token authentication failed/);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /Token is missing content:read/);

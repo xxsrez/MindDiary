@@ -561,10 +561,10 @@ when:
   any:
     - fact: run.changed_capabilities
       operator: contains
-      value: mcp.compat.2025-11-25
+      value: mcp.modern.2026-07-28
     - fact: run.scope_required_capabilities
       operator: contains
-      value: mcp.compat.2025-11-25
+      value: mcp.modern.2026-07-28
 ```
 
 Допустимы `always`, `all`, `any`, `not` и leaf operators `eq`, `ne`, `exists`,

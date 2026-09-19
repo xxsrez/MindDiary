@@ -233,7 +233,7 @@ flowchart LR
     OAuthClient["Direct OAuth MCP client"]
     Rest["First-party REST control API\n/api/v1"]
     OAuth["OAuth Authorization Server\n/.well-known + /oauth"]
-    Mcp["Content MCP\n/api/mcp\n/api/mcp/2025-11-25"]
+    Mcp["Content MCP\n/api/mcp"]
     Core["Application API\ncommands + queries"]
 
     Browser --> Rest --> Core
@@ -751,7 +751,7 @@ Adapter различает human UI entry и machine endpoints до product data
 | `GET`/`HEAD` распознанного UI route (`/`, `/me`, `/minds`, `/public`, `/invitations`, `/settings/account`, `/settings/connections`, `/settings/connections/{connection_ref}`, `/settings/developer/mcp`, `/settings/mcp`, `/help`, `/help/codex`, canonical `/{handle}`) | `200 text/html`; одинаковый static sign-in shell со ссылкой exact `/signin-with-chatgpt`, `Cache-Control: no-store`, без CSRF и product projections. `HEAD` возвращает те же status/headers без body. |
 | Любой `/api/v1/**` без trusted Sites identity | JSON `401 authentication_required`; HTML не возвращается. |
 | UI или REST при недоступном trusted identity provider/binding | JSON `503 identity_binding_unavailable`; sign-in shell не маскирует outage. |
-| `/api/mcp`, `/api/mcp/2025-11-25` без valid product Bearer | Existing MCP `401` + `WWW-Authenticate` contract; Sites sign-in shell не участвует. |
+| `/api/mcp` без valid product Bearer | Existing MCP `401` + `WWW-Authenticate` contract; Sites sign-in shell не участвует. |
 | OAuth routes | Existing authorization-server contract; product Web adapter не реализует `/signin-with-chatgpt`, `/signout-with-chatgpt` или callback. |
 
 Signed-out UI shell route-agnostic: он не отражает handle или target metadata,
@@ -1637,27 +1637,19 @@ target/deployment обязан повторить route probe. В текущем
 `/mcp` не является alias, и server не redirect-ит с него request с
 `Authorization` header.
 
-Product source candidate публикует два намеренно раздельных endpoint:
+По [ADR-0031](../decisions/0031-single-mcp-endpoint.md) единственный MCP endpoint — `/api/mcp`:
 
 | Endpoint | Protocol/lifecycle | Client gate |
 |---|---|---|
 | `POST /api/mcp` | pinned final `2026-07-28`, stateless и начиная с `server/discover`; публикует стандартный `openai/fileParams` tool | current Codex/ChatGPT и другие проверенные modern clients |
-| `POST /api/mcp/2025-11-25` | isolated initialize lifecycle предыдущей stable revision `2025-11-25` без server session | default `codex-cli 0.147.0` |
-
-Оба endpoint требуют один и тот же principal Bearer token и вызывают одну
-content application boundary. Authentication, token lifecycle/scopes и current
-Mind authorization вычисляются заново для каждого HTTP request. Различается
-только protocol framing; compatibility adapter не добавляет отдельную ACL,
-cached actor или tool surface.
 
 Authenticated `/settings/developer/mcp` (compatibility entrypoint
 `/settings/mcp`) получает canonical origin из server-side request и показывает
-два точных secret-free Codex config; endpoint placeholder не
+один точный secret-free Codex config; endpoint placeholder не
 остаётся в hosted HTML. Browser self-check использует текущую Sites session
 только для `GET /api/v1/session`, а one-time Mind Diary Bearer — только для
-обоих content MCP endpoint. Он выполняет modern `server/discover` и read-only
-`list_minds`, затем isolated compatibility initialize/initialized и тот же
-read-only `list_minds`. Ответы проверяются внутри page и отбрасываются; DOM
+единственного content MCP endpoint. Он выполняет `server/discover` и read-only
+`list_minds`. Ответы проверяются внутри page и отбрасываются; DOM
 получает только allowlisted status без email, names, IDs, query, content,
 credential или raw response. Закрытие show-once dialog отменяет pending fetch,
 стирает Bearer и запрещает retry; никакой отдельный diagnostic endpoint,
@@ -1676,13 +1668,6 @@ session/audience access не называется ошибкой product token, 
 unregistered account, lifecycle mismatch и unavailable state отображаются
 только фиксированным безопасным текстом; server error message не переносится в
 DOM.
-
-Route selection и оба profiles проверены transport/integration tests и
-UAT Sites smoke. Настоящий `codex-cli 0.147.0` выполнил
-`tools/list`/`tools/call` и через default compatibility lifecycle, и через
-opt-in modern discovery; matching Worker events завершились HTTP 200.
-Предыдущее отрицательное evidence exact `/mcp` остаётся в
-[датированном capability report](../reports/2026-08-07-sites-mcp-capability-gate.md).
 
 ### Modern stateless profile `2026-07-28`
 
@@ -1760,40 +1745,13 @@ Mcp-Name: search
 }
 ```
 
-### Isolated Codex compatibility profile `2025-11-25`
+### Единственный клиентский endpoint
 
-Default `codex-cli 0.147.0` ещё использует initialize lifecycle. На
-`POST /api/mcp/2025-11-25` проверена последовательность:
-
-1. Codex посылает `initialize` с `protocolVersion: "2025-06-18"`.
-2. Server выбирает и возвращает `protocolVersion: "2025-11-25"`,
-   рекламируя только проверенную `tools` capability; Resources для
-   compatibility profile пока не заявляются.
-3. Codex посылает `notifications/initialized`, затем `tools/list` и
-   `tools/call` с `MCP-Protocol-Version: 2025-11-25`.
-
-Server не выдаёт и не требует `Mcp-Session-Id`. Adapter переводит только
-operational messages во внутренний stateless contract и возвращает legacy
-result shapes без modern `resultType`, `ttlMs` и `cacheScope`; initialize
-lifecycle никогда не передаётся в `/api/mcp`.
-
-Текущий secret-free Codex config:
-
-```toml
-[mcp_servers.mind_diary]
-url = "https://<your-mind-diary-site>/api/mcp/2025-11-25"
-bearer_token_env_var = "MIND_DIARY_TOKEN"
-required = true
-
-[mcp_servers.mind_diary.env_http_headers]
-OAI-Sites-Authorization = "MIND_DIARY_SITES_AUTHORIZATION"
-```
-
-Token value хранится только в `MIND_DIARY_TOKEN`. Для opt-in
-`mcp_2026_07_28` в том же Codex build либо другого подтверждённого modern client
-config должен использовать `https://<your-mind-diary-site>/api/mcp`, а не
-compatibility URL. В `codex-cli 0.147.0` modern path ещё скрыт за
-under-development feature; default остаётся compatibility profile.
+Клиент использует `https://<your-mind-diary-site>/api/mcp` и протокол
+`2026-07-28`. Старые `/api/mcp/2025-11-25` и `/api/mcp/apps` возвращают
+404 без redirect или downgrade. `initialize` и `notifications/initialized`
+не обслуживаются. Локальная конфигурация хранит только имена переменных
+окружения для credentials, не сами secrets.
 
 Sites audience gate находится перед product Worker и не заменяет product
 authentication. В наблюдавшемся 2026-08-07 single-principal UAT deployment
@@ -1883,7 +1841,7 @@ Compatibility profile в `initialize` публикует только:
 - `tools/list` обязателен и возвращает tools в deterministic order.
 - `listChanged` не объявляется: tool set не меняется внутри deployed version.
 - `resources` modern profile используется для exact immutable Markdown
-  resources; compatibility profile его не рекламирует и не обслуживает.
+  resources.
 - `subscribe` и resource `listChanged` не объявляются: immutable URI не
   обновляется, а смена HEAD создаёт новые URIs.
 - Prompts, sampling, elicitation, roots и skills extension не требуются MVP.
@@ -1943,9 +1901,7 @@ Recoverable application error:
 ```
 
 Для backward-compatible clients `content` содержит короткое text summary,
-даже когда основной contract находится в `structuredContent`. Isolated
-`2025-11-25` adapter сохраняет тот же tool payload, но удаляет только modern
-transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего result.
+даже когда основной contract находится в `structuredContent`.
 
 ### Historical tool catalog
 
@@ -2564,8 +2520,7 @@ capability row, MCP/REST tool, route or export surface.
 
 ### `create_file_upload_intent`
 
-This write-scoped MCP tool exists in both the modern `2026-07-28` and isolated
-compatibility `2025-11-25` catalogs. Read-only credentials neither list nor
+This write-scoped MCP tool exists in the `2026-07-28` catalog. Read-only credentials neither list nor
 execute it. Server resolves and pins the exact current principal-owned
 `read_write` Mind generation.
 
@@ -2724,8 +2679,7 @@ Input:
 Tool definition advertises `_meta["openai/fileParams"] = ["file"]` and appears
 in the ordinary fresh modern `/api/mcp` catalog. Compatible hosts create the
 file object from a user-selected file; the model does not construct it.
-Compatibility `/api/mcp/2025-11-25` omits the tool until that exact lifecycle
-and client pair has separate evidence. Schema/conformance execution alone does
+Schema/conformance execution alone does
 not prove host support.
 
 `file_id`/`download_url` are current OpenAI adapter transport inputs and never
@@ -3535,10 +3489,8 @@ authentication не раскрывает existence/metadata.
 6. Metadata version CAS, ownership invariant и invitation lifecycle.
 7. `/api/mcp`: `server/discover`, MCP `2026-07-28` headers/body metadata,
    current result/cache metadata и отсутствие session assumptions.
-8. `/api/mcp/2025-11-25`: Codex offer `2025-06-18`, server selection
-   `2025-11-25`, initialized/list/call lifecycle без session и без смешивания с
-   modern endpoint.
-9. Оба profiles выполняют новый Bearer/current-access check на каждом request и
+8. Удалённые `/api/mcp/2025-11-25` и `/api/mcp/apps` возвращают 404 без redirect.
+9. `/api/mcp` выполняет новый Bearer/current-access check на каждом request и
    публикуют deterministic `tools/list`, JSON Schema 2020-12 и annotations.
 10. Read-only token не получает effective content mutation.
 11. Каждый tool на representative, invalid, denied и out-of-scope inputs.
@@ -3630,8 +3582,6 @@ transport без нового принятого решения.
 - [MCP 2026-07-28: Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
 - [MCP 2026-07-28: tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)
 - [MCP 2026-07-28: resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources)
-- [MCP 2025-11-25: lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
-- [MCP 2025-11-25: Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
 - [OpenAI: build an MCP server](https://developers.openai.com/plugins/build/mcp-server)
 - [OpenAI: MCP authentication](https://developers.openai.com/plugins/build/auth)
 - [OpenAI Codex: MCP](https://developers.openai.com/codex/mcp)
@@ -3723,4 +3673,4 @@ Authenticated `GET /api/v1/minds` дополняет каждый уже раз�
 CAS конфликт — `metadata_conflict`; повтор ключа с другим payload —
 `idempotency_conflict`. После изменения описания обновляется поколение записи
 только затронутого Mind; no-op и replay поколения не меняют. Modes, ACL,
-содержание и история не меняются. Modern и compatibility surface одинаковы.
+содержание и история не меняются.

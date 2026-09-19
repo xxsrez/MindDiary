@@ -12,15 +12,12 @@ import {
   FILE_UPLOAD_INTENT_ROUTE_PREFIX,
   MCP_CONTENT_TOOLS,
   MCP_ENDPOINT,
-  MCP_LEGACY_CODEX_ENDPOINT,
-  MCP_LEGACY_CODEX_PROTOCOL,
   MCP_MOVED_EXPORT_TOOLS,
   MCP_RETIRED_BINDING_TOOLS,
   MCP_RETIRED_CAPTURE_TOOLS,
   MCP_RETIRED_SITES_ENDPOINT,
   MCP_RESOURCE_CAPABILITIES,
   MCP_TOOL_DEFINITIONS,
-  createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
 } from "../../packages/adapter-mcp/dist/index.js";
 import { WEB_CONTROL_ROUTES } from "../../packages/adapter-web/dist/index.js";
@@ -81,7 +78,6 @@ function gitBlob(bytes) {
 
 const buildPairs = [
   ["packages/adapter-mcp/src/http-handler.ts", "packages/adapter-mcp/dist/http-handler.js"],
-  ["packages/adapter-mcp/src/legacy-codex.ts", "packages/adapter-mcp/dist/legacy-codex.js"],
   ["packages/adapter-mcp/src/tool-definitions.ts", "packages/adapter-mcp/dist/tool-definitions.js"],
   ["packages/adapter-web/src/index.ts", "packages/adapter-web/dist/index.js"],
   ["packages/adapter-web/src/product-http-handler.ts", "packages/adapter-web/dist/product-http-handler.js"],
@@ -152,7 +148,6 @@ function protocolHarness() {
     },
   };
   const modern = createMcpHttpHandler(dependencies);
-  const compatibility = createLegacyCodexMcpHttpHandler(dependencies);
   const protocolMeta = {
     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
     "io.modelcontextprotocol/clientInfo": { name: "operation-contract", version: "1" },
@@ -183,42 +178,7 @@ function protocolHarness() {
     }));
   }
 
-  async function sendCompatibility(method) {
-    const initialize = method === "initialize";
-    const notification = method === "notifications/initialized";
-    const params = initialize
-      ? {
-          protocolVersion: "2025-06-18",
-          capabilities: {},
-          clientInfo: { name: "codex-mcp-client", version: "0.147.0" },
-        }
-      : {
-          ...(method === "resources/read"
-            ? { uri: "okf://spaces/space_contract/revisions/revision_contract/index" }
-            : {}),
-          ...(method === "tools/call" ? { name: "list_minds", arguments: {} } : {}),
-        };
-    return compatibility(new Request(
-      "https://mind-diary.invalid/api/mcp/2025-11-25",
-      {
-        method: "POST",
-        headers: {
-          accept: "application/json, text/event-stream",
-          authorization: "Bearer contract-token",
-          "content-type": "application/json",
-          ...(initialize ? {} : { "mcp-protocol-version": MCP_LEGACY_CODEX_PROTOCOL }),
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          ...(notification ? {} : { id: 1 }),
-          method,
-          ...(Object.keys(params).length === 0 ? {} : { params }),
-        }),
-      },
-    ));
-  }
-
-  return { sendModern, sendCompatibility };
+  return { sendModern };
 }
 
 const profiles = new Set(Object.keys(fixture.profiles));
@@ -370,7 +330,6 @@ test("auxiliary capability, delivery, OAuth, MCP, and retired Sites routes are e
     "POST /oauth/token",
     "POST /oauth/revoke",
     `POST ${MCP_ENDPOINT}`,
-    `POST ${MCP_LEGACY_CODEX_ENDPOINT}`,
     `ANY ${MCP_RETIRED_SITES_ENDPOINT}`,
   ]);
   for (const route of fixture.auxiliaryHttpRoutes) {
@@ -679,10 +638,9 @@ test("normative resource URI grammars execute through the application builder an
   assert.equal(fixture.resources.bearerUri, false);
 });
 
-test("both MCP protocol profiles execute their closed keep/change/remove sets", async () => {
-  assertExactKeys(fixture.protocolProfiles, ["2026-07-28", "2025-11-25"], "protocol profiles");
+test("the single MCP protocol executes its closed keep/change/remove sets", async () => {
+  assertExactKeys(fixture.protocolProfiles, ["2026-07-28"], "protocol profiles");
   const modern = fixture.protocolProfiles["2026-07-28"];
-  const compatibility = fixture.protocolProfiles["2025-11-25"];
   for (const [name, profile] of Object.entries(fixture.protocolProfiles)) {
     assertExactKeys(
       profile,
@@ -706,18 +664,6 @@ test("both MCP protocol profiles execute their closed keep/change/remove sets", 
     ],
     removeWithMethodNotFound: ["initialize", "ping"],
   });
-  assert.deepEqual(compatibility, {
-    endpoint: "/api/mcp/2025-11-25",
-    keep: ["notifications/initialized", "ping"],
-    change: ["initialize", "tools/list", "tools/call"],
-    removeWithMethodNotFound: [
-      "server/discover",
-      "resources/templates/list",
-      "resources/list",
-      "resources/read",
-    ],
-  });
-
   const runtime = protocolHarness();
   for (const method of [...modern.keep, ...modern.change]) {
     const response = await runtime.sendModern(method);
@@ -730,33 +676,10 @@ test("both MCP protocol profiles execute their closed keep/change/remove sets", 
     assert.equal((await response.json()).error.code, -32601, `modern ${method}`);
   }
 
-  for (const method of ["initialize", "ping", "tools/list", "tools/call"]) {
-    const response = await runtime.sendCompatibility(method);
-    assert.equal(response.status, 200, `compatibility ${method}`);
-    assert.equal(
-      Object.hasOwn(await response.json(), "error"),
-      false,
-      `compatibility ${method}`,
-    );
-  }
-  const initialized = await runtime.sendCompatibility("notifications/initialized");
-  assert.equal(initialized.status, 202);
-  assert.equal(await initialized.text(), "");
-  for (const method of compatibility.removeWithMethodNotFound) {
-    const response = await runtime.sendCompatibility(method);
-    assert.equal(response.status, 404, `compatibility ${method}`);
-    assert.equal((await response.json()).error.code, -32601, `compatibility ${method}`);
-  }
-
   assert.deepEqual(fixture.resources.modern, MCP_RESOURCE_CAPABILITIES);
-  assert.deepEqual(fixture.resources.compatibility, []);
   assert.deepEqual(
     modern.change.filter((method) => method.startsWith("resources/")),
     ["resources/list", "resources/read"],
-  );
-  assert.deepEqual(
-    compatibility.removeWithMethodNotFound.filter((method) => method.startsWith("resources/")),
-    ["resources/templates/list", "resources/list", "resources/read"],
   );
 });
 
@@ -766,7 +689,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "f45629a629c0ad539be2d48b49bc294396bca737",
+      gitBlob: "26ef9faf57822a9ab959f2cfc6a6b4ee0c530856",
     },
     {
       surface: "plugin-label",
@@ -808,7 +731,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "package-probe-source",
         path: "scripts/run-oauth-direct-plugin-probe.mjs",
-        gitBlob: "50e984f5085d1f8fa8ad532da1069484dcf781e4",
+        gitBlob: "e51eb5b70f428afc2e54ea36a0a63044bd15565f",
       }],
     },
     {
@@ -829,12 +752,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "575d1e3067602ad7ff8cc26e5ed3d0cd0217ba7a",
+          gitBlob: "62872ecc90801dfa3d20f53a2e4b7b0b654fb2d5",
         },
         {
           role: "installed-skill-probe-source",
           path: "scripts/run-oauth-direct-plugin-probe.mjs",
-          gitBlob: "50e984f5085d1f8fa8ad532da1069484dcf781e4",
+          gitBlob: "e51eb5b70f428afc2e54ea36a0a63044bd15565f",
         },
       ],
     },
@@ -852,7 +775,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "f45629a629c0ad539be2d48b49bc294396bca737",
+        gitBlob: "26ef9faf57822a9ab959f2cfc6a6b4ee0c530856",
       }],
     },
     {
@@ -864,7 +787,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-playbook-source",
           path: "packages/adapter-web/src/token-management.ts",
-          gitBlob: "cf31fa2f523d4bed48759671da4d068b117f27f6",
+          gitBlob: "10a2a48d93df43685ee659cb30377bc4e948de56",
         },
         {
           role: "help-route-source",

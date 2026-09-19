@@ -33,7 +33,6 @@ const ROOT = resolve(import.meta.dirname, "..");
 const EVIDENCE_SCHEMA = "mind-diary/synthetic-browser-evidence/v1";
 const ACTOR_CLASS = "synthetic-browser-principal";
 const MODERN_PROTOCOL = "2026-07-28";
-const COMPAT_PROTOCOL = "2025-11-25";
 
 // This registry is intentionally closed: a passing receipt cannot silently
 // omit a browser boundary, UI, API, ACL, operator, restart, or cleanup check.
@@ -187,59 +186,7 @@ async function assertExactMcpCatalogs(context, secret) {
     fail("mcp_modern_catalog_mismatch", { status: modern.status });
   }
 
-  const initialized = await context.request("/api/mcp/2025-11-25", {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${secret}`,
-      "content-type": "application/json; charset=utf-8",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: `${context.name}-compat-initialize`,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-06-18",
-        capabilities: {},
-        clientInfo: { name: "synthetic-browser-gate", version: "1" },
-      },
-    }),
-  });
-  if (
-    initialized.status !== 200 ||
-    initialized.body?.result?.protocolVersion !== COMPAT_PROTOCOL
-  ) fail("mcp_compat_initialize_failed", { status: initialized.status });
 
-  const notified = await context.request("/api/mcp/2025-11-25", {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${secret}`,
-      "content-type": "application/json; charset=utf-8",
-      "mcp-protocol-version": COMPAT_PROTOCOL,
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-  });
-  if (notified.status !== 202) fail("mcp_compat_initialized_failed", { status: notified.status });
-
-  const compat = await context.request("/api/mcp/2025-11-25", {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${secret}`,
-      "content-type": "application/json; charset=utf-8",
-      "mcp-protocol-version": COMPAT_PROTOCOL,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: `${context.name}-compat-tools-list`,
-      method: "tools/list",
-      params: {},
-    }),
-  });
-  if (compat.status !== 200 || !matchesExactDefaultMcpToolInventory(compat.body?.result?.tools)) {
-    fail("mcp_compat_catalog_mismatch", { status: compat.status });
-  }
 }
 
 async function issueToken(context, nonce, name) {

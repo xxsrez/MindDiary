@@ -302,7 +302,7 @@ test("MCP cutover is a versioned side-effect-free compatibility result", () => {
   assert.equal(fixture.compatibility.json_rpc_transport_error, false);
   assert.equal(fixture.compatibility.retryable, false);
   assert.equal(fixture.compatibility.advertised_after_cutover, false);
-  assert.deepEqual(fixture.compatibility.profiles, ["2026-07-28", "2025-11-25"]);
+  assert.deepEqual(fixture.compatibility.profiles, ["2026-07-28"]);
   assert.deepEqual(fixture.compatibility.side_effects, {
     target_authorization_reads: 0,
     capacity_reservations: 0,

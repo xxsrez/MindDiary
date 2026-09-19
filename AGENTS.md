@@ -13,8 +13,7 @@
   исполняемую реализацию, UAT evidence и проверку актуального Open
   Knowledge Format (OKF).
 - Текущий OpenAI Site Mind Diary — UAT, а не production. Exact `/mcp`
-  перехватывается Sites до product Worker, поэтому активны `/api/mcp` и
-  `/api/mcp/2025-11-25`; подробный диагноз и live resolution сохранены в
+  перехватывается Sites до product Worker, поэтому активен только `/api/mcp`; подробный диагноз и live resolution сохранены в
   датированном capability report.
 - MVP — дешёвая Codex-first проверка managed OKF workflow. Начальная аудитория
   умеет работать с Codex, но не обязательно умеет самостоятельно устанавливать
@@ -216,11 +215,9 @@ delivery profile и ADR-0008/ADR-0009
 
 ## Платформенные правила
 
-- Текущая стабильная целевая версия MCP — `2026-07-28`. Изолированный
-  compatibility profile `2025-11-25` сохраняйте только для реально
-  проверенного клиента, который ещё требует legacy initialize/session flow.
-  Не смешивайте lifecycle двух версий и не заявляйте поддержку без conformance
-  tests на конкретном adapter/client pair.
+- Единственный MCP endpoint — `/api/mcp`, протокол `2026-07-28`.
+  Legacy `2025-11-25`, отдельный Apps endpoint и fallback удалены по ADR-0031.
+  Исторические receipts не задают текущий каталог или требования поддержки.
 - `dev` — полный локальный запуск приложения на `localhost` с изолированными
   local/test данными. Перед UAT release проверяйте затронутые сценарии по
   соразмерному плану из delivery profile revision 9; весь набор web/control,

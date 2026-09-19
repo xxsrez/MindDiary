@@ -26,7 +26,7 @@ export const RELEASE_03_LOCAL_ASSERTION_IDS = Object.freeze([
   "local.personal-membership-public-unlisted-private",
   "local.membership-visibility-revoke-immediate",
   "local.owner-isolation-oauth-and-personal-token",
-  "local.modern-compat-catalog-exact-16",
+  "local.modern-catalog-exact",
   "local.target-exact-generation-stale-head-wrong-mind",
   "local.fresh-reconnect-reissue-empty-target",
   "local.legacy-and-same-owner-upgrade",
@@ -263,12 +263,12 @@ export function verifyRelease03AuthorityTargetLocalEvidence(value) {
 }
 
 function verifyCatalogReadBack(value) {
-  if (!exactKeys(value, ["modern", "compatibility"])) fail("invalid_catalog_read_back");
-  for (const profile of ["modern", "compatibility"]) {
+  if (!exactKeys(value, ["modern"])) fail("invalid_catalog_read_back");
+  for (const profile of ["modern"]) {
     const row = value[profile];
     if (
       !exactKeys(row, ["protocol", "tool_names", "retired_binding_tools_absent", "moved_export_tools_absent"]) ||
-      row.protocol !== (profile === "modern" ? "2026-07-28" : "2025-11-25") ||
+      row.protocol !== "2026-07-28" ||
       canonical(row.tool_names) !== canonical(EXPECTED_DEFAULT_MCP_TOOL_NAMES) ||
       row.retired_binding_tools_absent !== true ||
       row.moved_export_tools_absent !== true
@@ -437,7 +437,7 @@ export function createRelease03AuthorityTargetUatJoin(input) {
       deployment: Object.freeze({ ...hosted.deployment_read_back }),
       web_surfaces: Object.freeze(structuredClone(hosted.web_surfaces)),
       modern_tool_count: hosted.catalogs.modern.tool_names.length,
-      compatibility_tool_count: hosted.catalogs.compatibility.tool_names.length,
+
       immutable_revision: Object.freeze({ ...hosted.immutable_revision }),
       run_fingerprint: hosted.run_fingerprint,
       observed_at_utc: hosted.observed_at_utc,
@@ -467,13 +467,12 @@ export function verifyRelease03AuthorityTargetUatJoin(value) {
     !exactKeys(value.read_back, [
       "local_evidence_sha256", "pool_readiness_sha256", "hosted_observation_sha256",
       "deployment", "web_surfaces", "modern_tool_count",
-      "compatibility_tool_count", "immutable_revision", "run_fingerprint", "observed_at_utc",
+      "immutable_revision", "run_fingerprint", "observed_at_utc",
     ]) ||
     !SHA256.test(value.read_back.local_evidence_sha256) ||
     !SHA256.test(value.read_back.pool_readiness_sha256) ||
     !SHA256.test(value.read_back.hosted_observation_sha256) ||
     value.read_back.modern_tool_count !== EXPECTED_DEFAULT_MCP_TOOL_NAMES.length ||
-    value.read_back.compatibility_tool_count !== EXPECTED_DEFAULT_MCP_TOOL_NAMES.length ||
     !RUN_FINGERPRINT.test(value.read_back.run_fingerprint)
   ) fail("invalid_uat_join_evidence");
   verifySurfaceReadBack(value.read_back.web_surfaces);

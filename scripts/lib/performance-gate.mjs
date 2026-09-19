@@ -48,10 +48,9 @@ export const REQUIRED_PROFILE_MATRIX = Object.freeze({
 export const PERFORMANCE_PROFILES = Object.freeze([
   "web",
   "mcp_modern",
-  "mcp_compatibility",
 ]);
 
-const MCP_PROFILES = Object.freeze(["mcp_modern", "mcp_compatibility"]);
+const MCP_PROFILES = Object.freeze(["mcp_modern"]);
 const REQUIRED_MCP_OPERATIONS = Object.freeze(Object.keys(PERFORMANCE_BUDGETS_MS.server));
 const READ_OPERATIONS = new Set([
   ...REQUIRED_MCP_OPERATIONS,
@@ -281,11 +280,9 @@ function scenarioRequest(value, fixtureProfiles) {
       value.sites_authorization_env === undefined || historyComparison !== null
     ) reject("invalid_web_scenario_request");
   } else {
-    const expectedPath = value.profile === "mcp_modern"
-      ? "/api/mcp"
-      : "/api/mcp/2025-11-25";
+    const expectedPath = "/api/mcp";
     const headers = normalizedHeaders(value.headers);
-    const protocolVersion = value.profile === "mcp_modern" ? "2026-07-28" : "2025-11-25";
+    const protocolVersion = "2026-07-28";
     if (
       value.cookie_env !== undefined || !READ_OPERATIONS.has(value.operation) || value.method !== "POST" ||
       value.path !== expectedPath || value.expected_status !== 200 ||

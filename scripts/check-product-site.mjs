@@ -32,9 +32,9 @@ const artifactCheck = await readFile(resolve(root, "scripts/check-product-site-a
 if (!worker.includes("createProductSiteRuntime")) errors.push("Worker does not use product composition");
 if (!composition.includes("createSitesMetadataStore") || !composition.includes("createSitesObjectStore")) errors.push("composition does not select durable Sites adapters");
 if (!composition.includes("createMcpHttpHandler") || !composition.includes("createProductWebHttpHandler")) errors.push("composition is missing web or MCP inbound boundary");
-if (!mcp.includes('MCP_ENDPOINT = "/api/mcp"') || !mcp.includes('MCP_LEGACY_CODEX_ENDPOINT = "/api/mcp/2025-11-25"')) errors.push("MCP adapters do not expose the Sites-safe modern and Codex compatibility endpoints");
-if (!composition.includes("path === MCP_ENDPOINT") || !composition.includes("path === MCP_LEGACY_CODEX_ENDPOINT")) errors.push("product dispatcher does not route both exact MCP endpoints");
-if (!tokenUi.includes("/api/mcp/2025-11-25")) errors.push("Codex token instructions do not use the verified compatibility endpoint");
+if (!mcp.includes('MCP_ENDPOINT = "/api/mcp"')) errors.push("MCP adapter does not expose the single Sites-safe endpoint");
+if (!composition.includes("path === MCP_ENDPOINT") || composition.includes("MCP_LEGACY_CODEX_ENDPOINT")) errors.push("product dispatcher must route only the modern MCP endpoint");
+if (tokenUi.includes("/api/mcp/2025-11-25") || !tokenUi.includes("/api/mcp")) errors.push("Codex token instructions must use the single MCP endpoint");
 if (!sitesPlugin.includes("mind-diary/site-artifact/v1") || !sitesPlugin.includes("server_sha256")) errors.push("Product Site build does not emit exact-candidate artifact provenance");
 if (!artifactCheck.includes("candidate_tree_sha") || !artifactCheck.includes("--porcelain") || !artifactCheck.includes("server_sha256")) errors.push("Product Site artifact check does not verify source, checkout cleanliness, and server hash");
 if (/sites-probe|PROBE_BUCKET|@aws-sdk|AgentCore|DynamoDB|OpenSearch/iu.test(`${worker}\n${composition}`)) errors.push("product Site contains a probe or forbidden production fallback");

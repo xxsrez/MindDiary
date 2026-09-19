@@ -5,8 +5,6 @@ export * from "./product-application.js";
 export {
   MCP_TARGET_PROTOCOL,
   MCP_ENDPOINT,
-  MCP_LEGACY_CODEX_PROTOCOL,
-  MCP_LEGACY_CODEX_ENDPOINT,
   MCP_RETIRED_SITES_ENDPOINT,
   MCP_WWW_AUTHENTICATE,
   MCP_AUTHENTICATION_POLICY,
@@ -57,7 +55,3 @@ export type {
   McpSafeLogger,
   McpHttpHandlerDependencies,
 } from "./http-handler.js";
-
-export {
-  createLegacyCodexMcpHttpHandler,
-} from "./legacy-codex.js";

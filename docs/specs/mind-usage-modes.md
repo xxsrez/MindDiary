@@ -259,7 +259,7 @@ configured state; следующий call пересчитывает capability.
 
 ## MCP projection и instructions
 
-Modern и compatibility profiles используют одну semantics. `list_minds`
+MCP использует одну semantics. `list_minds`
 возвращает только enabled/currently readable Minds и для каждого публикует
 routing profile, nullable description, mode, per-Mind generation и effective
 capability. Пример:
@@ -324,7 +324,7 @@ v2 singleton.
    mode и ordinary metadata неизменны, corpus injection не запускает operation.
 8. v1/v2 migration, restart, mixed-version rejection и rollback boundary
    сохраняют modes, generations, history и unknown OKF fields.
-9. Site, MCP modern/compat, server instructions, installed plugin и ChatGPT
+9. Site, MCP modern, server instructions, installed plugin и ChatGPT
    copy согласованы; fresh sessions и post-compaction scenarios проверены.
 10. Exact candidate проходит applicable repository/CI/UAT gates. Документация
     сама этого не доказывает.

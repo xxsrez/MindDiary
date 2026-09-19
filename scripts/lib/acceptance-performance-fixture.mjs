@@ -77,11 +77,11 @@ export async function createAcceptancePerformanceFixture(client, identity, bindi
       deployment, started_at: startedAt, completed_at: new Date().toISOString(), generator: "mind-diary/uat-profile-provision-readback/v2", profiles });
     const requests = [{ id: "web.home", profile: "web", fixture_profile_id: null, operation: "home", method: "GET", path: "/", expected_status: 200,
       sites_authorization_env: "MD_PERF_PLATFORM", cookie_env: "MD_PERF_COOKIE" }];
-    for (const profile of ["mcp_modern", "mcp_compatibility"]) for (const fixture of profiles) {
+    for (const profile of ["mcp_modern"]) for (const fixture of profiles) {
       for (const { operation } of fixture.request_bindings) {
         const id = `${profile}.${fixture.id}.${operation}`, modern = profile === "mcp_modern";
-        requests.push({ id, profile, fixture_profile_id: fixture.id, operation, method: "POST", path: modern ? "/api/mcp" : "/api/mcp/2025-11-25", expected_status: 200,
-          headers: { accept: "application/json, text/event-stream", "content-type": "application/json", "mcp-protocol-version": modern ? "2026-07-28" : "2025-11-25", "x-md-acceptance-run": run.run_id,
+        requests.push({ id, profile, fixture_profile_id: fixture.id, operation, method: "POST", path: "/api/mcp", expected_status: 200,
+          headers: { accept: "application/json, text/event-stream", "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "x-md-acceptance-run": run.run_id,
             ...(modern ? { "mcp-method": "tools/call", "mcp-name": operation } : {}) }, bearer_token_env: `MD_PERF_${fixture.id.toUpperCase()}`, sites_authorization_env: "MD_PERF_PLATFORM",
           body: { jsonrpc: "2.0", id, method: "tools/call", params: { name: operation, arguments: credentials[fixture.id].args[operation], ...(modern ? { _meta: {
             "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientInfo": { name: "acceptance-performance", version: "1" }, "io.modelcontextprotocol/clientCapabilities": {} } } : {}) } },

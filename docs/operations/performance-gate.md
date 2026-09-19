@@ -80,10 +80,8 @@ exact SHA/deployment/target, задаёт `warm_samples >= 20` и bounded
 environment variables. Inline `Authorization`, cookie и Sites authorization
 header запрещены.
 
-Три fixture profiles выполняются через оба MCP profiles:
-
-- `mcp_modern` — `POST /api/mcp`;
-- `mcp_compatibility` — `POST /api/mcp/2025-11-25`.
+Три fixture profiles выполняются через MCP profile
+`mcp_modern` — `POST /api/mcp`.
 
 `starter_small` обязательно покрывает `list_minds`, `browse_entries`, `search`
 и `fetch`. Два `small_history` profiles покрывают пару `get_revision` с
@@ -95,8 +93,7 @@ authenticated `GET /`. Large-corpus, Brain-scale, mixed 590 MB, 100 Minds и
 `warm_samples` warm samples. MCP rows должны быть `tools/call`, а заявленная
 operation обязана совпадать с tool name и hashed fixture request binding.
 Modern request обязательно несёт согласованные `MCP-Protocol-Version`,
-`Mcp-Method`, `Mcp-Name` и `_meta` protocol/client/capabilities. Compatibility
-request несёт exact `MCP-Protocol-Version: 2025-11-25`. Оба MCP profiles и web
+`Mcp-Method`, `Mcp-Name` и `_meta` protocol/client/capabilities. MCP и web
 используют Sites credential env reference; MCP дополнительно использует
 fixture-bound Bearer env reference.
 

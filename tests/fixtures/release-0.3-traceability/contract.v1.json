@@ -5,8 +5,8 @@
   "status": "accepted_verification_contract_not_runtime_evidence",
   "source": "docs/specs/release-0.3-traceability.md",
   "sourceEvidence": [
-    {"assertionId":"r03.transfer.web-authority","role":"site-export-authority-conformance","path":"tests/conformance/import-export-authority-delta.test.mjs","gitBlob":"4c55bad74314a681ab8ec36c6b43900b2ac326b7"},
-    {"assertionId":"r03.transfer.web-authority","role":"mcp-export-cutover-conformance","path":"tests/conformance/mcp-export-move.test.mjs","gitBlob":"0d68a3a701fab6d747d824fadac5b1f9f5640eec"}
+    {"assertionId":"r03.transfer.web-authority","role":"site-export-authority-conformance","path":"tests/conformance/import-export-authority-delta.test.mjs","gitBlob":"1b0170b8f216bc4c73676eb32519005fb2ae0950"},
+    {"assertionId":"r03.transfer.web-authority","role":"mcp-export-cutover-conformance","path":"tests/conformance/mcp-export-move.test.mjs","gitBlob":"389aca85f3a4dbea4abbbcb05db57dc4449f92e1"}
   ],
   "scope": {
     "epics": ["MD-329", "MD-330", "MD-331", "MD-332", "MD-333", "MD-334", "MD-335"],

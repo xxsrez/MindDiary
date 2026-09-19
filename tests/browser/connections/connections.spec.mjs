@@ -357,7 +357,7 @@ test("Connection guide switches all three clients by keyboard and copies exact c
   await expect(cliPanel).toBeHidden();
   await page.getByRole("button", { name: "Copy MCP server URL" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
-    "https://mind-diary.example.invalid/api/mcp/2025-11-25",
+    "https://mind-diary.example.invalid/api/mcp",
   );
   await expect(chatgptPanel).toContainText("OIDC enabled");
   await expect(chatgptPanel).toContainText("Sign in to Mind Diary before connecting");

@@ -342,7 +342,7 @@
     "json_rpc_transport_error": false,
     "retryable": false,
     "advertised_after_cutover": false,
-    "profiles": ["2026-07-28", "2025-11-25"],
+    "profiles": ["2026-07-28"],
     "operations": [
       {
         "name": "start_export",

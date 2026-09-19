@@ -7,9 +7,8 @@ import {
 } from "./ui-shell.js";
 
 export const MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER =
-  "https://<your-mind-diary-site>/api/mcp/2025-11-25" as const;
+  "https://<your-mind-diary-site>/api/mcp" as const;
 export const MIND_DIARY_MCP_MODERN_PATH = "/api/mcp" as const;
-export const MIND_DIARY_MCP_COMPATIBILITY_PATH = "/api/mcp/2025-11-25" as const;
 export const MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE =
   "MIND_DIARY_TOKEN" as const;
 export const MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE =
@@ -62,7 +61,6 @@ export const MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK = `Assist me with a bounded con
 3. Resolve current HEAD and fetch only the target index/log and paths that may change. Map the selected source into ordinary create/replace Markdown operations, preserving unknown OKF fields when present.
 4. Show a bounded path-level preview with exact target name, route and visibility, then ask for explicit confirmation. After confirmation, re-read HEAD and commit with exact expected_revision plus a fresh idempotency key; stop if effective write access, routing profile, applicable description, rights, or revision changed and never change usage mode through MCP.
 5. Validate the complete resulting bundle, then search and fetch one converted Memory as evidence. Keep tokens, credentials, email, private queries, content not selected for conversion, and download URLs out of the report.` as const;
-export type MindDiaryMcpClientProfile = "modern" | "compatibility";
 
 function canonicalSiteOrigin(value: string): string {
   const candidate = new URL(value);
@@ -82,19 +80,15 @@ function canonicalSiteOrigin(value: string): string {
 
 export function mindDiaryMcpEndpoint(
   siteOrigin: string,
-  profile: MindDiaryMcpClientProfile,
 ): string {
-  return `${canonicalSiteOrigin(siteOrigin)}${profile === "modern"
-    ? MIND_DIARY_MCP_MODERN_PATH
-    : MIND_DIARY_MCP_COMPATIBILITY_PATH}`;
+  return `${canonicalSiteOrigin(siteOrigin)}${MIND_DIARY_MCP_MODERN_PATH}`;
 }
 
 export function mindDiaryCodexConfig(
   siteOrigin: string,
-  profile: MindDiaryMcpClientProfile,
 ): string {
   return `[mcp_servers.mind_diary]
-url = "${mindDiaryMcpEndpoint(siteOrigin, profile)}"
+url = "${mindDiaryMcpEndpoint(siteOrigin)}"
 bearer_token_env_var = "${MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE}"
 required = true
 
@@ -365,19 +359,14 @@ function setupOrigin(value: string | undefined): string | null {
 
 function setupConfig(
   origin: string | null,
-  profile: MindDiaryMcpClientProfile,
 ): string {
-  if (origin !== null) return mindDiaryCodexConfig(origin, profile);
-  const endpoint = profile === "modern"
-    ? "https://<your-mind-diary-site>/api/mcp"
-    : MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER;
-  return MIND_DIARY_CODEX_CONFIG.replace(MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER, endpoint);
+  if (origin !== null) return mindDiaryCodexConfig(origin);
+  return MIND_DIARY_CODEX_CONFIG;
 }
 
 function renderCodexSetup(siteOrigin: string | undefined): string {
   const origin = setupOrigin(siteOrigin);
-  const compatibility = setupConfig(origin, "compatibility");
-  const modern = setupConfig(origin, "modern");
+  const modern = setupConfig(origin);
   return `<section class="md-setup-card" aria-labelledby="codex-setup-heading">
     <div>
       <p class="md-eyebrow">Setup guide</p>
@@ -396,20 +385,14 @@ function renderCodexSetup(siteOrigin: string | undefined): string {
         <p>Ask the Site owner or release coordinator for this separate credential. The environment variable must contain the complete <code>Bearer &lt;secret&gt;</code> header value; it never replaces the Mind Diary token.</p>
       </li>
       <li>
-        <h3>Default Codex 0.147 compatibility profile</h3>
-        <pre><code id="mind-diary-compatibility-config" tabindex="-1" data-code-value>${escapeUntrustedText(compatibility)}</code></pre>
-        <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-compatibility-config">Copy compatibility config</button>
-        <p>This profile uses isolated MCP <code>2025-11-25</code> lifecycle at the exact compatibility endpoint.</p>
-      </li>
-      <li>
         <h3>Modern MCP 2026-07-28 profile</h3>
         <pre><code id="mind-diary-modern-config" tabindex="-1" data-code-value>${escapeUntrustedText(modern)}</code></pre>
         <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-modern-config">Copy modern config</button>
-        <p>Codex 0.147 requires opt-in <code>--enable mcp_2026_07_28</code> for this endpoint. Do not enable it while using the compatibility URL.</p>
+        <p>Use a client supporting MCP <code>2026-07-28</code>.</p>
       </li>
     </ol>
     <p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p>
-    <p>Both configurations contain only endpoint and environment-variable names. Never replace either variable name with a secret. A public Site may omit the <code>env_http_headers</code> table.</p>
+    <p>The configuration contains only endpoint and environment-variable names. Never replace either variable name with a secret. A public Site may omit the <code>env_http_headers</code> table.</p>
     <p class="md-caveat"><strong>UAT connector baseline:</strong> marketplace connections use OAuth Authorization Code with PKCE and short-lived tokens. Personal tokens remain available for direct Codex setup and recovery. This hosted environment is UAT, not production.</p>
   </section>`;
 }
@@ -487,7 +470,7 @@ function renderSecretDialog(): string {
         <div>
           <p class="md-eyebrow">Redacted connection check</p>
           <h3 id="mcp-self-check-title">Test this token before closing</h3>
-          <p>The check uses the current authenticated account, modern discovery and read-only <code>list_minds</code> on both profiles. It never renders or retains email, Mind names, IDs, queries, content, credentials or raw responses.</p>
+          <p>The check uses the current authenticated account, modern discovery and read-only <code>list_minds</code> on the MCP endpoint. It never renders or retains email, Mind names, IDs, queries, content, credentials or raw responses.</p>
         </div>
         <button class="md-button md-button--secondary" type="button" data-run-mcp-self-check disabled>Run redacted self-check</button>
         <p class="md-form__status" role="status" aria-live="polite" data-mcp-self-check-status>Available only while the one-time secret is visible.</p>

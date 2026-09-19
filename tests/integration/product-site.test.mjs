@@ -615,7 +615,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
   assert.match(tokenHtml, /data-mcp-self-check/);
   assert.match(tokenHtml, /data-run-mcp-self-check disabled/);
   assert.match(tokenHtml, /data-copy-code="mind-diary-modern-config"/);
-  assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp\/2025-11-25/);
+  assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp/);
   assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp/);
   assert.doesNotMatch(tokenHtml, /&lt;your-mind-diary-site&gt;/);
   assert.doesNotMatch(tokenHtml, /synthetic-show-once-value|verifier|principal_one|token_internal_must_not_render/i);
@@ -628,7 +628,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     ["/brand/mind-diary-lockup.svg", "image/svg+xml; charset=utf-8", "Mind Diary logo"],
     ["/brand/mind-diary-mark.svg", "image/svg+xml; charset=utf-8", "Mind Diary mark"],
     ["/ui/mind-diary-onboarding-client.js", "text/javascript; charset=utf-8", "/api/v1/account"],
-    ["/ui/mind-diary-token-client.js", "text/javascript; charset=utf-8", "/api/mcp/2025-11-25"],
+    ["/ui/mind-diary-token-client.js", "text/javascript; charset=utf-8", "/api/mcp"],
     ["/ui/mind-diary-ordinary-minds-list-client.js", "text/javascript; charset=utf-8", "/api/v1/minds"],
     ["/ui/mind-diary-connections-client.js", "text/javascript; charset=utf-8", "data-revoke-connection"],
     ["/ui/mind-diary-visibility-client.js", "text/javascript; charset=utf-8", "data-public-catalog-retry"],

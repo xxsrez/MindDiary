@@ -210,7 +210,7 @@ report, но не component для прежнего runner.
 Внутри перспективного first-user canary assertions также выбираются по
 изменённому компоненту. OAuth adapter требует настоящих read-first OAuth,
 refresh rotation, revoke denial и cleanup. Token/connections UI требует
-opt-in формы, modern/compat self-check и cleanup. Изменение plugin/Marketplace
+opt-in формы, modern self-check и cleanup. Изменение plugin/Marketplace
 или provider configuration сохраняет полный first-user набор, включая свежую
 установку. Исторические MD-394/399 всегда сохраняют полный прежний набор.
 Sites identity подтверждается реальным входом и чтением зарегистрированного

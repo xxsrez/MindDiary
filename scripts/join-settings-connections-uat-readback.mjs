@@ -92,7 +92,7 @@ function validateLocalReceipt(value, expected) {
     !SHA.test(value.plugin.marketplace_candidate_sha ?? "") ||
     !SHA.test(value.plugin.marketplace_tree_sha ?? "") ||
     !SHA256.test(value.plugin.plugin_snapshot_sha256 ?? "") ||
-    canonical(value.plugin.routes) !== canonical(["/api/mcp", "/api/mcp/2025-11-25"]) ||
+    canonical(value.plugin.routes) !== canonical(["/api/mcp"]) ||
     value.plugin.catalog_profiles?.default_product_site_write !== 21 ||
     value.plugin.catalog_profiles?.read_only !== 20 ||
     value.plugin.catalog_profiles?.verified_native !== 22

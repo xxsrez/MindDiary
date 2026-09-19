@@ -1,5 +1,11 @@
 # Архитектура Mind Diary
 
+
+Текущий MCP contract (2026-09-19): по [ADR-0031](decisions/0031-single-mcp-endpoint.md)
+обслуживается только `/api/mcp` с протоколом `2026-07-28`. Legacy handler,
+Apps endpoint и выбор профиля удалены. Исторические описания двух профилей
+ниже не задают текущую реализацию и не требуют legacy smoke.
+
 MD-453 implemented, UAT verified (2026-09-14): `NoteQueueService` принимает небольшие добавочные
 заметки через `enqueue_note`. Markdown bytes находятся в Space-scoped object
 storage; `queuedNotes` в durable metadata содержит digest, размер, квитанцию,
@@ -305,11 +311,7 @@ dependency graph или composition.
 - **MCP adapter** предоставляет user-scoped content tools через Streamable HTTP.
   Целевой stateless profile `2026-07-28` доступен по `POST /api/mcp`, начинает
   negotiation с `server/discover` и использует current result metadata;
-  `codex-cli 0.147.0` проходит его при opt-in `mcp_2026_07_28`.
-  Отдельный `POST /api/mcp/2025-11-25` изолирует lifecycle compatibility для
-  проверенного `codex-cli 0.147.0`: client предлагает `2025-06-18`, server
-  выбирает `2025-11-25`. Оба adapters вызывают одну content application
-  boundary и заново проверяют Bearer token, scope, current membership и
+  Application boundary заново проверяет Bearer token, scope, current membership и
   visibility на каждом HTTP request. Protocol adapter выполняет transport-level
   Bearer/scope checks и передаёт каждый tool call в application boundary ровно
   один раз; initial и final current-state/TOCTOU authorization остаются внутри
@@ -492,10 +494,7 @@ per-Mind `read_write` generation; write-only token не выпускается.
 Codex configuration использует `bearer_token_env_var`. Для single-principal UAT Site
 отдельный `env_http_headers` передаёт `OAI-Sites-Authorization`, причём значение
 environment variable содержит полный `Bearer <secret>`, а не только secret.
-Проверенный default
-`codex-cli 0.147.0` направляется на compatibility URL
-`https://{site-host}/api/mcp/2025-11-25`; modern clients — на
-`https://{site-host}/api/mcp`. Для Claude Code и других clients support
+Единственный URL — `https://{site-host}/api/mcp`. Для Claude Code и других clients support
 объявляется только после conformance test.
 
 ### OAuth authentication
@@ -734,8 +733,7 @@ sequenceDiagram
 ```
 
 Обычный modern `/api/mcp` публикует один `stage_bundle_file` с
-`openai/fileParams`; isolated compatibility `/api/mcp/2025-11-25` не заявляет
-native support без отдельного client proof. Отдельного Apps endpoint, picker
+`openai/fileParams`. Поддержка native file input требует отдельного client proof. Отдельного Apps endpoint, picker
 resource и app-only projection нет.
 
 Provider file object на modern edge остаётся недоверенным envelope. OAuth scope,
@@ -877,9 +875,7 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   с source и не позволяет Worker, browser fixtures и canonical styles тихо
   разойтись.
 - Exact `/mcp` исключён из product surface из-за pre-Worker Sites reservation.
-  Modern `2026-07-28` adapter обслуживает `/api/mcp`; isolated compatibility
-  adapter для default `codex-cli 0.147.0` обслуживает
-  `/api/mcp/2025-11-25` и не создаёт session state.
+  Единственный stateless adapter `2026-07-28` обслуживает `/api/mcp`.
 - D1 event log сохраняет metadata transactions и восстанавливает state после
   нового runtime instance. Event log остаётся canonical recovery source, а
   materialized snapshot фиксирует exact applied sequence: bounded D1 head
@@ -983,7 +979,7 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   Данный предел относится к очереди, а не заменяет end-to-end deadline
   пользовательского запроса или предел внешнего I/O внутри callback.
   Product Worker ограничивает ожидание страниц и обычного REST 10 секундами,
-  а exact MCP routes `/api/mcp` и `/api/mcp/2025-11-25` —
+  а exact MCP route `/api/mcp` —
   30 секундами от входа в fetch, включая инициализацию, очередь и callback.
   MCP budget учитывает полную producer validation и durable commit, которые
   на hosted storage могут превышать navigation budget даже для малой записи.
@@ -1167,7 +1163,7 @@ audit log.
 
 - Даст ли Sites stable external identifier, позволяющий позже заменить ручной
   fail-closed account recovery безопасным automatic relink?
-- Сохранят ли `/api/mcp`, isolated `/api/mcp/2025-11-25` и Bearer forwarding
+- Сохранят ли `/api/mcp` и Bearer forwarding
   проверенную совместимость при изменениях Sites runtime или target Codex?
   Базовый UAT gate уже пройден; каждый новый release и platform/client upgrade
   должны повторно проверить exact paths и lifecycle, а regression блокирует

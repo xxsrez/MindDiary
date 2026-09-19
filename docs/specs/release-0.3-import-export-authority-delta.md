@@ -185,7 +185,7 @@ exists must remain v4-aware.
 ## MCP compatibility response v1
 
 После cutover `start_export` и `get_export_status` удаляются из advertised
-modern and `2025-11-25` tool catalogs, но exact calls получают terminal
+modern tool catalog, но exact calls получают terminal
 application-level compatibility result, а не начинают export:
 
 ```json

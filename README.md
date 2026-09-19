@@ -19,8 +19,7 @@ post-MVP infrastructure direction — AWS/AgentCore; это также само�
 Сейчас Mind Diary развёрнут single-principal в UAT OpenAI Sites по адресу
 <https://mind-diary.example.invalid>. Репозиторий содержит отдельное
 приложение `apps/mind-diary-site`, authenticated web/control
-routes, современный Streamable HTTP `POST /api/mcp`, изолированный Codex
-compatibility endpoint `POST /api/mcp/2025-11-25`, D1/R2 adapters и Worker
+routes, единственный Streamable HTTP `POST /api/mcp`, D1/R2 adapters и Worker
 background handlers. Перенос с `/mcp` необходим, потому что exact path
 перехватывается Sites до product Worker. Локальные build, contract/integration
 checks дополнены UAT smoke: persisted authenticated web/control UI,
@@ -78,7 +77,7 @@ full-bundle OKF, documentation, architecture и secret/config checks. Она н�
 UAT Product Site соединяет принятые application use cases с
 Sites-compatible Vinext/Worker runtime, durable D1/R2 adapters и background
 jobs. Browser surface остаётся control plane и не рендерит raw Markdown;
-Bearer endpoints `/api/mcp` и `/api/mcp/2025-11-25` используют одну
+Bearer endpoint `/api/mcp` использует одну
 request-scoped authorization boundary и не публикуют membership/control tools.
 Single-principal Sites audience gate и application Bearer остаются независимыми:
 Codex передаёт первый через `env_http_headers`, второй — через

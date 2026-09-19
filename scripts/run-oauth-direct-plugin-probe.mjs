@@ -55,7 +55,6 @@ const CODEX_SKILL_DISCOVERY_PROMPT =
   "Check whether the installed Mind Diary skill is available. Do not call tools.";
 const MAX_CODEX_PROMPT_INPUT_BYTES = 2 * 1024 * 1024;
 const MODERN_PROTOCOL = "2026-07-28";
-const COMPAT_PROTOCOL = "2025-11-25";
 export const CODEX_PLUGIN_MCP_URL =
   "https://mind-diary.example.invalid/api/mcp";
 export const CODEX_PLUGIN_OAUTH_RESOURCE =
@@ -75,7 +74,7 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "package.task-manager-separate",
   "oauth.codex-compatible-default-write-schema",
   "oauth.catalog-modern-default-exact-18",
-  "oauth.catalog-compat-default-exact-18",
+  "oauth.catalog-modern-write-exact",
   "oauth.protected-resource-discovery",
   "oauth.authorization-server-discovery",
   "oauth.public-dcr-no-secret",
@@ -86,7 +85,6 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "oauth.bad-verifier-code-replay-denied",
   "oauth.authorization-code-expiry",
   "oauth.read-grant-modern-runtime",
-  "oauth.read-grant-compat-runtime",
   "oauth.read-grant-write-challenge",
   "oauth.access-token-expiry",
   "oauth.refresh-rotation",
@@ -110,7 +108,6 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "oauth.reconnect-new-grant",
   "oauth.reconnect-shares-principal-usage",
   "personal-token.modern-regression",
-  "personal-token.compat-regression",
   "personal-token.shared-principal-usage",
   "production-negative.no-synthetic-authority",
   "evidence.external-ui-canary-separated",
@@ -248,7 +245,7 @@ export function createEvidence({
     ),
     client: CLIENT,
     client_version: CLIENT_VERSION,
-    route: Object.freeze(["/api/mcp", "/api/mcp/2025-11-25"]),
+    route: Object.freeze(["/api/mcp"]),
     binding_namespace: BINDING_NAMESPACE,
     started_at: requiredString(startedAt, "missing_started_at"),
     completed_at: requiredString(completedAt, "missing_completed_at"),
@@ -837,19 +834,6 @@ async function modernTool(actor, token, id, name, args = {}) {
   return modern(actor, token, modernBody(id, name, args));
 }
 
-async function compatibility(actor, token, body) {
-  return raw(actor, "/api/mcp/2025-11-25", {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json; charset=utf-8",
-      ...(body.method === "initialize" ? {} : { "mcp-protocol-version": COMPAT_PROTOCOL }),
-    },
-    body: JSON.stringify(body),
-  });
-}
-
 function mcpData(response, code) {
   const result = response.body?.result;
   if (response.status !== 200 || result?.isError === true || !isRecord(result?.structuredContent?.data)) {
@@ -864,44 +848,6 @@ function expectMcpError(response, expected, code) {
     fail(code, { status: response.status, applicationCode: safeCode(actual) });
   }
   return response.body.result;
-}
-
-async function assertCompatibilityRead(actor, token, { defaultWriteCatalog = false } = {}) {
-  const initialized = await compatibility(actor, token, {
-    jsonrpc: "2.0",
-    id: "oauth-compat-init",
-    method: "initialize",
-    params: {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "codex-mcp-client", title: "Codex", version: CLIENT_VERSION },
-    },
-  });
-  if (initialized.status !== 200 || initialized.body?.result?.protocolVersion !== COMPAT_PROTOCOL) {
-    fail("oauth_compat_initialize_failed");
-  }
-  expectStatus(await compatibility(actor, token, {
-    jsonrpc: "2.0",
-    method: "notifications/initialized",
-  }), 202, "oauth_compat_initialized_failed");
-  const tools = await compatibility(actor, token, {
-    jsonrpc: "2.0",
-    id: "oauth-compat-tools",
-    method: "tools/list",
-    params: {},
-  });
-  if (tools.status !== 200) fail("oauth_compat_tools_list_failed");
-  if (defaultWriteCatalog) {
-    assertCodexCompatibleDefaultWriteCatalog(tools.body?.result?.tools);
-  }
-  else assertCodexCompatibleReadCatalog(tools.body?.result?.tools);
-  const listed = await compatibility(actor, token, {
-    jsonrpc: "2.0",
-    id: "oauth-compat-list",
-    method: "tools/call",
-    params: { _meta: { progressToken: 1 }, name: "list_minds", arguments: {} },
-  });
-  return mcpData(listed, "oauth_compat_list_failed");
 }
 
 function latestAccessRecord(database) {
@@ -1153,13 +1099,6 @@ export async function runOAuthScenario({ assertions, nowState }) {
     modernReadPersonal?.writable_mount?.active !== false
   ) fail("oauth_personal_mind_read_projection_mismatch");
   assertions.add("oauth.read-grant-modern-runtime");
-  const compatList = await assertCompatibilityRead(owner, readGrant.tokens.access_token);
-  const compatReadPersonal = compatList.minds?.find((mind) => mind.route === "/me");
-  if (
-    compatReadPersonal?.usage_mode !== "read" ||
-    compatReadPersonal?.effective?.can_write !== false
-  ) fail("oauth_compat_personal_mind_read_projection_mismatch");
-  assertions.add("oauth.read-grant-compat-runtime");
   const writeChallenge = expectMcpError(
     await modernTool(owner, readGrant.tokens.access_token, "oauth-read-write", "commit_changeset", {
       mind: "/me",
@@ -1247,10 +1186,8 @@ export async function runOAuthScenario({ assertions, nowState }) {
   if (advertisedWriteTools.status !== 200) fail("oauth_write_tools_list_failed");
   assertCodexCompatibleDefaultWriteCatalog(advertisedWriteTools.body?.result?.tools);
   assertions.add("oauth.catalog-modern-default-exact-18");
-  await assertCompatibilityRead(owner, writeGrant.tokens.access_token, {
-    defaultWriteCatalog: true,
-  });
-  assertions.add("oauth.catalog-compat-default-exact-18");
+  assertCodexCompatibleVerifiedNativeCatalog(advertisedWriteTools.body?.result?.tools);
+  assertions.add("oauth.catalog-modern-write-exact");
   assertions.add("oauth.codex-compatible-default-write-schema");
   const writeAccessRecord = latestAccessRecord(database);
   const metadata = await createSitesMetadataStore(database);
@@ -1447,19 +1384,6 @@ export async function runOAuthScenario({ assertions, nowState }) {
     personalTokenMind?.writable_mount?.active !== true
   ) fail("personal_token_principal_usage_mismatch");
   assertions.add("personal-token.modern-regression");
-  const personalTokenCompat = await assertCompatibilityRead(owner, owner.mcpToken, {
-    defaultWriteCatalog: true,
-  });
-  const personalTokenCompatMind = personalTokenCompat.minds?.find(
-    (mind) => mind.route === "/me",
-  );
-  if (
-    personalTokenCompatMind?.usage_mode !== "read_write" ||
-    personalTokenCompatMind?.routing_profile !== "personal_default" ||
-    personalTokenCompatMind?.description !== null ||
-    personalTokenCompatMind?.effective?.can_write !== true
-  ) fail("personal_token_compat_principal_usage_mismatch");
-  assertions.add("personal-token.compat-regression");
   assertions.add("personal-token.shared-principal-usage");
 
   if (ownerSession.personal_mind?.route !== "/me") fail("oauth_owner_session_invalid");

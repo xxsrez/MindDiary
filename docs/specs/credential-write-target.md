@@ -221,9 +221,7 @@ previous/current/Personal/«единственный доступный» Mind. 
 consumes staged ref.
 
 Historical `write_binding_id` и `expected_binding_version` удалены из target
-content schemas, а replacement generation field не добавляется. Protocol
-compatibility profiles могут иметь разные envelopes, но вызывают одну
-semantics. MD-337 не сохраняет old MCP aliases: exact calls fail explicitly,
+content schemas, а replacement generation field не добавляется. MCP использует протокол `2026-07-28` и одну application semantics. MD-337 не сохраняет old MCP aliases: exact calls fail explicitly,
 silent translation old ID или target mutation через MCP запрещены.
 
 ## Capture, staging и in-flight work
@@ -354,5 +352,5 @@ Machine-readable closed contract:
 7. capture/staged generation pinning, no transfer and fail-closed migration;
 8. отсутствие administrative export authority в Content MCP с disposition в
    MD-337 и Site route/projection ownership в MD-359;
-9. modern/compatibility protocol envelopes invoking one target-v1 application
+9. modern protocol envelopes invoking one target-v1 application
    semantics without legacy ID/replacement-generation wire fields.

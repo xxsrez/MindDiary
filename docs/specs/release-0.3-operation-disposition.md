@@ -176,7 +176,6 @@ indistinguishable `404` for every other actor.
 | `POST /oauth/token` | keep → OAuth | PKCE/refresh/resource/grant checks |
 | `POST /oauth/revoke` | keep → OAuth | Credential revoke; Site Connection UI remains product control |
 | `POST /api/mcp` | change → Content MCP modern | Enabled 26-tool projection, centralized instructions, one self-contained guidance tool and one standard native file parameter; canonical OAuth resource unchanged. MD-376/MD-379/MD-470/MD-472/ADR-0030 |
-| `POST /api/mcp/2025-11-25` | change → Content MCP compatibility | Isolated legacy lifecycle, same enabled tool catalog and centralized instructions. MD-376 |
 | any `/mcp` | remove → none | Preserve explicit product `404 route_not_found`; never redirect a bearer request |
 
 ## MCP tool register
@@ -261,18 +260,6 @@ Modern `2026-07-28`:
 | `tools/call` | change | Execute only advertised target tool and target schemas |
 | `initialize` | remove | Preserve explicit `Method not found`; modern profile never starts legacy lifecycle |
 | `ping` | remove | Preserve current `Method not found`; not silently added by this migration |
-
-Compatibility `2025-11-25`:
-
-| Method | Disposition | Target behavior |
-|---|---|---|
-| `initialize` | change | Keep isolated negotiation; update instructions and advertised tool capability |
-| `notifications/initialized` | keep | `202` for exact notification |
-| `ping` | keep | Empty successful result |
-| `tools/list` | change | Advertise the 25-tool compatibility projection; omit native stage until exact client evidence |
-| `tools/call` | change | Same target schemas and authorization |
-| `resources/templates/list`, `resources/list`, `resources/read` | remove | Preserve compatibility `Method not found`; resources are not silently widened in this profile |
-| `server/discover` | remove | Preserve compatibility `Method not found` |
 
 Отдельного MCP Apps endpoint, picker resource или app-only tool projection нет.
 Host bridge формирует standard file object, а modern adapter возвращает только

@@ -130,12 +130,12 @@ function mcpRequest(profileName, operation, fixtureProfileId, suffix, historyCom
     fixture_profile_id: fixtureProfileId,
     operation,
     method: "POST",
-    path: profileName === "mcp_modern" ? "/api/mcp" : "/api/mcp/2025-11-25",
+    path: "/api/mcp",
     expected_status: 200,
     headers: {
       accept: "application/json, text/event-stream",
       "content-type": "application/json; charset=utf-8",
-      "mcp-protocol-version": profileName === "mcp_modern" ? "2026-07-28" : "2025-11-25",
+      "mcp-protocol-version": "2026-07-28",
       ...(profileName === "mcp_modern"
         ? { "mcp-method": "tools/call", "mcp-name": operation }
         : {}),
@@ -177,7 +177,7 @@ function rawScenario() {
     headers: { accept: "text/html" },
     sites_authorization_env: "MIND_DIARY_PERFORMANCE_SITES_TOKEN",
   }];
-  for (const profileName of ["mcp_modern", "mcp_compatibility"]) {
+  for (const profileName of ["mcp_modern"]) {
     requests.push(
       mcpRequest(profileName, "list_minds", "starter", "starter"),
       mcpRequest(profileName, "browse_entries", "starter", "starter_browse"),

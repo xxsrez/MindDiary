@@ -547,8 +547,8 @@ Neither result permits binding-generation replay or fallback to another Mind.
 adapter downloads host-provided bytes. `list_bundle_files` is read-only and
 closed-world. `get_bundle_file_download` creates a grant, so it is non-read-only,
 non-destructive and open-world. `commit_changeset` remains destructive. Tool
-catalog semantics are identical on modern and compatibility profiles only when
-the pinned client passes the native-file capability gate.
+catalog uses the single modern profile; the pinned client must pass the
+native-file capability gate.
 
 ## Проверяемые post-MVP acceptance rows
 

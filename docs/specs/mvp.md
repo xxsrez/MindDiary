@@ -386,25 +386,12 @@ Personal access token имеет следующий contract:
 - `Authorization: Bearer <token>` передаётся MCP client через environment
   variable, а не сохраняется в repository/config plaintext;
 - role, visibility и token status проверяются на каждом request;
-- pinned final MCP specification `2026-07-28` обслуживается современным
-  stateless profile по
-  `POST /api/mcp` и проверен с opt-in `mcp_2026_07_28`; isolated compatibility
-  profile предыдущей stable revision `2025-11-25` для проверенного default
-  `codex-cli 0.147.0` — по
-  `POST /api/mcp/2025-11-25`;
-- в compatibility profile Codex предлагает `2025-06-18`, server выбирает
-  `2025-11-25`; session state не создаётся, а lifecycle translation не
-  попадает в modern adapter;
-- оба endpoint используют тот же Bearer authenticator и тот же per-request
-  current authorization для выбранного Mind/revision;
-- `/settings/developer/mcp` (compatibility entrypoint `/settings/mcp`) строит
-  два copy-ready secret-free Codex config из origin
-  текущего deployment: default `codex-cli 0.147.0` использует exact
-  `/api/mcp/2025-11-25`, а opt-in `mcp_2026_07_28` — exact `/api/mcp`;
-- сразу после issuance и по явному retry, пока one-time secret ещё виден,
-  browser выполняет redacted read-only self-check: current Sites account,
-  modern `server/discover` + `list_minds` и isolated compatibility
-  `initialize`/`notifications/initialized` + `list_minds`;
+- единственный MCP endpoint — `POST /api/mcp`, stateless `2026-07-28`
+  с `server/discover`; legacy lifecycle и Apps endpoint удалены по
+  [ADR-0031](../decisions/0031-single-mcp-endpoint.md);
+- `/settings/developer/mcp` строит один secret-free config для `/api/mcp`;
+- пока one-time secret виден, read-only self-check проверяет Sites account,
+  `server/discover` и `list_minds` на этом endpoint;
 - self-check не принимает search query, не выводит и не сохраняет verified
   email, principal/Mind/revision IDs, Mind names, content, credentials или raw
   response. UI показывает только фиксированные статусы для success, Sites
@@ -650,7 +637,7 @@ identity, credentials, headers и URLs не записываются.
 
 Для [performance gate](../operations/performance-gate.md)
 `request_latency_ms` дополнительно проецируется по закрытым categorical
-operations: MCP profile (`mcp_modern` или `mcp_compatibility`), stage
+operations: MCP profile (`mcp_modern`), stage
 (`stage_authentication`, `stage_application`, `stage_total`), exact allowlisted
 tool name и `home` route. Authenticated home публикует `home` и все три stage
 operation с одним opaque request ID; MCP публикует profile, применимые stage и
@@ -673,7 +660,7 @@ performance projection, где каждая строка содержит `candi
 control-plane join и не считаются attestation.
 
 Gate фиксирует один first-observed и не менее 20 warm samples каждого request,
-обязательно покрывает web, modern и compatibility profiles и связывает server
+обязательно покрывает web и modern MCP и связывает server
 latency только с distinct exact-lineage request/correlation-ID groups actual
 runner window. HTTP `200` не считается MCP success без matching JSON-RPC result,
 `isError === false` и structured success. Scale matrix принимается только из
@@ -794,7 +781,7 @@ envelopes, pagination, errors, tool annotations и Resources contract наход
 
 OpenAI native `file` metadata/download URL terminates in the MCP adapter and is
 advertised via `_meta["openai/fileParams"]`; it is not provider-neutral domain
-input. Pinned modern/compatibility clients must independently prove this
+input. Pinned clients must independently prove this
 extension. Unsupported client returns `native_file_input_unsupported` without
 local-path/base64 fallback.
 
@@ -957,12 +944,8 @@ network, которого Sites пока не обещает. Если Streamabl
     writes, а не заявляют его полное устранение.
 26. MCP публикует custom Mind-aware tools и не заявляет company-knowledge
     compatibility или user-openable content URLs.
-27. MCP Inspector проходит modern `2026-07-28` adapter по `/api/mcp`, а
-    проверенный `codex-cli 0.147.0` проходит этот же adapter с opt-in
-    `mcp_2026_07_28` и isolated default `2025-11-25` adapter по
-    `/api/mcp/2025-11-25`; оба используют один content contract и current
-    authorization. Claude Code не блокирует первый UAT MVP и объявляется
-    supported только после отдельной проверки своего adapter/client pair.
+27. Проверенный MCP client проходит `2026-07-28` по `/api/mcp`.
+    Поддержка конкретного клиента подтверждается отдельным conformance test.
 28. Все validators, fixtures и docs checks проходят на одном commit; никакой
     deployment не объявляется завершённым без live evidence.
 29. UAT release связывает exact Git SHA с одним Sites
@@ -1030,18 +1013,14 @@ Sites UAT MVP считается завершённым только после 
 
 - authenticated Sites headers и устойчивый account binding;
 - stable HTTPS Streamable HTTP `POST /api/mcp` для pinned final
-  `2026-07-28` и
-  `POST /api/mcp/2025-11-25` для pinned default `codex-cli 0.147.0`; exact
+  `2026-07-28`; exact
   `/mcp` не используется, потому что в проверенном UAT deployment 2026-08-07
   Sites перехватывал его до product Worker; это датированное deployment
   evidence, а не универсальная гарантия маршрутизации Sites;
 - `server/discover`, stateless metadata/results, `tools/list` и все обязательные
   tools modern profile, включая pinned Codex с opt-in `mcp_2026_07_28`;
-- isolated initialize flow, где Codex предлагает `2025-06-18`, а server
-  выбирает `2025-11-25`, затем `notifications/initialized`, `tools/list` и все
-  обязательные tools без session state;
 - Bearer token через environment configuration Codex и свежая current
-  authorization на каждом request обоих profiles; Claude Code проверяется
+  authorization на каждом request; Claude Code проверяется
   отдельной non-blocking gate до заявления его поддержки;
 - Sites audience gate пропускает machine client к endpoint либо через
   public reachability, либо через отдельный platform-supported machine
@@ -1064,7 +1043,7 @@ portable container и AWS/AgentCore не используются без нов�
 package shape и fresh temporary plugin context, OAuth discovery/DCR/PKCE,
 exact redirect/resource/state, read, write step-up, expiry, refresh rotation/
 bounded concurrent reuse/late replay revoke, revoke/reconnect,
-modern/compatibility transport и existing personal-token regression. Synthetic
+modern transport и existing personal-token regression. Synthetic
 identity допустима только на trusted authorize/
 consent boundary; password grant, admin mint и client-selected principal
 запрещены. Real external Marketplace/Codex OAuth UI остаётся informational
