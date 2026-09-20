@@ -43,6 +43,7 @@ class OAuthD1 {
   connectionPageLimits = [];
   batchTail = Promise.resolve();
   failNextTokenIssueBatch = false;
+  revokeGrantBeforeNextTokenIssueBatch = false;
 
   prepare(sql) {
     return new Statement(this, sql);
@@ -55,6 +56,16 @@ class OAuthD1 {
       ) {
         this.failNextTokenIssueBatch = false;
         throw new Error("injected OAuth token issue batch failure");
+      }
+      if (
+        this.revokeGrantBeforeNextTokenIssueBatch &&
+        statements.some((statement) => statement.sql.includes("-create-conditional*/"))
+      ) {
+        this.revokeGrantBeforeNextTokenIssueBatch = false;
+        const accessCreate = statements.find((statement) =>
+          statement.sql.includes("/*md-oauth-access-create-conditional*/"));
+        const grant = this.grants.get(accessCreate.values[2]);
+        if (grant) grant.revoked_at = new Date().toISOString();
       }
       const results = [];
       for (const statement of statements) results.push(await statement.run());
@@ -175,13 +186,24 @@ class OAuthD1 {
     }
     if (sql.includes("/*md-oauth-code-consume-conditional*/")) {
       const row = this.codes.get(values[1]);
-      if (!row || row.consumed_at || row.expires_at <= values[2]) return this.result(0);
+      if (
+        !row ||
+        row.consumed_at ||
+        row.expires_at <= values[2] ||
+        this.grants.get(row.grant_id)?.revoked_at
+      ) return this.result(0);
       row.consumed_at = values[0];
       return this.result();
     }
     if (sql.includes("/*md-oauth-refresh-consume-conditional*/")) {
       const row = this.refresh.get(values[1]);
-      if (!row || row.used_at || row.revoked_at || row.expires_at <= values[2]) return this.result(0);
+      if (
+        !row ||
+        row.used_at ||
+        row.revoked_at ||
+        row.expires_at <= values[2] ||
+        this.grants.get(row.grant_id)?.revoked_at
+      ) return this.result(0);
       row.used_at = values[0];
       return this.result();
     }
@@ -725,6 +747,32 @@ test("refresh remains reusable when mirror creation or the atomic D1 issue batch
   assert.equal(
     (await connector.authenticator.authenticate(body.access_token, "request_after_retry")).kind,
     "authenticated",
+  );
+});
+
+test("grant revocation racing token issue cannot consume the one-time source", async () => {
+  const { connector, database } = await environment();
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const source = [...database.refresh.values()].find((row) => row.parent_id === null);
+  assert.ok(source);
+  database.revokeGrantBeforeNextTokenIssueBatch = true;
+  const response = await connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: issued.refresh_token,
+      client_id: client.client_id,
+      resource: `${ORIGIN}/api/mcp`,
+    }),
+  }));
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, "invalid_grant");
+  assert.equal(source.used_at, null);
+  assert.equal(
+    [...database.refresh.values()].filter((row) => row.parent_id === source.id).length,
+    0,
   );
 });
 

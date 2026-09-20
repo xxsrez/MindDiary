@@ -385,7 +385,12 @@ export class FakeD1Database {
     }
     if (sql.includes("/*md-oauth-code-consume-conditional*/")) {
       const row = this.oauthCodes.get(values[1]);
-      if (!row || row.consumed_at || row.expires_at <= values[2]) {
+      if (
+        !row ||
+        row.consumed_at ||
+        row.expires_at <= values[2] ||
+        this.oauthGrants.get(row.grant_id)?.revoked_at
+      ) {
         return { success: true, meta: { changes: 0 } };
       }
       row.consumed_at = values[0];
@@ -393,7 +398,13 @@ export class FakeD1Database {
     }
     if (sql.includes("/*md-oauth-refresh-consume-conditional*/")) {
       const row = this.oauthRefresh.get(values[1]);
-      if (!row || row.used_at || row.revoked_at || row.expires_at <= values[2]) {
+      if (
+        !row ||
+        row.used_at ||
+        row.revoked_at ||
+        row.expires_at <= values[2] ||
+        this.oauthGrants.get(row.grant_id)?.revoked_at
+      ) {
         return { success: true, meta: { changes: 0 } };
       }
       row.used_at = values[0];

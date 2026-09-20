@@ -1252,11 +1252,23 @@ export async function createSitesOAuthConnector(
     const consumeSource = input.source.kind === "authorization_code"
       ? options.database
           .prepare(`/*md-oauth-code-consume-conditional*/ UPDATE md_oauth_authorization_codes
-            SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND expires_at > ?`)
+            SET consumed_at = ?
+            WHERE id = ? AND consumed_at IS NULL AND expires_at > ?
+              AND EXISTS (
+                SELECT 1 FROM md_oauth_grants grant
+                WHERE grant.id = md_oauth_authorization_codes.grant_id
+                  AND grant.revoked_at IS NULL
+              )`)
           .bind(timestamp.toISOString(), input.source.id, timestamp.toISOString())
       : options.database
           .prepare(`/*md-oauth-refresh-consume-conditional*/ UPDATE md_oauth_refresh_tokens
-            SET used_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+            SET used_at = ?
+            WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+              AND EXISTS (
+                SELECT 1 FROM md_oauth_grants grant
+                WHERE grant.id = md_oauth_refresh_tokens.grant_id
+                  AND grant.revoked_at IS NULL
+              )`)
           .bind(timestamp.toISOString(), input.source.id, timestamp.toISOString());
     try {
       const results = await options.database.batch([
