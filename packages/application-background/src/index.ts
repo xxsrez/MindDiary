@@ -362,9 +362,12 @@ function searchFields(path: string, text: string) {
     ? parsed.file.frontmatter
     : null;
   const defaultTitle = (path.split("/").at(-1) ?? path).replace(/\.md$/u, "");
-  const title = frontmatter !== null && typeof frontmatter.title === "string" &&
+  const explicitTitle = frontmatter !== null && typeof frontmatter.title === "string" &&
       frontmatter.title.trim().length > 0
     ? frontmatter.title.trim()
+    : null;
+  const title = explicitTitle
+    ? explicitTitle
     : defaultTitle;
   const description = frontmatter !== null &&
       typeof frontmatter.description === "string" &&
@@ -384,11 +387,14 @@ function searchFields(path: string, text: string) {
     else body.push(line);
   }
   return Object.freeze({
-    title: Object.freeze([title]),
-    description: Object.freeze(description),
-    tags: Object.freeze([...tags]),
-    headings: Object.freeze(headings),
-    body: Object.freeze([body.join("\n")]),
+    titleDerivedFromPath: explicitTitle === null,
+    fields: Object.freeze({
+      title: Object.freeze([title]),
+      description: Object.freeze(description),
+      tags: Object.freeze([...tags]),
+      headings: Object.freeze(headings),
+      body: Object.freeze([body.join("\n")]),
+    }),
   });
 }
 
@@ -576,11 +582,13 @@ export class RevisionIndexJobHandler {
       ) {
         throw new ExactRevisionMismatchError();
       }
+      const projection = searchFields(file.path, file.text);
       documents.push(Object.freeze({
         path: file.path,
         text: file.text,
         sha256: file.sha256,
-        fields: searchFields(file.path, file.text),
+        titleDerivedFromPath: projection.titleDerivedFromPath,
+        fields: projection.fields,
       }));
     }
     return Object.freeze({
@@ -602,11 +610,15 @@ export class RevisionIndexJobHandler {
         (file): file is typeof file & { readonly text: string } =>
           file.kind !== "opaque" && typeof file.text === "string",
       )
-      .map((file) => Object.freeze({
-        path: file.path,
-        text: file.text,
-        fields: searchFields(file.path, file.text),
-      }));
+      .map((file) => {
+        const projection = searchFields(file.path, file.text);
+        return Object.freeze({
+          path: file.path,
+          text: file.text,
+          titleDerivedFromPath: projection.titleDerivedFromPath,
+          fields: projection.fields,
+        });
+      });
     return Object.freeze({ entries: undefined, documents: Object.freeze(documents) });
   }
 }

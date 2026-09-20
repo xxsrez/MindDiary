@@ -434,6 +434,42 @@ test("get_mind_info pins one revision and removes commit from historical mode", 
   );
 });
 
+test("get_mind_info resolves as_of through compact metadata without listing manifests", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Compact History Owner");
+  const mind = await createMind(env, owner, "compact-history", "Compact History");
+  const head = await env.discovery.getMindInfo(
+    actor(owner.principalId),
+    mind.mindId,
+    { kind: "head" },
+  );
+  let compactReads = 0;
+  const store = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "listRevisions") {
+        return async () => { throw new Error("full revision listing must not run"); };
+      }
+      if (property === "resolveRevisionAsOf") {
+        return async (spaceId, asOf) => {
+          compactReads += 1;
+          return target.resolveRevisionAsOf(spaceId, asOf);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const discovery = new MindDiscoveryService({ store, host: HOST });
+
+  const historical = await discovery.getMindInfo(
+    actor(owner.principalId),
+    mind.mindId,
+    { kind: "as_of", asOf: head.resolvedRevision.committedAt },
+  );
+  assert.equal(historical.resolvedRevision.revisionId, head.resolvedRevision.revisionId);
+  assert.equal(compactReads, 1);
+});
+
 test("content commit keeps ordinary metadata HEAD atomic and immediately discoverable", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Owner");

@@ -152,6 +152,11 @@ export interface ExportStartTransaction
   listRevisions(
     spaceId: SpaceId,
   ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
+  /** Optional compact UTC selector; callers load only the selected manifest. */
+  resolveRevisionAsOf?(
+    spaceId: SpaceId,
+    asOf: UtcInstant,
+  ): Promise<Readonly<RevisionCatalogEntry> | null>;
   findActiveOrRecoverableExportJob(request: Readonly<{
     requestedByPrincipalId: PrincipalId;
     spaceId: SpaceId;
@@ -709,6 +714,8 @@ export interface ExactRevisionIndexDocument {
   readonly text: string;
   /** Canonical manifest digest; required by incremental index builds. */
   readonly sha256?: Sha256Digest;
+  /** True only when the title was derived from the current manifest path. */
+  readonly titleDerivedFromPath?: boolean;
   /** Parsed field projection used by bounded storage-side ranking. */
   readonly fields?: Readonly<{
     readonly title: readonly string[];

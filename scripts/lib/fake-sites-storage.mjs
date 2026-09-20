@@ -114,7 +114,7 @@ export class FakeD1Database {
 
   async run(sql, values) {
     const normalizedSql = canonicalSql(sql);
-    if (/^(?:CREATE TABLE|CREATE (?:UNIQUE )?INDEX)/u.test(normalizedSql)) {
+    if (/^(?:CREATE TABLE|CREATE (?:UNIQUE )?INDEX|ALTER TABLE)/u.test(normalizedSql)) {
       if (!EXPECTED_D1_SCHEMA.has(normalizedSql)) {
         throw new Error(`unexpected FakeD1 schema statement: ${normalizedSql}`);
       }
@@ -593,7 +593,7 @@ export class FakeD1Database {
     }
     if (sql.includes("/*md-search-fields-upsert*/")) {
       let changes = 0;
-      for (let index = 0; index < values.length; index += 7) {
+      for (let index = 0; index < values.length; index += 8) {
         const key = `${values[index]}\u0000${values[index + 1]}`;
         if (this.searchFields.has(key)) continue;
         this.searchFields.set(key, {
@@ -604,6 +604,7 @@ export class FakeD1Database {
           normalized_tags: values[index + 4],
           normalized_headings: values[index + 5],
           normalized_body: values[index + 6],
+          title_from_path: Number(values[index + 7]),
         });
         changes += 1;
       }
@@ -611,18 +612,31 @@ export class FakeD1Database {
     }
     if (sql.includes("/*md-search-membership-insert*/")) {
       this.#assertSchema("search");
-      for (let index = 0; index < values.length; index += 5) {
+      for (let index = 0; index < values.length; index += 6) {
         const row = {
           space_id: values[index], revision_id: values[index + 1], ordinal: Number(values[index + 2]),
           path: values[index + 3], digest: values[index + 4],
+          normalized_path_title: values[index + 5],
         };
         this.searchMemberships.set(`${row.space_id}\u0000${row.revision_id}\u0000${row.path}`, row);
       }
-      return { success: true, meta: { changes: values.length / 5 } };
+      return { success: true, meta: { changes: values.length / 6 } };
     }
     if (sql.includes("/*md-search-legacy-delete*/")) {
       const removed = this.search.delete(`${values[0]}\u0000${values[1]}`);
       return { success: true, meta: { changes: removed ? 1 : 0 } };
+    }
+    if (sql.includes("/*md-search-orphan-fields-cleanup*/")) {
+      let changes = 0;
+      const used = new Set([...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0])
+        .map((row) => row.digest));
+      for (const [key, row] of this.searchFields) {
+        if (row.space_id !== values[0] || used.has(row.digest) || changes >= 100) continue;
+        this.searchFields.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-search-orphan-document-cleanup*/")) {
       let changes = 0;
@@ -1099,10 +1113,18 @@ export class FakeD1Database {
       };
       return [...this.searchMemberships.values()]
         .filter((row) => row.space_id === spaceId && row.revision_id === revisionId)
-        .map((row) => ({
-          row,
-          fields: this.searchFields.get(`${row.space_id}\u0000${row.digest}`),
-        }))
+        .map((row) => {
+          const stored = this.searchFields.get(`${row.space_id}\u0000${row.digest}`);
+          return {
+            row,
+            fields: stored === undefined ? undefined : {
+              ...stored,
+              normalized_title: stored.title_from_path === 1
+                ? row.normalized_path_title
+                : stored.normalized_title,
+            },
+          };
+        })
         .filter(({ fields }) => fields !== undefined && terms.every((term) =>
           columns.some(([column]) => fields[column].includes(term))))
         .map(({ row, fields }) => ({

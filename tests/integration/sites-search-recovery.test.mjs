@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { createSitesSearchIndex } from "../../packages/adapter-search-sites/dist/index.js";
 import { SqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
@@ -74,4 +75,78 @@ test("search evaluates every accepted term beyond the former D1 bind ceiling", a
       documents: [{ path: "complete.md", text: terms.join(" ") }],
     },
   );
+});
+
+test("digest reuse keeps path-derived title current without rereading the body", async (t) => {
+  const database = new SqliteD1();
+  t.after(() => database.close());
+  const index = await createSitesSearchIndex(database);
+  const text = "body without either filename";
+  const sha256 = `sha256:${createHash("sha256").update(text).digest("hex")}`;
+  await index.replaceExactRevision({
+    spaceId: "space_renamed_search",
+    revisionId: "revision_renamed_search_old",
+    entries: [{ path: "old.md", sha256 }],
+    documents: [{
+      path: "old.md",
+      text,
+      sha256,
+      titleDerivedFromPath: true,
+      fields: {
+        title: ["old"],
+        description: [],
+        tags: [],
+        headings: [],
+        body: [text],
+      },
+    }],
+  });
+  await index.replaceExactRevision({
+    spaceId: "space_renamed_search",
+    revisionId: "revision_renamed_search_new",
+    entries: [{ path: "new.md", sha256 }],
+    documents: [],
+  });
+
+  assert.deepEqual(
+    (await index.queryExactRevision(
+      "space_renamed_search",
+      "revision_renamed_search_new",
+      ["new"],
+    )).documents,
+    [{ path: "new.md", text }],
+  );
+  assert.deepEqual(
+    (await index.queryExactRevision(
+      "space_renamed_search",
+      "revision_renamed_search_new",
+      ["old"],
+    )).documents,
+    [],
+  );
+});
+
+test("same-revision replacement reclaims bounded orphan projections", async (t) => {
+  const database = new SqliteD1();
+  t.after(() => database.close());
+  const index = await createSitesSearchIndex(database);
+  const target = {
+    spaceId: "space_replaced_search",
+    revisionId: "revision_replaced_search",
+  };
+  await index.replaceExactRevision({
+    ...target,
+    documents: [{ path: "old.md", text: "old projection" }],
+  });
+  await index.replaceExactRevision({
+    ...target,
+    documents: [{ path: "new.md", text: "new projection" }],
+  });
+
+  assert.deepEqual(await index.readStorageMetricsForTest(target.spaceId), {
+    documentCount: 1,
+    documentBytes: Buffer.byteLength("new projection"),
+    lexicalBytes: Buffer.byteLength("new projection"),
+    membershipCount: 1,
+  });
 });

@@ -672,6 +672,8 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
               );
             return Object.freeze(revisions);
           },
+          resolveRevisionAsOf: (spaceId: SpaceId, asOf: import("@mind-diary/application-ports").UtcInstant) =>
+            this.resolveRevisionAsOf(spaceId, asOf),
           findActiveOrRecoverableExportJob: async (
             request: Parameters<
               ExportStartTransaction["findActiveOrRecoverableExportJob"]

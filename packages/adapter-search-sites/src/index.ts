@@ -8,7 +8,7 @@ import type {
 } from "@mind-diary/application-ports";
 
 export const SITES_SEARCH_ADAPTER = "sites-d1-exact-revision" as const;
-const SITES_SEARCH_SCHEMA_VERSION = 5;
+const SITES_SEARCH_SCHEMA_VERSION = 6;
 const SITES_SEARCH_SCHEMA_OBJECTS = Object.freeze([
   "md_search_schema_migrations",
   "md_exact_revision_search",
@@ -84,6 +84,10 @@ export const SITES_SEARCH_MIGRATIONS = Object.freeze([
     normalized_body TEXT NOT NULL,
     PRIMARY KEY (space_id, digest)
   )`,
+  `ALTER TABLE md_search_revision_documents
+    ADD COLUMN normalized_path_title TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE md_search_document_fields
+    ADD COLUMN title_from_path INTEGER NOT NULL DEFAULT 0`,
 ]);
 
 interface SearchRow {
@@ -141,6 +145,8 @@ function cloneDocuments(
         typeof document.path !== "string" ||
         document.path.length < 1 ||
         typeof document.text !== "string" ||
+        (document.titleDerivedFromPath !== undefined &&
+          typeof document.titleDerivedFromPath !== "boolean") ||
         paths.has(document.path)
       ) {
         throw new TypeError("exact revision search documents are invalid");
@@ -150,6 +156,9 @@ function cloneDocuments(
         path: document.path,
         text: document.text,
         ...(document.sha256 === undefined ? {} : { sha256: document.sha256 }),
+        ...(document.titleDerivedFromPath === undefined
+          ? {}
+          : { titleDerivedFromPath: document.titleDerivedFromPath }),
         ...(document.fields === undefined ? {} : { fields: document.fields }),
       });
     }),
@@ -186,6 +195,10 @@ function normalizedLexicalText(text: string): string {
   return text.normalize("NFKC").toLocaleLowerCase("en-US");
 }
 
+function normalizedPathTitle(path: string): string {
+  return normalizedLexicalText((path.split("/").at(-1) ?? path).replace(/\.md$/u, ""));
+}
+
 function normalizedFields(document: Readonly<ExactRevisionIndexDocument>) {
   const fields = document.fields ?? Object.freeze({
     title: Object.freeze([]),
@@ -207,6 +220,7 @@ function normalizedFields(document: Readonly<ExactRevisionIndexDocument>) {
     tags: normalize(fields.tags),
     headings: normalize(fields.headings),
     body: normalize(fields.body),
+    titleFromPath: document.titleDerivedFromPath === true,
   });
 }
 
@@ -280,7 +294,7 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
       this.#database
         .prepare(
           `/*md-search-migration*/ INSERT OR IGNORE INTO md_search_schema_migrations
-           (version, name, applied_at) VALUES (5, 'bounded-ranked-search-v5', ?1)`,
+           (version, name, applied_at) VALUES (6, 'path-aware-bounded-search-v6', ?1)`,
         )
         .bind(new Date().toISOString()),
     );
@@ -370,13 +384,13 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
             document.text,
             document.byteSize,
           ]))),
-      ...chunks(normalized, 14).map((batch) =>
+      ...chunks(normalized, 12).map((batch) =>
         this.#database
           .prepare(
             `/*md-search-fields-upsert*/ INSERT INTO md_search_document_fields
              (space_id, digest, normalized_title, normalized_description,
-              normalized_tags, normalized_headings, normalized_body)
-             VALUES ${placeholders(batch.length, 7)}
+              normalized_tags, normalized_headings, normalized_body, title_from_path)
+             VALUES ${placeholders(batch.length, 8)}
              ON CONFLICT(space_id, digest) DO NOTHING`,
           )
           .bind(...batch.flatMap((document) => [
@@ -387,6 +401,7 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
             document.normalizedFields.tags,
             document.normalizedFields.headings,
             document.normalizedFields.body,
+            document.normalizedFields.titleFromPath ? 1 : 0,
           ]))),
       ...chunks(normalized, 25).map((batch) =>
         this.#database
@@ -401,19 +416,20 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
             document.normalizedText,
             new TextEncoder().encode(document.normalizedText).byteLength,
           ]))),
-      ...chunks(memberships, 20).map((batch, batchIndex) =>
+      ...chunks(memberships, 16).map((batch, batchIndex) =>
         this.#database
           .prepare(
             `/*md-search-membership-insert*/ INSERT INTO md_search_revision_documents
-             (space_id, revision_id, ordinal, path, digest)
-             VALUES ${placeholders(batch.length, 5)}`,
+             (space_id, revision_id, ordinal, path, digest, normalized_path_title)
+             VALUES ${placeholders(batch.length, 6)}`,
           )
           .bind(...batch.flatMap((document, index) => [
             request.spaceId,
             request.revisionId,
-            batchIndex * 20 + index,
+            batchIndex * 16 + index,
             document.path,
             document.sha256,
+            normalizedPathTitle(document.path),
           ]))),
       memberships.length === 0
         ? this.#database
@@ -429,6 +445,48 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
                WHERE space_id = ?1 AND revision_id = ?2`,
             )
             .bind(request.spaceId, request.revisionId),
+      this.#database
+        .prepare(
+          `/*md-search-orphan-fields-cleanup*/ DELETE FROM md_search_document_fields
+           WHERE rowid IN (
+             SELECT fields.rowid FROM md_search_document_fields AS fields
+              WHERE fields.space_id = ?1 AND NOT EXISTS (
+                SELECT 1 FROM md_search_revision_documents AS membership
+                 WHERE membership.space_id = fields.space_id
+                   AND membership.digest = fields.digest
+              )
+              LIMIT 100
+           )`,
+        )
+        .bind(request.spaceId),
+      this.#database
+        .prepare(
+          `/*md-search-orphan-lexical-cleanup*/ DELETE FROM md_search_document_lexical
+           WHERE rowid IN (
+             SELECT lexical.rowid FROM md_search_document_lexical AS lexical
+              WHERE lexical.space_id = ?1 AND NOT EXISTS (
+                SELECT 1 FROM md_search_revision_documents AS membership
+                 WHERE membership.space_id = lexical.space_id
+                   AND membership.digest = lexical.digest
+              )
+              LIMIT 100
+           )`,
+        )
+        .bind(request.spaceId),
+      this.#database
+        .prepare(
+          `/*md-search-orphan-document-cleanup*/ DELETE FROM md_search_documents
+           WHERE rowid IN (
+             SELECT document.rowid FROM md_search_documents AS document
+              WHERE document.space_id = ?1 AND NOT EXISTS (
+                SELECT 1 FROM md_search_revision_documents AS membership
+                 WHERE membership.space_id = document.space_id
+                   AND membership.digest = document.digest
+              )
+              LIMIT 100
+           )`,
+        )
+        .bind(request.spaceId),
     ];
     await this.#database.batch(statements);
   }
@@ -612,7 +670,7 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
     }
     const termsJson = JSON.stringify(normalizedTerms);
     const columns = [
-      ["fields.normalized_title", 8],
+      ["(CASE WHEN fields.title_from_path = 1 THEN membership.normalized_path_title ELSE fields.normalized_title END)", 8],
       ["fields.normalized_description", 4],
       ["fields.normalized_tags", 6],
       ["fields.normalized_headings", 5],

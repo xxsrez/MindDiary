@@ -1418,6 +1418,12 @@ export class MindDiscoveryService {
     if (selector.kind === "revision") {
       return this.#readRevision(spaceId, selector.revisionId);
     }
+    if (this.#store.resolveRevisionAsOf !== undefined) {
+      const selected = await this.#store.resolveRevisionAsOf(spaceId, selector.asOf);
+      return selected === null
+        ? null
+        : this.#readRevision(spaceId, selected.revision.revisionId);
+    }
     const requestedAt = Date.parse(selector.asOf);
     const revisions = await this.#store.listRevisions(spaceId);
     let selected: Readonly<CanonicalRevisionEnvelope> | null = null;
@@ -1427,9 +1433,7 @@ export class MindDiscoveryService {
         Date.parse(envelope.revision.committedAt) <= requestedAt &&
         (selected === null ||
           envelope.revision.revisionNumber > selected.revision.revisionNumber)
-      ) {
-        selected = envelope;
-      }
+      ) selected = envelope;
     }
     return selected;
   }

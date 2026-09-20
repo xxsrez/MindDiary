@@ -136,10 +136,10 @@ async function harness(options = {}) {
     });
   let nextJob = 0;
   const ids = options.jobIds ?? ["export_job_1", "export_job_2", "export_job_3"];
-  const application = () => new ExportJobApplicationService({
+  const application = (metadataStore = metadata) => new ExportJobApplicationService({
     authorizer,
     backgroundAuthorizer,
-    metadata,
+    metadata: metadataStore,
     digest: objects,
     archives: objects,
     clock,
@@ -251,6 +251,39 @@ test("start_export atomically fixes principal, Space, exact revision and one dur
   );
   assert.deepEqual(conflict, { kind: "idempotency_conflict" });
   assert.equal((await env.metadata.listExportJobsForTest()).length, 1);
+});
+
+test("start_export resolves as_of through compact metadata without listing manifests", async () => {
+  const env = await harness({ jobIds: ["export_compact_as_of"] });
+  let compactReads = 0;
+  const metadata = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "runExportStartTransaction") {
+        return (operation) => target.runExportStartTransaction((transaction) =>
+          operation(Object.freeze({
+            ...transaction,
+            listRevisions: async () => {
+              throw new Error("full revision listing must not run");
+            },
+            resolveRevisionAsOf: async (spaceId, asOf) => {
+              compactReads += 1;
+              return transaction.resolveRevisionAsOf(spaceId, asOf);
+            },
+          })));
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  const result = await env.application(metadata).start(startRequest(
+    env.actor,
+    "export-compact-as-of",
+    { kind: "as_of", asOf: REVISIONS.initial.committedAt },
+  ));
+  assert.equal(result.kind, "started");
+  assert.equal(result.job.revisionId, REVISIONS.initial.revisionId);
+  assert.equal(compactReads, 1);
 });
 
 test("a fresh start key recovers the same due failed export instead of losing its capacity reservation", async () => {

@@ -899,6 +899,12 @@ export class ExportJobApplicationService {
     if (selector.kind === "revision") {
       return transaction.readRevision(spaceId, selector.revisionId);
     }
+    if (transaction.resolveRevisionAsOf !== undefined) {
+      const selected = await transaction.resolveRevisionAsOf(spaceId, selector.asOf);
+      return selected === null
+        ? null
+        : transaction.readRevision(spaceId, selected.revision.revisionId);
+    }
     const requestedAt = Date.parse(selector.asOf);
     const revisions = await transaction.listRevisions(spaceId);
     let selected: Readonly<CanonicalRevisionEnvelope> | null = null;
