@@ -527,6 +527,40 @@ test("browse reads only the requested manifest page, parses frontmatter, and nev
   assert.equal(env.observedObjects.reads(), 3);
 });
 
+test("large valid frontmatter falls back to compact locators without breaking browse or fetch", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 20, "Large Frontmatter Owner");
+  const mind = await createMind(env, owner, "large-frontmatter-browse");
+  const tags = Array.from(
+    { length: 125 },
+    (_, index) => `tag-${String(index).padStart(3, "0")}-${"x".repeat(40)}`,
+  );
+  await commitFiles(env, owner, mind, [
+    { path: "index.md", text: rootIndex([["Large", "a.md"]]) },
+    { path: "a.md", text: concept("Large", "LARGE_FRONTMATTER_BODY", { tags }) },
+  ]);
+
+  const listed = await env.browse.browseEntries(actor(owner.principalId), {
+    mind: mind.handle,
+    path: "",
+    limit: 10,
+  });
+  const entry = listed.entries.find((candidate) => candidate.path === "a.md");
+  assert.ok(entry);
+  assert.deepEqual(entry.tags, tags);
+  const locator = await env.locators.decode(entry.entryId);
+  assert.equal(locator.kind, "entry");
+  assert.equal(locator.okfType, undefined);
+
+  const fetched = await fetchAll(
+    env.browse,
+    actor(owner.principalId),
+    entry.entryId,
+    512,
+  );
+  assert.match(fetched.text, /LARGE_FRONTMATTER_BODY/u);
+});
+
 test("disabled Mind invalidates previously issued fetch and resource locators before object reads", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Usage Browse Owner");

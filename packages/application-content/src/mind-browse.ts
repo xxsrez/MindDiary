@@ -1968,35 +1968,50 @@ export class MindBrowseService {
         "The exact revision contains an invalid resource identity.",
       );
     }
-    const entryId = reusableEntryId ?? await this.#locators.encode(
-      Object.freeze({
-        version: LOCATOR_VERSION,
-        kind: "entry",
-        spaceId,
-        revisionId,
-        path: entry.path,
-        sha256: entry.sha256,
-        start: 0,
-        end: entry.size,
-        okfType: parsed.file.kind === "concept" ? parsed.file.okfType : null,
-        title: entryTitle(entry.path, frontmatter),
-        description: entryDescription(frontmatter),
-        tags: entryTags(frontmatter),
-      }),
-    );
+    const okfType = parsed.file.kind === "concept" ? parsed.file.okfType : null;
+    const title = entryTitle(entry.path, frontmatter);
+    const description = entryDescription(frontmatter);
+    const tags = entryTags(frontmatter);
+    const locatorIdentity = Object.freeze({
+      version: LOCATOR_VERSION,
+      kind: "entry" as const,
+      spaceId,
+      revisionId,
+      path: entry.path,
+      sha256: entry.sha256,
+      start: 0,
+      end: entry.size,
+    });
+    let entryId = reusableEntryId;
+    if (entryId === undefined) {
+      try {
+        entryId = await this.#locators.encode(Object.freeze({
+          ...locatorIdentity,
+          okfType,
+          title,
+          description,
+          tags,
+        }));
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        // Valid OKF metadata is not size-bounded. Fall back to the compact
+        // identity locator; fetch will load and reparse that exact file.
+        entryId = await this.#locators.encode(locatorIdentity);
+      }
+    }
     return Object.freeze({
       entryId,
       resourceUri,
       path: entry.path,
       kind: okfFileKind(entry.path),
-      title: entryTitle(entry.path, frontmatter),
-      description: entryDescription(frontmatter),
-      tags: entryTags(frontmatter),
+      title,
+      description,
+      tags,
       mimeType: MARKDOWN_MEDIA_TYPE,
       revisionId,
       sha256: entry.sha256,
       size: entry.size,
-      okfType: parsed.file.kind === "concept" ? parsed.file.okfType : null,
+      okfType,
     });
   }
 
