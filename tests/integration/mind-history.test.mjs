@@ -357,6 +357,34 @@ test("Snapshot View pins HEAD, exact and nanosecond UTC as_of while history meta
   assert.equal(await env.metadata.readHead(mind.mindId), headRevision);
 });
 
+test("as_of treats equivalent UTC fractions as the same instant", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 20, "Equivalent Fraction Owner");
+  const mind = await createMind(env, owner, "equivalent-fraction-history");
+  const initialRevision = mind.headRevisionId;
+  const committedRevision = await commitFiles(
+    env,
+    owner,
+    mind,
+    [{ path: "index.md", text: indexFile() }],
+    "Commit with a short UTC fraction",
+    "2026-08-07T20:02:00.1Z",
+  );
+  const ownerActor = actor(owner.principalId);
+
+  const equivalent = await env.history.resolveSnapshotView(ownerActor, {
+    mind: mind.handle,
+    revisionSelector: { kind: "as_of", asOf: "2026-08-07T20:02:00.100Z" },
+  });
+  assert.equal(equivalent.resolvedRevisionId, committedRevision);
+
+  const oneNanosecondEarlier = await env.history.resolveSnapshotView(ownerActor, {
+    mind: mind.handle,
+    revisionSelector: { kind: "as_of", asOf: "2026-08-07T20:02:00.099999999Z" },
+  });
+  assert.equal(oneNanosecondEarlier.resolvedRevisionId, initialRevision);
+});
+
 test("a file deleted from HEAD remains fetchable from its authorized exact revision", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Fetch Owner");

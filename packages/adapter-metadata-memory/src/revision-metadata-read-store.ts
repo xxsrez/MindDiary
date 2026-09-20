@@ -159,6 +159,14 @@ import {
 } from "@mind-diary/application-ports";
 import { RevisionMetadataSnapshotStore } from "./revision-metadata-snapshot-store.js";
 
+function normalizedUtcInstant(value: UtcInstant): string {
+  const withoutZone = value.slice(0, -1);
+  const separator = withoutZone.lastIndexOf(".");
+  const seconds = separator === -1 ? withoutZone : withoutZone.slice(0, separator);
+  const fraction = separator === -1 ? "" : withoutZone.slice(separator + 1);
+  return `${seconds}.${fraction.padEnd(9, "0")}Z`;
+}
+
 export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshotStore {
   async decommissionLegacyMindBindingsForMigration(): Promise<void> {
       await this._runExclusive(async () => {
@@ -1790,8 +1798,10 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
     }
 
   async resolveRevisionAsOf(spaceId: SpaceId, asOf: UtcInstant) {
+      const normalizedAsOf = normalizedUtcInstant(asOf);
       const selected = [...(this._spaces.get(spaceId)?.revisions.values() ?? [])]
-        .filter((entry) => entry.revision.committedAt <= asOf)
+        .filter((entry) =>
+          normalizedUtcInstant(entry.revision.committedAt) <= normalizedAsOf)
         .sort((left, right) =>
           right.revision.revisionNumber - left.revision.revisionNumber)[0];
       if (selected === undefined) return null;
