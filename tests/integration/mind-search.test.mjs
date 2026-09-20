@@ -4,6 +4,7 @@ import test from "node:test";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
+import { createSitesSearchIndex } from "@mind-diary/adapter-search-sites";
 import {
   CanonicalRevisionCoordinator,
   MindBrowseService,
@@ -21,6 +22,7 @@ import {
   MARKDOWN_MEDIA_TYPE,
   verifiedSpaceHost,
 } from "@mind-diary/domain";
+import { SqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
 
 const BOOTSTRAP_AT = "2026-08-07T20:20:00.000Z";
 const COMMITTED_AT = "2026-08-07T20:21:00.000Z";
@@ -298,6 +300,48 @@ test("lexical search covers declared fields, ranks deterministically and emits e
   });
   assert.equal(fetched.entry.revisionId, revisionId);
   assert.equal(fetched.entry.path, "concepts/title-ranked.md");
+});
+
+test("bounded SQL ranking and application reparse agree on indented ATX headings", async (t) => {
+  const database = new SqliteD1();
+  t.after(() => database.close());
+  const index = await createSitesSearchIndex(database);
+  const env = harness(index);
+  const owner = await createAccount(env, 20, "Indented Heading Owner");
+  const mind = await createMind(env, owner, "indented-heading-search");
+  const documents = [
+    { path: "index.md", text: rootIndex("") },
+    {
+      path: "a.md",
+      text: "---\ntype: Reference\ntitle: Alpha\n---\n\ntarget\n",
+    },
+    {
+      path: "z.md",
+      text: "---\ntype: Reference\ntitle: Zeta\n---\n\n   # target\n",
+    },
+  ];
+  const revisionId = await commitFiles(env, owner, mind, documents, "Indented heading");
+  await index.replaceExactRevision({
+    spaceId: mind.mindId,
+    revisionId,
+    documents: documents.map((document) => ({
+      ...document,
+      titleDerivedFromPath: false,
+      fields: document.path === "a.md"
+        ? { title: ["Alpha"], description: [], tags: [], headings: [], body: ["target"] }
+        : document.path === "z.md"
+          ? { title: ["Zeta"], description: [], tags: [], headings: ["target"], body: [""] }
+          : { title: [], description: [], tags: [], headings: [], body: [document.text] },
+    })),
+  });
+
+  const result = await env.search.searchEntries(actor(owner.principalId), {
+    mind: mind.handle,
+    query: "target",
+    limit: 1,
+  });
+  assert.equal(result.results[0].entry.path, "z.md");
+  assert.deepEqual(result.results[0].matchedFields, ["headings"]);
 });
 
 test("search cursor is query/revision bound and keeps its immutable snapshot after HEAD moves", async () => {

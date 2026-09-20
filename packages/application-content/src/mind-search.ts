@@ -42,7 +42,7 @@ export const MAX_SEARCH_QUERY_CHARACTERS = 1_024;
 const SEARCH_CURSOR_PATH_PREFIX = "search/";
 const MAX_CURSOR_CHARACTERS = 8 * 1_024;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
-const HEADING = /^#{1,6}\s+(.+?)\s*#*\s*$/u;
+const HEADING = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u;
 const QUERY_TERM = /[\p{L}\p{N}_-]+/gu;
 
 type AllowedAuthorization = Extract<AuthorizationDecision, { readonly kind: "allowed" }>;
