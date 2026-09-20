@@ -79,6 +79,7 @@ export class FakeD1Database {
   searchMemberships = new Map();
   searchLexical = new Map();
   searchFields = new Map();
+  searchV6FieldProjectionsInvalidated = false;
   audit = new Map();
   oauthClients = new Map();
   oauthRequests = new Map();
@@ -200,6 +201,15 @@ export class FakeD1Database {
     if (sql.includes("/*md-search-migration*/")) {
       this.#assertSchema("search");
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-search-v6-invalidate-field-projections*/")) {
+      if (this.searchV6FieldProjectionsInvalidated) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      const changes = this.searchFields.size;
+      this.searchFields.clear();
+      this.searchV6FieldProjectionsInvalidated = true;
+      return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-audit-migration*/")) {
       this.#assertSchema("audit");
@@ -1078,6 +1088,12 @@ export class FakeD1Database {
         this.searchFields.has(`${row.space_id}\u0000${row.digest}`));
       return { success: true, results: [{
         membership_count: memberships.length,
+        document_count: memberships.filter((row) =>
+          this.searchDocuments.has(`${row.space_id}\u0000${row.digest}`)).length,
+        lexical_count: memberships.filter((row) =>
+          this.searchLexical.has(`${row.space_id}\u0000${row.digest}`)).length,
+        fields_count: memberships.filter((row) =>
+          this.searchFields.has(`${row.space_id}\u0000${row.digest}`)).length,
         indexed_count: indexed.length,
       }] };
     }

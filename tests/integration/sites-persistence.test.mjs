@@ -145,6 +145,7 @@ class FakeD1Database {
   searchMemberships = new Map();
   searchLexical = new Map();
   searchFields = new Map();
+  searchV6FieldProjectionsInvalidated = false;
   audit = new Map();
   locatorHandles = new Map();
   #appliedUploadIntentSchema = new Set();
@@ -191,6 +192,7 @@ class FakeD1Database {
       searchMemberships: new Map([...this.searchMemberships].map(([key, value]) => [key, { ...value }])),
       searchLexical: new Map([...this.searchLexical].map(([key, value]) => [key, { ...value }])),
       searchFields: new Map([...this.searchFields].map(([key, value]) => [key, { ...value }])),
+      searchV6FieldProjectionsInvalidated: this.searchV6FieldProjectionsInvalidated,
       audit: new Map([...this.audit].map(([key, value]) => [key, { ...value }])),
       locatorHandles: new Map([...this.locatorHandles].map(([key, value]) => [key, { ...value }])),
     };
@@ -214,6 +216,7 @@ class FakeD1Database {
       this.searchMemberships = before.searchMemberships;
       this.searchLexical = before.searchLexical;
       this.searchFields = before.searchFields;
+      this.searchV6FieldProjectionsInvalidated = before.searchV6FieldProjectionsInvalidated;
       this.audit = before.audit;
       this.locatorHandles = before.locatorHandles;
       throw error;
@@ -306,6 +309,15 @@ class FakeD1Database {
         this.#appliedUploadIntentSchema.add(normalizedSql);
       }
       return { success: true, meta: { changes: 0 } };
+    }
+    if (sql.includes("/*md-search-v6-invalidate-field-projections*/")) {
+      if (this.searchV6FieldProjectionsInvalidated) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      const changes = this.searchFields.size;
+      this.searchFields.clear();
+      this.searchV6FieldProjectionsInvalidated = true;
+      return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-metadata-migration*/")) {
       this.metadataSchemaVersion = Math.max(this.metadataSchemaVersion, Number(values[0]));
@@ -832,6 +844,12 @@ class FakeD1Database {
         this.searchFields.has(`${row.space_id}\u0000${row.digest}`));
       return { success: true, results: [{
         membership_count: memberships.length,
+        document_count: memberships.filter((row) =>
+          this.searchDocuments.has(`${row.space_id}\u0000${row.digest}`)).length,
+        lexical_count: memberships.filter((row) =>
+          this.searchLexical.has(`${row.space_id}\u0000${row.digest}`)).length,
+        fields_count: memberships.filter((row) =>
+          this.searchFields.has(`${row.space_id}\u0000${row.digest}`)).length,
         indexed_count: indexed.length,
       }] };
     }

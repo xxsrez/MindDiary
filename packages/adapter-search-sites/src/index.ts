@@ -88,6 +88,10 @@ export const SITES_SEARCH_MIGRATIONS = Object.freeze([
     ADD COLUMN normalized_path_title TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE md_search_document_fields
     ADD COLUMN title_from_path INTEGER NOT NULL DEFAULT 0`,
+  `/*md-search-v6-invalidate-field-projections*/ DELETE FROM md_search_document_fields
+    WHERE NOT EXISTS (
+      SELECT 1 FROM md_search_schema_migrations WHERE version >= 6
+    )`,
 ]);
 
 interface SearchRow {
@@ -112,6 +116,9 @@ interface SearchRevisionCountRow {
 
 interface SearchProjectionCountRow {
   readonly membership_count: number;
+  readonly document_count: number;
+  readonly lexical_count: number;
+  readonly fields_count: number;
   readonly indexed_count: number;
 }
 
@@ -630,6 +637,27 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
               JOIN md_search_documents AS document
                 ON document.space_id = membership.space_id
                AND document.digest = membership.digest
+             WHERE membership.space_id = ?1 AND membership.revision_id = ?2)
+             AS document_count,
+           (SELECT COUNT(*)
+              FROM md_search_revision_documents AS membership
+              JOIN md_search_document_lexical AS lexical
+                ON lexical.space_id = membership.space_id
+               AND lexical.digest = membership.digest
+             WHERE membership.space_id = ?1 AND membership.revision_id = ?2)
+             AS lexical_count,
+           (SELECT COUNT(*)
+              FROM md_search_revision_documents AS membership
+              JOIN md_search_document_fields AS fields
+                ON fields.space_id = membership.space_id
+               AND fields.digest = membership.digest
+             WHERE membership.space_id = ?1 AND membership.revision_id = ?2)
+             AS fields_count,
+           (SELECT COUNT(*)
+              FROM md_search_revision_documents AS membership
+              JOIN md_search_documents AS document
+                ON document.space_id = membership.space_id
+               AND document.digest = membership.digest
               JOIN md_search_document_lexical AS lexical
                 ON lexical.space_id = membership.space_id
                AND lexical.digest = membership.digest
@@ -642,8 +670,20 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
       .bind(spaceId, revisionId)
       .all<SearchProjectionCountRow>();
     const membershipCount = Number(counts.results?.[0]?.membership_count ?? 0);
+    const documentCount = Number(counts.results?.[0]?.document_count ?? 0);
+    const fieldsCount = Number(counts.results?.[0]?.fields_count ?? 0);
     const indexedCount = Number(counts.results?.[0]?.indexed_count ?? 0);
     if (membershipCount === 0 || indexedCount !== membershipCount) {
+      // Stored text is sufficient to rebuild lexical rows, but it cannot
+      // reconstruct parsed field projections or a missing canonical document.
+      // Leave those revisions unavailable so the canonical index job rebuilds
+      // them with the full parser output.
+      if (
+        membershipCount > 0 &&
+        (documentCount !== membershipCount || fieldsCount !== membershipCount)
+      ) {
+        return Object.freeze({ kind: "unavailable" });
+      }
       const legacy = await this.readExactRevision(spaceId, revisionId);
       if (legacy.kind !== "ready") return legacy;
       // Complete stored text can rebuild a missing lexical projection. A partial

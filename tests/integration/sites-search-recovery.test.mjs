@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { createSitesSearchIndex } from "../../packages/adapter-search-sites/dist/index.js";
+import {
+  createSitesSearchIndex,
+  SITES_SEARCH_MIGRATIONS,
+} from "../../packages/adapter-search-sites/dist/index.js";
 import { SqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
 
 for (const missingTable of [
@@ -23,11 +26,12 @@ for (const missingTable of [
 
     assert.equal((await index.inspectExactRevision(spaceId, revisionId)).kind, "unavailable");
     const queried = await index.queryExactRevision(spaceId, revisionId, ["searchable"]);
-    if (missingTable === "md_search_documents") {
+    if (missingTable === "md_search_documents" || missingTable === "md_search_document_fields") {
       assert.deepEqual(queried, { kind: "unavailable" });
       assert.equal((await index.inspectExactRevision(spaceId, revisionId)).kind, "unavailable");
     } else {
-      // Missing lexical rows are safely recoverable when all document text remains.
+      // Missing lexical rows are safely recoverable when full documents and
+      // parsed field projections remain. Missing fields require canonical rebuild.
       assert.equal(queried.kind, "ready");
       assert.deepEqual(queried.documents, documents);
     }
@@ -42,6 +46,72 @@ for (const missingTable of [
     assert.deepEqual(found.documents, documents);
   });
 }
+
+test("v5 migration invalidates ambiguous field projections before digest reuse", async (t) => {
+  const database = new SqliteD1();
+  t.after(() => database.close());
+  for (const sql of SITES_SEARCH_MIGRATIONS.slice(0, 8)) {
+    await database.prepare(sql).run();
+  }
+  const text = "body without either filename";
+  const digest = `sha256:${createHash("sha256").update(text).digest("hex")}`;
+  await database.prepare(
+    `INSERT INTO md_search_schema_migrations (version, name, applied_at)
+     VALUES (5, 'bounded-ranked-search-v5', '2026-09-20T00:00:00.000Z')`,
+  ).run();
+  await database.prepare(
+    `INSERT INTO md_search_documents (space_id, digest, text, byte_size)
+     VALUES ('space_v5_search', ?1, ?2, ?3)`,
+  ).bind(digest, text, Buffer.byteLength(text)).run();
+  await database.prepare(
+    `INSERT INTO md_search_document_lexical (space_id, digest, normalized_text, byte_size)
+     VALUES ('space_v5_search', ?1, ?2, ?3)`,
+  ).bind(digest, text, Buffer.byteLength(text)).run();
+  await database.prepare(
+    `INSERT INTO md_search_document_fields
+       (space_id, digest, normalized_title, normalized_description,
+        normalized_tags, normalized_headings, normalized_body)
+     VALUES ('space_v5_search', ?1, 'old', '', '', '', ?2)`,
+  ).bind(digest, text).run();
+  await database.prepare(
+    `INSERT INTO md_search_revision_documents
+       (space_id, revision_id, ordinal, path, digest)
+     VALUES ('space_v5_search', 'revision_v5_search', 0, 'old.md', ?1)`,
+  ).bind(digest).run();
+
+  const index = await createSitesSearchIndex(database);
+  assert.equal(
+    (await index.inspectExactRevision("space_v5_search", "revision_v5_search")).kind,
+    "unavailable",
+  );
+  assert.deepEqual(
+    await index.queryExactRevision("space_v5_search", "revision_v5_search", ["old"]),
+    { kind: "unavailable" },
+  );
+
+  await index.replaceExactRevision({
+    spaceId: "space_v5_search",
+    revisionId: "revision_v5_search",
+    entries: [{ path: "old.md", sha256: digest }],
+    documents: [{
+      path: "old.md",
+      text,
+      sha256: digest,
+      titleDerivedFromPath: true,
+      fields: { title: ["old"], description: [], tags: [], headings: [], body: [text] },
+    }],
+  });
+  await index.replaceExactRevision({
+    spaceId: "space_v5_search",
+    revisionId: "revision_v6_search",
+    entries: [{ path: "new.md", sha256: digest }],
+    documents: [],
+  });
+  assert.deepEqual(
+    (await index.queryExactRevision("space_v5_search", "revision_v6_search", ["new"])).documents,
+    [{ path: "new.md", text }],
+  );
+});
 
 test("search evaluates every accepted term beyond the former D1 bind ceiling", async (t) => {
   const database = new SqliteD1();
