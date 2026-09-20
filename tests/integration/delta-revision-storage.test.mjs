@@ -260,6 +260,26 @@ test("producer additive validation reads only changed files and the retained roo
   const newPath = `concepts/concept-${fileCount}.md`;
   const newIndex = `${currentIndex.trimEnd()}\n- [Concept ${fileCount}](${newPath})\n`;
 
+  const firstEntry = initial.manifest.entries.find(
+    (entry) => entry.path === "concepts/concept-0000.md",
+  );
+  counted.reset();
+  const proof = await preflight.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionMode: "head",
+    expectedRevisionId: INITIAL_REVISION,
+    producerProfile: true,
+    operations: [{
+      type: "replace_file",
+      path: firstEntry.path,
+      text: concept(0),
+      expected_sha256: firstEntry.sha256,
+    }],
+  });
+  assert.equal(proof.kind, "ready");
+  assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
+
   counted.reset();
   const additive = await preflight.preflight({
     actor: currentActor,
@@ -297,6 +317,99 @@ test("producer additive validation reads only changed files and the retained roo
   });
   assert.equal(invalidating.kind, "ready");
   assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
+});
+
+test("producer additive validation cannot trust an unproved consumer-warning parent", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = principalMountedMetadata(new InMemoryRevisionMetadataStore());
+  const warningRevisionId = "revision_delta_warning_initial";
+  const files = [{
+    path: "index.md",
+    text: "---\nokf_version: \"0.2\"\n---\n\n# Warning parent\n\n- [Warning](concepts/warning.md)\n",
+  }, {
+    path: "concepts/warning.md",
+    text: "---\ntype: Generated Knowledge\nstatus: reviewed\n---\n\n# Warning\n",
+  }];
+  const entries = [];
+  for (const file of files) {
+    const put = await objects.putSpaceCanonicalObject({
+      kind: "markdown",
+      spaceId: MINDS.ordinary.spaceId,
+      bytes: ENCODER.encode(file.text),
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: "2026-08-22T17:00:00.000Z",
+    });
+    entries.push({
+      kind: "markdown",
+      path: file.path,
+      sha256: put.object.sha256,
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      size: put.object.size,
+    });
+  }
+  const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V4);
+  const manifestObject = await objects.putSpaceCanonicalObject({
+    kind: "revision_manifest",
+    spaceId: MINDS.ordinary.spaceId,
+    bytes: ENCODER.encode(serializeRevisionManifest(manifest)),
+    mediaType: REVISION_MANIFEST_MEDIA_TYPE,
+    createdAt: "2026-08-22T17:00:00.000Z",
+  });
+  const envelope = createCanonicalRevisionEnvelope({
+    revisionId: warningRevisionId,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionNumber: 1,
+    parentRevisionId: null,
+    committedAt: "2026-08-22T17:00:00.000Z",
+    committedBy: { kind: "principal", principalId: PRINCIPALS.editor.principalId },
+    manifest,
+    manifestHash: manifestObject.object.sha256,
+    manifestSize: manifestObject.object.size,
+    summary: "Consumer-valid warning fixture",
+  });
+  assert.equal(
+    (await metadata.commitRevision({ expectedHeadRevisionId: null, envelope })).kind,
+    "committed",
+  );
+  const currentActor = actor();
+  metadata.setCurrentAuthorizationStateForTest(
+    {
+      principalId: currentActor.principalId,
+      spaceId: MINDS.ordinary.spaceId,
+      tokenId: currentActor.authentication.tokenId,
+    },
+    authorizationState(currentActor),
+  );
+  const preflight = new ChangesetPreflightService({
+    authorizer: new CapabilityAuthorizer(metadata),
+    revisions: new CanonicalRevisionCoordinator({ objects, revisions: metadata }),
+    clock: { now: () => "2026-08-22T18:14:00.000Z" },
+  });
+  const indexEntry = entries.find((entry) => entry.path === "index.md");
+  const nextPath = "concepts/new.md";
+  const result = await preflight.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionMode: "head",
+    expectedRevisionId: warningRevisionId,
+    producerProfile: true,
+    operations: [{
+      type: "create_file",
+      path: nextPath,
+      text: concept(2, "new producer file"),
+    }, {
+      type: "replace_index",
+      path: "index.md",
+      text: `${files[0].text.trimEnd()}\n- [New](${nextPath})\n`,
+      expected_sha256: indexEntry.sha256,
+    }],
+  });
+
+  assert.equal(result.kind, "invalid");
+  assert.equal(result.error.code, "okf_validation_failed");
+  assert.ok(result.error.diagnostics.some(
+    (diagnostic) => diagnostic.code === "invalid_lifecycle_status",
+  ));
 });
 
 test("small add/update/delete over a large v3 Mind read no unchanged content and write only delta plus manifest", async () => {

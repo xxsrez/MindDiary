@@ -2818,9 +2818,14 @@ Input uses the same `operations` and optional `source_references` as
 
 The tool resolves one explicit effective `read_write` Mind and requires
 `content:write`. It applies the exact file operations to the named base in
-memory, materializes the complete resulting bundle, and runs the same strict
-producer profile, consistency doctor, BundleFile limits and source-reference
-authorization used by `commit_changeset`. Links from unchanged Markdown files
+memory and runs the same strict producer profile, consistency doctor,
+BundleFile limits and source-reference authorization used by
+`commit_changeset`. The first producer preflight for an unproved exact bundle
+materializes the complete result. A later additive preflight may reuse only a
+bounded process-local proof keyed by the exact Space and every resulting
+path/media type/size/content digest; cold start, eviction or any content change
+falls back to the full scan. A partial changed-file check by itself is never a
+producer-validity proof. Links and blocking warnings from unchanged Markdown
 therefore participate in the result; a multi-file repair is evaluated
 atomically.
 

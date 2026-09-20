@@ -39,6 +39,7 @@ import {
   collectMarkdownLocalTargets,
 } from "./markdown-consistency.js";
 import { materializeLogEntry } from "./reserved-content.js";
+import { IncrementalSha256 } from "./incremental-sha256.js";
 
 export interface CreateFileOperation {
   readonly type: "create_file";
@@ -870,6 +871,38 @@ function comparePaths(
   return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
 }
 
+function digestText(text: string): Sha256Digest {
+  const digest = new IncrementalSha256();
+  digest.update(ENCODER.encode(text));
+  return digest.digest() as Sha256Digest;
+}
+
+function producerValidationProofKey(
+  spaceId: SpaceId,
+  files: readonly Readonly<{
+    readonly kind: "markdown" | "opaque";
+    readonly path: string;
+    readonly mediaType: string;
+    readonly sha256: Sha256Digest | null;
+    readonly size: number;
+    readonly text?: string;
+  }>[],
+): Sha256Digest {
+  const digest = new IncrementalSha256();
+  digest.update(ENCODER.encode(`mind-diary-producer-validation-proof-v1\n${spaceId}\n`));
+  for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
+    const sha256 = file.sha256 ?? digestText(file.text!);
+    digest.update(ENCODER.encode(`${JSON.stringify([
+      file.kind,
+      file.path,
+      file.mediaType,
+      sha256,
+      file.size,
+    ])}\n`));
+  }
+  return digest.digest() as Sha256Digest;
+}
+
 function isDeltaRevisionReader(reader: HeadRevisionReader): reader is DeltaRevisionReader {
   return (
     "readHeadRevisionEnvelope" in reader &&
@@ -885,6 +918,7 @@ export class ChangesetPreflightService {
   readonly #clock: Clock;
   readonly #limits: Readonly<ChangesetPreflightLimits>;
   readonly #stagedBundleFiles: Pick<BundleFileStagingStore, "readStagedBundleFile"> | null;
+  readonly #producerValidationProofs = new Map<Sha256Digest, true>();
 
   constructor(dependencies: ChangesetPreflightDependencies) {
     this.#authorizer = dependencies.authorizer;
@@ -941,6 +975,10 @@ export class ChangesetPreflightService {
       });
     }
 
+    const parentProducerValidationProof = headEnvelope === null
+      ? null
+      : producerValidationProofKey(request.spaceId, headEnvelope.manifest.entries);
+
     const hasCreatedMarkdown = operationSet.operations.some(
       (operation) => operation.type === "create_file",
     );
@@ -948,6 +986,8 @@ export class ChangesetPreflightService {
       request.producerProfile === true &&
       deltaReader !== null &&
       currentRevisionId !== null &&
+      parentProducerValidationProof !== null &&
+      this.#producerValidationProofs.has(parentProducerValidationProof) &&
       operationSet.operations.every((operation) =>
         operation.type === "create_file" ||
         operation.type === "replace_index" ||
@@ -1517,6 +1557,16 @@ export class ChangesetPreflightService {
             : [...validation.conformanceErrors, ...validation.envelopeErrors],
         },
       );
+    }
+
+    if (request.producerProfile === true) {
+      const proof = producerValidationProofKey(request.spaceId, candidateFiles);
+      this.#producerValidationProofs.delete(proof);
+      this.#producerValidationProofs.set(proof, true);
+      if (this.#producerValidationProofs.size > 256) {
+        const oldest = this.#producerValidationProofs.keys().next().value;
+        if (oldest !== undefined) this.#producerValidationProofs.delete(oldest);
+      }
     }
 
     return Object.freeze({
