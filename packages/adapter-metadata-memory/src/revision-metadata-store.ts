@@ -188,9 +188,15 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
       }
       restored._spaces = new Map(snapshot.spaces as Map<SpaceId, SpaceState>);
       restored._revisionsById = new Map(snapshot.revisionsById as Map<RevisionId, Envelope>);
-      restored._reachabilityCounts = snapshot.v !== 6 || snapshot.objectReachabilityCounts === undefined
-        ? null
-        : cloneObjectReachabilityCounts(snapshot.objectReachabilityCounts);
+      const persistedReachability = snapshot.objectReachabilityCounts;
+      restored._reachabilityCounts =
+        snapshot.v !== 6 ||
+        typeof persistedReachability !== "object" ||
+        persistedReachability === null ||
+        !("bundleBytes" in persistedReachability) ||
+        !("bundleRetainedBytes" in persistedReachability)
+          ? null
+          : cloneObjectReachabilityCounts(persistedReachability);
       restored._idempotencyRecords = new Map(snapshot.idempotencyRecords as Map<string, CompletedIdempotencyRecord>);
       restored._auditEvents = new Map(snapshot.auditEvents as Map<AuditEventId, Readonly<AuditEvent>>);
       restored._auditOutbox = new Map(snapshot.auditOutbox as Map<OutboxMessageId, Readonly<AuditOutboxMessage>>);

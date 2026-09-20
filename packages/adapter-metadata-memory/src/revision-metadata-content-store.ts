@@ -211,7 +211,7 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
               ContentCommitMetadataTransaction["checkBundleFileRetainedQuota"]
             >[0],
           ) =>
-            bundleFileRetainedQuotaAllows(request, spaces),
+            bundleFileRetainedQuotaAllows(request, this._objectReachabilityCounts()),
           checkIdempotency: async (request: CheckIdempotencyRequest) =>
             checkIdempotencyAgainst(request, idempotencyRecords),
           commitRevision: async (request: RevisionCommitRequest) => {

@@ -30,6 +30,8 @@ export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStor
         objectReachabilityCounts: Object.freeze({
           immutable: new Map(reachabilityCounts.immutable),
           bundle: new Map(reachabilityCounts.bundle),
+          bundleBytes: new Map(reachabilityCounts.bundleBytes),
+          bundleRetainedBytes: new Map(reachabilityCounts.bundleRetainedBytes),
           spaceCanonical: new Map(reachabilityCounts.spaceCanonical),
           capacity: new Map(reachabilityCounts.capacity),
         }),

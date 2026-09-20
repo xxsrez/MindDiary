@@ -845,8 +845,45 @@ export function validCapacityAdmissionRequest(request: Readonly<CapacityAdmissio
 export interface ObjectReachabilityCounts {
   readonly immutable: ReadonlyMap<Digest, number>;
   readonly bundle: ReadonlyMap<string, number>;
+  readonly bundleBytes: ReadonlyMap<string, number>;
+  readonly bundleRetainedBytes: ReadonlyMap<SpaceId, number>;
   readonly spaceCanonical: ReadonlyMap<string, number>;
   readonly capacity: ReadonlyMap<string, number>;
+}
+
+export function bundleFileRetainedQuotaAllows(
+  request: Readonly<{
+    spaceId: SpaceId;
+    candidateEntries: readonly Readonly<{ sha256: Digest; size: number }>[];
+    maxRetainedBytes: number;
+  }>,
+  counts: Readonly<ObjectReachabilityCounts>,
+): boolean {
+  if (!Number.isSafeInteger(request.maxRetainedBytes) || request.maxRetainedBytes < 1) {
+    return false;
+  }
+  // The persisted Space total and per-digest sizes make foreground admission
+  // proportional to the candidate manifest, never to immutable history.
+  if (request.candidateEntries.length === 0) return true;
+  let total = counts.bundleRetainedBytes.get(request.spaceId) ?? 0;
+  const candidate = new Map<Digest, number>();
+  for (const entry of request.candidateEntries) {
+    const candidateSize = candidate.get(entry.sha256);
+    const existingSize = counts.bundleBytes.get(`${request.spaceId}\u0000${entry.sha256}`);
+    if (
+      !SHA256_PATTERN.test(entry.sha256) ||
+      !Number.isSafeInteger(entry.size) || entry.size < 0 ||
+      (candidateSize !== undefined && candidateSize !== entry.size) ||
+      (existingSize !== undefined && existingSize !== entry.size)
+    ) return false;
+    if (candidateSize !== undefined) continue;
+    candidate.set(entry.sha256, entry.size);
+    if (existingSize === undefined) {
+      total += entry.size;
+      if (!Number.isSafeInteger(total) || total > request.maxRetainedBytes) return false;
+    }
+  }
+  return total <= request.maxRetainedBytes;
 }
 
 export function cloneObjectReachabilityCounts(value: unknown): Readonly<ObjectReachabilityCounts> {
@@ -856,6 +893,7 @@ export function cloneObjectReachabilityCounts(value: unknown): Readonly<ObjectRe
   const source = value as Record<string, unknown>;
   if (
     !(source.immutable instanceof Map) || !(source.bundle instanceof Map) ||
+    !(source.bundleBytes instanceof Map) || !(source.bundleRetainedBytes instanceof Map) ||
     !(source.spaceCanonical instanceof Map) || !(source.capacity instanceof Map)
   ) throw new TypeError("object reachability counts are invalid");
   const clone = (input: Map<unknown, unknown>) => {
@@ -876,9 +914,48 @@ export function cloneObjectReachabilityCounts(value: unknown): Readonly<ObjectRe
     }
     immutable.set(key as unknown as Digest, count);
   }
+  const bundle = clone(source.bundle);
+  const bundleBytes = new Map<string, number>();
+  for (const [key, size] of source.bundleBytes) {
+    if (typeof key !== "string" || !Number.isSafeInteger(size) || (size as number) < 0) {
+      throw new TypeError("object reachability counts are invalid");
+    }
+    bundleBytes.set(key, size as number);
+  }
+  const bundleRetainedBytes = new Map<SpaceId, number>();
+  for (const [spaceId, size] of source.bundleRetainedBytes) {
+    if (typeof spaceId !== "string" || !Number.isSafeInteger(size) || (size as number) < 0) {
+      throw new TypeError("object reachability counts are invalid");
+    }
+    bundleRetainedBytes.set(spaceId as SpaceId, size as number);
+  }
+  const calculatedRetainedBytes = new Map<string, number>();
+  for (const [key, size] of bundleBytes) {
+    const separator = key.lastIndexOf("\u0000");
+    const spaceId = key.slice(0, separator);
+    const digest = key.slice(separator + 1);
+    if (separator < 1 || !SHA256_PATTERN.test(digest)) {
+      throw new TypeError("object reachability counts are invalid");
+    }
+    const retained = (calculatedRetainedBytes.get(spaceId) ?? 0) + size;
+    if (!Number.isSafeInteger(retained)) {
+      throw new TypeError("object reachability counts are invalid");
+    }
+    calculatedRetainedBytes.set(spaceId, retained);
+  }
+  if (
+    [...bundle.keys()].some((key) => !bundleBytes.has(key)) ||
+    [...bundleBytes.keys()].some((key) => !bundle.has(key)) ||
+    calculatedRetainedBytes.size !== bundleRetainedBytes.size ||
+    [...calculatedRetainedBytes].some(
+      ([spaceId, size]) => bundleRetainedBytes.get(spaceId as SpaceId) !== size,
+    )
+  ) throw new TypeError("object reachability counts are invalid");
   return Object.freeze({
     immutable,
-    bundle: clone(source.bundle),
+    bundle,
+    bundleBytes,
+    bundleRetainedBytes,
     spaceCanonical: clone(source.spaceCanonical),
     capacity: clone(source.capacity),
   });

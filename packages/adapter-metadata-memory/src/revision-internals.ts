@@ -184,43 +184,6 @@ export function consumeStagedBundleFilesAgainst(
   return Object.freeze({ kind: "consumed", records: Object.freeze(consumed) });
 }
 
-export function bundleFileRetainedQuotaAllows(
-  request: Readonly<{
-    spaceId: SpaceId;
-    candidateEntries: readonly Readonly<{ sha256: Digest; size: number }>[];
-    maxRetainedBytes: number;
-  }>,
-  spaces: ReadonlyMap<SpaceId, SpaceState>,
-): boolean {
-  if (!Number.isSafeInteger(request.maxRetainedBytes) || request.maxRetainedBytes < 1) {
-    return false;
-  }
-  // Markdown-only commits have no BundleFile retained-quota contribution and
-  // must not pay an unrelated full-history scan.
-  if (request.candidateEntries.length === 0) return true;
-  const unique = new Map<Digest, number>();
-  for (const revision of spaces.get(request.spaceId)?.revisions.values() ?? []) {
-    for (const entry of revision.manifest.entries) {
-      if (entry.kind === "opaque") unique.set(entry.sha256, entry.size);
-    }
-  }
-  for (const entry of request.candidateEntries) {
-    const existingSize = unique.get(entry.sha256);
-    if (
-      !SHA256_PATTERN.test(entry.sha256) ||
-      !Number.isSafeInteger(entry.size) || entry.size < 0 ||
-      (existingSize !== undefined && existingSize !== entry.size)
-    ) return false;
-    unique.set(entry.sha256, entry.size);
-  }
-  let total = 0;
-  for (const size of unique.values()) {
-    total += size;
-    if (!Number.isSafeInteger(total) || total > request.maxRetainedBytes) return false;
-  }
-  return true;
-}
-
 export const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 export const EXPORT_DOWNLOAD_VERIFIER_PATTERN =
   /^hmac-sha256:export-download:v1:[0-9a-f]{64}$/u;

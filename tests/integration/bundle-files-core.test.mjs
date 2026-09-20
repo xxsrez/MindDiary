@@ -563,6 +563,27 @@ test("staging contains spoofed types and atomically consumes a binding-pinned re
     (await env.metadata.readStagedBundleFile(staged.record.stagedFileId)).state,
     "consumed",
   );
+  const restoredMetadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    env.metadata.exportDurableSnapshot(),
+  );
+  const retainedQuota = (candidateEntries, maxRetainedBytes) =>
+    restoredMetadata.runContentCommitTransaction((transaction) =>
+      transaction.checkBundleFileRetainedQuota({
+        spaceId: MINDS.ordinary.spaceId,
+        candidateEntries,
+        maxRetainedBytes,
+      }));
+  assert.equal(await retainedQuota(
+    [{ sha256: staged.record.sha256, size: staged.record.size }],
+    staged.record.size,
+  ), true);
+  assert.equal(await retainedQuota(
+    [
+      { sha256: staged.record.sha256, size: staged.record.size },
+      { sha256: `sha256:${"f".repeat(64)}`, size: 1 },
+    ],
+    staged.record.size,
+  ), false);
   const exact = await env.revisions.materialize(
     MINDS.ordinary.spaceId,
     REVISIONS.next.revisionId,

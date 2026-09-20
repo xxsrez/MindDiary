@@ -624,6 +624,8 @@ export abstract class RevisionMetadataStoreState {
       if (this._reachabilityCounts !== null) return this._reachabilityCounts;
       const immutable = new Map<Digest, number>();
       const bundle = new Map<string, number>();
+      const bundleBytes = new Map<string, number>();
+      const bundleRetainedBytes = new Map<SpaceId, number>();
       const spaceCanonical = new Map<string, number>();
       const capacity = new Map<string, number>();
       const increment = (target: Map<string, number>, key: string) =>
@@ -634,7 +636,20 @@ export abstract class RevisionMetadataStoreState {
           immutable.set(entry.sha256, (immutable.get(entry.sha256) ?? 0) + 1);
           increment(capacity, `${spaceId}\u0000${entry.kind}\u0000${entry.sha256}`);
           if (entry.kind === "opaque") {
-            increment(bundle, `${spaceId}\u0000${entry.sha256}`);
+            const key = `${spaceId}\u0000${entry.sha256}`;
+            const existingSize = bundleBytes.get(key);
+            if (existingSize !== undefined && existingSize !== entry.size) {
+              throw new TypeError("BundleFile digest size is inconsistent");
+            }
+            increment(bundle, key);
+            if (existingSize === undefined) {
+              bundleBytes.set(key, entry.size);
+              const retained = (bundleRetainedBytes.get(spaceId) ?? 0) + entry.size;
+              if (!Number.isSafeInteger(retained)) {
+                throw new TypeError("BundleFile retained bytes overflow");
+              }
+              bundleRetainedBytes.set(spaceId, retained);
+            }
           } else if (
             envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
             envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
@@ -659,6 +674,8 @@ export abstract class RevisionMetadataStoreState {
       this._reachabilityCounts = Object.freeze({
         immutable,
         bundle,
+        bundleBytes,
+        bundleRetainedBytes,
         spaceCanonical,
         capacity,
       });
@@ -731,6 +748,8 @@ export abstract class RevisionMetadataStoreState {
       const currentCounts = this._objectReachabilityCounts();
       const immutable = new Map(currentCounts.immutable);
       const bundle = new Map(currentCounts.bundle);
+      const bundleBytes = new Map(currentCounts.bundleBytes);
+      const bundleRetainedBytes = new Map(currentCounts.bundleRetainedBytes);
       const spaceCanonical = new Map(currentCounts.spaceCanonical);
       const capacity = new Map(currentCounts.capacity);
       const increment = (target: Map<string, number>, key: string) =>
@@ -749,7 +768,20 @@ export abstract class RevisionMetadataStoreState {
         increment(capacity, capacityKey);
         immutable.set(entry.sha256, (immutable.get(entry.sha256) ?? 0) + 1);
         if (entry.kind === "opaque") {
-          increment(bundle, `${spaceId}\u0000${entry.sha256}`);
+          const key = `${spaceId}\u0000${entry.sha256}`;
+          const existingSize = bundleBytes.get(key);
+          if (existingSize !== undefined && existingSize !== entry.size) {
+            throw new TypeError("BundleFile digest size is inconsistent");
+          }
+          increment(bundle, key);
+          if (existingSize === undefined) {
+            bundleBytes.set(key, entry.size);
+            const retained = (bundleRetainedBytes.get(spaceId) ?? 0) + entry.size;
+            if (!Number.isSafeInteger(retained)) {
+              throw new TypeError("BundleFile retained bytes overflow");
+            }
+            bundleRetainedBytes.set(spaceId, retained);
+          }
         } else if (
           envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
           envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
@@ -786,6 +818,8 @@ export abstract class RevisionMetadataStoreState {
       this._reachabilityCounts = Object.freeze({
         immutable,
         bundle,
+        bundleBytes,
+        bundleRetainedBytes,
         spaceCanonical,
         capacity,
       });
