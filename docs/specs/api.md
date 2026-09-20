@@ -436,8 +436,20 @@ Allowed resource для pilot — exact canonical modern MCP URL `/api/mcp`.
 read. Access token получает internal authorization mirror в существующем MCP
 token store. Mirror не является user-visible personal token, но позволяет
 application authorizer заново проверить token status, expiry и scopes внутри
-ACL/CAS/commit transaction. Grant revoke и account deletion отзывают mirror до
-best-effort cleanup OAuth normalized records.
+ACL/CAS/commit transaction.
+
+Authorization code или current refresh token считается потреблённым только в
+той же D1 transaction, которая создаёт его access/refresh successor и обновляет
+grant activity. Authorization mirror сначала staging-ится под новым случайным
+record ID: если mirror создать нельзя, one-time source остаётся пригодным для
+повтора; если conditional D1 transaction проиграла гонку или откатилась,
+staged mirror компенсирующе отзывается и bearer secrets не возвращаются.
+
+При revoke authoritative grant/access/refresh records становятся unusable в D1
+до secondary cleanup. Mirror IDs затем читаются keyset-страницами и отзываются
+ограниченными batches, чтобы ни query result, ни один metadata event не росли
+пропорционально всей истории grant/principal. Сбой secondary cleanup не может
+сохранить bearer действующим; cleanup остаётся idempotent.
 
 Grant владеет independent `MindBindingSet`; refresh rotation сохраняет его,
 revoke делает unusable, reconnect создаёт новый empty set. Для personal-token

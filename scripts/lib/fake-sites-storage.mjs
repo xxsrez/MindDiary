@@ -311,6 +311,32 @@ export class FakeD1Database {
       });
       return { success: true, meta: { changes: 1 } };
     }
+    if (sql.includes("/*md-oauth-access-create-conditional*/")) {
+      const sourceId = values[9];
+      const source = sql.includes("md_oauth_authorization_codes source")
+        ? this.oauthCodes.get(sourceId)
+        : this.oauthRefresh.get(sourceId);
+      const sourceAvailable = source && (
+        sql.includes("md_oauth_authorization_codes source")
+          ? !source.consumed_at && source.expires_at > values[10]
+          : !source.used_at && !source.revoked_at && source.expires_at > values[10]
+      ) && !this.oauthGrants.get(source.grant_id)?.revoked_at;
+      if (!sourceAvailable) return { success: true, meta: { changes: 0 } };
+      this.oauthAccess.set(values[0], {
+        id: values[0],
+        token_verifier: values[1],
+        grant_id: values[2],
+        principal_id: values[3],
+        client_id: values[4],
+        resource: values[5],
+        scopes_json: values[6],
+        expires_at: values[7],
+        created_at: values[8],
+        last_used_at: null,
+        revoked_at: null,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
     if (sql.includes("/*md-oauth-refresh-create*/")) {
       this.oauthRefresh.set(values[0], {
         id: values[0],
@@ -327,6 +353,58 @@ export class FakeD1Database {
         used_at: null,
         revoked_at: null,
       });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-oauth-refresh-create-conditional*/")) {
+      const sourceId = values[11];
+      const source = sql.includes("md_oauth_authorization_codes source")
+        ? this.oauthCodes.get(sourceId)
+        : this.oauthRefresh.get(sourceId);
+      const sourceAvailable = source && (
+        sql.includes("md_oauth_authorization_codes source")
+          ? !source.consumed_at && source.expires_at > values[12]
+          : !source.used_at && !source.revoked_at && source.expires_at > values[12]
+      ) && !this.oauthGrants.get(source.grant_id)?.revoked_at;
+      if (!sourceAvailable) return { success: true, meta: { changes: 0 } };
+      this.oauthRefresh.set(values[0], {
+        id: values[0],
+        token_verifier: values[1],
+        grant_id: values[2],
+        family_id: values[3],
+        parent_id: values[4],
+        principal_id: values[5],
+        client_id: values[6],
+        resource: values[7],
+        scopes_json: values[8],
+        expires_at: values[9],
+        created_at: values[10],
+        used_at: null,
+        revoked_at: null,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-oauth-code-consume-conditional*/")) {
+      const row = this.oauthCodes.get(values[1]);
+      if (!row || row.consumed_at || row.expires_at <= values[2]) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      row.consumed_at = values[0];
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-oauth-refresh-consume-conditional*/")) {
+      const row = this.oauthRefresh.get(values[1]);
+      if (!row || row.used_at || row.revoked_at || row.expires_at <= values[2]) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      row.used_at = values[0];
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-oauth-grant-touch-conditional*/")) {
+      const row = this.oauthGrants.get(values[2]);
+      if (!row || row.revoked_at || !this.oauthAccess.has(values[3])) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      Object.assign(row, { last_used_at: values[0], updated_at: values[1] });
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-oauth-grant-touch*/")) {
@@ -835,14 +913,18 @@ export class FakeD1Database {
     if (sql.includes("/*md-oauth-access-grant-list*/")) {
       return {
         results: [...this.oauthAccess.values()]
-          .filter((row) => row.grant_id === values[0] && !row.revoked_at)
+          .filter((row) => row.grant_id === values[0] && row.id > values[1])
+          .sort((left, right) => left.id.localeCompare(right.id))
+          .slice(0, values[2])
           .map((row) => ({ id: row.id, principal_id: row.principal_id })),
       };
     }
     if (sql.includes("/*md-oauth-access-principal-list*/")) {
       return {
         results: [...this.oauthAccess.values()]
-          .filter((row) => row.principal_id === values[0] && !row.revoked_at)
+          .filter((row) => row.principal_id === values[0] && row.id > values[1])
+          .sort((left, right) => left.id.localeCompare(right.id))
+          .slice(0, values[2])
           .map((row) => ({ id: row.id, principal_id: row.principal_id })),
       };
     }

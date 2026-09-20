@@ -7,6 +7,7 @@ import {
   createSitesOAuthConnector,
 } from "../../packages/adapter-oauth-sites/dist/index.js";
 import { InMemoryMcpTokenStore } from "../../packages/adapter-metadata-memory/dist/index.js";
+import { SqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
 
 const ORIGIN = "https://mind-diary.example";
 const REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect";
@@ -40,14 +41,28 @@ class OAuthD1 {
   access = new Map();
   refresh = new Map();
   connectionPageLimits = [];
+  batchTail = Promise.resolve();
+  failNextTokenIssueBatch = false;
 
   prepare(sql) {
     return new Statement(this, sql);
   }
   async batch(statements) {
-    const results = [];
-    for (const statement of statements) results.push(await statement.run());
-    return results;
+    const execute = async () => {
+      if (
+        this.failNextTokenIssueBatch &&
+        statements.some((statement) => statement.sql.includes("-create-conditional*/"))
+      ) {
+        this.failNextTokenIssueBatch = false;
+        throw new Error("injected OAuth token issue batch failure");
+      }
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
+    };
+    const result = this.batchTail.then(execute, execute);
+    this.batchTail = result.then(() => undefined, () => undefined);
+    return result;
   }
   result(changes = 1) {
     return { success: true, meta: { changes } };
@@ -111,6 +126,25 @@ class OAuthD1 {
       });
       return this.result();
     }
+    if (sql.includes("/*md-oauth-access-create-conditional*/")) {
+      const sourceId = values[9];
+      const source = sql.includes("md_oauth_authorization_codes source")
+        ? this.codes.get(sourceId)
+        : this.refresh.get(sourceId);
+      const sourceAvailable = source && (
+        sql.includes("md_oauth_authorization_codes source")
+          ? !source.consumed_at && source.expires_at > values[10]
+          : !source.used_at && !source.revoked_at && source.expires_at > values[10]
+      ) && !this.grants.get(source.grant_id)?.revoked_at;
+      if (!sourceAvailable) return this.result(0);
+      this.access.set(values[0], {
+        id: values[0], token_verifier: values[1], grant_id: values[2],
+        principal_id: values[3], client_id: values[4], resource: values[5],
+        scopes_json: values[6], expires_at: values[7], created_at: values[8],
+        last_used_at: null, revoked_at: null,
+      });
+      return this.result();
+    }
     if (sql.includes("/*md-oauth-refresh-create*/")) {
       this.refresh.set(values[0], {
         id: values[0], token_verifier: values[1], grant_id: values[2], family_id: values[3],
@@ -118,6 +152,43 @@ class OAuthD1 {
         resource: values[7], scopes_json: values[8], expires_at: values[9],
         created_at: values[10], used_at: null, revoked_at: null,
       });
+      return this.result();
+    }
+    if (sql.includes("/*md-oauth-refresh-create-conditional*/")) {
+      const sourceId = values[11];
+      const source = sql.includes("md_oauth_authorization_codes source")
+        ? this.codes.get(sourceId)
+        : this.refresh.get(sourceId);
+      const sourceAvailable = source && (
+        sql.includes("md_oauth_authorization_codes source")
+          ? !source.consumed_at && source.expires_at > values[12]
+          : !source.used_at && !source.revoked_at && source.expires_at > values[12]
+      ) && !this.grants.get(source.grant_id)?.revoked_at;
+      if (!sourceAvailable) return this.result(0);
+      this.refresh.set(values[0], {
+        id: values[0], token_verifier: values[1], grant_id: values[2], family_id: values[3],
+        parent_id: values[4], principal_id: values[5], client_id: values[6],
+        resource: values[7], scopes_json: values[8], expires_at: values[9],
+        created_at: values[10], used_at: null, revoked_at: null,
+      });
+      return this.result();
+    }
+    if (sql.includes("/*md-oauth-code-consume-conditional*/")) {
+      const row = this.codes.get(values[1]);
+      if (!row || row.consumed_at || row.expires_at <= values[2]) return this.result(0);
+      row.consumed_at = values[0];
+      return this.result();
+    }
+    if (sql.includes("/*md-oauth-refresh-consume-conditional*/")) {
+      const row = this.refresh.get(values[1]);
+      if (!row || row.used_at || row.revoked_at || row.expires_at <= values[2]) return this.result(0);
+      row.used_at = values[0];
+      return this.result();
+    }
+    if (sql.includes("/*md-oauth-grant-touch-conditional*/")) {
+      const row = this.grants.get(values[2]);
+      if (!row || row.revoked_at || !this.access.has(values[3])) return this.result(0);
+      Object.assign(row, { last_used_at: values[0], updated_at: values[1] });
       return this.result();
     }
     if (sql.includes("/*md-oauth-grant-touch*/")) {
@@ -218,10 +289,18 @@ class OAuthD1 {
       return { results: [{ ...row, grant_revoked_at: this.grants.get(row.grant_id)?.revoked_at ?? null }] };
     }
     if (sql.includes("/*md-oauth-access-grant-list*/")) {
-      return { results: [...this.access.values()].filter((row) => row.grant_id === values[0] && !row.revoked_at).map((row) => ({ id: row.id, principal_id: row.principal_id })) };
+      return { results: [...this.access.values()]
+        .filter((row) => row.grant_id === values[0] && row.id > values[1])
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .slice(0, values[2])
+        .map((row) => ({ id: row.id, principal_id: row.principal_id })) };
     }
     if (sql.includes("/*md-oauth-access-principal-list*/")) {
-      return { results: [...this.access.values()].filter((row) => row.principal_id === values[0] && !row.revoked_at).map((row) => ({ id: row.id, principal_id: row.principal_id })) };
+      return { results: [...this.access.values()]
+        .filter((row) => row.principal_id === values[0] && row.id > values[1])
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .slice(0, values[2])
+        .map((row) => ({ id: row.id, principal_id: row.principal_id })) };
     }
     if (sql.includes("/*md-oauth-access-owner*/")) {
       const row = [...this.access.values()].find((item) => item.token_verifier === values[0] && item.client_id === values[1]);
@@ -289,7 +368,7 @@ async function pkce(value) {
 
 async function environment(options = {}) {
   const database = new OAuthD1();
-  const authorizationTokens = new InMemoryMcpTokenStore();
+  const authorizationTokens = options.authorizationTokens ?? new InMemoryMcpTokenStore();
   const targetRegistrations = [];
   const targetRevocations = [];
   const connector = await createSitesOAuthConnector({
@@ -606,6 +685,130 @@ test("refresh rotation tolerates bounded concurrent reuse without revoking the c
   assert.equal(
     (await connector.authenticator.authenticate(rotatedBody.access_token, "request_concurrent")).kind,
     "authenticated",
+  );
+});
+
+test("refresh remains reusable when mirror creation or the atomic D1 issue batch fails", async () => {
+  const backing = new InMemoryMcpTokenStore();
+  let failMirrorCreate = false;
+  const authorizationTokens = {
+    createMcpToken: (request) => {
+      if (failMirrorCreate) throw new Error("injected mirror creation failure");
+      return backing.createMcpToken(request);
+    },
+    revokeMcpToken: (request) => backing.revokeMcpToken(request),
+    revokeMcpTokens: (request) => backing.revokeMcpTokens(request),
+  };
+  const { connector, database } = await environment({ authorizationTokens });
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const refresh = () => connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: issued.refresh_token,
+      client_id: client.client_id,
+      resource: `${ORIGIN}/api/mcp`,
+    }),
+  }));
+
+  failMirrorCreate = true;
+  assert.equal((await refresh()).status, 500);
+  failMirrorCreate = false;
+  database.failNextTokenIssueBatch = true;
+  assert.equal((await refresh()).status, 500);
+
+  const retried = await refresh();
+  assert.equal(retried.status, 200);
+  const body = await retried.json();
+  assert.equal(
+    (await connector.authenticator.authenticate(body.access_token, "request_after_retry")).kind,
+    "authenticated",
+  );
+});
+
+test("conditional one-time token issuance executes atomically on SQLite", async (context) => {
+  const database = new SqliteD1();
+  context.after(() => database.close());
+  const connector = await createSitesOAuthConnector({
+    database,
+    publicOrigin: ORIGIN,
+    verifierKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 1),
+    authorizationTokens: new InMemoryMcpTokenStore(),
+    resolveIdentity: async () => ({ kind: "authenticated", principalId: "principal_1" }),
+  });
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const refreshed = await connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: issued.refresh_token,
+      client_id: client.client_id,
+      resource: `${ORIGIN}/api/mcp`,
+    }),
+  }));
+  assert.equal(refreshed.status, 200);
+  const body = await refreshed.json();
+  assert.equal(
+    (await connector.authenticator.authenticate(body.access_token, "request_sqlite")).kind,
+    "authenticated",
+  );
+});
+
+test("connection revoke bounds mirror events and revokes authoritative OAuth rows first", async () => {
+  const mirrorBatchSizes = [];
+  const authorizationTokens = {
+    createMcpToken: async () => ({ kind: "created" }),
+    revokeMcpToken: async () => ({ kind: "not_found" }),
+    revokeMcpTokens: async (request) => {
+      mirrorBatchSizes.push(request.tokenIds.length);
+      return { revokedCount: request.tokenIds.length, replayedCount: 0, notFoundCount: 0 };
+    },
+  };
+  const { connector, database } = await environment({ authorizationTokens });
+  const client = await register(connector);
+  await authorize(connector, client.client_id);
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  for (let index = 0; index < 700; index += 1) {
+    database.access.set(`md_oauth_access_record_bulk_${index}`, {
+      id: `md_oauth_access_record_bulk_${index}`,
+      token_verifier: `bulk:${index}`,
+      grant_id: connection.bindingOwnerId,
+      principal_id: "principal_1",
+      client_id: client.client_id,
+      resource: `${ORIGIN}/api/mcp`,
+      scopes_json: JSON.stringify(["content:read"]),
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      created_at: new Date().toISOString(),
+      last_used_at: null,
+      revoked_at: null,
+    });
+  }
+  assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+  assert.equal(database.access.size, 701);
+  assert.equal([...database.access.values()].every((row) => row.revoked_at !== null), true);
+  assert.deepEqual(mirrorBatchSizes, [256, 256, 189]);
+});
+
+test("mirror cleanup failure cannot leave a revoked OAuth connection usable", async () => {
+  const authorizationTokens = {
+    createMcpToken: async () => ({ kind: "created" }),
+    revokeMcpToken: async () => ({ kind: "not_found" }),
+    revokeMcpTokens: async () => {
+      throw new Error("injected mirror cleanup failure");
+    },
+  };
+  const { connector } = await environment({ authorizationTokens });
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+  assert.deepEqual(
+    await connector.authenticator.authenticate(issued.access_token, "request_after_cleanup_failure"),
+    { kind: "invalid" },
   );
 });
 
