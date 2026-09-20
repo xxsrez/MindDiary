@@ -360,10 +360,9 @@ function rankDocument(
   );
   let weighted = 0;
   for (const field of matchedFields) {
-    for (const value of normalizedFields[field]) {
-      for (const term of terms) {
-        weighted += FIELD_WEIGHT[field] * countOccurrences(value, term);
-      }
+    const value = normalizedFields[field].join("\n");
+    for (const term of terms) {
+      weighted += FIELD_WEIGHT[field] * countOccurrences(value, term);
     }
   }
   const preferredSnippetField = [...matchedFields].sort(

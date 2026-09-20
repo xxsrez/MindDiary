@@ -344,6 +344,76 @@ test("bounded SQL ranking and application reparse agree on indented ATX headings
   assert.deepEqual(result.results[0].matchedFields, ["headings"]);
 });
 
+test("bounded SQL ranking uses the same rounded score as application ordering", async (t) => {
+  const database = new SqliteD1();
+  t.after(() => database.close());
+  const index = await createSitesSearchIndex(database);
+  const env = harness(index);
+  const owner = await createAccount(env, 21, "Rounded Ranking Owner");
+  const mind = await createMind(env, owner, "rounded-ranking-search");
+  const commonTerms = Array.from({ length: 7 }, (_, item) => `term${item + 1}`);
+  const discriminator = "term8";
+  const repeat = (terms, count) => terms.flatMap((term) => Array(count).fill(term)).join(" ");
+  const common = repeat(commonTerms, 20);
+  const title = `${common} ${repeat([discriminator], 15)}`;
+  const description = `${common} ${discriminator}`;
+  const tags = [common];
+  const heading = common;
+  const document = (path, extraBody) => ({
+    path,
+    text: concept({
+      title,
+      description,
+      tags,
+      heading,
+      body: `${common}${extraBody ? ` ${discriminator}` : ""}`,
+    }),
+    titleDerivedFromPath: false,
+    fields: {
+      title: [title],
+      description: [description],
+      tags,
+      headings: [heading],
+      body: [`${common}${extraBody ? ` ${discriminator}` : ""}`],
+    },
+  });
+  const documents = [
+    { path: "index.md", text: rootIndex("") },
+    document("a.md", false),
+    document("z.md", true),
+  ];
+  const revisionId = await commitFiles(env, owner, mind, documents, "Rounded ranking");
+  await index.replaceExactRevision({
+    spaceId: mind.mindId,
+    revisionId,
+    documents,
+  });
+  const request = {
+    mind: mind.handle,
+    query: [...commonTerms, discriminator].join(" "),
+  };
+
+  const full = await env.search.searchEntries(actor(owner.principalId), {
+    ...request,
+    limit: 2,
+  });
+  assert.deepEqual(full.results.map((result) => result.entry.path), ["a.md", "z.md"]);
+  assert.equal(full.results[0].score, full.results[1].score);
+
+  const bounded = await env.search.searchEntries(actor(owner.principalId), {
+    ...request,
+    limit: 1,
+  });
+  assert.equal(bounded.results[0].entry.path, "a.md");
+  assert.ok(bounded.nextCursor);
+  const continued = await env.search.searchEntries(actor(owner.principalId), {
+    ...request,
+    limit: 1,
+    cursor: bounded.nextCursor,
+  });
+  assert.equal(continued.results[0].entry.path, "z.md");
+});
+
 test("search cursor is query/revision bound and keeps its immutable snapshot after HEAD moves", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Cursor Owner");

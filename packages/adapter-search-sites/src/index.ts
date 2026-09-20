@@ -750,7 +750,8 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
         `/*md-search-query-normalized*/ SELECT membership.path, document.text,
            (SELECT COALESCE(SUM(${score}), 0) FROM json_each(?3) AS term) AS weighted_score
          ${joins}
-         ORDER BY weighted_score DESC, membership.path ASC${pagination}`,
+         ORDER BY round(weighted_score / (weighted_score + 12.0), 6) DESC,
+                  membership.path ASC${pagination}`,
       )
       .bind(
         spaceId,
