@@ -1115,15 +1115,15 @@ export class FakeD1Database {
           right.score - left.score || left.row.path.localeCompare(right.row.path));
     };
     if (sql.includes("/*md-search-match-count*/")) {
-      const terms = values.slice(2).map(String);
+      const terms = JSON.parse(String(values[2]));
       return { success: true, results: [{
         total_matches: rankedSearchRows(values[0], values[1], terms).length,
       }] };
     }
     if (sql.includes("/*md-search-query-normalized*/")) {
       const paged = /\sLIMIT\s/u.test(sql);
-      const termValues = paged ? values.slice(2, -2) : values.slice(2);
-      const ranked = rankedSearchRows(values[0], values[1], termValues.map(String));
+      const terms = JSON.parse(String(values[2]));
+      const ranked = rankedSearchRows(values[0], values[1], terms);
       const selected = paged
         ? ranked.slice(Number(values.at(-1)), Number(values.at(-1)) + Number(values.at(-2)))
         : ranked;

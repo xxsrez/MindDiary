@@ -105,6 +105,62 @@ test("usage is recomputed from immutable manifests and same-Space shared digests
   assert.equal(second.scannedSpaces, 1);
 });
 
+test("queued note reusing a committed markdown digest does not double-count physical storage", async () => {
+  const metadata = new InMemoryRevisionMetadataStore();
+  const objects = new InMemoryObjectStore();
+  const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
+  const committed = await revisions.commit({
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: null,
+    revisionId: REVISIONS.initial.revisionId,
+    committedAt: REVISIONS.initial.committedAt,
+    committedBy: REVISION_AUTHORS.active,
+    summary: "capacity queued-note seed",
+    files: CANONICAL_REVISION_FILES,
+  });
+  assert.equal(committed.kind, "committed");
+  const markdown = committed.envelope.manifest.entries.find((entry) => entry.kind === "markdown");
+  assert.ok(markdown);
+  const before = await metadata.readMindCapacityUsage(MINDS.ordinary.spaceId);
+  const snapshot = metadata.exportDurableSnapshot();
+  const receiptId = `note_${"0".repeat(64)}`;
+  snapshot.queuedNotes.set(receiptId, Object.freeze({
+    receiptId,
+    spaceId: MINDS.ordinary.spaceId,
+    actor: Object.freeze({
+      kind: "registered_principal",
+      principalId: PRINCIPALS.owner.principalId,
+      authentication: Object.freeze({
+        kind: "mcp_token",
+        tokenId: "token_capacity_reused_note",
+        effectiveScopes: Object.freeze(["content:read", "content:write"]),
+      }),
+      deploymentCapabilities: Object.freeze([]),
+      requestId: "request_capacity_reused_note",
+      occurredAtUtc: CREATED,
+    }),
+    writePin: Object.freeze({
+      principalId: PRINCIPALS.owner.principalId,
+      spaceId: MINDS.ordinary.spaceId,
+      generationId: "generation_capacity_reused_note",
+    }),
+    payloadHash: markdown.sha256,
+    size: markdown.size,
+    path: `raw/inbox/${receiptId}.md`,
+    state: "queued",
+    attempts: 0,
+    leaseUntil: 0,
+    revisionId: null,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    failureCode: null,
+  }));
+  const restored = InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot);
+  const after = await restored.readMindCapacityUsage(MINDS.ordinary.spaceId);
+
+  assert.equal(after.physicalCanonicalBytes, before.physicalCanonicalBytes);
+  assert.equal(after.d1MetadataBytes, before.d1MetadataBytes + 2_048);
+});
+
 test("reservation admission is serialized, retry-safe and enforces fairness plus soft/hard limits", async () => {
   const metadata = new InMemoryRevisionMetadataStore();
   const constrained = limits({

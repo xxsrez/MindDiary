@@ -610,7 +610,7 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
       });
       return this.queryExactRevision(spaceId, revisionId, normalizedTerms, page);
     }
-    const storageTerms = normalizedTerms.slice(0, 98);
+    const termsJson = JSON.stringify(normalizedTerms);
     const columns = [
       ["fields.normalized_title", 8],
       ["fields.normalized_description", 4],
@@ -618,14 +618,15 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
       ["fields.normalized_headings", 5],
       ["fields.normalized_body", 1],
     ] as const;
-    const predicates = storageTerms.map((_term, index) =>
-      `(${columns.map(([column]) => `instr(${column}, ?${index + 3}) > 0`).join(" OR ")})`
-    );
-    const score = storageTerms.flatMap((_term, index) =>
-      columns.map(([column, weight]) =>
-        `${weight} * min(20, (length(${column}) - length(replace(${column}, ?${index + 3}, ''))) / length(?${index + 3}))`
+    const termValue = "CAST(term.value AS TEXT)";
+    const predicate = columns
+      .map(([column]) => `instr(${column}, ${termValue}) > 0`)
+      .join(" OR ");
+    const score = columns
+      .map(([column, weight]) =>
+        `${weight} * min(20, (length(${column}) - length(replace(${column}, ${termValue}, ''))) / length(${termValue}))`
       )
-    ).join(" + ");
+      .join(" + ");
     const joins = `FROM md_search_revision_documents AS membership
          JOIN md_search_documents AS document
            ON document.space_id = membership.space_id
@@ -634,26 +635,29 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
            ON fields.space_id = membership.space_id
           AND fields.digest = membership.digest
          WHERE membership.space_id = ?1 AND membership.revision_id = ?2
-           AND ${predicates.join(" AND ")}`;
+           AND NOT EXISTS (
+             SELECT 1 FROM json_each(?3) AS term
+              WHERE NOT (${predicate})
+           )`;
     const matchCount = await this.#database
       .prepare(`/*md-search-match-count*/ SELECT COUNT(*) AS total_matches ${joins}`)
-      .bind(spaceId, revisionId, ...storageTerms)
+      .bind(spaceId, revisionId, termsJson)
       .all<SearchMatchCountRow>();
     const totalMatches = Number(matchCount.results?.[0]?.total_matches ?? 0);
     const pagination = page === undefined
       ? ""
-      : ` LIMIT ?${storageTerms.length + 3} OFFSET ?${storageTerms.length + 4}`;
+      : " LIMIT ?4 OFFSET ?5";
     const matches = await this.#database
       .prepare(
         `/*md-search-query-normalized*/ SELECT membership.path, document.text,
-           (${score}) AS weighted_score
+           (SELECT COALESCE(SUM(${score}), 0) FROM json_each(?3) AS term) AS weighted_score
          ${joins}
          ORDER BY weighted_score DESC, membership.path ASC${pagination}`,
       )
       .bind(
         spaceId,
         revisionId,
-        ...storageTerms,
+        termsJson,
         ...(page === undefined ? [] : [page.limit, page.offset]),
       )
       .all<NormalizedSearchRow>();

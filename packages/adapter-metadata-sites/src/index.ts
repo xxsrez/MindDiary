@@ -565,7 +565,7 @@ function isEmptyRecoveryTransaction(
 function transactionContainsMutation(calls: readonly DurableCall[]): boolean {
   return calls.some((call) =>
     METADATA_MUTATIONS.has(call.method) ||
-    !/^(?:check|classify|inspect|is|list|read|resolve|validate)/u.test(call.method)
+    !/^(?:check|classify|find|inspect|is|list|read|resolve|validate)/u.test(call.method)
   );
 }
 

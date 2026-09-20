@@ -41,3 +41,37 @@ for (const missingTable of [
     assert.deepEqual(found.documents, documents);
   });
 }
+
+test("search evaluates every accepted term beyond the former D1 bind ceiling", async (t) => {
+  const database = new SqliteD1();
+  t.after(() => database.close());
+  const index = await createSitesSearchIndex(database);
+  const terms = Array.from({ length: 99 }, (_, index) =>
+    `term-${String(index).padStart(3, "0")}`);
+  await index.replaceExactRevision({
+    spaceId: "space_many_search_terms",
+    revisionId: "revision_many_search_terms",
+    documents: [
+      { path: "complete.md", text: terms.join(" ") },
+      { path: "missing-last.md", text: terms.slice(0, -1).join(" ") },
+    ],
+  });
+
+  assert.deepEqual(
+    await index.queryExactRevision(
+      "space_many_search_terms",
+      "revision_many_search_terms",
+      terms,
+      { offset: 0, limit: 1 },
+    ),
+    {
+      kind: "ready",
+      spaceId: "space_many_search_terms",
+      revisionId: "revision_many_search_terms",
+      totalDocuments: 2,
+      totalMatches: 1,
+      pageApplied: true,
+      documents: [{ path: "complete.md", text: terms.join(" ") }],
+    },
+  );
+});

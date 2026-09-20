@@ -869,7 +869,7 @@ class FakeD1Database {
           right.score - left.score || left.row.path.localeCompare(right.row.path));
     };
     if (sql.includes("/*md-search-match-count*/")) {
-      const terms = values.slice(2).map(String);
+      const terms = JSON.parse(String(values[2]));
       return { success: true, results: [{
         total_matches: rankedSearchRows(values[0], values[1], terms).length,
       }] };
@@ -877,8 +877,8 @@ class FakeD1Database {
     if (sql.includes("/*md-search-query-normalized*/")) {
       this.searchReadOperations.push("query");
       const paged = /\sLIMIT\s/u.test(sql);
-      const termValues = paged ? values.slice(2, -2) : values.slice(2);
-      const ranked = rankedSearchRows(values[0], values[1], termValues.map(String));
+      const terms = JSON.parse(String(values[2]));
+      const ranked = rankedSearchRows(values[0], values[1], terms);
       const selected = paged
         ? ranked.slice(Number(values.at(-1)), Number(values.at(-1)) + Number(values.at(-2)))
         : ranked;
@@ -1869,6 +1869,17 @@ test("read-only transactions do not append durable metadata events", async () =>
   assert.equal(
     await store.runContentCommitTransaction((transaction) =>
       transaction.readHead(opaqueId("space_read_only_transaction"))),
+    null,
+  );
+  assert.equal(
+    await store.runExportStartTransaction((transaction) =>
+      transaction.findActiveOrRecoverableExportJob({
+        requestedByPrincipalId: opaqueId("principal_read_only_export"),
+        spaceId: opaqueId("space_read_only_export"),
+        revisionId: opaqueId("revision_read_only_export"),
+        profile: "MD-OKF-ZIP-1",
+        now: T5,
+      })),
     null,
   );
 

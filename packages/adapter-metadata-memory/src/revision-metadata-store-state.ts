@@ -708,6 +708,7 @@ export abstract class RevisionMetadataStoreState {
       return capacityUsageFromCanonicalLedger({
         spaceIds,
         ledger: this._capacityUsageLedger,
+        committedCanonicalKeys: this._objectReachabilityCounts().capacity.keys(),
         stagedBundleFiles: overrides.stagedBundleFiles ?? this._stagedBundleFiles,
         queuedNotes: overrides.queuedNotes ?? this._queuedNotes,
         exportJobs: overrides.exportJobs ?? this._exportJobs,
