@@ -627,6 +627,164 @@ export function capacityUsageFromCanonicalState(input: Readonly<{
   });
 }
 
+/**
+ * Canonical retained-revision contribution for one Space. This is the only
+ * helper that walks revision manifests; callers persist the result as the
+ * admission ledger and update it incrementally on later commits.
+ */
+export function canonicalCapacityUsageForSpace(
+  spaceId: SpaceId,
+  state: SpaceState,
+  reconciledAt: UtcInstant | null,
+): Readonly<CapacityUsageSnapshot> {
+  let logicalHeadBytes = 0;
+  let logicalRetainedBytes = 0;
+  let physicalCanonicalBytes = 0;
+  let d1MetadataBytes = 1_024;
+  const uniqueCanonical = new Set<string>();
+  const head = state.head === null ? null : state.revisions.get(state.head) ?? null;
+  if (head !== null) {
+    logicalHeadBytes = head.manifest.entries.reduce(
+      (total, entry) => total + entry.size,
+      0,
+    );
+  }
+  for (const envelope of state.revisions.values()) {
+    d1MetadataBytes += 512 + envelope.manifest.entries.length * 160;
+    logicalRetainedBytes += envelope.manifest.entries.reduce(
+      (total, entry) => total + entry.size,
+      0,
+    );
+    const manifestKey = `${spaceId}\u0000manifest\u0000${envelope.revision.manifestHash}`;
+    if (!uniqueCanonical.has(manifestKey)) {
+      uniqueCanonical.add(manifestKey);
+      physicalCanonicalBytes += envelope.revision.manifestSize ?? 0;
+    }
+    for (const entry of envelope.manifest.entries) {
+      const key = `${spaceId}\u0000${entry.kind}\u0000${entry.sha256}`;
+      if (uniqueCanonical.has(key)) continue;
+      uniqueCanonical.add(key);
+      physicalCanonicalBytes += entry.size;
+    }
+  }
+  return Object.freeze({
+    logicalHeadBytes,
+    logicalRetainedBytes,
+    physicalCanonicalBytes,
+    temporaryBytes: 0,
+    d1MetadataBytes,
+    reservedBytes: 0,
+    storageAmplification: logicalHeadBytes === 0
+      ? 1
+      : physicalCanonicalBytes / logicalHeadBytes,
+    trustworthy: true,
+    reconciledAt,
+  });
+}
+
+/**
+ * Builds complete usage from per-Space canonical ledgers plus bounded mutable
+ * records. It deliberately never reads a revision manifest.
+ */
+export function capacityUsageFromCanonicalLedger(input: Readonly<{
+  queuedNotes?: ReadonlyMap<string, Readonly<import("@mind-diary/application-ports").QueuedNote>>;
+  spaceIds: ReadonlySet<SpaceId>;
+  ledger: ReadonlyMap<SpaceId, Readonly<CapacityUsageSnapshot>>;
+  stagedBundleFiles: ReadonlyMap<StagedBundleFileId, Readonly<StagedBundleFileRecord>>;
+  exportJobs: ReadonlyMap<JobId, Readonly<ExportJob>>;
+  markdownImportPlans?: ReadonlyMap<string, Readonly<MarkdownImportPlan>>;
+  markdownImportSessions?: ReadonlyMap<string, Readonly<MarkdownImportSession>>;
+  markdownImportStagedFiles?: ReadonlyMap<StagedBundleFileId, Readonly<MarkdownImportStagedFile>>;
+  reservations: ReadonlyMap<string, Readonly<CapacityReservation>>;
+}>): Readonly<CapacityUsageSnapshot> {
+  let logicalHeadBytes = 0;
+  let logicalRetainedBytes = 0;
+  let physicalCanonicalBytes = 0;
+  let temporaryBytes = 0;
+  let d1MetadataBytes = 0;
+  let reservedBytes = 0;
+  let latestReconciledAt: UtcInstant | null = null;
+  const uniqueCanonical = new Set<string>();
+
+  for (const spaceId of input.spaceIds) {
+    const usage = input.ledger.get(spaceId);
+    if (usage === undefined || usage.trustworthy !== true) {
+      throw new TypeError("capacity usage ledger is incomplete");
+    }
+    logicalHeadBytes += usage.logicalHeadBytes;
+    logicalRetainedBytes += usage.logicalRetainedBytes;
+    physicalCanonicalBytes += usage.physicalCanonicalBytes;
+    d1MetadataBytes += usage.d1MetadataBytes;
+    if (
+      usage.reconciledAt !== null &&
+      (latestReconciledAt === null ||
+        Date.parse(usage.reconciledAt) > Date.parse(latestReconciledAt))
+    ) latestReconciledAt = usage.reconciledAt;
+  }
+
+  for (const note of input.queuedNotes?.values() ?? []) {
+    if (!input.spaceIds.has(note.spaceId)) continue;
+    d1MetadataBytes += 2_048;
+    const key = `${note.spaceId}\u0000markdown\u0000${note.payloadHash}`;
+    if (!uniqueCanonical.has(key)) {
+      uniqueCanonical.add(key);
+      physicalCanonicalBytes += note.size;
+    }
+  }
+  for (const record of input.stagedBundleFiles.values()) {
+    if (!input.spaceIds.has(record.spaceId)) continue;
+    temporaryBytes += record.size;
+    d1MetadataBytes += 512;
+  }
+  for (const job of input.exportJobs.values()) {
+    if (!input.spaceIds.has(job.spaceId)) continue;
+    d1MetadataBytes += 768;
+    if (job.archive !== null && job.archiveCleanedAt === null) {
+      temporaryBytes += job.archive.size;
+    }
+  }
+  for (const plan of input.markdownImportPlans?.values() ?? []) {
+    if (!input.spaceIds.has(plan.spaceId)) continue;
+    d1MetadataBytes += 512 + plan.files.length * 160;
+  }
+  for (const session of input.markdownImportSessions?.values() ?? []) {
+    if (!input.spaceIds.has(session.spaceId)) continue;
+    d1MetadataBytes += 768 + session.failures.length * 128;
+  }
+  for (const file of input.markdownImportStagedFiles?.values() ?? []) {
+    const session = input.markdownImportSessions?.get(file.importId);
+    if (session !== undefined && input.spaceIds.has(session.spaceId)) {
+      d1MetadataBytes += 384;
+    }
+  }
+  for (const reservation of input.reservations.values()) {
+    if (!input.spaceIds.has(reservation.spaceId)) continue;
+    d1MetadataBytes += 512;
+    if (reservation.state === "active") {
+      reservedBytes += reservation.requested.physicalCanonicalBytes +
+        reservation.requested.temporaryBytes +
+        reservation.requested.d1MetadataBytes;
+    }
+    if (reservation.state === "cleanup_pending") {
+      temporaryBytes += reservation.requested.temporaryBytes +
+        reservation.requested.physicalCanonicalBytes;
+    }
+  }
+  return Object.freeze({
+    logicalHeadBytes,
+    logicalRetainedBytes,
+    physicalCanonicalBytes,
+    temporaryBytes,
+    d1MetadataBytes,
+    reservedBytes,
+    storageAmplification: logicalHeadBytes === 0
+      ? 1
+      : physicalCanonicalBytes / logicalHeadBytes,
+    trustworthy: true,
+    reconciledAt: latestReconciledAt,
+  });
+}
+
 export function capacityReservationMatches(
   reservation: Readonly<CapacityReservation>,
   request: Readonly<CapacityAdmissionRequest>,
@@ -680,6 +838,7 @@ export interface ObjectReachabilityCounts {
   readonly immutable: ReadonlyMap<Digest, number>;
   readonly bundle: ReadonlyMap<string, number>;
   readonly spaceCanonical: ReadonlyMap<string, number>;
+  readonly capacity: ReadonlyMap<string, number>;
 }
 
 export function cloneObjectReachabilityCounts(value: unknown): Readonly<ObjectReachabilityCounts> {
@@ -689,7 +848,7 @@ export function cloneObjectReachabilityCounts(value: unknown): Readonly<ObjectRe
   const source = value as Record<string, unknown>;
   if (
     !(source.immutable instanceof Map) || !(source.bundle instanceof Map) ||
-    !(source.spaceCanonical instanceof Map)
+    !(source.spaceCanonical instanceof Map) || !(source.capacity instanceof Map)
   ) throw new TypeError("object reachability counts are invalid");
   const clone = (input: Map<unknown, unknown>) => {
     const output = new Map<string, number>();
@@ -713,6 +872,7 @@ export function cloneObjectReachabilityCounts(value: unknown): Readonly<ObjectRe
     immutable,
     bundle: clone(source.bundle),
     spaceCanonical: clone(source.spaceCanonical),
+    capacity: clone(source.capacity),
   });
 }
 

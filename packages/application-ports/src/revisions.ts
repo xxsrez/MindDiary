@@ -298,7 +298,27 @@ export interface RevisionMetadataStore
   listRevisions(
     spaceId: SpaceId,
   ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
+  /** Optional compact history projection; it never returns manifest entries. */
+  listRevisionCatalog?(spaceId: SpaceId, query: Readonly<{
+    readonly beforeRevisionId: RevisionId | null;
+    readonly limit: number;
+  }>): Promise<Readonly<{
+    readonly entries: readonly Readonly<RevisionCatalogEntry>[];
+    readonly hasMore: boolean;
+    readonly boundaryFound: boolean;
+  }>>;
+  /** Optional compact UTC selector over immutable revision metadata. */
+  resolveRevisionAsOf?(
+    spaceId: SpaceId,
+    asOf: UtcInstant,
+  ): Promise<Readonly<RevisionCatalogEntry> | null>;
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
+}
+
+export interface RevisionCatalogEntry {
+  readonly revision: Readonly<CanonicalRevisionEnvelope["revision"]>;
+  readonly fileCount: number;
+  readonly totalBytes: number;
 }
 
 export type MarkdownImportSessionState =
@@ -687,11 +707,29 @@ export interface ExactRevisionIndexDocument {
   readonly path: string;
   /** Derived searchable text. Implementations must never log it. */
   readonly text: string;
+  /** Canonical manifest digest; required by incremental index builds. */
+  readonly sha256?: Sha256Digest;
+  /** Parsed field projection used by bounded storage-side ranking. */
+  readonly fields?: Readonly<{
+    readonly title: readonly string[];
+    readonly description: readonly string[];
+    readonly tags: readonly string[];
+    readonly headings: readonly string[];
+    readonly body: readonly string[];
+  }>;
+}
+
+export interface ExactRevisionIndexEntry {
+  readonly path: string;
+  readonly sha256: Sha256Digest;
 }
 
 export interface ReplaceExactRevisionIndexRequest {
   readonly spaceId: SpaceId;
   readonly revisionId: RevisionId;
+  /** Complete ordered Markdown membership projection for this revision. */
+  readonly entries?: readonly Readonly<ExactRevisionIndexEntry>[];
+  /** Bodies absent from the Space-scoped content store, or all bodies for legacy callers. */
   readonly documents: readonly Readonly<ExactRevisionIndexDocument>[];
 }
 
@@ -713,6 +751,10 @@ export type QueryExactRevisionIndexResult =
       readonly totalDocuments: number;
       /** Query-specific candidates only; application ranking remains authoritative. */
       readonly documents: readonly Readonly<ExactRevisionIndexDocument>[];
+      /** Exact number of documents matching all terms before page slicing. */
+      readonly totalMatches?: number;
+      /** True only when the adapter already applied the requested page. */
+      readonly pageApplied?: boolean;
     }
   | { readonly kind: "unavailable" };
 
@@ -727,6 +769,10 @@ export type InspectExactRevisionIndexResult =
 /** Revision-keyed derived index. There is deliberately no implicit HEAD API. */
 export interface SearchIndex {
   readonly kind: "search-index";
+  findMissingDigests?(
+    spaceId: SpaceId,
+    digests: readonly Sha256Digest[],
+  ): Promise<readonly Sha256Digest[]>;
   replaceExactRevision(
     request: ReplaceExactRevisionIndexRequest,
   ): Promise<void>;
@@ -743,6 +789,7 @@ export interface SearchIndex {
     spaceId: SpaceId,
     revisionId: RevisionId,
     normalizedTerms: readonly string[],
+    page?: Readonly<{ readonly offset: number; readonly limit: number }>,
   ): Promise<QueryExactRevisionIndexResult>;
   purgeSpace(spaceId: SpaceId): Promise<number>;
 }

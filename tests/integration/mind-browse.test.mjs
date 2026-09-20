@@ -111,6 +111,9 @@ function trackedObjects(delegate) {
   let bundleOpens = 0;
   let concurrentReads = 0;
   let maximumConcurrentReads = 0;
+  let rangeReads = 0;
+  let rangeBytes = 0;
+  let canonicalReads = 0;
   return {
     kind: "object-store",
     calculateSha256: (bytes) => delegate.calculateSha256(bytes),
@@ -130,20 +133,38 @@ function trackedObjects(delegate) {
       return delegate.openBundleFile(spaceId, sha256);
     },
     getBundleFile: (spaceId, sha256) => delegate.getBundleFile(spaceId, sha256),
-    getSpaceCanonicalObject: (kind, spaceId, sha256) =>
-      delegate.getSpaceCanonicalObject(kind, spaceId, sha256),
+    getSpaceCanonicalObject: (kind, spaceId, sha256) => {
+      canonicalReads += 1;
+      return delegate.getSpaceCanonicalObject(kind, spaceId, sha256);
+    },
     openSpaceCanonicalObject: (kind, spaceId, sha256) =>
       delegate.openSpaceCanonicalObject(kind, spaceId, sha256),
+    openSpaceCanonicalObjectRange: (kind, spaceId, sha256, range) => {
+      rangeReads += 1;
+      rangeBytes += range.length;
+      return delegate.openSpaceCanonicalObjectRange(kind, spaceId, sha256, range);
+    },
+    openBundleFileRange: (spaceId, sha256, range) => {
+      rangeReads += 1;
+      rangeBytes += range.length;
+      return delegate.openBundleFileRange(spaceId, sha256, range);
+    },
     listImmutableObjects: (request) => delegate.listImmutableObjects(request),
     deleteImmutableObject: (request) => delegate.deleteImmutableObject(request),
     reads: () => immutableReads,
     bundleOpens: () => bundleOpens,
     maxConcurrentReads: () => maximumConcurrentReads,
+    rangeReads: () => rangeReads,
+    rangeBytes: () => rangeBytes,
+    canonicalReads: () => canonicalReads,
     reset: () => {
       immutableReads = 0;
       bundleOpens = 0;
       concurrentReads = 0;
       maximumConcurrentReads = 0;
+      rangeReads = 0;
+      rangeBytes = 0;
+      canonicalReads = 0;
     },
   };
 }
@@ -284,7 +305,9 @@ async function commitMixedFiles(env, owner, mind, markdownFiles, opaqueFiles, su
   const expectedRevisionId = await env.metadata.readHead(mind.mindId);
   const parent = await env.metadata.readRevision(mind.mindId, expectedRevisionId);
   const markdownObjects = await Promise.all(markdownFiles.map((file) =>
-    env.objects.putImmutable({
+    env.objects.putSpaceCanonicalObject({
+      kind: "markdown",
+      spaceId: mind.mindId,
       bytes: encoder.encode(file.text),
       mediaType: MARKDOWN_MEDIA_TYPE,
       createdAt: CHANGED_AT,
@@ -738,7 +761,10 @@ test("BundleFile listing returns metadata only, verifies preview bytes, and stay
     referenceStatus: "referenced",
   }]);
   assert.ok(first.nextCursor);
-  assert.equal(env.observedObjects.reads(), oldMarkdown.length);
+  assert.equal(
+    env.observedObjects.reads() + env.observedObjects.canonicalReads(),
+    oldMarkdown.length + 1,
+  );
   assert.equal(env.observedObjects.bundleOpens(), 2);
   assert.deepEqual(first.diagnostics.map(({ code }) => code), [
     "bundle_file_inline_disallowed",
@@ -1194,6 +1220,18 @@ test("differential file operations compose over one exact mixed-file revision wi
   assert.ok(streamedBytes < opaqueFiles.find(({ path }) => path === "notes/plain.txt").bytes.byteLength);
   assert.equal(streamedHead.items[0].file.lineRange.total, null);
 
+  streamedBytes = 0;
+  streamCanceled = false;
+  const streamedLines = await streamingBrowse.readFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId: exactRevision },
+    requests: [{ path: "notes/plain.txt", mode: "lines", startLine: 2, endLine: 2 }],
+  });
+  assert.equal(streamedLines.items[0].file.text, "needle café 🧠\n");
+  assert.equal(streamCanceled, true);
+  assert.ok(streamedBytes < opaqueFiles.find(({ path }) => path === "notes/plain.txt").bytes.byteLength);
+  assert.equal(streamedLines.items[0].file.lineRange.total, null);
+
   const firstRead = await env.browse.readFiles(actor(owner.principalId), {
     mind: mind.handle,
     requests: [
@@ -1309,6 +1347,7 @@ test("file-operation budgets always advance or fail explicitly and abort a stall
   assert.equal(largeGrep.files[0].matches[0].lineNumber, 3);
   assert.equal(largeGrep.files[0].matches[0].text, lateRow.trimEnd());
   const lateRowStart = largeText.byteLength - encoder.encode(lateRow).byteLength;
+  env.observedObjects.reset();
   const largeRange = await env.browse.readFiles(actor(owner.principalId), {
     mind: mind.handle,
     revisionSelector: { kind: "revision", revisionId },
@@ -1326,6 +1365,8 @@ test("file-operation budgets always advance or fail explicitly and abort a stall
     end: largeText.byteLength,
     total: largeText.byteLength,
   });
+  assert.equal(env.observedObjects.rangeReads(), 1);
+  assert.ok(env.observedObjects.rangeBytes() <= encoder.encode(lateRow).byteLength + 3);
   const largeHead = await env.browse.readFiles(actor(owner.principalId), {
     mind: mind.handle,
     revisionSelector: { kind: "revision", revisionId },
@@ -1489,7 +1530,14 @@ test("entry and continuation locators stay on one exact revision across a HEAD m
   const oldBody = "OLD_REVISION_BODY with UTF-8 scalars: 🧠 café Madeira. ".repeat(6);
   const oldFiles = fixtureFiles(oldBody);
   const seededMind = await createMind(env, owner, "immutable-fetch-seeded", oldFiles);
-  const oldRevision = seededMind.headRevisionId;
+  const oldRevision = await commitMixedFiles(
+    env,
+    owner,
+    seededMind,
+    oldFiles,
+    [],
+    "Promote exact fetch fixture to Space-canonical storage",
+  );
   const oldBrowse = await env.browse.browseEntries(actor(owner.principalId), {
     mind: seededMind.handle,
     path: "concepts",
@@ -1503,6 +1551,7 @@ test("entry and continuation locators stay on one exact revision across a HEAD m
   assert.equal(oldEntry.resourceUri.includes("mdl1_"), false);
   assert.equal(oldEntry.resourceUri.includes("mdp_v1_"), false);
 
+  env.observedObjects.reset();
   const firstPage = await env.browse.fetch(actor(owner.principalId), {
     id: oldEntry.entryId,
     maxBytes: 17,
@@ -1533,6 +1582,11 @@ test("entry and continuation locators stay on one exact revision across a HEAD m
   );
   assert.equal(firstPage.text + rest.text, oldCanonical);
   assert.equal(rest.ranges.every((range) => range.end > range.start), true);
+  assert.ok(env.observedObjects.rangeReads() > 1);
+  assert.ok(
+    env.observedObjects.rangeBytes() <
+      encoder.encode(oldCanonical).byteLength * env.observedObjects.rangeReads(),
+  );
   const replay = await env.browse.fetch(actor(owner.principalId), {
     id: oldEntry.entryId,
     maxBytes: 17,

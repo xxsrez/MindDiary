@@ -274,6 +274,11 @@ type ResolvedTarget =
   | Readonly<{ kind: "invalid"; target: string }>
   | Readonly<{ kind: "local"; path: string; fragment?: string; target: string }>;
 
+export interface MarkdownLocalTarget {
+  readonly path: string;
+  readonly fragment?: string;
+}
+
 function decodedFragment(value: string): string | null {
   try {
     return decodeURIComponent(value).normalize("NFC");
@@ -327,6 +332,31 @@ function resolveRelative(sourcePath: string, rawTarget: string): ResolvedTarget 
     ...(fragment === undefined || fragment.length === 0 ? {} : { fragment }),
     target,
   });
+}
+
+/**
+ * Returns the deterministic local-link projection without requiring target
+ * bodies. Callers use it to decide whether a delta validation can prove the
+ * same graph invariants or must fall back to a full revision scan.
+ */
+export function collectMarkdownLocalTargets(
+  document: Readonly<MarkdownConsistencyDocument>,
+): readonly Readonly<MarkdownLocalTarget>[] {
+  const parsed = parseDocument(document);
+  const targets = new Map<string, Readonly<MarkdownLocalTarget>>();
+  for (const reference of parsed.links) {
+    const resolved = resolveRelative(parsed.path, reference.destination);
+    if (resolved.kind !== "local") continue;
+    const key = `${resolved.path}\u0000${resolved.fragment ?? ""}`;
+    targets.set(key, Object.freeze({
+      path: resolved.path,
+      ...(resolved.fragment === undefined ? {} : { fragment: resolved.fragment }),
+    }));
+  }
+  return Object.freeze([...targets.values()].sort((left, right) =>
+    left.path.localeCompare(right.path) ||
+    (left.fragment ?? "").localeCompare(right.fragment ?? "")
+  ));
 }
 
 function resolveSource(

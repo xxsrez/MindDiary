@@ -109,6 +109,7 @@ export interface ReadyExactRevisionIndexReader {
     spaceId: SpaceId,
     revisionId: RevisionId,
     normalizedTerms: readonly string[],
+    page?: Readonly<{ readonly offset: number; readonly limit: number }>,
   ): Promise<QueryExactRevisionIndexResult>;
 }
 
@@ -454,12 +455,14 @@ export class MindSearchService {
       info.mind.mindId,
       info.revisionMode,
     );
-    const documents = await this.#loadVerifiedDocuments(
+    const offset = cursor?.start ?? 0;
+    const loaded = await this.#loadVerifiedDocuments(
       info.mind.mindId,
       info.resolvedRevision,
       request.terms,
+      { offset, limit: request.limit },
     );
-    const ranked = documents
+    const ranked = loaded.documents
       .map((document) => rankDocument(document, request.terms))
       .filter((candidate): candidate is Readonly<RankedDocument> => candidate !== null)
       .sort(
@@ -467,30 +470,34 @@ export class MindSearchService {
           right.score - left.score ||
           left.document.entry.path.localeCompare(right.document.entry.path, "en"),
       );
+    if (loaded.pageApplied && ranked.length !== loaded.documents.length) {
+      throw this.#unavailable();
+    }
+    const totalMatches = loaded.pageApplied
+      ? loaded.totalMatches
+      : ranked.length;
     const resultFingerprint = await sha256(
       JSON.stringify({
         query: queryHash,
         revision: info.resolvedRevision.revisionId,
-        results: ranked.map((candidate) => [
-          candidate.document.entry.path,
-          candidate.document.entry.sha256,
-          candidate.score,
-        ]),
+        manifest: info.resolvedRevision.manifestHash,
+        totalMatches,
       }),
     );
-    const offset = cursor?.start ?? 0;
     if (
       cursor !== null &&
       (cursor.manifestHash !== resultFingerprint ||
-        cursor.end !== ranked.length ||
-        offset >= ranked.length)
+        cursor.end !== totalMatches ||
+        offset >= totalMatches)
     ) {
       throw new MindSearchFailure("invalid_cursor", "Search cursor is invalid.");
     }
-    const page = ranked.slice(offset, offset + request.limit);
+    const page = loaded.pageApplied
+      ? ranked
+      : ranked.slice(offset, offset + request.limit);
     const nextOffset = offset + page.length;
     const nextCursor =
-      nextOffset < ranked.length
+      nextOffset < totalMatches
         ? await this.#locators.encode(
             Object.freeze({
               version: 1,
@@ -500,7 +507,7 @@ export class MindSearchService {
               path: searchCursorPath,
               manifestHash: resultFingerprint,
               start: nextOffset,
-              end: ranked.length,
+              end: totalMatches,
             }),
           )
         : null;
@@ -532,10 +539,11 @@ export class MindSearchService {
     spaceId: SpaceId,
     revisionId: RevisionId,
     normalizedTerms: readonly string[],
+    page: Readonly<{ readonly offset: number; readonly limit: number }>,
   ): Promise<QueryExactRevisionIndexResult> {
     try {
       if ("query" in this.#index && typeof this.#index.query === "function") {
-        return await this.#index.query(spaceId, revisionId, normalizedTerms);
+        return await this.#index.query(spaceId, revisionId, normalizedTerms, page);
       }
       if (
         "queryExactRevision" in this.#index &&
@@ -545,6 +553,7 @@ export class MindSearchService {
           spaceId,
           revisionId,
           normalizedTerms,
+          page,
         );
       }
       if ("read" in this.#index && typeof this.#index.read === "function") {
@@ -569,7 +578,12 @@ export class MindSearchService {
     spaceId: SpaceId,
     resolvedRevision: Readonly<MindDiscoveryRevisionDescriptor>,
     normalizedTerms: readonly string[],
-  ): Promise<readonly Readonly<SearchableDocument>[]> {
+    page: Readonly<{ readonly offset: number; readonly limit: number }>,
+  ): Promise<Readonly<{
+    readonly documents: readonly Readonly<SearchableDocument>[];
+    readonly totalMatches: number;
+    readonly pageApplied: boolean;
+  }>> {
     const envelope = await this.#store.readRevision(spaceId, resolvedRevision.revisionId);
     if (
       envelope === null ||
@@ -583,6 +597,7 @@ export class MindSearchService {
       spaceId,
       resolvedRevision.revisionId,
       normalizedTerms,
+      page,
     );
     const markdownEntries = envelope.manifest.entries.filter(
       (entry) => entry.kind === "markdown",
@@ -620,7 +635,19 @@ export class MindSearchService {
         ),
       );
     }
-    return Object.freeze(documents);
+    const pageApplied = indexed.pageApplied === true;
+    const totalMatches = pageApplied
+      ? indexed.totalMatches ?? -1
+      : documents.length;
+    if (
+      !Number.isSafeInteger(totalMatches) || totalMatches < documents.length ||
+      (pageApplied && documents.length > page.limit)
+    ) throw this.#unavailable();
+    return Object.freeze({
+      documents: Object.freeze(documents),
+      totalMatches,
+      pageApplied,
+    });
   }
 
   async #searchableDocument(

@@ -15,6 +15,7 @@ import {
   REVISION_MANIFEST_MEDIA_TYPE,
   type SpaceCanonicalObject,
   type OpenedSpaceCanonicalObject,
+  type ObjectByteRange,
   type SpaceCanonicalObjectMetadata,
   type SpaceCanonicalObjectPutResult,
   type SpaceCanonicalObjectWriteRequest,
@@ -392,8 +393,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     return this;
   }
 
-  async #get(key: string): Promise<R2ObjectBodyLike | null> {
-    return withR2ReadTimeout(this.#bucket.get(key), "object lookup");
+  async #get(
+    key: string,
+    range?: Readonly<ObjectByteRange>,
+  ): Promise<R2ObjectBodyLike | null> {
+    return withR2ReadTimeout(
+      this.#bucket.get(key, range === undefined ? undefined : { range }),
+      "object lookup",
+    );
   }
 
   async #list(options: Parameters<R2BucketLike["list"]>[0]): Promise<R2ListResultLike> {
@@ -597,6 +604,27 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     return Object.freeze({ ...metadata, body: bodyStream(object) });
   }
 
+  async openSpaceCanonicalObjectRange(
+    kind: SpaceCanonicalObjectMetadata["kind"],
+    spaceId: SpaceCanonicalObjectMetadata["spaceId"],
+    digest: Digest,
+    range: Readonly<ObjectByteRange>,
+  ): Promise<Readonly<OpenedSpaceCanonicalObject> | null> {
+    assertDigest(digest);
+    if (
+      !Number.isSafeInteger(range.offset) || range.offset < 0 ||
+      !Number.isSafeInteger(range.length) || range.length < 1
+    ) throw new ObjectStoreFailure("invalid_range", "Object byte range is invalid");
+    const object = await this.#get(spaceCanonicalKey(kind, spaceId, digest), range);
+    if (!object) return null;
+    const metadata = spaceCanonicalMetadataFromR2(object);
+    if (
+      metadata.kind !== kind || metadata.spaceId !== spaceId ||
+      metadata.sha256 !== digest || range.offset + range.length > metadata.size
+    ) throw new ObjectStoreFailure("object_tampered", "Space canonical metadata is invalid");
+    return Object.freeze({ ...metadata, body: bodyStream(object) });
+  }
+
   async listSpaceCanonicalObjects(
     request: SpaceCanonicalObjectListRequest,
   ): Promise<readonly Readonly<SpaceCanonicalObjectMetadata>[]> {
@@ -773,6 +801,27 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     if (metadata.spaceId !== spaceId || metadata.sha256 !== digest) {
       throw new ObjectStoreFailure("object_tampered", "BundleFile metadata is invalid");
     }
+    return Object.freeze({ ...metadata, body: bodyStream(object) });
+  }
+
+  async openBundleFileRange(
+    spaceId: BundleFileObjectMetadata["spaceId"],
+    digest: Digest,
+    range: Readonly<ObjectByteRange>,
+  ): Promise<Readonly<OpenedBundleFileObject> | null> {
+    assertDigest(digest);
+    if (
+      !Number.isSafeInteger(range.offset) || range.offset < 0 ||
+      !Number.isSafeInteger(range.length) || range.length < 1
+    ) throw new ObjectStoreFailure("invalid_range", "Object byte range is invalid");
+    const key = `${BUNDLE_PREFIX}${encodeURIComponent(spaceId)}/sha256/${digest.slice(7)}`;
+    const object = await this.#get(key, range);
+    if (!object) return null;
+    const metadata = this.#bundleMetadata(object);
+    if (
+      metadata.spaceId !== spaceId || metadata.sha256 !== digest ||
+      range.offset + range.length > metadata.size
+    ) throw new ObjectStoreFailure("object_tampered", "BundleFile metadata is invalid");
     return Object.freeze({ ...metadata, body: bodyStream(object) });
   }
 

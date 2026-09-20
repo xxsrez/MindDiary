@@ -3,7 +3,11 @@ import test from "node:test";
 import { createSitesSearchIndex } from "../../packages/adapter-search-sites/dist/index.js";
 import { SqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
 
-for (const missingTable of ["md_search_documents", "md_search_document_lexical"]) {
+for (const missingTable of [
+  "md_search_documents",
+  "md_search_document_lexical",
+  "md_search_document_fields",
+]) {
   test(`search preserves damaged membership after losing a row in ${missingTable}`, async (t) => {
     const database = new SqliteD1();
     t.after(() => database.close());

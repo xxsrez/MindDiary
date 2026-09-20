@@ -1,6 +1,7 @@
 import type {
   CompletedIdempotencyRecord,
   Digest,
+  Envelope,
   RevisionId,
   SpaceId,
 } from "./metadata-store-internals.js";
@@ -37,7 +38,6 @@ import type {
 import {
   authorizationStateKey,
   bundleFileRetainedQuotaAllows,
-  capacityUsageFromCanonicalState,
   checkIdempotencyAgainst,
   cloneAuditEvent,
   cloneAuditOutbox,
@@ -156,6 +156,7 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         const markdownImportSessionKeys = new Map(this._markdownImportSessionKeys);
         const markdownImportBatchHashes = new Map(this._markdownImportBatchHashes);
         const capacityReservations = cloneCapacityReservations(this._capacityReservations);
+        const committedCapacityRevisions: Envelope[] = [];
         const capacityTransaction = this._capacityTransaction(capacityReservations);
         const authorizationStates = new Map(
           [...this._authorizationStates].map(([key, state]) => [
@@ -234,6 +235,9 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
               spaces,
               revisionsById,
             );
+            if (committed.kind === "committed" && existing === undefined) {
+              committedCapacityRevisions.push(request.envelope);
+            }
             const committedRevisionId = request.envelope.revision.revisionId;
             if (
               committed.kind === "committed" &&
@@ -291,17 +295,17 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
             if (!Number.isSafeInteger(siteD1MetadataLimit) || siteD1MetadataLimit < 1) {
               throw new TypeError("Markdown import plan D1 limit is invalid");
             }
-            const usage = capacityUsageFromCanonicalState({
-              spaceIds: new Set(spaces.keys()),
-              spaces,
-              stagedBundleFiles,
-              exportJobs: this._exportJobs,
-              markdownImportPlans,
-              markdownImportSessions,
-              markdownImportStagedFiles,
-              reservations: capacityReservations,
-              reconciledAt: this._capacityReconciledAt,
-            });
+            const usage = this._capacityUsageFromLedger(
+              new Set(spaces.keys()),
+              {
+                stagedBundleFiles,
+                exportJobs: this._exportJobs,
+                markdownImportPlans,
+                markdownImportSessions,
+                markdownImportStagedFiles,
+                reservations: capacityReservations,
+              },
+            );
             if (usage.d1MetadataBytes + 512 + plan.files.length * 160 > siteD1MetadataLimit) {
               this._capacityQuotaRejects += 1;
               return Object.freeze({ kind: "capacity_rejected" as const });
@@ -593,9 +597,11 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         });
 
         const result = await operation(transaction);
+        for (const envelope of committedCapacityRevisions) {
+          this._recordCommittedRevisionCapacity(envelope);
+        }
         this._spaces = spaces;
         this._revisionsById = revisionsById;
-        this._reachabilityCounts = null;
         this._knowledgeSpaces = knowledgeSpaces;
         this._idempotencyRecords = idempotencyRecords;
         this._auditEvents = auditEvents;

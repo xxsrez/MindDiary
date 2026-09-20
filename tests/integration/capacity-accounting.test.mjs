@@ -101,7 +101,7 @@ test("usage is recomputed from immutable manifests and same-Space shared digests
     spaceId: MINDS.ordinary.spaceId,
     reconciledAt: "2026-08-22T12:20:00.000Z",
   });
-  assert.equal(second.driftDetected, true);
+  assert.equal(second.driftDetected, false);
   assert.equal(second.scannedSpaces, 1);
 });
 

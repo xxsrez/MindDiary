@@ -7,14 +7,16 @@ function changed(result: Readonly<{ meta?: Readonly<{ changes?: number }> }>): b
 /** Registers a physical canonical delete before its first R2 operation. */
 export class SystemBackupCleanupBarrier {
   readonly #database: D1DatabaseLike;
+  readonly #now: () => Date;
 
-  constructor(database: D1DatabaseLike) {
+  constructor(database: D1DatabaseLike, now: () => Date = () => new Date()) {
     this.#database = database;
+    this.#now = now;
   }
 
   async run(operation: () => Promise<boolean>): Promise<boolean> {
     const id = crypto.randomUUID();
-    const now = new Date().toISOString();
+    const now = this.#now().toISOString();
     const admitted = await this.#database.prepare(
       `/*md-backup-cleanup-admit*/ INSERT INTO md_backup_cleanup_ops
        (operation_id, started_at)

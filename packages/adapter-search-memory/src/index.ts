@@ -1,5 +1,6 @@
 import type {
   ExactRevisionIndexDocument,
+  ExactRevisionIndexEntry,
   ReadExactRevisionIndexResult,
   ReplaceExactRevisionIndexRequest,
   SearchIndex,
@@ -17,9 +18,25 @@ function cloneDocuments(
 ): readonly Readonly<ExactRevisionIndexDocument>[] {
   return Object.freeze(
     documents.map((document) =>
-      Object.freeze({ path: document.path, text: document.text }),
+      Object.freeze({
+        path: document.path,
+        text: document.text,
+        ...(document.sha256 === undefined ? {} : { sha256: document.sha256 }),
+        ...(document.fields === undefined ? {} : { fields: document.fields }),
+      }),
     ),
   );
+}
+
+async function digestText(
+  text: string,
+): Promise<ExactRevisionIndexEntry["sha256"]> {
+  const digest = new Uint8Array(
+    await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+  );
+  return `sha256:${[...digest]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}` as ExactRevisionIndexEntry["sha256"];
 }
 
 /** Durable-process fixture whose only lookup key is Space + exact revision. */
@@ -33,7 +50,17 @@ export class InMemoryExactRevisionSearchIndex implements SearchIndex {
       readonly documents: readonly Readonly<ExactRevisionIndexDocument>[];
     }
   >();
+  readonly #documents = new Map<string, Readonly<ExactRevisionIndexDocument>>();
   #nextFailure: Error | null = null;
+
+  async findMissingDigests(
+    spaceId: ReplaceExactRevisionIndexRequest["spaceId"],
+    digests: readonly ExactRevisionIndexEntry["sha256"][],
+  ) {
+    return Object.freeze([...new Set(digests)].filter(
+      (digest) => !this.#documents.has(`${spaceId}\u0000${digest}`),
+    ));
+  }
 
   async replaceExactRevision(request: ReplaceExactRevisionIndexRequest): Promise<void> {
     if (
@@ -61,13 +88,34 @@ export class InMemoryExactRevisionSearchIndex implements SearchIndex {
         throw new TypeError("exact revision index documents are invalid");
       }
       paths.add(document.path);
+      const digest = await digestText(document.text);
+      if (document.sha256 !== undefined && document.sha256 !== digest) {
+        throw new TypeError("exact revision index document digest is invalid");
+      }
+      this.#documents.set(
+        `${request.spaceId}\u0000${digest}`,
+        Object.freeze({ path: document.path, text: document.text, sha256: digest }),
+      );
     }
+    const revisionDocuments = request.entries === undefined
+      ? cloneDocuments(request.documents)
+      : Object.freeze(request.entries.map((entry) => {
+          const document = this.#documents.get(`${request.spaceId}\u0000${entry.sha256}`);
+          if (document === undefined) {
+            throw new TypeError("exact revision index document body is unavailable");
+          }
+          return Object.freeze({
+            path: entry.path,
+            text: document.text,
+            sha256: entry.sha256,
+          });
+        }));
     this.#revisions.set(
       key(request.spaceId, request.revisionId),
       Object.freeze({
         spaceId: request.spaceId,
         revisionId: request.revisionId,
-        documents: cloneDocuments(request.documents),
+        documents: revisionDocuments,
       }),
     );
   }
@@ -108,6 +156,9 @@ export class InMemoryExactRevisionSearchIndex implements SearchIndex {
       .filter(([, record]) => record.spaceId === spaceId)
       .map(([recordKey]) => recordKey);
     keys.forEach((recordKey) => this.#revisions.delete(recordKey));
+    for (const documentKey of [...this.#documents.keys()]) {
+      if (documentKey.startsWith(`${spaceId}\u0000`)) this.#documents.delete(documentKey);
+    }
     return keys.length;
   }
 

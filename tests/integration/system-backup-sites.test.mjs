@@ -96,6 +96,7 @@ async function setup() {
   });
   return {
     database, bucket, service,
+    now: () => now,
     setSnapshot(value) { currentSnapshot = value; },
     advance() { database.database.exec(
       "UPDATE md_backup_control SET backup_sequence = backup_sequence + 1",
@@ -238,7 +239,7 @@ test("R2 object ranges are bounded and a deletion epoch rejects completion", asy
 test("pending physical cleanup blocks target registration; expiry rejects old pages", async () => {
   const fixture = await setup();
   try {
-    const barrier = new SystemBackupCleanupBarrier(fixture.database);
+    const barrier = new SystemBackupCleanupBarrier(fixture.database, fixture.now);
     let release;
     let started;
     const startedPromise = new Promise((resolve) => { started = resolve; });
@@ -264,7 +265,7 @@ test("pending physical cleanup blocks target registration; expiry rejects old pa
 test("an active target pins physical cleanup until deletion invalidates it", async () => {
   const fixture = await setup();
   try {
-    const barrier = new SystemBackupCleanupBarrier(fixture.database);
+    const barrier = new SystemBackupCleanupBarrier(fixture.database, fixture.now);
     const session = await fixture.service.createSession();
     let deleted = false;
     assert.equal(await barrier.run(async () => { deleted = true; return true; }), false);

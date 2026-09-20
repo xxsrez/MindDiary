@@ -23,7 +23,9 @@ const SEARCH_OBJECTS = Object.freeze([
   "md_search_documents",
   "md_search_revision_documents",
   "md_search_revision_order",
+  "md_search_document_digest_lookup",
   "md_search_document_lexical",
+  "md_search_document_fields",
 ]);
 
 class ProbeStatement {
@@ -78,11 +80,11 @@ test("audit schema probe skips DDL only for a complete current schema", async ()
 });
 
 test("search schema probe skips DDL only for a complete current schema", async () => {
-  const complete = new ProbeDatabase(rows(SEARCH_OBJECTS, 3));
+  const complete = new ProbeDatabase(rows(SEARCH_OBJECTS, 5));
   await new SitesExactRevisionSearchIndex(complete).ready();
   assert.equal(complete.batches.length, 0);
 
-  const incomplete = new ProbeDatabase(rows(SEARCH_OBJECTS.slice(0, -1), 3));
+  const incomplete = new ProbeDatabase(rows(SEARCH_OBJECTS.slice(0, -1), 5));
   await new SitesExactRevisionSearchIndex(incomplete).ready();
   assert.equal(incomplete.batches.length, 1);
   assert.equal(incomplete.batches[0].length, SITES_SEARCH_MIGRATIONS.length + 1);

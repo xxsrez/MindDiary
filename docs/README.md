@@ -151,6 +151,9 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 - [Exact-candidate performance gate](operations/performance-gate.md) —
   machine-verified UAT scale read-back, web/modern/compatibility sampling,
   request-correlated closed telemetry, blocking budgets и private receipt.
+- [Полный тщательный аудит проекта](operations/thorough-project-audit.md) —
+  запускаемый только по прямой просьбе source-to-UAT runbook: inventory,
+  scenario/risk matrix, дорогие scale/fault проверки, evidence и cleanup.
 - [Privacy-safe операции UAT pilot](operations/uat-pilot-operations.md) —
   participant boundaries, closed-schema telemetry, bounded diagnostics,
   token/audience revoke, exact rollback и fixture export/restore drill.

@@ -5,6 +5,11 @@ Product Site реализованы; single-principal UAT deployment и обяз
 smoke подтверждены отдельно. Локальный build по-прежнему не является заменой
 exact Sites/Codex UAT evidence.
 
+Полная тщательная проверка всего проекта — отдельный режим по
+[каноническому runbook](../operations/thorough-project-audit.md). Она требует
+прямой просьбы пользователя и не следует из `npm run check`, обычной разработки
+или релиза.
+
 ## Toolchain
 
 Baseline использует:

@@ -33,7 +33,7 @@ import type {
   UtcInstant,
   Version,
 } from "@mind-diary/domain";
-import type { OkfBundleFixture } from "@mind-diary/okf-codec";
+import { parseOkfFile, type OkfBundleFixture } from "@mind-diary/okf-codec";
 
 export const BACKGROUND_HANDLERS = [
   "rebuild_revision_index",
@@ -286,6 +286,20 @@ export interface ExactRevisionMaterializer {
     readonly size: number;
     readonly text?: string;
   }> | null>;
+  openRevisionSession?(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<{
+    readonly envelope: Readonly<CanonicalRevisionEnvelope>;
+    readRevisionFile(path: string): Promise<Readonly<{
+      readonly kind: "markdown" | "opaque";
+      readonly path: string;
+      readonly mediaType: string;
+      readonly sha256: Sha256Digest;
+      readonly size: number;
+      readonly text?: string;
+    }> | null>;
+  }>>;
 }
 
 export interface UnreachableObjectCollector {
@@ -339,6 +353,43 @@ function mapClaim(kind: "not_found" | "not_available" | "completed"): Background
   return kind === "completed"
     ? Object.freeze({ kind: "already_completed" })
     : Object.freeze({ kind });
+}
+
+function searchFields(path: string, text: string) {
+  const parsed = parseOkfFile({ path, text });
+  if (!parsed.valid || parsed.file === null) throw new ExactRevisionMismatchError();
+  const frontmatter = parsed.file.kind === "concept" || parsed.file.kind === "index"
+    ? parsed.file.frontmatter
+    : null;
+  const defaultTitle = (path.split("/").at(-1) ?? path).replace(/\.md$/u, "");
+  const title = frontmatter !== null && typeof frontmatter.title === "string" &&
+      frontmatter.title.trim().length > 0
+    ? frontmatter.title.trim()
+    : defaultTitle;
+  const description = frontmatter !== null &&
+      typeof frontmatter.description === "string" &&
+      frontmatter.description.trim().length > 0
+    ? [frontmatter.description.trim()]
+    : [];
+  const tags = frontmatter !== null && Array.isArray(frontmatter.tags) &&
+      frontmatter.tags.every((tag) => typeof tag === "string")
+    ? frontmatter.tags as string[]
+    : [];
+  const source = parsed.file.kind === "log" ? parsed.file.sourceText : parsed.file.body;
+  const headings: string[] = [];
+  const body: string[] = [];
+  for (const line of source.split(/\r?\n/u)) {
+    const match = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u.exec(line);
+    if (match?.[1] !== undefined) headings.push(match[1].trim());
+    else body.push(line);
+  }
+  return Object.freeze({
+    title: Object.freeze([title]),
+    description: Object.freeze(description),
+    tags: Object.freeze([...tags]),
+    headings: Object.freeze(headings),
+    body: Object.freeze([body.join("\n")]),
+  });
 }
 
 export class RevisionIndexJobHandler {
@@ -430,14 +481,15 @@ export class RevisionIndexJobHandler {
         : Object.freeze({ kind: "not_available" });
     }
     try {
-      const documents = typeof this.#revisions.readRevisionEnvelope === "function" &&
+      const projection = typeof this.#revisions.readRevisionEnvelope === "function" &&
           typeof this.#revisions.readRevisionFile === "function"
         ? await this.#readIndexableFiles(target.spaceId, target.revisionId)
         : await this.#materializeIndexableFiles(target.spaceId, target.revisionId);
       await this.#index.replaceExactRevision({
         spaceId: target.spaceId,
         revisionId: target.revisionId,
-        documents,
+        ...(projection.entries === undefined ? {} : { entries: projection.entries }),
+        documents: projection.documents,
       });
       const completed = await this.#work.completeIndexJob(
         request.jobId,
@@ -486,17 +538,33 @@ export class RevisionIndexJobHandler {
     if (typeof readEnvelope !== "function" || typeof readFile !== "function") {
       throw new TypeError("selective revision reader is incomplete");
     }
-    const envelope = await readEnvelope.call(this.#revisions, spaceId, revisionId);
+    const session = typeof this.#revisions.openRevisionSession === "function"
+      ? await this.#revisions.openRevisionSession(spaceId, revisionId)
+      : null;
+    const envelope = session?.envelope ??
+      await readEnvelope.call(this.#revisions, spaceId, revisionId);
     if (
       envelope.revision.spaceId !== spaceId ||
       envelope.revision.revisionId !== revisionId
     ) {
       throw new ExactRevisionMismatchError();
     }
+    const entries = envelope.manifest.entries
+      .filter((entry) => entry.kind === "markdown")
+      .map((entry) => Object.freeze({ path: entry.path, sha256: entry.sha256 }));
+    const missing = this.#index.findMissingDigests === undefined
+      ? entries.map((entry) => entry.sha256)
+      : await this.#index.findMissingDigests(
+          spaceId,
+          entries.map((entry) => entry.sha256),
+        );
+    const missingDigests = new Set(missing);
     const documents = [];
     for (const entry of envelope.manifest.entries) {
-      if (entry.kind !== "markdown") continue;
-      const file = await readFile.call(this.#revisions, spaceId, revisionId, entry.path);
+      if (entry.kind !== "markdown" || !missingDigests.has(entry.sha256)) continue;
+      const file = session === null
+        ? await readFile.call(this.#revisions, spaceId, revisionId, entry.path)
+        : await session.readRevisionFile(entry.path);
       if (
         file === null ||
         file.kind !== "markdown" ||
@@ -508,9 +576,17 @@ export class RevisionIndexJobHandler {
       ) {
         throw new ExactRevisionMismatchError();
       }
-      documents.push(Object.freeze({ path: file.path, text: file.text }));
+      documents.push(Object.freeze({
+        path: file.path,
+        text: file.text,
+        sha256: file.sha256,
+        fields: searchFields(file.path, file.text),
+      }));
     }
-    return documents;
+    return Object.freeze({
+      entries: Object.freeze(entries),
+      documents: Object.freeze(documents),
+    });
   }
 
   async #materializeIndexableFiles(spaceId: SpaceId, revisionId: RevisionId) {
@@ -521,12 +597,17 @@ export class RevisionIndexJobHandler {
     ) {
       throw new ExactRevisionMismatchError();
     }
-    return materialized.files
+    const documents = materialized.files
       .filter(
         (file): file is typeof file & { readonly text: string } =>
           file.kind !== "opaque" && typeof file.text === "string",
       )
-      .map((file) => Object.freeze({ path: file.path, text: file.text }));
+      .map((file) => Object.freeze({
+        path: file.path,
+        text: file.text,
+        fields: searchFields(file.path, file.text),
+      }));
+    return Object.freeze({ entries: undefined, documents: Object.freeze(documents) });
   }
 }
 
@@ -758,7 +839,12 @@ export class ReadyExactRevisionIndexService {
     return indexed;
   }
 
-  async query(spaceId: SpaceId, revisionId: RevisionId, normalizedTerms: readonly string[]) {
+  async query(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    normalizedTerms: readonly string[],
+    page?: Readonly<{ readonly offset: number; readonly limit: number }>,
+  ) {
     const state = await this.#work.readRevisionIndexState(spaceId, revisionId);
     if (!state || state.status !== "ready") {
       return Object.freeze({ kind: "unavailable" as const });
@@ -773,6 +859,7 @@ export class ReadyExactRevisionIndexService {
       spaceId,
       revisionId,
       normalizedTerms,
+      page,
     );
     if (
       indexed.kind !== "ready" ||

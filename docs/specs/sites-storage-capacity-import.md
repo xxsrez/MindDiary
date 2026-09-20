@@ -525,6 +525,86 @@ MD-265; MD-267 import depends on MD-266 and MD-268 plus its existing search/
 MCP prerequisites. MD-260 closes only after those children and exact UAT
 capacity/import evidence.
 
+## Release 0.5: bounded foreground work and incremental projections
+
+Статус: accepted implementation contract, 2026-09-20. Этот раздел устраняет
+подтверждённые MD-473–MD-482 bottlenecks, не меняя canonical revision,
+authorization, HEAD CAS, immutable history и recovery contracts.
+
+### Small changeset validation
+
+Producer changeset не перечитывает все неизменённые Markdown bodies, когда
+операции только добавляют новые Markdown files и/или изменяют reserved index и
+log через предназначенные для этого операции. В таком fast path он обязан:
+
+- проверить exact base revision, operation/path/digest limits и candidate
+  manifest так же, как полный path;
+- строго разобрать каждый новый/изменённый Markdown file, проверить его
+  OKF-frontmatter, локальные ссылки относительно полного набора candidate paths
+  и BundleFile references относительно полного набора opaque descriptors;
+- для изменяемого index прочитать прежний index и доказать, что его прежние
+  локальные Markdown targets не исчезли из нового index;
+- использовать только integrity уже committed immutable parent content, а не
+  недоверенное утверждение клиента о его корректности;
+- автоматически перейти к прежней полной producer validation при delete,
+  ordinary replace, BundleFile mutation, неразрешимой fragment/reference
+  проверке или любом другом случае, где локальная проверка не доказывает
+  сохранение bundle-wide invariants.
+
+Fast path не ослабляет invalid-content rejection, idempotency, authorization
+или HEAD CAS. Тестовый large-Mind scenario обязан отдельно доказывать, что
+малое additive изменение не читает unrelated bodies, а потенциально
+инвалидирующее изменение включает полный fallback.
+
+### Metadata transactions and read isolation
+
+Read-only metadata transaction не создаёт durable event или checkpoint. Один
+content/capacity write создаёт ровно один ordered event; full snapshot
+checkpoint выполняется по bounded cadence и при recovery-sensitive event, а не
+после каждого content write. Consistent read фиксирует immutable in-memory
+snapshot под короткой очередью и выполняет callback после освобождения очереди:
+медленный R2/search callback одного запроса не блокирует metadata writes и
+reads других запросов. Snapshot по-прежнему сохраняет atomic view одной
+операции и не разрешает stale authorization bypass.
+
+### Incremental capacity accounting
+
+Foreground capacity admission использует persisted logical/physical usage
+ledger и per-object reachability counts, обновляемые в той же metadata
+transaction, что и revision/HEAD. Стоимость обычного commit зависит от delta
+candidate manifest, а не от полной истории Space, principal или Site.
+Reconciliation остаётся отдельным bounded repair path: mismatch переводит
+accounting в untrusted/fail-closed state до исправления и не позволяет ledger
+стать вторым источником revision truth.
+
+### Exact-revision index and search
+
+Index build открывает exact-revision session один раз. Membership projection
+строится из manifest descriptors; body читается и отправляется в SQL только
+для digest, которого ещё нет в Space-scoped content store. SQL schema обязана
+иметь индекс `(space_id, digest)`. Orphan cleanup выполняется bounded batch по
+cursor/limit либо в owning deletion/GC flow; correlated full-table cleanup на
+каждый index build запрещён.
+
+Search adapter применяет authorization и exact index-completeness fence до
+выдачи результата, затем фильтрует, ранжирует и сортирует в SQL и возвращает
+только одну bounded page полных Markdown bodies плюс exact total count и
+continuation state. Application повторно проверяет digest/OKF и вычисляет
+snippet только для этой страницы. Cursor привязан к Space, exact revision,
+index generation и normalized query; изменение любого bind отклоняется.
+
+### Bounded history and object reads
+
+History list/as-of использует отдельный compact revision catalog без manifest
+bodies; manifest загружается только для выбранной revision. List pagination и
+UTC selector сохраняют deterministic ordering и текущую authorization.
+
+Canonical object port предоставляет verified bounded range/tail read и
+streaming fetch. Range/tail не материализуют полный object; streaming path
+проверяет declared size/digest до успешного завершения и не выдаёт partial
+bytes как успешный fetch. Manifest/session authorization и digest fences
+остаются обязательными.
+
 ## Alternatives rejected
 
 - **Full revision snapshot in D1/R2 on every commit.** Simple, but makes small

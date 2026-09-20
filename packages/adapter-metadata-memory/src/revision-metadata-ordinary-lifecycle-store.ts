@@ -22,7 +22,6 @@ import {
   BOUNDED_OPAQUE_ID,
   SHA256_PATTERN,
   activeReservationAmounts,
-  capacityUsageFromCanonicalState,
   cloneAuditEvent,
   cloneAuditOutbox,
   cloneOrdinaryMindIdempotencyRecords,
@@ -736,18 +735,10 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
               tx.memberships,
             ));
             targetSpaceIds.add(request.spaceId);
-            const targetUsage = capacityUsageFromCanonicalState({
-              spaceIds: targetSpaceIds,
-              spaces: tx.revisionSpaces,
-              stagedBundleFiles: this._stagedBundleFiles,
-              queuedNotes: this._queuedNotes,
-              exportJobs: tx.exportJobs,
-              markdownImportPlans: this._markdownImportPlans,
-              markdownImportSessions: this._markdownImportSessions,
-              markdownImportStagedFiles: this._markdownImportStagedFiles,
-              reservations: this._capacityReservations,
-              reconciledAt: this._capacityReconciledAt,
-            });
+            const targetUsage = this._capacityUsageFromLedger(
+              targetSpaceIds,
+              { exportJobs: tx.exportJobs },
+            );
             const targetReserved = activeReservationAmounts(
               this._capacityReservations,
               (reservation) => targetSpaceIds.has(reservation.spaceId),

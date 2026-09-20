@@ -186,7 +186,7 @@ function snapshotMaps(value: unknown): Record<string, unknown> {
     throw new TypeError("system backup metadata snapshot is invalid");
   }
   const snapshot = { queuedNotes: new Map(), ...value } as Record<string, unknown>;
-  if (snapshot.v !== 5 || SYSTEM_BACKUP_EXACT_FIELDS.some((field) =>
+  if ((snapshot.v !== 5 && snapshot.v !== 6) || SYSTEM_BACKUP_EXACT_FIELDS.some((field) =>
     !(snapshot[field] instanceof Map))) {
     throw new TypeError("system backup metadata snapshot version or fields are unsupported");
   }

@@ -13,6 +13,10 @@ Repository runner реализован; этот документ не утве�
 ухудшения. Если benchmark запущен, его samples, thresholds и failed результат
 не подменяются; исключение из scope не означает успешный benchmark.
 
+Этот gate — один возможный компонент
+[полного тщательного аудита](thorough-project-audit.md), но сам не запускает
+его и не доказывает полноту проекта.
+
 ## Назначение и граница
 
 Gate блокирует UAT acceptance при regressions authenticated home и MCP read

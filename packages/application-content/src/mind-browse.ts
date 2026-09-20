@@ -41,7 +41,6 @@ import {
   MAX_GREP_SCAN_BYTES,
   MAX_METADATA_SCAN_BYTES,
   MAX_TEXT_BUNDLE_FILE_BYTES,
-  byteOffsetAt,
   compareUnknown,
   evaluateMetadataFilter,
   exactJsonEqual,
@@ -49,16 +48,17 @@ import {
   fileOperationBudgetState,
   fileOperationRequestValue,
   isTextMediaType,
-  isUtf8Boundary,
   jsonValue,
   metadataAt,
   normalizeGrepFilesRequest,
   normalizeListFilesRequest,
   normalizeReadFilesRequest,
   loadTextFileHead,
+  loadTextFileRange,
   regexEscape,
   scalarAfter,
   scalarBefore,
+  textPositionIndex,
   scalarCompare,
   selectEntries,
   splitTextLines,
@@ -75,6 +75,24 @@ import {
   type ReadFileResultItem,
   type ReadFilesResult,
 } from "./file-operations.js";
+import {
+  MAX_LOCATOR_CHARACTERS,
+  type BrowseCursorLocatorPayload,
+  type BundleFileListCursorLocatorPayload,
+  type ExactEntryLocatorPayload,
+  type FileOperationCursorLocatorPayload,
+  type MindLocatorCodec,
+} from "./mind-locators.js";
+
+export { WebCryptoMindLocatorCodec } from "./mind-locators.js";
+export type {
+  BrowseCursorLocatorPayload,
+  BundleFileListCursorLocatorPayload,
+  ExactEntryLocatorPayload,
+  FileOperationCursorLocatorPayload,
+  MindLocatorCodec,
+  MindLocatorPayload,
+} from "./mind-locators.js";
 
 import {
   MindDiscoveryFailure,
@@ -91,16 +109,9 @@ export const DEFAULT_FETCH_BYTE_BUDGET = 64 * 1024;
 export const MAX_FETCH_BYTE_BUDGET = 1024 * 1024;
 export const MIN_FETCH_BYTE_BUDGET = 4;
 
-const LOCATOR_PREFIX = "mdl1_";
-const LOCATOR_VERSION = 1;
-const AES_GCM_IV_BYTES = 12;
-const AES_GCM_TAG_BITS = 128;
-const MAX_LOCATOR_CHARACTERS = 8 * 1024;
-const MAX_LOCATOR_PLAINTEXT_BYTES = 6 * 1024;
-const LOCATOR_AAD = new TextEncoder().encode("mind-diary:opaque-locator:v1");
-const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 const ENCODED_SEPARATOR = /%(?:2f|5c)/iu;
+const LOCATOR_VERSION = 1;
 const MAX_BROWSE_OBJECT_CONCURRENCY = 8;
 const INLINE_BUNDLE_FILE_MEDIA_TYPES = new Set<string>([
   "image/png",
@@ -133,379 +144,22 @@ async function mapBounded<Input, Output>(
 
 type AllowedAuthorization = Extract<AuthorizationDecision, { readonly kind: "allowed" }>;
 
-export interface ExactEntryLocatorPayload {
-  readonly version: 1;
-  readonly kind: "entry" | "continuation";
-  readonly spaceId: SpaceId;
-  readonly revisionId: RevisionId;
-  readonly path: string;
-  readonly sha256: Sha256Digest;
-  /** Inclusive UTF-8 byte offset. */
-  readonly start: number;
-  /** Exclusive UTF-8 byte boundary fixed by the server-issued locator. */
-  readonly end: number;
-}
-
-export interface BrowseCursorLocatorPayload {
-  readonly version: 1;
-  readonly kind: "browse";
-  readonly spaceId: SpaceId;
-  readonly revisionId: RevisionId;
-  readonly path: string;
-  readonly manifestHash: Sha256Digest;
-  /** Inclusive entry offset inside the exact immutable directory listing. */
-  readonly start: number;
-  /** Exclusive entry count captured when the cursor was issued. */
-  readonly end: number;
-}
-
-export interface BundleFileListCursorLocatorPayload {
-  readonly version: 1;
-  readonly kind: "bundle_files";
-  readonly spaceId: SpaceId;
-  readonly revisionId: RevisionId;
-  readonly manifestHash: Sha256Digest;
-  readonly start: number;
-  readonly end: number;
-}
-
-export interface FileOperationCursorLocatorPayload {
-  readonly version: 1;
-  readonly kind: "file_operation";
-  readonly operation: "list" | "grep" | "read";
-  readonly spaceId: SpaceId;
-  readonly usageVersion: number | null;
-  readonly revisionId: RevisionId;
-  readonly manifestHash: Sha256Digest;
-  readonly requestHash: Sha256Digest;
-  readonly fileOffset: number;
-  readonly lineOffset: number;
-  readonly end: number;
-}
-
-export type MindLocatorPayload =
-  | ExactEntryLocatorPayload
-  | BrowseCursorLocatorPayload
-  | BundleFileListCursorLocatorPayload
-  | FileOperationCursorLocatorPayload;
-
-/** Server-side opaque locator boundary. Decoding is never exposed to MCP clients. */
-export interface MindLocatorCodec {
-  encode(payload: Readonly<MindLocatorPayload>): Promise<string>;
-  decode(candidate: unknown): Promise<Readonly<MindLocatorPayload> | null>;
-}
-
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 1) {
-    binary += String.fromCharCode(bytes[index]!);
-  }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
-}
-
-function base64UrlToBytes(value: string): Uint8Array | null {
-  if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) return null;
-  const padded = `${value.replaceAll("-", "+").replaceAll("_", "/")}${"=".repeat(
-    (4 - (value.length % 4)) % 4,
-  )}`;
-  try {
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    return bytesToBase64Url(bytes) === value ? bytes : null;
-  } catch {
-    return null;
-  }
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const sortedExpected = [...expected].sort();
-  return (
-    actual.length === sortedExpected.length &&
-    actual.every((key, index) => key === sortedExpected[index])
-  );
-}
-
 function validOpaqueIdentity(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= 512 &&
-    !CONTROL_CHARACTER.test(value)
-  );
-}
-
-function validRange(start: unknown, end: unknown, allowEmpty: boolean): boolean {
-  return (
-    Number.isSafeInteger(start) &&
-    Number.isSafeInteger(end) &&
-    (start as number) >= 0 &&
-    (allowEmpty ? (end as number) >= (start as number) : (end as number) > (start as number))
-  );
+  return typeof value === "string" && value.length > 0 && value.length <= 512 &&
+    !CONTROL_CHARACTER.test(value);
 }
 
 function normalizeBrowsePathValue(value: unknown): string | null {
   if (value === "") return "";
-  if (
-    typeof value !== "string" ||
-    value.length > 2048 ||
-    value.startsWith("/") ||
-    value.endsWith("/") ||
-    value.includes("\\") ||
-    CONTROL_CHARACTER.test(value) ||
-    ENCODED_SEPARATOR.test(value)
-  ) {
-    return null;
-  }
-  const segments = value.split("/");
-  return segments.some(
-    (segment) => segment.length === 0 || segment === "." || segment === "..",
-  )
-    ? null
-    : value;
-}
-
-function parseLocatorPayload(value: unknown): Readonly<MindLocatorPayload> | null {
-  if (!isRecord(value) || value.version !== LOCATOR_VERSION) return null;
-  if (value.kind === "entry" || value.kind === "continuation") {
-    if (
-      !hasExactKeys(value, [
-        "version",
-        "kind",
-        "spaceId",
-        "revisionId",
-        "path",
-        "sha256",
-        "start",
-        "end",
-      ]) ||
-      !validOpaqueIdentity(value.spaceId) ||
-      !validOpaqueIdentity(value.revisionId) ||
-      typeof value.path !== "string" ||
-      typeof value.sha256 !== "string" ||
-      !SHA256_PATTERN.test(value.sha256) ||
-      !validRange(value.start, value.end, value.kind === "entry")
-    ) {
-      return null;
-    }
-    try {
-      canonicalMarkdownPath(value.path);
-    } catch {
-      return null;
-    }
-    return Object.freeze({
-      version: LOCATOR_VERSION,
-      kind: value.kind,
-      spaceId: value.spaceId as SpaceId,
-      revisionId: value.revisionId as RevisionId,
-      path: value.path,
-      sha256: value.sha256 as Sha256Digest,
-      start: value.start as number,
-      end: value.end as number,
-    });
-  }
-  if (value.kind === "browse") {
-    if (
-      !hasExactKeys(value, [
-        "version",
-        "kind",
-        "spaceId",
-        "revisionId",
-        "path",
-        "manifestHash",
-        "start",
-        "end",
-      ]) ||
-      !validOpaqueIdentity(value.spaceId) ||
-      !validOpaqueIdentity(value.revisionId) ||
-      normalizeBrowsePathValue(value.path) === null ||
-      typeof value.manifestHash !== "string" ||
-      !SHA256_PATTERN.test(value.manifestHash) ||
-      !validRange(value.start, value.end, false)
-    ) {
-      return null;
-    }
-    return Object.freeze({
-      version: LOCATOR_VERSION,
-      kind: "browse",
-      spaceId: value.spaceId as SpaceId,
-      revisionId: value.revisionId as RevisionId,
-      path: value.path as string,
-      manifestHash: value.manifestHash as Sha256Digest,
-      start: value.start as number,
-      end: value.end as number,
-    });
-  }
-  if (value.kind === "bundle_files") {
-    if (
-      !hasExactKeys(value, [
-        "version",
-        "kind",
-        "spaceId",
-        "revisionId",
-        "manifestHash",
-        "start",
-        "end",
-      ]) ||
-      !validOpaqueIdentity(value.spaceId) ||
-      !validOpaqueIdentity(value.revisionId) ||
-      typeof value.manifestHash !== "string" ||
-      !SHA256_PATTERN.test(value.manifestHash) ||
-      !validRange(value.start, value.end, false)
-    ) {
-      return null;
-    }
-    return Object.freeze({
-      version: LOCATOR_VERSION,
-      kind: "bundle_files",
-      spaceId: value.spaceId as SpaceId,
-      revisionId: value.revisionId as RevisionId,
-      manifestHash: value.manifestHash as Sha256Digest,
-      start: value.start as number,
-      end: value.end as number,
-    });
-  }
-  if (value.kind === "file_operation") {
-    if (
-      !hasExactKeys(value, [
-        "version",
-        "kind",
-        "operation",
-        "spaceId",
-        "usageVersion",
-        "revisionId",
-        "manifestHash",
-        "requestHash",
-        "fileOffset",
-        "lineOffset",
-        "end",
-      ]) ||
-      (value.operation !== "list" &&
-        value.operation !== "grep" &&
-        value.operation !== "read") ||
-      !validOpaqueIdentity(value.spaceId) ||
-      !(value.usageVersion === null ||
-        (Number.isSafeInteger(value.usageVersion) && (value.usageVersion as number) >= 0)) ||
-      !validOpaqueIdentity(value.revisionId) ||
-      typeof value.manifestHash !== "string" ||
-      !SHA256_PATTERN.test(value.manifestHash) ||
-      typeof value.requestHash !== "string" ||
-      !SHA256_PATTERN.test(value.requestHash) ||
-      !Number.isSafeInteger(value.fileOffset) ||
-      (value.fileOffset as number) < 0 ||
-      !Number.isSafeInteger(value.lineOffset) ||
-      (value.lineOffset as number) < 0 ||
-      !Number.isSafeInteger(value.end) ||
-      (value.end as number) < 0 ||
-      (value.fileOffset as number) > (value.end as number)
-    ) {
-      return null;
-    }
-    return Object.freeze({
-      version: LOCATOR_VERSION,
-      kind: "file_operation",
-      operation: value.operation,
-      spaceId: value.spaceId as SpaceId,
-      usageVersion: value.usageVersion as number | null,
-      revisionId: value.revisionId as RevisionId,
-      manifestHash: value.manifestHash as Sha256Digest,
-      requestHash: value.requestHash as Sha256Digest,
-      fileOffset: value.fileOffset as number,
-      lineOffset: value.lineOffset as number,
-      end: value.end as number,
-    });
-  }
-  return null;
-}
-
-/**
- * AES-256-GCM makes locator contents confidential as well as unforgeable.
- * The key is deployment secret material and is copied before import.
- */
-export class WebCryptoMindLocatorCodec implements MindLocatorCodec {
-  readonly #crypto: Crypto;
-  readonly #key: Promise<CryptoKey>;
-
-  constructor(secret: Uint8Array, cryptoImplementation: Crypto = globalThis.crypto) {
-    if (!(secret instanceof Uint8Array) || secret.byteLength !== 32) {
-      throw new TypeError("Mind locator secret must contain exactly 32 bytes.");
-    }
-    if (cryptoImplementation?.subtle === undefined) {
-      throw new TypeError("Web Crypto is required for Mind locator protection.");
-    }
-    this.#crypto = cryptoImplementation;
-    this.#key = this.#crypto.subtle.importKey(
-      "raw",
-      new Uint8Array(secret),
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["encrypt", "decrypt"],
-    );
-  }
-
-  async encode(payload: Readonly<MindLocatorPayload>): Promise<string> {
-    const normalized = parseLocatorPayload(payload);
-    if (normalized === null) throw new TypeError("Mind locator payload is invalid.");
-    const plaintext = new TextEncoder().encode(JSON.stringify(normalized));
-    if (plaintext.byteLength > MAX_LOCATOR_PLAINTEXT_BYTES) {
-      throw new TypeError("Mind locator payload is too large.");
-    }
-    const iv = this.#crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
-    const ciphertext = new Uint8Array(
-      await this.#crypto.subtle.encrypt(
-        {
-          name: "AES-GCM",
-          iv,
-          additionalData: LOCATOR_AAD,
-          tagLength: AES_GCM_TAG_BITS,
-        },
-        await this.#key,
-        plaintext,
-      ),
-    );
-    const encoded = new Uint8Array(iv.byteLength + ciphertext.byteLength);
-    encoded.set(iv, 0);
-    encoded.set(ciphertext, iv.byteLength);
-    return `${LOCATOR_PREFIX}${bytesToBase64Url(encoded)}`;
-  }
-
-  async decode(candidate: unknown): Promise<Readonly<MindLocatorPayload> | null> {
-    if (
-      typeof candidate !== "string" ||
-      candidate.length <= LOCATOR_PREFIX.length ||
-      candidate.length > MAX_LOCATOR_CHARACTERS ||
-      !candidate.startsWith(LOCATOR_PREFIX)
-    ) {
-      return null;
-    }
-    const encoded = base64UrlToBytes(candidate.slice(LOCATOR_PREFIX.length));
-    if (encoded === null || encoded.byteLength <= AES_GCM_IV_BYTES + 16) return null;
-    const iv = encoded.slice(0, AES_GCM_IV_BYTES);
-    const ciphertext = encoded.slice(AES_GCM_IV_BYTES);
-    try {
-      const plaintext = new Uint8Array(
-        await this.#crypto.subtle.decrypt(
-          {
-            name: "AES-GCM",
-            iv,
-            additionalData: LOCATOR_AAD,
-            tagLength: AES_GCM_TAG_BITS,
-          },
-          await this.#key,
-          ciphertext,
-        ),
-      );
-      if (plaintext.byteLength > MAX_LOCATOR_PLAINTEXT_BYTES) return null;
-      const text = new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
-      return parseLocatorPayload(JSON.parse(text) as unknown);
-    } catch {
-      return null;
-    }
-  }
+  if (typeof value !== "string" || value.length > 2048 || value.startsWith("/") ||
+    value.endsWith("/") || value.includes("\\") || CONTROL_CHARACTER.test(value) ||
+    ENCODED_SEPARATOR.test(value)) return null;
+  return value.split("/").some((segment) =>
+    segment.length === 0 || segment === "." || segment === "..") ? null : value;
 }
 
 export interface MindEntrySummary {
@@ -618,6 +272,12 @@ interface NormalizedBrowseQuery {
 interface LoadedExactFile {
   readonly entry: Readonly<RevisionManifestEntry>;
   readonly bytes: Uint8Array;
+  readonly authorization: AllowedAuthorization;
+}
+
+interface LoadedExactEntry {
+  readonly entry: Readonly<RevisionManifestEntry>;
+  readonly manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"];
   readonly authorization: AllowedAuthorization;
 }
 
@@ -1517,6 +1177,8 @@ export class MindBrowseService {
         }
         const line = lines[index]!;
         const spans: GrepMatchSpan[] = [];
+        let acceptedOccurrences = 0;
+        let positions: ReturnType<typeof textPositionIndex> | null = null;
         expressions.forEach((expression, patternIndex) => {
           const matcher = expression.matcher(line.text);
           while (matcher.find()) {
@@ -1525,19 +1187,21 @@ export class MindBrowseService {
             const accepted = (!request.wholeLine || (start === 0 && end === line.text.length)) &&
               (!request.wholeWord || (!wordScalar(scalarBefore(line.text, start)) && !wordScalar(scalarAfter(line.text, end))));
             if (accepted) {
-              const startInLine = byteOffsetAt(line.text, start);
-              const endInLine = byteOffsetAt(line.text, end);
-              spans.push(Object.freeze({
-                patternIndex,
-                startColumn: Array.from(line.text.slice(0, start)).length + 1,
-                endColumn: Array.from(line.text.slice(0, end)).length + 1,
-                startByte: line.startByte + startInLine,
-                endByte: line.startByte + endInLine,
-              }));
+              acceptedOccurrences += 1;
+              if (request.output === "matches") {
+                positions ??= textPositionIndex(line.text);
+                spans.push(Object.freeze({
+                  patternIndex,
+                  startColumn: positions.scalarColumns[start]!,
+                  endColumn: positions.scalarColumns[end]!,
+                  startByte: line.startByte + positions.byteOffsets[start]!,
+                  endByte: line.startByte + positions.byteOffsets[end]!,
+                }));
+              }
             }
           }
         });
-        if (spans.length === 0) continue;
+        if (acceptedOccurrences === 0) continue;
         spans.sort((left, right) => left.startByte - right.startByte || left.patternIndex - right.patternIndex);
         if (request.output === "matches") {
           const beforeContext = lines.slice(Math.max(0, index - request.beforeContext), index).map((item) => item.text);
@@ -1557,7 +1221,7 @@ export class MindBrowseService {
             break;
           }
           matchingLines += 1;
-          occurrences += spans.length;
+          occurrences += acceptedOccurrences;
           matches.push(Object.freeze({
             lineNumber: index + 1,
             startByte: line.startByte,
@@ -1571,7 +1235,7 @@ export class MindBrowseService {
           returnedBytes += rowBytes;
         } else {
           matchingLines += 1;
-          occurrences += spans.length;
+          occurrences += acceptedOccurrences;
         }
       }
       const qualifies = request.output === "count" ||
@@ -1699,13 +1363,97 @@ export class MindBrowseService {
         }));
         continue;
       }
-      const loaded = selection.mode === "head"
+      if (selection.mode === "bytes") {
+        const total = entry.size;
+        if (selection.endByte > total) {
+          items.push(Object.freeze({
+            kind: "error",
+            path: selection.path,
+            error: Object.freeze({ code: "range_out_of_bounds", retryable: false }),
+          }));
+          continue;
+        }
+        const start = Math.max(selection.startByte, continuationByte);
+        const remaining = request.maxOutputBytes - returnedBytes;
+        if (remaining < MIN_FETCH_BYTE_BUDGET && start < selection.endByte) {
+          incomplete = true;
+          incompleteReason = "response_budget";
+          break;
+        }
+        const readEnd = Math.min(
+          selection.endByte,
+          start + remaining + 3,
+        );
+        const ranged = await loadTextFileRange(
+          this.#objects,
+          envelope.revision.spaceId,
+          envelope.manifest.format,
+          entry,
+          start,
+          readEnd,
+          signal,
+          deadlineAt,
+          () => this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry),
+        );
+        if (ranged.kind === "error") {
+          items.push(Object.freeze({ kind: "error", path: selection.path, error: ranged.error }));
+          continue;
+        }
+        const first = ranged.file.bytes[0];
+        const relativeEnd = safeUtf8PageEnd(
+          ranged.file.bytes,
+          0,
+          ranged.file.bytes.byteLength,
+          remaining,
+        );
+        let text: string;
+        try {
+          if (first !== undefined && (first & 0xc0) === 0x80) throw new Error("boundary");
+          text = new TextDecoder("utf-8", { fatal: true }).decode(
+            ranged.file.bytes.slice(0, relativeEnd),
+          );
+        } catch {
+          items.push(Object.freeze({
+            kind: "error",
+            path: selection.path,
+            error: Object.freeze({ code: "utf8_boundary_required", retryable: false }),
+          }));
+          continue;
+        }
+        const pageEnd = start + relativeEnd;
+        returnedBytes += relativeEnd;
+        items.push(Object.freeze({
+          kind: "file",
+          file: Object.freeze({
+            path: entry.path,
+            kind: entry.kind,
+            mediaType: entry.mediaType,
+            sha256: entry.sha256,
+            revisionId: envelope.revision.revisionId,
+            text,
+            byteRange: Object.freeze({ start, end: pageEnd, total }),
+            lineRange: null,
+            truncated: pageEnd < selection.endByte,
+            nextRange: pageEnd < selection.endByte
+              ? Object.freeze({ startByte: pageEnd, endByte: selection.endByte })
+              : null,
+          }),
+        }));
+        if (pageEnd < selection.endByte) {
+          continuationByte = pageEnd;
+          incomplete = true;
+          incompleteReason = "response_budget";
+          break;
+        }
+        continue;
+      }
+      const loaded = selection.mode === "head" || selection.mode === "lines"
         ? await loadTextFileHead(
             this.#objects,
             envelope.revision.spaceId,
             envelope.manifest.format,
             entry,
-            selection.count,
+            selection.mode === "lines" ? selection.endLine : selection.count,
             signal,
             deadlineAt,
             () => this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry),
@@ -1744,22 +1492,11 @@ export class MindBrowseService {
         }
         start = lines[selection.startLine - 1]!.startByte;
         end = lines[selection.endLine - 1]!.endWithTerminatorByte;
-        requestedLineRange = Object.freeze({ start: selection.startLine, end: selection.endLine, total: lines.length });
-      } else if (selection.mode === "bytes") {
-        if (selection.endByte > total || !isUtf8Boundary(loaded.file.bytes, selection.startByte) ||
-          !isUtf8Boundary(loaded.file.bytes, selection.endByte)) {
-          items.push(Object.freeze({
-            kind: "error",
-            path: selection.path,
-            error: Object.freeze({
-              code: selection.endByte > total ? "range_out_of_bounds" : "utf8_boundary_required",
-              retryable: false,
-            }),
-          }));
-          continue;
-        }
-        start = selection.startByte;
-        end = selection.endByte;
+        requestedLineRange = Object.freeze({
+          start: selection.startLine,
+          end: selection.endLine,
+          total: "complete" in loaded && loaded.complete ? lines.length : null,
+        });
       }
       if (continuationByte > 0) start = Math.max(start, continuationByte);
       const remaining = request.maxOutputBytes - returnedBytes;
@@ -1833,25 +1570,76 @@ export class MindBrowseService {
     if (locator === null || (locator.kind !== "entry" && locator.kind !== "continuation")) {
       throw new MindBrowseFailure("locator_not_found", "Entry was not found.");
     }
-    const loaded = await this.#loadExactFile(
-      actor,
-      locator.spaceId,
-      locator.revisionId,
-      locator.path,
-      "locator_not_found",
-      locator,
-    );
-    const pageEnd = safeUtf8PageEnd(
-      loaded.bytes,
-      locator.start,
-      locator.end,
-      request.maxBytes,
-    );
+    const rangeCapableLocator = locator.okfType !== undefined;
+    const loadedEntry = rangeCapableLocator
+      ? await this.#loadExactEntry(
+          actor,
+          locator.spaceId,
+          locator.revisionId,
+          locator.path,
+          "locator_not_found",
+          locator,
+        )
+      : null;
+    const loaded = loadedEntry === null
+      ? await this.#loadExactFile(
+          actor,
+          locator.spaceId,
+          locator.revisionId,
+          locator.path,
+          "locator_not_found",
+          locator,
+        )
+      : null;
+    let pageEnd: number;
+    let pageBytes: Uint8Array;
+    if (loadedEntry !== null && locator.start < locator.end) {
+      const readEnd = Math.min(locator.end, locator.start + request.maxBytes + 3);
+      const ranged = await loadTextFileRange(
+        this.#objects,
+        locator.spaceId,
+        loadedEntry.manifestFormat,
+        loadedEntry.entry,
+        locator.start,
+        readEnd,
+        undefined,
+        Date.now() + FILE_OPERATION_WALL_CLOCK_BUDGET_MS,
+        () => this.#loadTextFile(
+          locator.spaceId,
+          loadedEntry.manifestFormat,
+          loadedEntry.entry,
+        ),
+      );
+      if (ranged.kind === "error") {
+        throw new MindBrowseFailure(
+          "revision_integrity_failure",
+          "The exact revision could not be decoded safely.",
+        );
+      }
+      const relativeEnd = safeUtf8PageEnd(
+        ranged.file.bytes,
+        0,
+        ranged.file.bytes.byteLength,
+        request.maxBytes,
+      );
+      pageEnd = locator.start + relativeEnd;
+      pageBytes = ranged.file.bytes.slice(0, relativeEnd);
+    } else {
+      const fullBytes = loaded?.bytes ?? new Uint8Array();
+      pageEnd = safeUtf8PageEnd(
+        fullBytes,
+        locator.start,
+        locator.end,
+        request.maxBytes,
+      );
+      pageBytes = fullBytes.slice(locator.start, pageEnd);
+    }
     let text: string;
     try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(
-        loaded.bytes.slice(locator.start, pageEnd),
-      );
+      if (pageBytes[0] !== undefined && (pageBytes[0] & 0xc0) === 0x80) {
+        throw new Error("boundary");
+      }
+      text = new TextDecoder("utf-8", { fatal: true }).decode(pageBytes);
     } catch {
       throw new MindBrowseFailure(
         "revision_integrity_failure",
@@ -1870,22 +1658,39 @@ export class MindBrowseService {
               sha256: locator.sha256,
               start: pageEnd,
               end: locator.end,
+              ...(locator.okfType !== undefined ? {
+                okfType: locator.okfType,
+                title: locator.title!,
+                description: locator.description!,
+                tags: locator.tags!,
+              } : {}),
             }),
           )
         : null;
     const result = Object.freeze({
-      entry: await this.#entrySummary(
-        locator.spaceId,
-        locator.revisionId,
-        loaded.entry,
-        loaded.bytes,
-        locator.kind === "entry" &&
-          locator.start === 0 &&
-          locator.end === loaded.entry.size &&
-          typeof request.id === "string"
-          ? request.id
-          : undefined,
-      ),
+      entry: loadedEntry !== null
+        ? await this.#entrySummaryFromLocator(
+            locator.spaceId,
+            locator.revisionId,
+            loadedEntry.entry,
+            locator,
+            locator.kind === "entry" &&
+              locator.start === 0 && locator.end === loadedEntry.entry.size &&
+              typeof request.id === "string"
+              ? request.id
+              : undefined,
+          )
+        : await this.#entrySummary(
+            locator.spaceId,
+            locator.revisionId,
+            loaded!.entry,
+            loaded!.bytes,
+            locator.kind === "entry" &&
+              locator.start === 0 && locator.end === loaded!.entry.size &&
+              typeof request.id === "string"
+              ? request.id
+              : undefined,
+          ),
       text,
       truncated: continuationId !== null,
       continuationId,
@@ -1901,7 +1706,7 @@ export class MindBrowseService {
       locator.spaceId,
       "content:fetch",
       "historical",
-      loaded.authorization,
+      (loadedEntry ?? loaded!).authorization,
       "locator_not_found",
     );
     return result;
@@ -2173,6 +1978,10 @@ export class MindBrowseService {
         sha256: entry.sha256,
         start: 0,
         end: entry.size,
+        okfType: parsed.file.kind === "concept" ? parsed.file.okfType : null,
+        title: entryTitle(entry.path, frontmatter),
+        description: entryDescription(frontmatter),
+        tags: entryTags(frontmatter),
       }),
     );
     return Object.freeze({
@@ -2191,6 +2000,52 @@ export class MindBrowseService {
     });
   }
 
+  async #entrySummaryFromLocator(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    entry: Readonly<RevisionManifestEntry>,
+    locator: Readonly<ExactEntryLocatorPayload>,
+    reusableEntryId?: string,
+  ): Promise<Readonly<MindEntrySummary>> {
+    let resourceUri: string;
+    try {
+      resourceUri = exactRevisionResourceUri(spaceId, revisionId, entry.path);
+    } catch {
+      throw new MindBrowseFailure(
+        "revision_integrity_failure",
+        "The exact revision contains an invalid resource identity.",
+      );
+    }
+    const entryId = reusableEntryId ?? await this.#locators.encode(Object.freeze({
+      version: LOCATOR_VERSION,
+      kind: "entry" as const,
+      spaceId,
+      revisionId,
+      path: entry.path,
+      sha256: entry.sha256,
+      start: 0,
+      end: entry.size,
+      okfType: locator.okfType ?? null,
+      title: locator.title ?? entryTitle(entry.path, null),
+      description: locator.description ?? null,
+      tags: locator.tags ?? Object.freeze([]),
+    }));
+    return Object.freeze({
+      entryId,
+      resourceUri,
+      path: entry.path,
+      kind: okfFileKind(entry.path),
+      title: locator.title ?? entryTitle(entry.path, null),
+      description: locator.description ?? null,
+      tags: locator.tags ?? Object.freeze([]),
+      mimeType: MARKDOWN_MEDIA_TYPE,
+      revisionId,
+      sha256: entry.sha256,
+      size: entry.size,
+      okfType: locator.okfType ?? null,
+    });
+  }
+
   async #loadExactFile(
     actor: ActorContext,
     spaceId: SpaceId,
@@ -2199,6 +2054,34 @@ export class MindBrowseService {
     notFoundCode: "locator_not_found" | "resource_not_found",
     locator?: Readonly<ExactEntryLocatorPayload>,
   ): Promise<Readonly<LoadedExactFile>> {
+    const loaded = await this.#loadExactEntry(
+      actor,
+      spaceId,
+      revisionId,
+      path,
+      notFoundCode,
+      locator,
+    );
+    const bytes = await this.#readVerifiedObject(
+      spaceId,
+      loaded.manifestFormat,
+      loaded.entry,
+    );
+    return Object.freeze({
+      entry: loaded.entry,
+      bytes,
+      authorization: loaded.authorization,
+    });
+  }
+
+  async #loadExactEntry(
+    actor: ActorContext,
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    path: string,
+    notFoundCode: "locator_not_found" | "resource_not_found",
+    locator?: Readonly<ExactEntryLocatorPayload>,
+  ): Promise<Readonly<LoadedExactEntry>> {
     const initialAuthorization = await this.#requireAuthorization(
       actor,
       spaceId,
@@ -2232,16 +2115,9 @@ export class MindBrowseService {
       initialAuthorization,
       notFoundCode,
     );
-    const bytes = await this.#readVerifiedObject(
-      envelope.revision.spaceId,
-      envelope.manifest.format,
-      entry,
-    );
-    // The caller performs the final current-access recheck after response
-    // materialization; repeating it here would add an identical D1 refresh.
     return Object.freeze({
       entry,
-      bytes,
+      manifestFormat: envelope.manifest.format,
       authorization: initialAuthorization,
     });
   }

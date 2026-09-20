@@ -123,7 +123,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         MutablePrincipalMindUsageOwnerState
       > | null = null;
       if (
-        (snapshot.v === 3 || snapshot.v === 4 || snapshot.v === 5) &&
+        (snapshot.v === 3 || snapshot.v === 4 || snapshot.v === 5 || snapshot.v === 6) &&
         snapshot.principalMindUsageOwners instanceof Map &&
         snapshot.personalBindings instanceof Map
       ) {
@@ -145,10 +145,10 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
       }
       if (
         (snapshot.v !== 1 && snapshot.v !== 2 && snapshot.v !== 3 &&
-          snapshot.v !== 4 && snapshot.v !== 5) ||
+          snapshot.v !== 4 && snapshot.v !== 5 && snapshot.v !== 6) ||
         !mapFields.every((field) => snapshot[field] instanceof Map) ||
         (snapshot.v === 1 && !(snapshot.mindBindingOwners instanceof Map)) ||
-        ((snapshot.v === 2 || snapshot.v === 3 || snapshot.v === 4 || snapshot.v === 5) &&
+        ((snapshot.v === 2 || snapshot.v === 3 || snapshot.v === 4 || snapshot.v === 5 || snapshot.v === 6) &&
           (!(snapshot.credentialWriteTargetOwners instanceof Map) ||
             !(snapshot.legacyCredentialWriteTargetUpgrades instanceof Map) ||
             !validCredentialWriteTargetOwnersSnapshot(
@@ -162,7 +162,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
                 (snapshot.legacyCredentialWriteTargetUpgrades as Map<MindBindingOwnerId, unknown>)
                   .has(ownerId),
               ))) ||
-        ((snapshot.v === 3 || snapshot.v === 4 || snapshot.v === 5) &&
+        ((snapshot.v === 3 || snapshot.v === 4 || snapshot.v === 5 || snapshot.v === 6) &&
           (principalMindUsageOwners === null ||
             !validPrincipalMindUsageOwnersSnapshot(
               principalMindUsageOwners,
@@ -188,7 +188,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
       }
       restored._spaces = new Map(snapshot.spaces as Map<SpaceId, SpaceState>);
       restored._revisionsById = new Map(snapshot.revisionsById as Map<RevisionId, Envelope>);
-      restored._reachabilityCounts = snapshot.objectReachabilityCounts === undefined
+      restored._reachabilityCounts = snapshot.v !== 6 || snapshot.objectReachabilityCounts === undefined
         ? null
         : cloneObjectReachabilityCounts(snapshot.objectReachabilityCounts);
       restored._idempotencyRecords = new Map(snapshot.idempotencyRecords as Map<string, CompletedIdempotencyRecord>);
@@ -238,7 +238,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
       restored._capacityReconciledAt = snapshot.capacityReconciledAt instanceof Map
         ? new Map(snapshot.capacityReconciledAt as Map<SpaceId, UtcInstant>)
         : new Map();
-      restored._capacityUsageLedger = snapshot.capacityUsageLedger instanceof Map
+      restored._capacityUsageLedger = snapshot.v === 6 && snapshot.capacityUsageLedger instanceof Map
         ? new Map(
             [...(snapshot.capacityUsageLedger as Map<SpaceId, Readonly<CapacityUsageSnapshot>>)]
               .map(([spaceId, usage]) => [spaceId, Object.freeze({ ...usage })]),
@@ -309,7 +309,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         restored._mindBindingOwners = new Map();
       }
       restored._principalMindUsageOwners = snapshot.v === 3 || snapshot.v === 4 ||
-          snapshot.v === 5
+          snapshot.v === 5 || snapshot.v === 6
         ? clonePrincipalMindUsageOwners(principalMindUsageOwners!)
         : migrateLegacyCredentialTargetsToPrincipalUsage(
             restored._credentialWriteTargetOwners,

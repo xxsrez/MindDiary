@@ -157,7 +157,7 @@ function countedStore(objects) {
   return { store, metrics, reset };
 }
 
-async function seedLargeV3(objects, metadata, fileCount = 2_000) {
+async function seedLargeV3(objects, metadata, fileCount = 2_000, withIndex = false) {
   const entries = [];
   for (let index = 0; index < fileCount; index += 1) {
     const path = `concepts/concept-${String(index).padStart(4, "0")}.md`;
@@ -172,6 +172,28 @@ async function seedLargeV3(objects, metadata, fileCount = 2_000) {
     entries.push({
       kind: "markdown",
       path,
+      sha256: put.object.sha256,
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      size: put.object.size,
+    });
+  }
+  if (withIndex) {
+    const text = `---\nokf_version: "0.2"\n---\n\n# Large Mind\n\n${
+      Array.from({ length: fileCount }, (_, index) => {
+        const suffix = String(index).padStart(4, "0");
+        return `- [Concept ${index}](concepts/concept-${suffix}.md)`;
+      }).join("\n")
+    }\n`;
+    const put = await objects.putSpaceCanonicalObject({
+      kind: "markdown",
+      spaceId: MINDS.ordinary.spaceId,
+      bytes: ENCODER.encode(text),
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: "2026-08-22T17:00:00.000Z",
+    });
+    entries.push({
+      kind: "markdown",
+      path: "index.md",
       sha256: put.object.sha256,
       mediaType: MARKDOWN_MEDIA_TYPE,
       size: put.object.size,
@@ -203,6 +225,79 @@ async function seedLargeV3(objects, metadata, fileCount = 2_000) {
   );
   return envelope;
 }
+
+test("producer additive validation reads only changed files and the retained root projection", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = principalMountedMetadata(new InMemoryRevisionMetadataStore());
+  const fileCount = 500;
+  const initial = await seedLargeV3(objects, metadata, fileCount, true);
+  const counted = countedStore(objects);
+  const revisions = new CanonicalRevisionCoordinator({
+    objects: counted.store,
+    revisions: metadata,
+  });
+  const currentActor = actor();
+  metadata.setCurrentAuthorizationStateForTest(
+    {
+      principalId: currentActor.principalId,
+      spaceId: MINDS.ordinary.spaceId,
+      tokenId: currentActor.authentication.tokenId,
+    },
+    authorizationState(currentActor),
+  );
+  const preflight = new ChangesetPreflightService({
+    authorizer: new CapabilityAuthorizer(metadata),
+    revisions,
+    clock: { now: () => "2026-08-22T18:14:00.000Z" },
+  });
+  const indexEntry = initial.manifest.entries.find((entry) => entry.path === "index.md");
+  const indexObject = await objects.getSpaceCanonicalObject(
+    "markdown",
+    MINDS.ordinary.spaceId,
+    indexEntry.sha256,
+  );
+  const currentIndex = new TextDecoder().decode(indexObject.bytes);
+  const newPath = `concepts/concept-${fileCount}.md`;
+  const newIndex = `${currentIndex.trimEnd()}\n- [Concept ${fileCount}](${newPath})\n`;
+
+  counted.reset();
+  const additive = await preflight.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionMode: "head",
+    expectedRevisionId: INITIAL_REVISION,
+    producerProfile: true,
+    operations: [{
+      type: "create_file",
+      path: newPath,
+      text: concept(fileCount, "incremental producer"),
+    }, {
+      type: "replace_index",
+      path: "index.md",
+      text: newIndex,
+      expected_sha256: indexEntry.sha256,
+    }],
+  });
+  assert.equal(additive.kind, "ready");
+  assert.equal(counted.metrics.markdownReadBytes, indexObject.size);
+
+  counted.reset();
+  const invalidating = await preflight.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionMode: "head",
+    expectedRevisionId: INITIAL_REVISION,
+    producerProfile: true,
+    operations: [{
+      type: "replace_index",
+      path: "index.md",
+      text: currentIndex.replace(/^.*concept-0000\.md.*\n/mu, ""),
+      expected_sha256: indexEntry.sha256,
+    }],
+  });
+  assert.equal(invalidating.kind, "ready");
+  assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
+});
 
 test("small add/update/delete over a large v3 Mind read no unchanged content and write only delta plus manifest", async () => {
   const objects = new InMemoryObjectStore();

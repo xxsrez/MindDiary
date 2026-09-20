@@ -238,7 +238,8 @@ function searchProjectionCount(database) {
   return database.search.size +
     database.searchDocuments.size +
     database.searchMemberships.size +
-    database.searchLexical.size;
+    database.searchLexical.size +
+    database.searchFields.size;
 }
 
 async function drainScheduled({ runtimeRef, scheduled, kinds }) {

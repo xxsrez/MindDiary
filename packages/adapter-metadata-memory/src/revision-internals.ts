@@ -195,6 +195,9 @@ export function bundleFileRetainedQuotaAllows(
   if (!Number.isSafeInteger(request.maxRetainedBytes) || request.maxRetainedBytes < 1) {
     return false;
   }
+  // Markdown-only commits have no BundleFile retained-quota contribution and
+  // must not pay an unrelated full-history scan.
+  if (request.candidateEntries.length === 0) return true;
   const unique = new Map<Digest, number>();
   for (const revision of spaces.get(request.spaceId)?.revisions.values() ?? []) {
     for (const entry of revision.manifest.entries) {

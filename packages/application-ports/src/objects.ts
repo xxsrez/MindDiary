@@ -73,6 +73,7 @@ export type ObjectStoreFailureCode =
   | "invalid_utf8"
   | "invalid_timestamp"
   | "invalid_limit"
+  | "invalid_range"
   | "digest_collision"
   | "object_tampered"
   | "object_read_timeout";
@@ -134,6 +135,11 @@ export interface OpenedSpaceCanonicalObject extends SpaceCanonicalObjectMetadata
   readonly body: ReadableStream<Uint8Array>;
 }
 
+export interface ObjectByteRange {
+  readonly offset: number;
+  readonly length: number;
+}
+
 export interface SpaceCanonicalObjectPutResult {
   readonly object: Readonly<SpaceCanonicalObjectMetadata>;
   readonly status: "stored" | "already_exists";
@@ -173,6 +179,13 @@ export interface SpaceCanonicalObjectStore {
     kind: SpaceCanonicalObjectKind,
     spaceId: SpaceId,
     sha256: Sha256Digest,
+  ): Promise<Readonly<OpenedSpaceCanonicalObject> | null>;
+  /** Provider-bounded body read; metadata continues to describe the full immutable object. */
+  openSpaceCanonicalObjectRange?(
+    kind: SpaceCanonicalObjectKind,
+    spaceId: SpaceId,
+    sha256: Sha256Digest,
+    range: Readonly<ObjectByteRange>,
   ): Promise<Readonly<OpenedSpaceCanonicalObject> | null>;
   listSpaceCanonicalObjects(
     request: Readonly<SpaceCanonicalObjectListRequest>,
@@ -324,6 +337,11 @@ export interface BundleFileObjectStore extends ObjectStore, SpaceCanonicalObject
   openBundleFile(
     spaceId: SpaceId,
     sha256: Sha256Digest,
+  ): Promise<Readonly<OpenedBundleFileObject> | null>;
+  openBundleFileRange?(
+    spaceId: SpaceId,
+    sha256: Sha256Digest,
+    range: Readonly<ObjectByteRange>,
   ): Promise<Readonly<OpenedBundleFileObject> | null>;
   listBundleFileObjects(
     request: Readonly<BundleFileObjectListRequest>,

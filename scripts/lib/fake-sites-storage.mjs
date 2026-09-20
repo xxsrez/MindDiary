@@ -78,6 +78,7 @@ export class FakeD1Database {
   searchDocuments = new Map();
   searchMemberships = new Map();
   searchLexical = new Map();
+  searchFields = new Map();
   audit = new Map();
   oauthClients = new Map();
   oauthRequests = new Map();
@@ -590,6 +591,24 @@ export class FakeD1Database {
       }
       return { success: true, meta: { changes } };
     }
+    if (sql.includes("/*md-search-fields-upsert*/")) {
+      let changes = 0;
+      for (let index = 0; index < values.length; index += 7) {
+        const key = `${values[index]}\u0000${values[index + 1]}`;
+        if (this.searchFields.has(key)) continue;
+        this.searchFields.set(key, {
+          space_id: values[index],
+          digest: values[index + 1],
+          normalized_title: values[index + 2],
+          normalized_description: values[index + 3],
+          normalized_tags: values[index + 4],
+          normalized_headings: values[index + 5],
+          normalized_body: values[index + 6],
+        });
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
     if (sql.includes("/*md-search-membership-insert*/")) {
       this.#assertSchema("search");
       for (let index = 0; index < values.length; index += 5) {
@@ -653,6 +672,15 @@ export class FakeD1Database {
       for (const [key, row] of this.searchLexical) {
         if (row.space_id !== values[0]) continue;
         this.searchLexical.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-search-purge-fields*/")) {
+      let changes = 0;
+      for (const [key, row] of this.searchFields) {
+        if (row.space_id !== values[0]) continue;
+        this.searchFields.delete(key);
         changes += 1;
       }
       return { success: true, meta: { changes } };
@@ -1032,22 +1060,74 @@ export class FakeD1Database {
       );
       const indexed = memberships.filter((row) =>
         this.searchDocuments.has(`${row.space_id}\u0000${row.digest}`) &&
-        this.searchLexical.has(`${row.space_id}\u0000${row.digest}`));
+        this.searchLexical.has(`${row.space_id}\u0000${row.digest}`) &&
+        this.searchFields.has(`${row.space_id}\u0000${row.digest}`));
       return { success: true, results: [{
         membership_count: memberships.length,
         indexed_count: indexed.length,
       }] };
     }
-    if (sql.includes("/*md-search-query-normalized*/")) {
-      const terms = values.slice(2).map(String);
-      const results = [...this.searchMemberships.values()]
-        .filter((row) => row.space_id === values[0] && row.revision_id === values[1])
-        .filter((row) => {
-          const text = this.searchLexical.get(`${row.space_id}\u0000${row.digest}`)?.normalized_text;
-          return typeof text === "string" && terms.every((term) => text.includes(term));
-        })
-        .sort((left, right) => left.ordinal - right.ordinal)
+    if (sql.includes("/*md-search-existing-digests*/")) {
+      const requested = new Set(values.slice(1));
+      return {
+        success: true,
+        results: [...this.searchDocuments.values()]
+          .filter((row) =>
+            row.space_id === values[0] && requested.has(row.digest) &&
+            this.searchFields.has(`${row.space_id}\u0000${row.digest}`))
+          .map((row) => ({ digest: row.digest })),
+      };
+    }
+    const rankedSearchRows = (spaceId, revisionId, terms) => {
+      const columns = [
+        ["normalized_title", 8],
+        ["normalized_description", 4],
+        ["normalized_tags", 6],
+        ["normalized_headings", 5],
+        ["normalized_body", 1],
+      ];
+      const occurrences = (value, term) => {
+        let count = 0;
+        let offset = 0;
+        while (count < 20) {
+          const found = value.indexOf(term, offset);
+          if (found < 0) break;
+          count += 1;
+          offset = found + Math.max(1, term.length);
+        }
+        return count;
+      };
+      return [...this.searchMemberships.values()]
+        .filter((row) => row.space_id === spaceId && row.revision_id === revisionId)
         .map((row) => ({
+          row,
+          fields: this.searchFields.get(`${row.space_id}\u0000${row.digest}`),
+        }))
+        .filter(({ fields }) => fields !== undefined && terms.every((term) =>
+          columns.some(([column]) => fields[column].includes(term))))
+        .map(({ row, fields }) => ({
+          row,
+          score: columns.reduce((total, [column, weight]) =>
+            total + terms.reduce((sum, term) =>
+              sum + weight * occurrences(fields[column], term), 0), 0),
+        }))
+        .sort((left, right) =>
+          right.score - left.score || left.row.path.localeCompare(right.row.path));
+    };
+    if (sql.includes("/*md-search-match-count*/")) {
+      const terms = values.slice(2).map(String);
+      return { success: true, results: [{
+        total_matches: rankedSearchRows(values[0], values[1], terms).length,
+      }] };
+    }
+    if (sql.includes("/*md-search-query-normalized*/")) {
+      const paged = /\sLIMIT\s/u.test(sql);
+      const termValues = paged ? values.slice(2, -2) : values.slice(2);
+      const ranked = rankedSearchRows(values[0], values[1], termValues.map(String));
+      const selected = paged
+        ? ranked.slice(Number(values.at(-1)), Number(values.at(-1)) + Number(values.at(-2)))
+        : ranked;
+      const results = selected.map(({ row }) => ({
           path: row.path,
           text: this.searchDocuments.get(`${row.space_id}\u0000${row.digest}`)?.text,
         }));
@@ -1099,6 +1179,7 @@ export class FakeD1Database {
     this.searchDocuments.clear();
     this.searchMemberships.clear();
     this.searchLexical.clear();
+    this.searchFields.clear();
     this.audit.clear();
     this.oauthClients.clear();
     this.oauthRequests.clear();

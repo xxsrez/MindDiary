@@ -364,6 +364,7 @@ const SITES_METADATA_SCHEMA_VERSION = SITES_METADATA_MIGRATIONS.at(-1)?.version 
 export const SITES_METADATA_D1_TIMEOUT_MS = 2_500;
 const TOKEN_SNAPSHOT_CADENCE = 16;
 const MIND_BINDING_SNAPSHOT_CADENCE = 16;
+const CONTENT_SNAPSHOT_CADENCE = 16;
 const OBJECT_CLEANUP_SNAPSHOT_CADENCE = 16;
 const REQUEST_RECOVERY_SNAPSHOT_CADENCE = 16;
 const OBJECT_CLEANUP_CHECKPOINT_METHODS = new Set([
@@ -505,6 +506,12 @@ function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
   if (event.method === "runPrincipalMindUsageTransaction") {
     return sequence % MIND_BINDING_SNAPSHOT_CADENCE === 0;
   }
+  if (
+    event.method === "runContentCommitTransaction" ||
+    event.method === "runCapacityTransaction"
+  ) {
+    return sequence % CONTENT_SNAPSHOT_CADENCE === 0;
+  }
   if (OBJECT_CLEANUP_CHECKPOINT_METHODS.has(event.method)) {
     // Claim/completion events are already fenced durability. Request-triggered
     // maintenance may emit both around one empty bounded scan; rewriting the
@@ -552,6 +559,13 @@ function isEmptyRecoveryTransaction(
   ) || (
     calls[0]?.method === "deleteExpiredMarkdownImportPlans" &&
     callResults[0] === 0
+  );
+}
+
+function transactionContainsMutation(calls: readonly DurableCall[]): boolean {
+  return calls.some((call) =>
+    METADATA_MUTATIONS.has(call.method) ||
+    !/^(?:check|classify|inspect|is|list|read|resolve|validate)/u.test(call.method)
   );
 }
 
@@ -787,10 +801,7 @@ export class SitesMetadataStore {
     if (typeof operation !== "function") {
       throw new TypeError("Sites metadata read-session callback is required");
     }
-    return this.#exclusive(async () => {
-      await this.#refresh();
-      return operation(this.#consistentReadView(this.#metadata, this.#tokens));
-    }, "read_session");
+    return this.withDetachedConsistentRead(operation);
   }
 
   /**
@@ -1232,6 +1243,18 @@ export class SitesMetadataStore {
           )),
       );
       if (isEmptyRecoveryTransaction(method, calls, callResults)) return result;
+      if (!transactionContainsMutation(calls)) {
+        // A read-only transaction must not create a durable no-op event, but it
+        // still participates in the optimistic read fence. If another writer
+        // advanced the canonical sequence while the callback was running,
+        // retry against a fresh detached snapshot so authorization and other
+        // read decisions cannot escape from a stale transaction view.
+        if (await this.#readCanonicalEvent(loaded.sequence + 1) === null) {
+          return result;
+        }
+        await this.#refresh();
+        continue;
+      }
       const event: DurableEvent = {
         v: 1,
         kind: "transaction",

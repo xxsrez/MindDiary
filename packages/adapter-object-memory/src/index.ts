@@ -341,6 +341,33 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     });
   }
 
+  async openSpaceCanonicalObjectRange(
+    kind: SpaceCanonicalObjectMetadata["kind"],
+    spaceId: SpaceCanonicalObjectMetadata["spaceId"],
+    digest: Digest,
+    range: Readonly<{ offset: number; length: number }>,
+  ): Promise<Readonly<OpenedSpaceCanonicalObject> | null> {
+    if (
+      !Number.isSafeInteger(range.offset) || range.offset < 0 ||
+      !Number.isSafeInteger(range.length) || range.length < 1
+    ) throw new ObjectStoreIntegrityError("invalid_range", "canonical object range is invalid");
+    const object = await this.getSpaceCanonicalObject(kind, spaceId, digest);
+    if (object === null) return null;
+    if (range.offset + range.length > object.size) {
+      throw new ObjectStoreIntegrityError("invalid_range", "canonical object range is invalid");
+    }
+    const bytes = object.bytes.slice(range.offset, range.offset + range.length);
+    return Object.freeze({
+      ...this.#spaceCanonicalMetadata(object as StoredSpaceCanonicalObject),
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    });
+  }
+
   async listSpaceCanonicalObjects(
     request: SpaceCanonicalObjectListRequest,
   ): Promise<readonly Readonly<SpaceCanonicalObjectMetadata>[]> {
@@ -443,6 +470,32 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     const object = await this.getBundleFile(spaceId, digest);
     if (object === null) return null;
     const bytes = new Uint8Array(object.bytes);
+    return Object.freeze({
+      ...this.#bundleMetadata(object as StoredBundleFile),
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    });
+  }
+
+  async openBundleFileRange(
+    spaceId: BundleFileObjectMetadata["spaceId"],
+    digest: Digest,
+    range: Readonly<{ offset: number; length: number }>,
+  ): Promise<Readonly<OpenedBundleFileObject> | null> {
+    if (
+      !Number.isSafeInteger(range.offset) || range.offset < 0 ||
+      !Number.isSafeInteger(range.length) || range.length < 1
+    ) throw new ObjectStoreIntegrityError("invalid_range", "BundleFile range is invalid");
+    const object = await this.getBundleFile(spaceId, digest);
+    if (object === null) return null;
+    if (range.offset + range.length > object.size) {
+      throw new ObjectStoreIntegrityError("invalid_range", "BundleFile range is invalid");
+    }
+    const bytes = object.bytes.slice(range.offset, range.offset + range.length);
     return Object.freeze({
       ...this.#bundleMetadata(object as StoredBundleFile),
       body: new ReadableStream<Uint8Array>({

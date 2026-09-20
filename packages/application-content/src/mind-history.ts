@@ -4,6 +4,7 @@ import {
   type AuthorizationDecision,
   type Authorizer,
   type CredentialContentAccessAuthorizer,
+  type RevisionCatalogEntry,
 } from "@mind-diary/application-ports";
 import {
   utcInstant,
@@ -273,7 +274,13 @@ function revisionDescriptor(
   envelope: Readonly<CanonicalRevisionEnvelope>,
   headRevisionId: RevisionId,
 ): Readonly<MindDiscoveryRevisionDescriptor> {
-  const revision = envelope.revision;
+  return revisionDescriptorFromRecord(envelope.revision, headRevisionId);
+}
+
+function revisionDescriptorFromRecord(
+  revision: Readonly<CanonicalRevisionEnvelope["revision"]>,
+  headRevisionId: RevisionId,
+): Readonly<MindDiscoveryRevisionDescriptor> {
   const committedBy =
     revision.committedBy.kind === "principal"
       ? Object.freeze({
@@ -293,6 +300,28 @@ function revisionDescriptor(
     summary: revision.summary,
     manifestHash: revision.manifestHash,
     isHead: revision.revisionId === headRevisionId,
+  });
+}
+
+function catalogHistoryEntry(
+  entry: Readonly<RevisionCatalogEntry>,
+  spaceId: SpaceId,
+  headRevisionId: RevisionId,
+): Readonly<MindHistoryEntry> {
+  if (
+    entry.revision.spaceId !== spaceId ||
+    !Number.isSafeInteger(entry.fileCount) || entry.fileCount < 0 ||
+    !Number.isSafeInteger(entry.totalBytes) || entry.totalBytes < 0
+  ) throw new MindHistoryFailure(
+    "revision_integrity_failure",
+    "Revision metadata failed integrity verification.",
+  );
+  return Object.freeze({
+    revision: revisionDescriptorFromRecord(entry.revision, headRevisionId),
+    manifestSummary: Object.freeze({
+      fileCount: entry.fileCount,
+      totalBytes: entry.totalBytes,
+    }),
   });
 }
 
@@ -401,18 +430,21 @@ export class MindHistoryService {
     if (selector.kind === "revision") {
       revisionId = selector.revisionId;
     } else {
-      const revisions = await this.#store.listRevisions(anchor.mind.mindId);
-      let selected: Readonly<CanonicalRevisionEnvelope> | null = null;
-      for (const envelope of revisions) {
-        if (
-          envelope.revision.spaceId === anchor.mind.mindId &&
-          atOrBefore(envelope.revision.committedAt, selector.asOf) &&
-          (selected === null ||
-            envelope.revision.revisionNumber > selected.revision.revisionNumber)
-        ) {
-          selected = envelope;
-        }
-      }
+      const selected = this.#store.resolveRevisionAsOf === undefined
+        ? await (async () => {
+            const revisions = await this.#store.listRevisions(anchor.mind.mindId);
+            let match: Readonly<CanonicalRevisionEnvelope> | null = null;
+            for (const envelope of revisions) {
+              if (
+                envelope.revision.spaceId === anchor.mind.mindId &&
+                atOrBefore(envelope.revision.committedAt, selector.asOf) &&
+                (match === null ||
+                  envelope.revision.revisionNumber > match.revision.revisionNumber)
+              ) match = envelope;
+            }
+            return match === null ? null : Object.freeze({ revision: match.revision });
+          })()
+        : await this.#store.resolveRevisionAsOf(anchor.mind.mindId, selector.asOf);
       if (selected === null) {
         await this.#requireSameHistoryAuthorization(
           actor,
@@ -462,7 +494,15 @@ export class MindHistoryService {
         spaceId,
         false,
       );
-      const envelopes = await this.#store.listRevisions(spaceId);
+      const catalog = this.#store.listRevisionCatalog === undefined
+        ? null
+        : await this.#store.listRevisionCatalog(spaceId, {
+            beforeRevisionId: query.before,
+            limit: query.limit,
+          });
+      const envelopes = catalog === null
+        ? await this.#store.listRevisions(spaceId)
+        : null;
       if ((await this.#store.readHead(spaceId)) !== snapshot.resolvedRevisionId) {
         await this.#requireSameHistoryAuthorization(
           actor,
@@ -473,9 +513,11 @@ export class MindHistoryService {
       }
       let entries: Readonly<MindHistoryEntry>[];
       try {
-        entries = envelopes.map((envelope) =>
-          historyEntry(envelope, spaceId, snapshot.resolvedRevisionId),
-        );
+        entries = catalog === null
+          ? envelopes!.map((envelope) =>
+              historyEntry(envelope, spaceId, snapshot.resolvedRevisionId))
+          : catalog.entries.map((entry) =>
+              catalogHistoryEntry(entry, spaceId, snapshot.resolvedRevisionId));
         const revisionIds = new Set(
           entries.map((entry) => entry.revision.revisionId),
         );
@@ -485,7 +527,8 @@ export class MindHistoryService {
         if (
           revisionIds.size !== entries.length ||
           revisionNumbers.size !== entries.length ||
-          !revisionIds.has(snapshot.resolvedRevisionId)
+          (catalog === null || query.before === null) &&
+            !revisionIds.has(snapshot.resolvedRevisionId)
         ) {
           throw new MindHistoryFailure(
             "revision_integrity_failure",
@@ -504,8 +547,16 @@ export class MindHistoryService {
         (left, right) =>
           right.revision.revisionNumber - left.revision.revisionNumber,
       );
+      if (catalog !== null && !catalog.boundaryFound) {
+        await this.#requireSameHistoryAuthorization(
+          actor,
+          spaceId,
+          initialAuthorization,
+        );
+        throw new MindHistoryFailure("revision_not_found", "Revision was not found.");
+      }
       let candidates = entries;
-      if (query.before !== null) {
+      if (catalog === null && query.before !== null) {
         const boundary = entries.find(
           (entry) => entry.revision.revisionId === query.before,
         );
@@ -524,7 +575,7 @@ export class MindHistoryService {
       }
       const page = candidates.slice(0, query.limit);
       const nextBefore =
-        candidates.length > page.length
+        (catalog?.hasMore ?? (candidates.length > page.length))
           ? (page.at(-1)?.revision.revisionId ?? null)
           : null;
       await this.#requireSameHistoryAuthorization(

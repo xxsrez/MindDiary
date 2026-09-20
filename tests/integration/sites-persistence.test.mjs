@@ -144,6 +144,7 @@ class FakeD1Database {
   searchDocuments = new Map();
   searchMemberships = new Map();
   searchLexical = new Map();
+  searchFields = new Map();
   audit = new Map();
   locatorHandles = new Map();
   #appliedUploadIntentSchema = new Set();
@@ -189,6 +190,7 @@ class FakeD1Database {
       searchDocuments: new Map([...this.searchDocuments].map(([key, value]) => [key, { ...value }])),
       searchMemberships: new Map([...this.searchMemberships].map(([key, value]) => [key, { ...value }])),
       searchLexical: new Map([...this.searchLexical].map(([key, value]) => [key, { ...value }])),
+      searchFields: new Map([...this.searchFields].map(([key, value]) => [key, { ...value }])),
       audit: new Map([...this.audit].map(([key, value]) => [key, { ...value }])),
       locatorHandles: new Map([...this.locatorHandles].map(([key, value]) => [key, { ...value }])),
     };
@@ -211,6 +213,7 @@ class FakeD1Database {
       this.searchDocuments = before.searchDocuments;
       this.searchMemberships = before.searchMemberships;
       this.searchLexical = before.searchLexical;
+      this.searchFields = before.searchFields;
       this.audit = before.audit;
       this.locatorHandles = before.locatorHandles;
       throw error;
@@ -503,6 +506,25 @@ class FakeD1Database {
       }
       return { success: true, meta: { changes: changed } };
     }
+    if (sql.includes("/*md-search-fields-upsert*/")) {
+      this.searchWriteParameterCounts.push({ kind: "fields", count: values.length });
+      let changed = 0;
+      for (let index = 0; index < values.length; index += 7) {
+        const key = `${values[index]}\u0000${values[index + 1]}`;
+        if (this.searchFields.has(key)) continue;
+        this.searchFields.set(key, {
+          space_id: values[index],
+          digest: values[index + 1],
+          normalized_title: values[index + 2],
+          normalized_description: values[index + 3],
+          normalized_tags: values[index + 4],
+          normalized_headings: values[index + 5],
+          normalized_body: values[index + 6],
+        });
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
+    }
     if (sql.includes("/*md-search-membership-insert*/")) {
       this.searchWriteParameterCounts.push({ kind: "membership", count: values.length });
       for (let index = 0; index < values.length; index += 5) {
@@ -568,6 +590,15 @@ class FakeD1Database {
       for (const [key, row] of this.searchLexical) {
         if (row.space_id !== values[0]) continue;
         this.searchLexical.delete(key);
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
+    }
+    if (sql.includes("/*md-search-purge-fields*/")) {
+      let changed = 0;
+      for (const [key, row] of this.searchFields) {
+        if (row.space_id !== values[0]) continue;
+        this.searchFields.delete(key);
         changed += 1;
       }
       return { success: true, meta: { changes: changed } };
@@ -783,23 +814,75 @@ class FakeD1Database {
       );
       const indexed = memberships.filter((row) =>
         this.searchDocuments.has(`${row.space_id}\u0000${row.digest}`) &&
-        this.searchLexical.has(`${row.space_id}\u0000${row.digest}`));
+        this.searchLexical.has(`${row.space_id}\u0000${row.digest}`) &&
+        this.searchFields.has(`${row.space_id}\u0000${row.digest}`));
       return { success: true, results: [{
         membership_count: memberships.length,
         indexed_count: indexed.length,
       }] };
     }
+    if (sql.includes("/*md-search-existing-digests*/")) {
+      const requested = new Set(values.slice(1));
+      return {
+        success: true,
+        results: [...this.searchDocuments.values()]
+          .filter((row) =>
+            row.space_id === values[0] && requested.has(row.digest) &&
+            this.searchFields.has(`${row.space_id}\u0000${row.digest}`))
+          .map((row) => ({ digest: row.digest })),
+      };
+    }
+    const rankedSearchRows = (spaceId, revisionId, terms) => {
+      const columns = [
+        ["normalized_title", 8],
+        ["normalized_description", 4],
+        ["normalized_tags", 6],
+        ["normalized_headings", 5],
+        ["normalized_body", 1],
+      ];
+      const occurrences = (value, term) => {
+        let count = 0;
+        let offset = 0;
+        while (count < 20) {
+          const found = value.indexOf(term, offset);
+          if (found < 0) break;
+          count += 1;
+          offset = found + Math.max(1, term.length);
+        }
+        return count;
+      };
+      return [...this.searchMemberships.values()]
+        .filter((row) => row.space_id === spaceId && row.revision_id === revisionId)
+        .map((row) => ({
+          row,
+          fields: this.searchFields.get(`${row.space_id}\u0000${row.digest}`),
+        }))
+        .filter(({ fields }) => fields !== undefined && terms.every((term) =>
+          columns.some(([column]) => fields[column].includes(term))))
+        .map(({ row, fields }) => ({
+          row,
+          score: columns.reduce((total, [column, weight]) =>
+            total + terms.reduce((sum, term) =>
+              sum + weight * occurrences(fields[column], term), 0), 0),
+        }))
+        .sort((left, right) =>
+          right.score - left.score || left.row.path.localeCompare(right.row.path));
+    };
+    if (sql.includes("/*md-search-match-count*/")) {
+      const terms = values.slice(2).map(String);
+      return { success: true, results: [{
+        total_matches: rankedSearchRows(values[0], values[1], terms).length,
+      }] };
+    }
     if (sql.includes("/*md-search-query-normalized*/")) {
       this.searchReadOperations.push("query");
-      const terms = values.slice(2).map(String);
-      const results = [...this.searchMemberships.values()]
-        .filter((row) => row.space_id === values[0] && row.revision_id === values[1])
-        .filter((row) => {
-          const text = this.searchLexical.get(`${row.space_id}\u0000${row.digest}`)?.normalized_text;
-          return typeof text === "string" && terms.every((term) => text.includes(term));
-        })
-        .sort((left, right) => left.ordinal - right.ordinal)
-        .map((row) => ({
+      const paged = /\sLIMIT\s/u.test(sql);
+      const termValues = paged ? values.slice(2, -2) : values.slice(2);
+      const ranked = rankedSearchRows(values[0], values[1], termValues.map(String));
+      const selected = paged
+        ? ranked.slice(Number(values.at(-1)), Number(values.at(-1)) + Number(values.at(-2)))
+        : ranked;
+      const results = selected.map(({ row }) => ({
           path: row.path,
           text: this.searchDocuments.get(`${row.space_id}\u0000${row.digest}`)?.text,
         }));
@@ -986,7 +1069,7 @@ test("stalled append trace links its queued reader and preserves late settlement
   assert.equal(database.metadataEvents.length, 1);
 });
 
-test("a stalled consistent-read callback is distinguishable from active D1 I/O", async () => {
+test("a stalled consistent-read callback releases the metadata queue after snapshot", async () => {
   const events = [];
   const diagnostics = new RuntimeDiagnostics({ write: (line) => events.push(JSON.parse(line)) });
   const store = await createSitesMetadataStore(new FakeD1Database(), {
@@ -1001,15 +1084,14 @@ test("a stalled consistent-read callback is distinguishable from active D1 I/O",
   }));
   await started;
   try {
-    await assert.rejects(diagnostics.runRequest(new Request("https://example.com"), () => store.readAccount("principal_missing")), { code: "metadata_queue_timeout" });
-    const held = events.find((event) => event.stage === "operation" && event.operation === "read_session" && event.phase === "start");
-    assert.ok(held);
-    const waiting = events.find((event) => event.stage === "queue" && event.phase === "timeout");
-    assert.equal(waiting.blocked_by_span_id, held.span_id);
-    for (const begin of events.filter((event) => event.trace_id === held.trace_id && event.stage === "d1" && event.phase === "start")) {
-      assert.ok(events.some((event) => event.span_id === begin.span_id && event.phase === "end"));
-    }
-    assert.equal(events.some((event) => event.span_id === held.span_id && event.phase === "end"), false);
+    assert.equal(
+      await diagnostics.runRequest(
+        new Request("https://example.com"),
+        () => store.readAccount("principal_missing"),
+      ),
+      null,
+    );
+    assert.equal(events.some((event) => event.stage === "queue" && event.phase === "timeout"), false);
   } finally { release(); await callback; }
 });
 
@@ -1778,6 +1860,59 @@ test("warm metadata mutations clone one tail-refreshed view and omit empty recov
   assert.equal(database.metadataSnapshotWriteCount, snapshotWrites);
 });
 
+test("read-only transactions do not append durable metadata events", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  const eventCount = database.metadataEvents.length;
+  const snapshotWrites = database.metadataSnapshotWriteCount;
+
+  assert.equal(
+    await store.runContentCommitTransaction((transaction) =>
+      transaction.readHead(opaqueId("space_read_only_transaction"))),
+    null,
+  );
+
+  assert.equal(database.metadataEvents.length, eventCount);
+  assert.equal(database.metadataSnapshotWriteCount, snapshotWrites);
+});
+
+test("capacity transactions checkpoint their canonical event tail on bounded cadence", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  const snapshotWrites = database.metadataSnapshotWriteCount;
+
+  for (let index = 0; index < 16; index += 1) {
+    const result = await store.runCapacityTransaction((transaction) =>
+      transaction.admitCapacityReservation({
+        reservationId: `capacity:cadence:${index}`,
+        requestedByPrincipalId: opaqueId("principal_capacity_cadence"),
+        spaceId: opaqueId("space_capacity_cadence"),
+        operation: "import",
+        operationRef: `import_capacity_cadence_${index}`,
+        baseRevisionId: null,
+        idempotencyKey: idempotencyKey(`capacity-cadence-${index}`),
+        requested: {
+          physicalCanonicalBytes: 1,
+          temporaryBytes: 1,
+          d1MetadataBytes: 1,
+        },
+        bulk: false,
+        heavy: false,
+        createdAt: T0,
+        expiresAt: T5,
+      }, DEFAULT_CAPACITY_LIMITS));
+    assert.equal(result.kind, "admitted");
+  }
+
+  assert.equal(database.metadataEvents.length, 16);
+  assert.equal(database.metadataSnapshotWriteCount - snapshotWrites, 1);
+  const restarted = await createSitesMetadataStore(database);
+  assert.equal(
+    (await restarted.listCapacityReservationsForTest()).length,
+    16,
+  );
+});
+
 test("request recovery cursor keeps fenced events with bounded snapshot cadence", async () => {
   const database = new FakeD1Database();
   const boundary = await createSitesPersistenceBoundary({
@@ -1828,7 +1963,7 @@ test("snapshot write failure after fenced append self-heals from canonical tail"
   assert.equal(database.metadataSnapshotHead.sequence, 1);
 });
 
-test("Mind binding transactions keep fenced durability without rewriting every snapshot", async () => {
+test("read-only Mind binding transactions do not create fenced no-op events", async () => {
   const database = new FakeD1Database();
   const store = await createSitesMetadataStore(database);
   assert.equal(
@@ -1847,9 +1982,9 @@ test("Mind binding transactions keep fenced durability without rewriting every s
     assert.deepEqual(result, { kind: "binding-cadence-probe", index });
   }
 
-  assert.equal(database.metadataEvents.at(-1).sequence, 16);
-  assert.equal(database.metadataSnapshotWriteCount - writesBeforeBindings, 1);
-  assert.equal(database.metadataSnapshotHead.sequence, 16);
+  assert.equal(database.metadataEvents.at(-1).sequence, 1);
+  assert.equal(database.metadataSnapshotWriteCount - writesBeforeBindings, 0);
+  assert.equal(database.metadataSnapshotHead.sequence, 1);
 
   const restarted = await createSitesMetadataStore(database);
   assert.deepEqual(

@@ -56,6 +56,9 @@
 13. [Task Manager adapter доставки](docs/specs/ship-work-release-task-manager-srez.md)
     — перед разрешением Project/Release scope, чтением
     acceptance/dependencies или task-level status/comments и evidence.
+14. [Полный тщательный аудит](docs/operations/thorough-project-audit.md) —
+    только после прямой просьбы тщательно проверить весь проект; не запускать
+    автоматически при разработке, CI, performance regression или release.
 
 Архитектурные и product specification-документы пока имеют статус proposal,
 если сам документ явно не отмечен как accepted. Operational specification

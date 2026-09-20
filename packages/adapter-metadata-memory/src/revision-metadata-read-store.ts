@@ -89,6 +89,7 @@ import {
   accountFromMaps,
   activeReservationAmounts,
   authorizationStateKey,
+  canonicalCapacityUsageForSpace,
   capacityUsageFromCanonicalState,
   checkIdempotencyAgainst,
   cloneAccountDeletionCleanup,
@@ -389,56 +390,26 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
     ): Promise<Readonly<CapacityUsageSnapshot> | null> {
       return this._runExclusive(async () => {
         if (!this._spaces.has(spaceId)) return null;
-        return capacityUsageFromCanonicalState({
-          spaceIds: new Set([spaceId]),
-          spaces: this._spaces,
-          stagedBundleFiles: this._stagedBundleFiles,
-          queuedNotes: this._queuedNotes,
-          exportJobs: this._exportJobs,
-          markdownImportPlans: this._markdownImportPlans,
-          markdownImportSessions: this._markdownImportSessions,
-          markdownImportStagedFiles: this._markdownImportStagedFiles,
-          reservations: this._capacityReservations,
-          reconciledAt: this._capacityReconciledAt,
-        });
+        return this._capacityUsageFromLedger(new Set([spaceId]));
       });
     }
 
   async readPrincipalCapacityUsage(
       principalId: PrincipalId,
     ): Promise<Readonly<CapacityUsageSnapshot>> {
-      return this._runExclusive(async () => capacityUsageFromCanonicalState({
-        spaceIds: ownedCapacitySpaceIds(
+      return this._runExclusive(async () => this._capacityUsageFromLedger(
+        ownedCapacitySpaceIds(
           principalId,
           this._spaces,
           this._knowledgeSpaces,
           this._memberships,
         ),
-        spaces: this._spaces,
-        stagedBundleFiles: this._stagedBundleFiles,
-        queuedNotes: this._queuedNotes,
-        exportJobs: this._exportJobs,
-        markdownImportPlans: this._markdownImportPlans,
-        markdownImportSessions: this._markdownImportSessions,
-        markdownImportStagedFiles: this._markdownImportStagedFiles,
-        reservations: this._capacityReservations,
-        reconciledAt: this._capacityReconciledAt,
-      }));
+      ));
     }
 
   async readSiteCapacityUsage(): Promise<Readonly<CapacityUsageSnapshot>> {
-      return this._runExclusive(async () => capacityUsageFromCanonicalState({
-        spaceIds: new Set(this._spaces.keys()),
-        spaces: this._spaces,
-        stagedBundleFiles: this._stagedBundleFiles,
-        queuedNotes: this._queuedNotes,
-        exportJobs: this._exportJobs,
-        markdownImportPlans: this._markdownImportPlans,
-        markdownImportSessions: this._markdownImportSessions,
-        markdownImportStagedFiles: this._markdownImportStagedFiles,
-        reservations: this._capacityReservations,
-        reconciledAt: this._capacityReconciledAt,
-      }));
+      return this._runExclusive(async () =>
+        this._capacityUsageFromLedger(new Set(this._spaces.keys())));
     }
 
   async readCapacityTelemetry(
@@ -446,18 +417,7 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       now: UtcInstant,
     ) {
       return this._runExclusive(async () => {
-        const usage = capacityUsageFromCanonicalState({
-          spaceIds: new Set(this._spaces.keys()),
-          spaces: this._spaces,
-          stagedBundleFiles: this._stagedBundleFiles,
-          queuedNotes: this._queuedNotes,
-          exportJobs: this._exportJobs,
-          markdownImportPlans: this._markdownImportPlans,
-          markdownImportSessions: this._markdownImportSessions,
-          markdownImportStagedFiles: this._markdownImportStagedFiles,
-          reservations: this._capacityReservations,
-          reconciledAt: this._capacityReconciledAt,
-        });
+        const usage = this._capacityUsageFromLedger(new Set(this._spaces.keys()));
         const active = activeReservationAmounts(
           this._capacityReservations,
           () => true,
@@ -508,28 +468,14 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         const selected = request.spaceId === undefined
           ? new Set(this._spaces.keys())
           : new Set(this._spaces.has(request.spaceId) ? [request.spaceId] : []);
-        let driftDetected = false;
+        const previousUsage = this._capacityUsageFromLedger(selected);
         for (const spaceId of selected) {
           this._capacityReconciledAt.set(spaceId, request.reconciledAt);
-          const usage = capacityUsageFromCanonicalState({
-            spaceIds: new Set([spaceId]),
-            spaces: this._spaces,
-            stagedBundleFiles: this._stagedBundleFiles,
-            queuedNotes: this._queuedNotes,
-            exportJobs: this._exportJobs,
-            markdownImportPlans: this._markdownImportPlans,
-            markdownImportSessions: this._markdownImportSessions,
-            markdownImportStagedFiles: this._markdownImportStagedFiles,
-            reservations: this._capacityReservations,
-            reconciledAt: this._capacityReconciledAt,
-          });
-          const previous = this._capacityUsageLedger.get(spaceId);
-          if (
-            previous !== undefined &&
-            JSON.stringify({ ...previous, reconciledAt: null }) !==
-              JSON.stringify({ ...usage, reconciledAt: null })
-          ) driftDetected = true;
-          this._capacityUsageLedger.set(spaceId, usage);
+          const state = this._spaces.get(spaceId);
+          if (state !== undefined) this._capacityUsageLedger.set(
+            spaceId,
+            canonicalCapacityUsageForSpace(spaceId, state, request.reconciledAt),
+          );
         }
         const usage = capacityUsageFromCanonicalState({
           spaceIds: selected,
@@ -543,6 +489,8 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
           reservations: this._capacityReservations,
           reconciledAt: this._capacityReconciledAt,
         });
+        const driftDetected = JSON.stringify({ ...previousUsage, reconciledAt: null }) !==
+          JSON.stringify({ ...usage, reconciledAt: null });
         return Object.freeze({
           spaceId: request.spaceId ?? null,
           scannedSpaces: selected.size,
@@ -1798,6 +1746,65 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
           left.revision.revisionNumber - right.revision.revisionNumber,
       );
       return Object.freeze(revisions.map(cloneEnvelope));
+    }
+
+  async listRevisionCatalog(
+      spaceId: SpaceId,
+      query: Readonly<{ beforeRevisionId: RevisionId | null; limit: number }>,
+    ) {
+      if (!Number.isSafeInteger(query.limit) || query.limit < 1) {
+        throw new TypeError("revision catalog limit must be positive");
+      }
+      const revisions = [...(this._spaces.get(spaceId)?.revisions.values() ?? [])]
+        .sort((left, right) =>
+          right.revision.revisionNumber - left.revision.revisionNumber);
+      let candidates = revisions;
+      if (query.beforeRevisionId !== null) {
+        const boundary = revisions.find((entry) =>
+          entry.revision.revisionId === query.beforeRevisionId);
+        if (boundary === undefined) return Object.freeze({
+          entries: Object.freeze([]),
+          hasMore: false,
+          boundaryFound: false,
+        });
+        candidates = revisions.filter((entry) =>
+          entry.revision.revisionNumber < boundary.revision.revisionNumber);
+      }
+      const page = candidates.slice(0, query.limit);
+      return Object.freeze({
+        entries: Object.freeze(page.map((envelope) => {
+          let totalBytes = 0;
+          for (const entry of envelope.manifest.entries) totalBytes += entry.size;
+          return Object.freeze({
+            revision: Object.freeze({
+              ...envelope.revision,
+              committedBy: Object.freeze({ ...envelope.revision.committedBy }),
+            }),
+            fileCount: envelope.manifest.entries.length,
+            totalBytes,
+          });
+        })),
+        hasMore: candidates.length > page.length,
+        boundaryFound: true,
+      });
+    }
+
+  async resolveRevisionAsOf(spaceId: SpaceId, asOf: UtcInstant) {
+      const selected = [...(this._spaces.get(spaceId)?.revisions.values() ?? [])]
+        .filter((entry) => entry.revision.committedAt <= asOf)
+        .sort((left, right) =>
+          right.revision.revisionNumber - left.revision.revisionNumber)[0];
+      if (selected === undefined) return null;
+      let totalBytes = 0;
+      for (const entry of selected.manifest.entries) totalBytes += entry.size;
+      return Object.freeze({
+        revision: Object.freeze({
+          ...selected.revision,
+          committedBy: Object.freeze({ ...selected.revision.committedBy }),
+        }),
+        fileCount: selected.manifest.entries.length,
+        totalBytes,
+      });
     }
 
   async readAccount(

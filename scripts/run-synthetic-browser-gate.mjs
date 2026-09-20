@@ -267,7 +267,7 @@ async function revokeToken(context, personalTokenRef, nonce, name) {
 
 function searchProjectionCount(database) {
   return database.search.size + database.searchDocuments.size +
-    database.searchMemberships.size + database.searchLexical.size;
+    database.searchMemberships.size + database.searchLexical.size + database.searchFields.size;
 }
 
 function createEvidence({ candidate, startedAt, completedAt, nonce, passed }) {

@@ -482,9 +482,9 @@ test("invalid selectors and a visibility race fail closed without mutating immut
   let revokedDuringRead = false;
   const store = new Proxy(env.store, {
     get(target, property) {
-      if (property === "listRevisions") {
-        return async (spaceId) => {
-          const result = await target.listRevisions(spaceId);
+      if (property === "listRevisionCatalog") {
+        return async (spaceId, query) => {
+          const result = await target.listRevisionCatalog(spaceId, query);
           if (!revokedDuringRead && spaceId === mind.mindId) {
             revokedDuringRead = true;
             await changeVisibility(env, owner, mind, "private", "race-private");

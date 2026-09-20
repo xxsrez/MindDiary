@@ -623,6 +623,132 @@ export async function readHeadBytes(
   } finally { reader.releaseLock(); }
 }
 
+async function readExactStreamBytes(
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number,
+  signal: AbortSignal | undefined,
+  deadlineAt: number,
+): Promise<Uint8Array> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const next = await readStreamChunk(reader, signal, deadlineAt);
+      if (next.done) break;
+      if (!(next.value instanceof Uint8Array)) throw new Error("invalid stream chunk");
+      size += next.value.byteLength;
+      if (size > expectedSize) throw new Error("stream size mismatch");
+      chunks.push(new Uint8Array(next.value));
+    }
+    if (size !== expectedSize) throw new Error("stream size mismatch");
+    return joinedBytes(chunks, size);
+  } catch (error) {
+    await reader.cancel("file operation interrupted").catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export async function loadTextFileRange(
+  objects: ObjectStore,
+  spaceId: SpaceId,
+  manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
+  entry: Readonly<RevisionManifestEntry>,
+  start: number,
+  end: number,
+  signal: AbortSignal | undefined,
+  deadlineAt: number,
+  loadFull: () => Promise<Readonly<
+    | { readonly kind: "file"; readonly file: Readonly<ExactTextFile> }
+    | { readonly kind: "error"; readonly error: FileOperationItemError }
+  >>,
+): Promise<Readonly<
+  | { readonly kind: "file"; readonly file: Readonly<ExactTextFile> }
+  | { readonly kind: "error"; readonly error: FileOperationItemError }
+>> {
+  if (
+    !Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+    start < 0 || end <= start || end > entry.size
+  ) throw new TypeError("text file range is invalid");
+  if (entry.kind === "opaque" && !isTextMediaType(entry.mediaType)) {
+    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_not_text", retryable: false }) });
+  }
+  if (entry.kind === "opaque" && entry.size > MAX_TEXT_BUNDLE_FILE_BYTES) {
+    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_scan_limit_exceeded", retryable: false }) });
+  }
+  const length = end - start;
+  let opened: Readonly<OpenedBundleFileObject | OpenedSpaceCanonicalObject> | null = null;
+  try {
+    if (
+      entry.kind === "markdown" &&
+      (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
+      "openSpaceCanonicalObjectRange" in objects &&
+      typeof (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObjectRange === "function"
+    ) {
+      opened = await (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObjectRange!(
+        "markdown", spaceId, entry.sha256, { offset: start, length },
+      );
+    } else if (
+      entry.kind === "opaque" &&
+      "openBundleFileRange" in objects &&
+      typeof (objects as BundleFileObjectStore).openBundleFileRange === "function"
+    ) {
+      opened = await (objects as BundleFileObjectStore).openBundleFileRange!(
+        spaceId, entry.sha256, { offset: start, length },
+      );
+    }
+  } catch (error) {
+    if (error instanceof ObjectStoreFailure) {
+      throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+    }
+    throw error;
+  }
+  if (opened === null) {
+    const loaded = await loadFull();
+    if (loaded.kind === "error") return loaded;
+    const bytes = loaded.file.bytes.slice(start, end);
+    return Object.freeze({
+      kind: "file",
+      file: Object.freeze({
+        entry,
+        bytes,
+        text: new TextDecoder("utf-8").decode(bytes),
+      }),
+    });
+  }
+  if (
+    opened.sha256 !== entry.sha256 || opened.size !== entry.size ||
+    opened.mediaType !== entry.mediaType
+  ) {
+    await opened.body.cancel("metadata mismatch").catch(() => undefined);
+    throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+  }
+  try {
+    const bytes = await readExactStreamBytes(opened.body, length, signal, deadlineAt);
+    if (start === 0 && end === entry.size &&
+      (await objects.calculateSha256(bytes)) !== entry.sha256) throw new Error("digest mismatch");
+    return Object.freeze({
+      kind: "file",
+      file: Object.freeze({
+        entry,
+        bytes,
+        text: new TextDecoder("utf-8").decode(bytes),
+      }),
+    });
+  } catch (error) {
+    if (error instanceof FileOperationBudgetExceeded) {
+      throw new MindBrowseFailure(
+        "file_operation_budget_exhausted",
+        error.reason === "aborted" ? "File operation was aborted." : "File operation deadline was reached.",
+        true,
+      );
+    }
+    throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+  }
+}
+
 export async function loadTextFileHead(
   objects: ObjectStore,
   spaceId: SpaceId,
@@ -741,8 +867,43 @@ export function evaluateMetadataFilter(value: unknown, fields: Readonly<Record<s
 
 export function regexEscape(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); }
 export function wordScalar(value: string | undefined): boolean { return value !== undefined && /[\p{L}\p{N}\p{M}\p{Pc}]/u.test(value); }
-export function scalarBefore(value: string, index: number): string | undefined { return index <= 0 ? undefined : Array.from(value.slice(0, index)).at(-1); }
-export function scalarAfter(value: string, index: number): string | undefined { return Array.from(value.slice(index))[0]; }
+export function scalarBefore(value: string, index: number): string | undefined {
+  if (index <= 0) return undefined;
+  let start = index - 1;
+  const unit = value.charCodeAt(start);
+  if (unit >= 0xdc00 && unit <= 0xdfff && start > 0) start -= 1;
+  const point = value.codePointAt(start);
+  return point === undefined ? undefined : String.fromCodePoint(point);
+}
+export function scalarAfter(value: string, index: number): string | undefined {
+  const point = value.codePointAt(index);
+  return point === undefined ? undefined : String.fromCodePoint(point);
+}
+
+export function textPositionIndex(value: string): Readonly<{
+  readonly byteOffsets: Uint32Array;
+  readonly scalarColumns: Uint32Array;
+}> {
+  const byteOffsets = new Uint32Array(value.length + 1);
+  const scalarColumns = new Uint32Array(value.length + 1);
+  let bytes = 0;
+  let column = 1;
+  for (let index = 0; index < value.length;) {
+    const point = value.codePointAt(index)!;
+    const scalar = String.fromCodePoint(point);
+    const width = scalar.length;
+    for (let unit = 0; unit < width; unit += 1) {
+      byteOffsets[index + unit] = bytes;
+      scalarColumns[index + unit] = column;
+    }
+    bytes += new TextEncoder().encode(scalar).byteLength;
+    index += width;
+    column += 1;
+  }
+  byteOffsets[value.length] = bytes;
+  scalarColumns[value.length] = column;
+  return Object.freeze({ byteOffsets, scalarColumns });
+}
 
 export function fileOperationRequestValue(operation: "list" | "grep" | "read", request: Readonly<NormalizedListFilesRequest | NormalizedGrepFilesRequest | NormalizedReadFilesRequest>): unknown {
   if (operation === "list") {

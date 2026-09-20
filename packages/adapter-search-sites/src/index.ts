@@ -1,5 +1,6 @@
 import type {
   ExactRevisionIndexDocument,
+  ExactRevisionIndexEntry,
   QueryExactRevisionIndexResult,
   ReadExactRevisionIndexResult,
   ReplaceExactRevisionIndexRequest,
@@ -7,14 +8,16 @@ import type {
 } from "@mind-diary/application-ports";
 
 export const SITES_SEARCH_ADAPTER = "sites-d1-exact-revision" as const;
-const SITES_SEARCH_SCHEMA_VERSION = 3;
+const SITES_SEARCH_SCHEMA_VERSION = 5;
 const SITES_SEARCH_SCHEMA_OBJECTS = Object.freeze([
   "md_search_schema_migrations",
   "md_exact_revision_search",
   "md_search_documents",
   "md_search_revision_documents",
   "md_search_revision_order",
+  "md_search_document_digest_lookup",
   "md_search_document_lexical",
+  "md_search_document_fields",
 ]);
 
 export interface D1ResultLike<Row = Record<string, unknown>> {
@@ -62,11 +65,23 @@ export const SITES_SEARCH_MIGRATIONS = Object.freeze([
   )`,
   `CREATE INDEX IF NOT EXISTS md_search_revision_order
     ON md_search_revision_documents(space_id, revision_id, ordinal)`,
+  `CREATE INDEX IF NOT EXISTS md_search_document_digest_lookup
+    ON md_search_documents(space_id, digest)`,
   `CREATE TABLE IF NOT EXISTS md_search_document_lexical (
     space_id TEXT NOT NULL,
     digest TEXT NOT NULL,
     normalized_text TEXT NOT NULL,
     byte_size INTEGER NOT NULL,
+    PRIMARY KEY (space_id, digest)
+  )`,
+  `CREATE TABLE IF NOT EXISTS md_search_document_fields (
+    space_id TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    normalized_title TEXT NOT NULL,
+    normalized_description TEXT NOT NULL,
+    normalized_tags TEXT NOT NULL,
+    normalized_headings TEXT NOT NULL,
+    normalized_body TEXT NOT NULL,
     PRIMARY KEY (space_id, digest)
   )`,
 ]);
@@ -94,6 +109,10 @@ interface SearchRevisionCountRow {
 interface SearchProjectionCountRow {
   readonly membership_count: number;
   readonly indexed_count: number;
+}
+
+interface SearchMatchCountRow {
+  readonly total_matches: number;
 }
 
 interface SchemaProbeRow {
@@ -127,22 +146,68 @@ function cloneDocuments(
         throw new TypeError("exact revision search documents are invalid");
       }
       paths.add(document.path);
-      return Object.freeze({ path: document.path, text: document.text });
+      return Object.freeze({
+        path: document.path,
+        text: document.text,
+        ...(document.sha256 === undefined ? {} : { sha256: document.sha256 }),
+        ...(document.fields === undefined ? {} : { fields: document.fields }),
+      });
     }),
   );
 }
 
-async function digestText(text: string): Promise<string> {
+function cloneEntries(
+  entries: readonly Readonly<ExactRevisionIndexEntry>[],
+): readonly Readonly<ExactRevisionIndexEntry>[] {
+  const paths = new Set<string>();
+  return Object.freeze(entries.map((entry) => {
+    if (
+      typeof entry.path !== "string" || entry.path.length < 1 ||
+      typeof entry.sha256 !== "string" ||
+      !/^sha256:[0-9a-f]{64}$/u.test(entry.sha256) || paths.has(entry.path)
+    ) throw new TypeError("exact revision search entries are invalid");
+    paths.add(entry.path);
+    return Object.freeze({ path: entry.path, sha256: entry.sha256 });
+  }));
+}
+
+async function digestText(
+  text: string,
+): Promise<ExactRevisionIndexEntry["sha256"]> {
   const digest = new Uint8Array(
     await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
   );
   return `sha256:${[...digest]
     .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("")}`;
+    .join("")}` as ExactRevisionIndexEntry["sha256"];
 }
 
 function normalizedLexicalText(text: string): string {
   return text.normalize("NFKC").toLocaleLowerCase("en-US");
+}
+
+function normalizedFields(document: Readonly<ExactRevisionIndexDocument>) {
+  const fields = document.fields ?? Object.freeze({
+    title: Object.freeze([]),
+    description: Object.freeze([]),
+    tags: Object.freeze([]),
+    headings: Object.freeze([]),
+    body: Object.freeze([document.text]),
+  });
+  for (const values of Object.values(fields)) {
+    if (!Array.isArray(values) || values.some((value) => typeof value !== "string")) {
+      throw new TypeError("exact revision search field projection is invalid");
+    }
+  }
+  const normalize = (values: readonly string[]) =>
+    values.map(normalizedLexicalText).join("\n");
+  return Object.freeze({
+    title: normalize(fields.title),
+    description: normalize(fields.description),
+    tags: normalize(fields.tags),
+    headings: normalize(fields.headings),
+    body: normalize(fields.body),
+  });
 }
 
 function chunks<Value>(values: readonly Value[], size: number): readonly (readonly Value[])[] {
@@ -193,7 +258,9 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
                           'md_search_documents',
                           'md_search_revision_documents',
                           'md_search_revision_order',
-                          'md_search_document_lexical')`,
+                          'md_search_document_digest_lookup',
+                          'md_search_document_lexical',
+                          'md_search_document_fields')`,
         )
         .all<SchemaProbeRow>();
       const rows = result.results ?? [];
@@ -213,11 +280,38 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
       this.#database
         .prepare(
           `/*md-search-migration*/ INSERT OR IGNORE INTO md_search_schema_migrations
-           (version, name, applied_at) VALUES (3, 'query-lexical-v3', ?1)`,
+           (version, name, applied_at) VALUES (5, 'bounded-ranked-search-v5', ?1)`,
         )
         .bind(new Date().toISOString()),
     );
     await this.#database.batch(statements);
+  }
+
+  async findMissingDigests(
+    spaceId: ReplaceExactRevisionIndexRequest["spaceId"],
+    digests: readonly ExactRevisionIndexEntry["sha256"][],
+  ) {
+    await this.ready();
+    validateIdentity(spaceId, "space_id");
+    const unique = [...new Set(digests)];
+    if (unique.some((digest) => !/^sha256:[0-9a-f]{64}$/u.test(digest))) {
+      throw new TypeError("exact revision search digests are invalid");
+    }
+    const present = new Set<ExactRevisionIndexEntry["sha256"]>();
+    for (const batch of chunks(unique, 90)) {
+      if (batch.length === 0) continue;
+      const result = await this.#database.prepare(
+        `/*md-search-existing-digests*/ SELECT document.digest
+         FROM md_search_documents AS document
+         JOIN md_search_document_fields AS fields
+           ON fields.space_id = document.space_id AND fields.digest = document.digest
+         WHERE document.space_id = ?1 AND document.digest IN (${
+           batch.map((_digest, index) => `?${index + 2}`).join(", ")
+         })`,
+      ).bind(spaceId, ...batch).all<{ readonly digest: ExactRevisionIndexEntry["sha256"] }>();
+      for (const row of result.results ?? []) present.add(row.digest);
+    }
+    return Object.freeze(unique.filter((digest) => !present.has(digest)));
   }
 
   async replaceExactRevision(request: ReplaceExactRevisionIndexRequest): Promise<void> {
@@ -225,15 +319,37 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
     validateIdentity(request.spaceId, "space_id");
     validateIdentity(request.revisionId, "revision_id");
     const documents = cloneDocuments(request.documents);
+    const entries = request.entries === undefined
+      ? undefined
+      : cloneEntries(request.entries);
     const normalized = await Promise.all(
-      documents.map(async (document, ordinal) => Object.freeze({
+      documents.map(async (document, ordinal) => {
+        const digest = await digestText(document.text);
+        if (document.sha256 !== undefined && document.sha256 !== digest) {
+          throw new TypeError("exact revision search document digest is invalid");
+        }
+        return Object.freeze({
         ...document,
         ordinal,
-        digest: await digestText(document.text),
+        digest,
         byteSize: new TextEncoder().encode(document.text).byteLength,
         normalizedText: normalizedLexicalText(document.text),
-      })),
+        normalizedFields: normalizedFields(document),
+        });
+      }),
     );
+    const memberships = entries ?? normalized.map((document) => Object.freeze({
+      path: document.path,
+      sha256: document.digest,
+    }));
+    if (entries !== undefined) {
+      const membership = new Map(entries.map((entry) => [entry.path, entry.sha256]));
+      for (const document of normalized) {
+        if (membership.get(document.path) !== document.digest) {
+          throw new TypeError("exact revision search document is not in its manifest");
+        }
+      }
+    }
     const statements = [
       this.#database
         .prepare(
@@ -254,6 +370,24 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
             document.text,
             document.byteSize,
           ]))),
+      ...chunks(normalized, 14).map((batch) =>
+        this.#database
+          .prepare(
+            `/*md-search-fields-upsert*/ INSERT INTO md_search_document_fields
+             (space_id, digest, normalized_title, normalized_description,
+              normalized_tags, normalized_headings, normalized_body)
+             VALUES ${placeholders(batch.length, 7)}
+             ON CONFLICT(space_id, digest) DO NOTHING`,
+          )
+          .bind(...batch.flatMap((document) => [
+            request.spaceId,
+            document.digest,
+            document.normalizedFields.title,
+            document.normalizedFields.description,
+            document.normalizedFields.tags,
+            document.normalizedFields.headings,
+            document.normalizedFields.body,
+          ]))),
       ...chunks(normalized, 25).map((batch) =>
         this.#database
           .prepare(
@@ -267,21 +401,21 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
             document.normalizedText,
             new TextEncoder().encode(document.normalizedText).byteLength,
           ]))),
-      ...chunks(normalized, 20).map((batch) =>
+      ...chunks(memberships, 20).map((batch, batchIndex) =>
         this.#database
           .prepare(
             `/*md-search-membership-insert*/ INSERT INTO md_search_revision_documents
              (space_id, revision_id, ordinal, path, digest)
              VALUES ${placeholders(batch.length, 5)}`,
           )
-          .bind(...batch.flatMap((document) => [
+          .bind(...batch.flatMap((document, index) => [
             request.spaceId,
             request.revisionId,
-            document.ordinal,
+            batchIndex * 20 + index,
             document.path,
-            document.digest,
+            document.sha256,
           ]))),
-      documents.length === 0
+      memberships.length === 0
         ? this.#database
             .prepare(
               `/*md-search-empty-marker-upsert*/ INSERT INTO md_exact_revision_search
@@ -295,26 +429,6 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
                WHERE space_id = ?1 AND revision_id = ?2`,
             )
             .bind(request.spaceId, request.revisionId),
-      this.#database
-        .prepare(
-          `/*md-search-orphan-document-cleanup*/ DELETE FROM md_search_documents
-           WHERE space_id = ?1 AND NOT EXISTS (
-             SELECT 1 FROM md_search_revision_documents AS membership
-             WHERE membership.space_id = md_search_documents.space_id
-               AND membership.digest = md_search_documents.digest
-           )`,
-        )
-        .bind(request.spaceId),
-      this.#database
-        .prepare(
-          `/*md-search-orphan-lexical-cleanup*/ DELETE FROM md_search_document_lexical
-           WHERE space_id = ?1 AND NOT EXISTS (
-             SELECT 1 FROM md_search_revision_documents AS membership
-             WHERE membership.space_id = md_search_document_lexical.space_id
-               AND membership.digest = md_search_document_lexical.digest
-           )`,
-        )
-        .bind(request.spaceId),
     ];
     await this.#database.batch(statements);
   }
@@ -394,6 +508,9 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
               JOIN md_search_document_lexical AS lexical
                 ON lexical.space_id = membership.space_id
                AND lexical.digest = membership.digest
+              JOIN md_search_document_fields AS fields
+                ON fields.space_id = membership.space_id
+               AND fields.digest = membership.digest
              WHERE membership.space_id = ?1 AND membership.revision_id = ?2)
              AS indexed_count`,
       )
@@ -422,6 +539,7 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
     spaceId: ReplaceExactRevisionIndexRequest["spaceId"],
     revisionId: ReplaceExactRevisionIndexRequest["revisionId"],
     normalizedTerms: readonly string[],
+    page?: Readonly<{ readonly offset: number; readonly limit: number }>,
   ): Promise<QueryExactRevisionIndexResult> {
     await this.ready();
     validateIdentity(spaceId, "space_id");
@@ -439,6 +557,11 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
     ) {
       throw new TypeError("exact revision search terms are invalid");
     }
+    if (
+      page !== undefined &&
+      (!Number.isSafeInteger(page.offset) || page.offset < 0 ||
+        !Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > 100)
+    ) throw new TypeError("exact revision search page is invalid");
     const counts = await this.#database
       .prepare(
         `/*md-search-projection-count*/ SELECT
@@ -452,6 +575,9 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
               JOIN md_search_document_lexical AS lexical
                 ON lexical.space_id = membership.space_id
                AND lexical.digest = membership.digest
+              JOIN md_search_document_fields AS fields
+                ON fields.space_id = membership.space_id
+               AND fields.digest = membership.digest
              WHERE membership.space_id = ?1 AND membership.revision_id = ?2)
              AS indexed_count`,
       )
@@ -473,6 +599,7 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
           spaceId,
           revisionId,
           totalDocuments: 0,
+          ...(page === undefined ? {} : { totalMatches: 0, pageApplied: true }),
           documents: Object.freeze([]),
         });
       }
@@ -481,30 +608,53 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
         revisionId,
         documents: legacy.documents,
       });
-      return this.queryExactRevision(spaceId, revisionId, normalizedTerms);
+      return this.queryExactRevision(spaceId, revisionId, normalizedTerms, page);
     }
     const storageTerms = normalizedTerms.slice(0, 98);
-    const predicates = storageTerms.map(
-      (_term, index) => `instr(lexical.normalized_text, ?${index + 3}) > 0`,
+    const columns = [
+      ["fields.normalized_title", 8],
+      ["fields.normalized_description", 4],
+      ["fields.normalized_tags", 6],
+      ["fields.normalized_headings", 5],
+      ["fields.normalized_body", 1],
+    ] as const;
+    const predicates = storageTerms.map((_term, index) =>
+      `(${columns.map(([column]) => `instr(${column}, ?${index + 3}) > 0`).join(" OR ")})`
     );
-    const matches = await this.#database
-      .prepare(
-        `/*md-search-query-normalized*/ SELECT membership.path, document.text
-         FROM md_search_revision_documents AS membership
+    const score = storageTerms.flatMap((_term, index) =>
+      columns.map(([column, weight]) =>
+        `${weight} * min(20, (length(${column}) - length(replace(${column}, ?${index + 3}, ''))) / length(?${index + 3}))`
+      )
+    ).join(" + ");
+    const joins = `FROM md_search_revision_documents AS membership
          JOIN md_search_documents AS document
            ON document.space_id = membership.space_id
           AND document.digest = membership.digest
-         JOIN md_search_document_lexical AS lexical
-           ON lexical.space_id = membership.space_id
-          AND lexical.digest = membership.digest
+         JOIN md_search_document_fields AS fields
+           ON fields.space_id = membership.space_id
+          AND fields.digest = membership.digest
          WHERE membership.space_id = ?1 AND membership.revision_id = ?2
-           AND ${predicates.join(" AND ")}
-         ORDER BY membership.ordinal ASC`,
+           AND ${predicates.join(" AND ")}`;
+    const matchCount = await this.#database
+      .prepare(`/*md-search-match-count*/ SELECT COUNT(*) AS total_matches ${joins}`)
+      .bind(spaceId, revisionId, ...storageTerms)
+      .all<SearchMatchCountRow>();
+    const totalMatches = Number(matchCount.results?.[0]?.total_matches ?? 0);
+    const pagination = page === undefined
+      ? ""
+      : ` LIMIT ?${storageTerms.length + 3} OFFSET ?${storageTerms.length + 4}`;
+    const matches = await this.#database
+      .prepare(
+        `/*md-search-query-normalized*/ SELECT membership.path, document.text,
+           (${score}) AS weighted_score
+         ${joins}
+         ORDER BY weighted_score DESC, membership.path ASC${pagination}`,
       )
       .bind(
         spaceId,
         revisionId,
         ...storageTerms,
+        ...(page === undefined ? [] : [page.limit, page.offset]),
       )
       .all<NormalizedSearchRow>();
     return Object.freeze({
@@ -512,6 +662,7 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
       spaceId,
       revisionId,
       totalDocuments: membershipCount,
+      ...(page === undefined ? {} : { totalMatches, pageApplied: true }),
       documents: cloneDocuments(matches.results ?? []),
     });
   }
@@ -547,13 +698,19 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
         .bind(spaceId),
       this.#database
         .prepare(
+          `/*md-search-purge-fields*/ DELETE FROM md_search_document_fields
+           WHERE space_id = ?1`,
+        )
+        .bind(spaceId),
+      this.#database
+        .prepare(
           `/*md-search-purge-legacy*/ DELETE FROM md_exact_revision_search
            WHERE space_id = ?1`,
         )
         .bind(spaceId),
     ]);
     return Number(count.results?.[0]?.revision_count ?? 0) +
-      Number(results[3]?.meta?.changes ?? 0);
+      Number(results[4]?.meta?.changes ?? 0);
   }
 
   /** Privacy-safe capacity evidence: counts and UTF-8 bytes only. */

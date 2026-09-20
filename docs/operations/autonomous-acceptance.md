@@ -27,6 +27,11 @@ product handler. Обязательные outcomes текущей задачи �
 `passed`, старые failures не удаляются. Приёмка выбранного scope в отчёте и
 успешный полный `join-acceptance-suite` — разные утверждения.
 
+Полный suite также не равен
+[тщательному аудиту всего проекта](thorough-project-audit.md): аудит требует
+актуальной source inventory, поиска непокрытых путей и risk matrix. Ни один из
+режимов не запускает другой без прямой просьбы пользователя.
+
 ## Изоляция данных acceptance-run
 
 В этом harness Personal write означает запись только в

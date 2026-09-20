@@ -11,6 +11,7 @@ export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStor
   /** Trusted adapter checkpoint; canonical objects remain outside this projection. */
     exportDurableSnapshot(): unknown {
       const reachabilityCounts = this._objectReachabilityCounts();
+      this._ensureCapacityUsageLedger(new Set(this._spaces.keys()));
       const legacyCredentialWriteTargetUpgrades = new Map(
         this._legacyCredentialWriteTargetUpgrades,
       );
@@ -23,13 +24,14 @@ export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStor
         ) legacyCredentialWriteTargetUpgrades.set(ownerId, evidence);
       }
       return {
-        v: 5,
+        v: 6,
         spaces: new Map(this._spaces),
         revisionsById: new Map(this._revisionsById),
         objectReachabilityCounts: Object.freeze({
           immutable: new Map(reachabilityCounts.immutable),
           bundle: new Map(reachabilityCounts.bundle),
           spaceCanonical: new Map(reachabilityCounts.spaceCanonical),
+          capacity: new Map(reachabilityCounts.capacity),
         }),
         idempotencyRecords: new Map(this._idempotencyRecords),
         auditEvents: new Map(this._auditEvents),

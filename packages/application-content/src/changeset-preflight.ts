@@ -34,7 +34,10 @@ import {
 import type { DeltaRevisionReader, HeadRevisionReader } from "./index.js";
 import { analyzeBundleFileReferences } from "./bundle-file-references.js";
 import { classifyBundleFileMediaType } from "./bundle-files.js";
-import { analyzeMarkdownConsistency } from "./markdown-consistency.js";
+import {
+  analyzeMarkdownConsistency,
+  collectMarkdownLocalTargets,
+} from "./markdown-consistency.js";
 import { materializeLogEntry } from "./reserved-content.js";
 
 export interface CreateFileOperation {
@@ -938,6 +941,25 @@ export class ChangesetPreflightService {
       });
     }
 
+    const hasCreatedMarkdown = operationSet.operations.some(
+      (operation) => operation.type === "create_file",
+    );
+    let incrementalProducerValidation =
+      request.producerProfile === true &&
+      deltaReader !== null &&
+      currentRevisionId !== null &&
+      operationSet.operations.every((operation) =>
+        operation.type === "create_file" ||
+        operation.type === "replace_index" ||
+        operation.type === "add_log_entry"
+      ) &&
+      (!hasCreatedMarkdown || operationSet.operations.some(
+        (operation) => operation.type === "replace_index",
+      )) &&
+      !operationSet.operations.some((operation) =>
+        operation.type === "add_log_entry" && /\]\s*(?:\(|\[)/u.test(operation.message)
+      );
+
     // One request-scoped immutable session avoids reloading the same manifest
     // for every file during producer/full-reference validation.
     let revisionSession: ReturnType<NonNullable<DeltaRevisionReader["openRevisionSession"]>> | undefined;
@@ -994,6 +1016,7 @@ export class ChangesetPreflightService {
     const committedAt = this.#clock.now();
     const stagedRecords = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
     let stagedBytes = 0;
+    let previousIndexText: string | undefined;
 
     for (let index = 0; index < operationSet.operations.length; index += 1) {
       const operation = operationSet.operations[index]!;
@@ -1031,6 +1054,19 @@ export class ChangesetPreflightService {
             operationIndex: index,
             path: operation.path,
           });
+        }
+        if (operation.type === "replace_index") {
+          if (current.text === undefined && deltaReader !== null && currentRevisionId !== null) {
+            const loaded = await readParentFile(operation.path);
+            if (!loaded || loaded.kind !== "markdown" || loaded.sha256 !== current.sha256) {
+              return invalid("okf_validation_failed", "exact parent index cannot be verified", {
+                path: operation.path,
+              });
+            }
+            previousIndexText = loaded.text;
+          } else {
+            previousIndexText = current.text;
+          }
         }
         working.set(
           operation.path,
@@ -1271,10 +1307,43 @@ export class ChangesetPreflightService {
       operation.type === "delete_bundle_file" ||
       operation.type === "reclassify_bundle_file"
     );
+    if (incrementalProducerValidation && previousIndexText !== undefined) {
+      const nextIndex = operationSet.operations.find(
+        (operation): operation is ReplaceIndexOperation => operation.type === "replace_index",
+      );
+      const previousTargets = collectMarkdownLocalTargets({
+        path: nextIndex!.path,
+        text: previousIndexText,
+      });
+      const nextTargets = collectMarkdownLocalTargets({
+        path: nextIndex!.path,
+        text: nextIndex!.text,
+      });
+      const nextPaths = new Set(nextTargets.map((target) => target.path));
+      if (previousTargets.some((target) => !nextPaths.has(target.path))) {
+        incrementalProducerValidation = false;
+      }
+    }
+    if (incrementalProducerValidation) {
+      const changedPaths = new Set(operationSet.operations.map((operation) => operation.path));
+      for (const operation of operationSet.operations) {
+        if (
+          operation.type !== "create_file" && operation.type !== "replace_index"
+        ) continue;
+        if (collectMarkdownLocalTargets({ path: operation.path, text: operation.text })
+          .some((target) => target.fragment !== undefined && !changedPaths.has(target.path))) {
+          incrementalProducerValidation = false;
+          break;
+        }
+      }
+    }
     if (
       deltaReader !== null &&
       currentRevisionId !== null &&
-      (fullReferenceScan || request.producerProfile === true)
+      (
+        fullReferenceScan ||
+        (request.producerProfile === true && !incrementalProducerValidation)
+      )
     ) {
       for (const [path, file] of working) {
         if (file.kind !== "markdown" || file.text !== undefined) continue;
@@ -1321,7 +1390,10 @@ export class ChangesetPreflightService {
     const markdownCandidates = candidateFiles.filter(
       (file): file is ChangesetCandidateFile => file.kind === "markdown",
     );
-    const okfValidation = deltaReader === null || request.producerProfile === true
+    const fullBundleValidation =
+      deltaReader === null ||
+      (request.producerProfile === true && !incrementalProducerValidation);
+    const okfValidation = fullBundleValidation
       ? (request.producerProfile === true
           ? validateOkfProducerBundle(markdownCandidates.map((file) => ({
               path: file.path,
@@ -1371,7 +1443,7 @@ export class ChangesetPreflightService {
         (
           deltaReader === null ||
           fullReferenceScan ||
-          request.producerProfile === true ||
+          (request.producerProfile === true && !incrementalProducerValidation) ||
           file.writeRequired
         ))
       .map((file) => Object.freeze({ path: file.path, text: file.text! }));

@@ -78,7 +78,8 @@ import {
   canonicalManifestSource,
   capacityOwnerForSpace,
   capacityReservationMatches,
-  capacityUsageFromCanonicalState,
+  canonicalCapacityUsageForSpace,
+  capacityUsageFromCanonicalLedger,
   cloneCapacityReservation,
   cloneEnvelope,
   currentSitesAuthorizationStateFromMaps,
@@ -325,18 +326,10 @@ export abstract class RevisionMetadataStoreState {
               utilization: "normal",
             });
           }
-          const spaceUsage = capacityUsageFromCanonicalState({
-            spaceIds: new Set([request.spaceId]),
-            spaces: this._spaces,
-            stagedBundleFiles: this._stagedBundleFiles,
-            queuedNotes: this._queuedNotes,
-            exportJobs: this._exportJobs,
-            markdownImportPlans: this._markdownImportPlans,
-            markdownImportSessions: this._markdownImportSessions,
-            markdownImportStagedFiles: this._markdownImportStagedFiles,
-            reservations,
-            reconciledAt: this._capacityReconciledAt,
-          });
+          const spaceUsage = this._capacityUsageFromLedger(
+            new Set([request.spaceId]),
+            { reservations },
+          );
           const principalSpaceIds = new Set(ownedCapacitySpaceIds(
             ownerPrincipalId,
             this._spaces,
@@ -344,30 +337,14 @@ export abstract class RevisionMetadataStoreState {
             this._memberships,
           ));
           principalSpaceIds.add(request.spaceId);
-          const principalUsage = capacityUsageFromCanonicalState({
-            spaceIds: principalSpaceIds,
-            spaces: this._spaces,
-            stagedBundleFiles: this._stagedBundleFiles,
-            queuedNotes: this._queuedNotes,
-            exportJobs: this._exportJobs,
-            markdownImportPlans: this._markdownImportPlans,
-            markdownImportSessions: this._markdownImportSessions,
-            markdownImportStagedFiles: this._markdownImportStagedFiles,
-            reservations,
-            reconciledAt: this._capacityReconciledAt,
-          });
-          const siteUsage = capacityUsageFromCanonicalState({
-            spaceIds: new Set(this._spaces.keys()),
-            spaces: this._spaces,
-            stagedBundleFiles: this._stagedBundleFiles,
-            queuedNotes: this._queuedNotes,
-            exportJobs: this._exportJobs,
-            markdownImportPlans: this._markdownImportPlans,
-            markdownImportSessions: this._markdownImportSessions,
-            markdownImportStagedFiles: this._markdownImportStagedFiles,
-            reservations,
-            reconciledAt: this._capacityReconciledAt,
-          });
+          const principalUsage = this._capacityUsageFromLedger(
+            principalSpaceIds,
+            { reservations },
+          );
+          const siteUsage = this._capacityUsageFromLedger(
+            new Set(this._spaces.keys()),
+            { reservations },
+          );
           const spaceReserved = activeReservationAmounts(
             reservations,
             (reservation) => reservation.spaceId === request.spaceId,
@@ -648,12 +625,14 @@ export abstract class RevisionMetadataStoreState {
       const immutable = new Map<Digest, number>();
       const bundle = new Map<string, number>();
       const spaceCanonical = new Map<string, number>();
+      const capacity = new Map<string, number>();
       const increment = (target: Map<string, number>, key: string) =>
         target.set(key, (target.get(key) ?? 0) + 1);
       for (const envelope of this._revisionsById.values()) {
         const spaceId = envelope.revision.spaceId;
         for (const entry of envelope.manifest.entries) {
           immutable.set(entry.sha256, (immutable.get(entry.sha256) ?? 0) + 1);
+          increment(capacity, `${spaceId}\u0000${entry.kind}\u0000${entry.sha256}`);
           if (entry.kind === "opaque") {
             increment(bundle, `${spaceId}\u0000${entry.sha256}`);
           } else if (
@@ -672,9 +651,143 @@ export abstract class RevisionMetadataStoreState {
             `revision_manifest\u0000${spaceId}\u0000${envelope.revision.manifestHash}`,
           );
         }
+        increment(
+          capacity,
+          `${spaceId}\u0000manifest\u0000${envelope.revision.manifestHash}`,
+        );
       }
-      this._reachabilityCounts = Object.freeze({ immutable, bundle, spaceCanonical });
+      this._reachabilityCounts = Object.freeze({
+        immutable,
+        bundle,
+        spaceCanonical,
+        capacity,
+      });
       return this._reachabilityCounts;
+    }
+
+  protected _ensureCapacityUsageLedger(spaceIds: ReadonlySet<SpaceId>): void {
+      for (const spaceId of spaceIds) {
+        if (this._capacityUsageLedger.has(spaceId)) continue;
+        const state = this._spaces.get(spaceId);
+        this._capacityUsageLedger.set(
+          spaceId,
+          state === undefined
+            ? Object.freeze({
+                logicalHeadBytes: 0,
+                logicalRetainedBytes: 0,
+                physicalCanonicalBytes: 0,
+                temporaryBytes: 0,
+                d1MetadataBytes: 0,
+                reservedBytes: 0,
+                storageAmplification: 1,
+                trustworthy: true,
+                reconciledAt: this._capacityReconciledAt.get(spaceId) ?? null,
+              })
+            : canonicalCapacityUsageForSpace(
+                spaceId,
+                state,
+                this._capacityReconciledAt.get(spaceId) ?? null,
+              ),
+        );
+      }
+    }
+
+  protected _capacityUsageFromLedger(
+      spaceIds: ReadonlySet<SpaceId>,
+      overrides: Readonly<{
+        stagedBundleFiles?: ReadonlyMap<StagedBundleFileId, Readonly<StagedBundleFileRecord>>;
+        queuedNotes?: ReadonlyMap<string, Readonly<QueuedNote>>;
+        exportJobs?: ReadonlyMap<JobId, Readonly<ExportJob>>;
+        markdownImportPlans?: ReadonlyMap<string, Readonly<MarkdownImportPlan>>;
+        markdownImportSessions?: ReadonlyMap<string, Readonly<MarkdownImportSession>>;
+        markdownImportStagedFiles?: ReadonlyMap<StagedBundleFileId, Readonly<MarkdownImportStagedFile>>;
+        reservations?: ReadonlyMap<string, Readonly<CapacityReservation>>;
+      }> = {},
+    ): Readonly<CapacityUsageSnapshot> {
+      this._ensureCapacityUsageLedger(spaceIds);
+      return capacityUsageFromCanonicalLedger({
+        spaceIds,
+        ledger: this._capacityUsageLedger,
+        stagedBundleFiles: overrides.stagedBundleFiles ?? this._stagedBundleFiles,
+        queuedNotes: overrides.queuedNotes ?? this._queuedNotes,
+        exportJobs: overrides.exportJobs ?? this._exportJobs,
+        markdownImportPlans: overrides.markdownImportPlans ?? this._markdownImportPlans,
+        markdownImportSessions:
+          overrides.markdownImportSessions ?? this._markdownImportSessions,
+        markdownImportStagedFiles:
+          overrides.markdownImportStagedFiles ?? this._markdownImportStagedFiles,
+        reservations: overrides.reservations ?? this._capacityReservations,
+      });
+    }
+
+  protected _recordCommittedRevisionCapacity(envelope: Readonly<Envelope>): void {
+      const spaceId = envelope.revision.spaceId;
+      this._ensureCapacityUsageLedger(new Set([spaceId]));
+      const previous = this._capacityUsageLedger.get(spaceId);
+      if (previous === undefined) {
+        throw new TypeError("capacity usage ledger is incomplete");
+      }
+      const currentCounts = this._objectReachabilityCounts();
+      const immutable = new Map(currentCounts.immutable);
+      const bundle = new Map(currentCounts.bundle);
+      const spaceCanonical = new Map(currentCounts.spaceCanonical);
+      const capacity = new Map(currentCounts.capacity);
+      const increment = (target: Map<string, number>, key: string) =>
+        target.set(key, (target.get(key) ?? 0) + 1);
+      let physicalGrowth = 0;
+      const manifestKey = `${spaceId}\u0000manifest\u0000${envelope.revision.manifestHash}`;
+      if (!capacity.has(manifestKey)) {
+        physicalGrowth += envelope.revision.manifestSize ?? 0;
+      }
+      increment(capacity, manifestKey);
+      let headBytes = 0;
+      for (const entry of envelope.manifest.entries) {
+        headBytes += entry.size;
+        const capacityKey = `${spaceId}\u0000${entry.kind}\u0000${entry.sha256}`;
+        if (!capacity.has(capacityKey)) physicalGrowth += entry.size;
+        increment(capacity, capacityKey);
+        immutable.set(entry.sha256, (immutable.get(entry.sha256) ?? 0) + 1);
+        if (entry.kind === "opaque") {
+          increment(bundle, `${spaceId}\u0000${entry.sha256}`);
+        } else if (
+          envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+          envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
+        ) {
+          increment(spaceCanonical, `markdown\u0000${spaceId}\u0000${entry.sha256}`);
+        }
+      }
+      if (
+        envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+        envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
+      ) {
+        increment(
+          spaceCanonical,
+          `revision_manifest\u0000${spaceId}\u0000${envelope.revision.manifestHash}`,
+        );
+      }
+      const logicalRetainedBytes = previous.logicalRetainedBytes + headBytes;
+      const physicalCanonicalBytes = previous.physicalCanonicalBytes + physicalGrowth;
+      this._capacityUsageLedger.set(spaceId, Object.freeze({
+        logicalHeadBytes: headBytes,
+        logicalRetainedBytes,
+        physicalCanonicalBytes,
+        temporaryBytes: 0,
+        d1MetadataBytes: previous.d1MetadataBytes +
+          (this._spaces.has(spaceId) ? 0 : 1_024) + 512 +
+          envelope.manifest.entries.length * 160,
+        reservedBytes: 0,
+        storageAmplification: headBytes === 0
+          ? 1
+          : physicalCanonicalBytes / headBytes,
+        trustworthy: true,
+        reconciledAt: previous.reconciledAt,
+      }));
+      this._reachabilityCounts = Object.freeze({
+        immutable,
+        bundle,
+        spaceCanonical,
+        capacity,
+      });
     }
 
   protected _currentSitesAuthorizationState(
