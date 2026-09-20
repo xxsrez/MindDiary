@@ -891,7 +891,7 @@ function producerValidationProofKey(
   const digest = new IncrementalSha256();
   digest.update(ENCODER.encode(`mind-diary-producer-validation-proof-v1\n${spaceId}\n`));
   for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
-    const sha256 = file.sha256 ?? digestText(file.text!);
+    const sha256 = file.text === undefined ? file.sha256! : digestText(file.text);
     digest.update(ENCODER.encode(`${JSON.stringify([
       file.kind,
       file.path,

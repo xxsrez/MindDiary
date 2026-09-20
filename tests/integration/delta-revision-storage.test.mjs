@@ -245,10 +245,13 @@ test("producer additive validation reads only changed files and the retained roo
     },
     authorizationState(currentActor),
   );
-  const preflight = new ChangesetPreflightService({
+  const service = new ChangesetCommitService({
     authorizer: new CapabilityAuthorizer(metadata),
+    metadata,
     revisions,
+    objects: counted.store,
     clock: { now: () => "2026-08-22T18:14:00.000Z" },
+    revisionIds: { nextRevisionId: () => "revision_delta_producer_proof" },
   });
   const indexEntry = initial.manifest.entries.find((entry) => entry.path === "index.md");
   const indexObject = await objects.getSpaceCanonicalObject(
@@ -260,32 +263,28 @@ test("producer additive validation reads only changed files and the retained roo
   const newPath = `concepts/concept-${fileCount}.md`;
   const newIndex = `${currentIndex.trimEnd()}\n- [Concept ${fileCount}](${newPath})\n`;
 
-  const firstEntry = initial.manifest.entries.find(
-    (entry) => entry.path === "concepts/concept-0000.md",
-  );
   counted.reset();
-  const proof = await preflight.preflight({
+  const proof = await service.commit({
     actor: currentActor,
     spaceId: MINDS.ordinary.spaceId,
-    revisionMode: "head",
     expectedRevisionId: INITIAL_REVISION,
+    idempotencyKey: "producer-proof-chain",
+    summary: "Establish exact producer-valid parent proof",
     producerProfile: true,
     operations: [{
       type: "replace_file",
-      path: firstEntry.path,
-      text: concept(0),
-      expected_sha256: firstEntry.sha256,
+      path: "concepts/concept-0000.md",
+      text: concept(0, "producer proof candidate"),
     }],
   });
-  assert.equal(proof.kind, "ready");
+  assert.equal(proof.kind, "committed");
   assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
 
   counted.reset();
-  const additive = await preflight.preflight({
+  const additive = await service.preflight({
     actor: currentActor,
     spaceId: MINDS.ordinary.spaceId,
-    revisionMode: "head",
-    expectedRevisionId: INITIAL_REVISION,
+    expectedRevisionId: proof.envelope.revision.revisionId,
     producerProfile: true,
     operations: [{
       type: "create_file",
@@ -302,11 +301,10 @@ test("producer additive validation reads only changed files and the retained roo
   assert.equal(counted.metrics.markdownReadBytes, indexObject.size);
 
   counted.reset();
-  const invalidating = await preflight.preflight({
+  const invalidating = await service.preflight({
     actor: currentActor,
     spaceId: MINDS.ordinary.spaceId,
-    revisionMode: "head",
-    expectedRevisionId: INITIAL_REVISION,
+    expectedRevisionId: proof.envelope.revision.revisionId,
     producerProfile: true,
     operations: [{
       type: "replace_index",
