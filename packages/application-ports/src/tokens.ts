@@ -125,6 +125,18 @@ export type RevokeMcpTokenResult =
     }
   | { readonly kind: "not_found" };
 
+export interface RevokeMcpTokensRequest {
+  readonly principalId: PrincipalId;
+  readonly tokenIds: readonly TokenId[];
+  readonly revokedAt: UtcInstant;
+}
+
+export interface RevokeMcpTokensResult {
+  readonly revokedCount: number;
+  readonly replayedCount: number;
+  readonly notFoundCount: number;
+}
+
 export interface RevokePrincipalTokensForAccountDeletionRequest {
   readonly principalId: PrincipalId;
   readonly revokedAt: UtcInstant;
@@ -233,6 +245,7 @@ export interface McpTokenStore
     tokenId: TokenId,
   ): Promise<Readonly<CurrentAuthorizationToken> | null>;
   revokeMcpToken(request: RevokeMcpTokenRequest): Promise<RevokeMcpTokenResult>;
+  revokeMcpTokens(request: RevokeMcpTokensRequest): Promise<RevokeMcpTokensResult>;
   revokePrincipalTokensForAccountDeletion(
     request: RevokePrincipalTokensForAccountDeletionRequest,
   ): Promise<RevokePrincipalTokensForAccountDeletionResult>;

@@ -84,7 +84,7 @@ export interface SitesOAuthConnectorOptions {
   readonly verifierKey: Uint8Array;
   readonly authorizationTokens?: Pick<
     McpTokenStore,
-    "createMcpToken" | "revokeMcpToken"
+    "createMcpToken" | "revokeMcpToken" | "revokeMcpTokens"
   >;
   readonly revokeWriteTargetOwner?: (input: Readonly<{
     bindingOwnerId: string;
@@ -1029,10 +1029,17 @@ export async function createSitesOAuthConnector(
     revokedAt: string,
   ): Promise<void> => {
     if (options.authorizationTokens === undefined) return;
+    const byPrincipal = new Map<PrincipalId, TokenId[]>();
     for (const row of rows) {
-      await options.authorizationTokens.revokeMcpToken({
-        principalId: String(row.principal_id) as PrincipalId,
-        tokenId: String(row.id) as TokenId,
+      const principalId = String(row.principal_id) as PrincipalId;
+      const tokenIds = byPrincipal.get(principalId) ?? [];
+      tokenIds.push(String(row.id) as TokenId);
+      byPrincipal.set(principalId, tokenIds);
+    }
+    for (const [principalId, tokenIds] of byPrincipal) {
+      await options.authorizationTokens.revokeMcpTokens({
+        principalId,
+        tokenIds,
         revokedAt: revokedAt as UtcInstant,
       });
     }

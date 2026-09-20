@@ -351,6 +351,7 @@ const METADATA_MUTATIONS = new Set([
 const TOKEN_MUTATIONS = new Set([
   "createMcpToken",
   "revokeMcpToken",
+  "revokeMcpTokens",
   "revokePrincipalTokensForAccountDeletion",
   "beginPrincipalTokenDeletion",
   "completePrincipalTokenDeletion",

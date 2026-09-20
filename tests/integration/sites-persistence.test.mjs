@@ -2072,12 +2072,20 @@ test("MCP token mutations keep fenced durability with bounded snapshot cadence",
   store = await createSitesMetadataStore(database);
   assert.equal((await store.listMcpTokenMetadata(principalId)).length, 15);
 
-  const revoked = await store.revokeMcpToken({
+  const revoked = await store.revokeMcpTokens({
     principalId,
-    tokenId: "token_snapshot_cadence_0",
+    tokenIds: [
+      "token_snapshot_cadence_0",
+      "token_snapshot_cadence_1",
+      "token_snapshot_cadence_2",
+    ],
     revokedAt: T5,
   });
-  assert.equal(revoked.kind, "revoked");
+  assert.deepEqual(revoked, {
+    revokedCount: 3,
+    replayedCount: 0,
+    notFoundCount: 0,
+  });
   assert.equal(database.metadataEvents.at(-1).sequence, 16);
   assert.equal(database.metadataSnapshotWriteCount - writesBeforeTokens, 1);
   assert.equal(database.metadataSnapshotHead.sequence, 16);
@@ -2086,6 +2094,11 @@ test("MCP token mutations keep fenced durability with bounded snapshot cadence",
   assert.equal(
     (await store.listMcpTokenMetadata(principalId))
       .find((token) => token.tokenId === "token_snapshot_cadence_0")?.state,
+    "revoked",
+  );
+  assert.equal(
+    (await store.listMcpTokenMetadata(principalId))
+      .find((token) => token.tokenId === "token_snapshot_cadence_2")?.state,
     "revoked",
   );
   const createdAfterCheckpoint = await store.createMcpToken({

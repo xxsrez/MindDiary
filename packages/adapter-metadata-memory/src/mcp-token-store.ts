@@ -15,6 +15,8 @@ import type {
   PrincipalTokenDeletionSnapshot,
   RevokeMcpTokenRequest,
   RevokeMcpTokenResult,
+  RevokeMcpTokensRequest,
+  RevokeMcpTokensResult,
   RevokePrincipalTokensForAccountDeletionRequest,
   RevokePrincipalTokensForAccountDeletionResult,
   TokenVerifier,
@@ -421,6 +423,30 @@ export class InMemoryMcpTokenStore implements McpTokenStore {
       token: cloneTokenMetadata(revoked),
       replayed: false,
     });
+  }
+
+  async revokeMcpTokens(
+    request: RevokeMcpTokensRequest,
+  ): Promise<RevokeMcpTokensResult> {
+    const tokenIds = [...new Set(request.tokenIds)];
+    let revokedCount = 0;
+    let replayedCount = 0;
+    let notFoundCount = 0;
+    for (const tokenId of tokenIds) {
+      const result = await this.revokeMcpToken({
+        principalId: request.principalId,
+        tokenId,
+        revokedAt: request.revokedAt,
+      });
+      if (result.kind === "not_found") {
+        notFoundCount += 1;
+      } else if (result.replayed) {
+        replayedCount += 1;
+      } else {
+        revokedCount += 1;
+      }
+    }
+    return Object.freeze({ revokedCount, replayedCount, notFoundCount });
   }
 
   async revokePrincipalTokensForAccountDeletion(

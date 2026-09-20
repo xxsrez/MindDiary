@@ -478,6 +478,12 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
   assert.deepEqual(await connector.authenticator.authenticate(writeTokens.access_token, "request_3"), { kind: "invalid" });
   assert.equal(
     (await authorizationTokens.readMcpTokenForAuthorization(
+      authenticatedRead.actor.authentication.tokenId,
+    )).state,
+    "revoked",
+  );
+  assert.equal(
+    (await authorizationTokens.readMcpTokenForAuthorization(
       authenticatedWrite.actor.authentication.tokenId,
     )).state,
     "revoked",
