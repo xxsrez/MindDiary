@@ -203,6 +203,7 @@ export class FakeD1Database {
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-search-v6-invalidate-field-projections*/")) {
+      this.#appliedSchema.add(normalizedSql);
       if (this.searchV6FieldProjectionsInvalidated) {
         return { success: true, meta: { changes: 0 } };
       }
@@ -1218,6 +1219,7 @@ export class FakeD1Database {
     this.searchMemberships.clear();
     this.searchLexical.clear();
     this.searchFields.clear();
+    this.searchV6FieldProjectionsInvalidated = false;
     this.audit.clear();
     this.oauthClients.clear();
     this.oauthRequests.clear();
