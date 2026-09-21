@@ -1222,6 +1222,7 @@ export async function createProductSiteRuntime(
     store: metadata,
     objects,
     host,
+    locators,
     authorizer: contentAuthorizer,
     credentialAccess: contentAuthorizer,
   });

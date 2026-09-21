@@ -1,6 +1,6 @@
 # Полный тщательный аудит Mind Diary
 
-Статус: accepted operational runbook, 2026-09-20. Этот документ задаёт
+Статус: accepted operational runbook, 2026-09-21. Этот документ задаёт
 одноразовую проверку всего актуального продукта. Он не является release gate,
 CI job, расписанием или заменой соразмерной приёмки.
 
@@ -137,11 +137,12 @@ offset pagination, no-op writes, amplification и event-loop blocking.
 Использовать детерминированные counters рядом с временем. Для timing записать
 warm/cold state, размеры `1x/10x/100x`, повторы, median/tail и шум. В применимом
 Release 0.5 targeted scenario pack проверяются reopened MD-473, MD-474, MD-476,
-MD-481, MD-482 и новые MD-484—MD-487: producer validation, metadata
+MD-481, MD-482 и новые MD-484—MD-488: producer validation, metadata
 transactions/read queue, per-Space capacity ledger, index build/cleanup/search,
 grep, maintained history/asOf catalog, authenticated partial reads, full
-validation, import/export diagnostics и 72+ batch commit. Это сценарии для
-соразмерной приёмки; они не запускают полный аудит автоматически.
+validation с MCP report pagination, import/export diagnostics и 72+ batch
+commit. Это сценарии для соразмерной приёмки; они не запускают полный аудит
+автоматически.
 
 ### Конкурентность и отказы
 
@@ -200,15 +201,37 @@ Mind names остаются за пределами публичного matrix/
 
 | ID | Contract row | Required variants |
 |---|---|---|
-| `r05-md473-proof` | Durable exact-revision producer proof и dependency-aware create/replace/delete/index/log/mixed validation. | warm, cold/restart, proof eviction, injected failure, hosted persistence. |
+| `r05-md473-proof` | Durable exact-revision producer proof и dependency-aware create/replace/delete/index/log/mixed validation. | warm proof; cold/restart без certificate; small write поверх большого legacy revision; bounded object concurrency; proof eviction; object timeout; hosted persistence. |
 | `r05-md474-metadata` | Addressable metadata transactions, bounded queue/read isolation, no foreground full checkpoint. | concurrent read/write, cold/restart, snapshot/event failure. |
 | `r05-md476-capacity` | Per-Space capacity/reachability keys and atomic reservation/reconcile. | same/different Space, warning/soft/hard, reservation failure and recovery. |
 | `r05-md481-history` | Maintained compact history and exact UTC `asOf` catalog. | warm, cold/restart/eviction, missing/corrupt catalog, revoked access. |
 | `r05-md482-range` | Authenticated cryptographic partial-read chunks with full-read legacy fallback. | modern range, v1/v2/no-range, bad proof, UTF-8 boundary, timeout. |
 | `r05-md484-validation` | Full exact-revision `validate_mind`, bounded concurrency or resumable progress, current access and failure behavior. | 72+ entries, cold/restart, revoke between batches, object failure/deadline. |
-| `r05-md485-capacity-diagnostics` | Import/export capacity and heavy-operation stable codes/details/retry policy. | plan/stage/validate/promote/export, each threshold and fairness lane. |
+| `r05-md485-capacity-diagnostics` | Import/export capacity and heavy-operation stable codes/details/retry policy. | plan/stage/validate/promote/export; each threshold and fairness lane; expired active heavy reservation после cold restart; atomic `cleanup_pending`; cleanup bytes остаются charged; successor admission; same-operation retry и replay без duplicate. |
 | `r05-md486-batch-commit` | 72+ ordinary operations, bounded object I/O, no partial revision, exact reconcile. | mixed files, injected object failure, unknown transport outcome, retry. |
 | `r05-md487-traceability` | Complaint-to-entrypoint-to-variant-to-hosted evidence join. | one complete trace per reopened/new row, redacted public summary. |
+| `r05-md488-validation-pagination` | Public MCP `validate_mind` report pagination over one fully validated exact revision. | `tools/list` cursor schema; 0/100/101 and mixed severity; no gaps/duplicates; unforgeable cursor; changed HEAD pinned to original revision; explicit-selector mismatch; foreign/tampered cursor; current-access revoke; hosted continuation. |
+
+Для regression-derived строк unit-проверка helper недостаточна. Matrix обязана
+дойти до того product entrypoint и durable boundary, где проявилась жалоба:
+
+- MD-473 воспроизводит первый small write после cold/restart на большой
+  legacy revision без producer certificate; измеряются число object reads,
+  максимальная concurrency и bounded completion, а не только итоговая
+  валидность маленького changeset;
+- MD-485 выполняет expiry transition и successor admission одной D1-backed
+  capacity transaction после нового isolate; read-back доказывает сохранённые
+  cleanup bytes, один active successor, retry/replay semantics и отсутствие
+  duplicate reservations;
+- MD-488 получает cursor через публичный MCP `validate_mind`, проходит все
+  страницы после отдельного HEAD commit и доказывает exact-once set equality.
+  Cursor должен быть opaque и неподделываемым: base64-valid изменение payload
+  или token отклоняется, как и foreign Mind и current-access revoke.
+
+Нельзя закрывать эти строки только green warm-path тестом, прямым вызовом
+in-memory service либо исчезновением исходной ошибки. Для каждой требуется
+отдельный cold/restart вариант и, когда surface доступна в UAT, exact-candidate
+hosted read-back.
 
 Каждая строка дополнительно отмечает `legacy` variant для применимого
 manifest/object/adapter path; если legacy path к сценарию неприменим, matrix

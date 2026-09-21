@@ -42,6 +42,10 @@ import {
   analyzeMarkdownConsistency,
   type MarkdownConsistencyDiagnostic,
 } from "./markdown-consistency.js";
+import type {
+  MindLocatorCodec,
+  ValidationIssueCursorLocatorPayload,
+} from "./mind-locators.js";
 
 export const VALIDATION_ISSUE_LIMIT = 100;
 export const VALIDATION_RESPONSE_BYTE_BUDGET = 64 * 1024;
@@ -209,6 +213,7 @@ export interface MindValidationDependencies {
   readonly store: MindDiscoveryStore;
   readonly objects: ObjectStore;
   readonly host: VerifiedSpaceHost;
+  readonly locators: MindLocatorCodec;
   readonly authorizer?: Authorizer;
   readonly credentialAccess?: CredentialContentAccessAuthorizer;
 }
@@ -334,76 +339,56 @@ function issueByteCost(issue: Readonly<MindValidationIssue>): number {
   return encoder.encode(JSON.stringify(issue)).byteLength;
 }
 
-function issueCursor(input: Readonly<{
-  revisionId: string;
-  offset: number;
-}>): string {
-  const encoded = encoder.encode(JSON.stringify({
-    revisionId: input.revisionId,
-    rulesVersion: MARKDOWN_CONSISTENCY_RULES_VERSION,
-    offset: input.offset,
-  }));
-  let binary = "";
-  for (const byte of encoded) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/gu, "");
-}
-
-interface ParsedIssueCursor {
-  readonly revisionId: string;
-  readonly offset: number;
-}
-
-function parseIssueCursor(cursor: unknown): Readonly<ParsedIssueCursor> | null {
+async function parseIssueCursor(
+  cursor: unknown,
+  locators: MindLocatorCodec,
+): Promise<Readonly<ValidationIssueCursorLocatorPayload> | null> {
   if (cursor === undefined) return null;
-  if (typeof cursor !== "string" || cursor.length === 0 || cursor.length > 2048) {
+  if (typeof cursor !== "string" || cursor.length === 0) {
     throw new MindValidationFailure("invalid_request", "Validation cursor is invalid.");
   }
-  try {
-    const base64 = cursor.replace(/-/gu, "+").replace(/_/gu, "/");
-    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
-    if (
-      !isRecord(value) ||
-      typeof value.revisionId !== "string" ||
-      value.revisionId.length === 0 ||
-      value.rulesVersion !== MARKDOWN_CONSISTENCY_RULES_VERSION ||
-      !Number.isSafeInteger(value.offset) ||
-      (value.offset as number) <= 0
-    ) throw new Error("cursor mismatch");
-    return Object.freeze({
-      revisionId: value.revisionId,
-      offset: value.offset as number,
-    });
-  } catch {
+  const decoded = await locators.decode(cursor);
+  if (decoded === null || decoded.kind !== "validation_issues") {
     throw new MindValidationFailure("invalid_request", "Validation cursor is invalid.");
   }
+  return decoded;
 }
 
 function cursorOffset(
-  cursor: Readonly<ParsedIssueCursor> | null,
-  revisionId: string,
-  issueCount: number,
+  cursor: Readonly<ValidationIssueCursorLocatorPayload> | null,
+  expected: Readonly<{
+    spaceId: SpaceId;
+    revisionId: string;
+    manifestHash: string;
+    issuesHash: string;
+    issueCount: number;
+  }>,
 ): number {
   if (cursor === null) return 0;
-  if (cursor.revisionId !== revisionId || cursor.offset >= issueCount) {
+  if (
+    cursor.spaceId !== expected.spaceId ||
+    cursor.revisionId !== expected.revisionId ||
+    cursor.manifestHash !== expected.manifestHash ||
+    cursor.rulesVersion !== MARKDOWN_CONSISTENCY_RULES_VERSION ||
+    cursor.issuesHash !== expected.issuesHash ||
+    cursor.end !== expected.issueCount ||
+    cursor.start >= expected.issueCount
+  ) {
     throw new MindValidationFailure("invalid_request", "Validation cursor is invalid.");
   }
-  return cursor.offset;
+  return cursor.start;
 }
 
 function boundedIssues(
   issues: readonly Readonly<MindValidationIssue>[],
   offset: number,
-  revisionId: string,
 ): Readonly<{
   conformanceErrors: readonly Readonly<MindValidationIssue>[];
   consistencyErrors: readonly Readonly<MindValidationIssue>[];
   qualityWarnings: readonly Readonly<MindValidationIssue>[];
   advisories: readonly Readonly<MindValidationIssue>[];
   issuesTruncated: boolean;
-  nextCursor: string | null;
+  nextOffset: number | null;
 }> {
   const conformanceErrors: Readonly<MindValidationIssue>[] = [];
   const consistencyErrors: Readonly<MindValidationIssue>[] = [];
@@ -427,16 +412,14 @@ function boundedIssues(
     bytes += cost;
   }
   const nextOffset = offset + count;
-  const nextCursor = nextOffset < issues.length
-    ? issueCursor({ revisionId, offset: nextOffset })
-    : null;
+  const hasNextPage = nextOffset < issues.length;
   return Object.freeze({
     conformanceErrors: Object.freeze(conformanceErrors),
     consistencyErrors: Object.freeze(consistencyErrors),
     qualityWarnings: Object.freeze(qualityWarnings),
     advisories: Object.freeze(advisories),
-    issuesTruncated: nextCursor !== null,
-    nextCursor,
+    issuesTruncated: hasNextPage,
+    nextOffset: hasNextPage ? nextOffset : null,
   });
 }
 
@@ -460,12 +443,14 @@ function mapDiscoveryFailure(error: unknown): never {
 export class MindValidationService {
   readonly #store: MindDiscoveryStore;
   readonly #objects: ObjectStore;
+  readonly #locators: MindLocatorCodec;
   readonly #discovery: MindDiscoveryService;
   readonly #authorizer: Authorizer;
 
   constructor(dependencies: MindValidationDependencies) {
     this.#store = dependencies.store;
     this.#objects = dependencies.objects;
+    this.#locators = dependencies.locators;
     this.#discovery = new MindDiscoveryService({
       store: dependencies.store,
       host: dependencies.host,
@@ -482,7 +467,7 @@ export class MindValidationService {
     queryValue: unknown,
   ): Promise<Readonly<MindValidationResult>> {
     const query = normalizeQuery(queryValue);
-    const parsedCursor = parseIssueCursor(query.cursor);
+    const parsedCursor = await parseIssueCursor(query.cursor, this.#locators);
     let info;
     try {
       info = await this.#discovery.getMindInfo(
@@ -761,12 +746,30 @@ export class MindValidationService {
       (left.line ?? 0) - (right.line ?? 0) ||
       left.code.localeCompare(right.code) ||
       (left.target ?? "").localeCompare(right.target ?? "")));
-    const offset = cursorOffset(
-      parsedCursor,
-      info.resolvedRevision.revisionId,
-      projected.length,
+    const issuesHash = await this.#objects.calculateSha256(
+      encoder.encode(JSON.stringify(projected)),
     );
-    const bounded = boundedIssues(projected, offset, info.resolvedRevision.revisionId);
+    const offset = cursorOffset(parsedCursor, {
+      spaceId,
+      revisionId: info.resolvedRevision.revisionId,
+      manifestHash: envelope.revision.manifestHash,
+      issuesHash,
+      issueCount: projected.length,
+    });
+    const bounded = boundedIssues(projected, offset);
+    const nextCursor = bounded.nextOffset === null
+      ? null
+      : await this.#locators.encode(Object.freeze({
+          version: 1 as const,
+          kind: "validation_issues" as const,
+          spaceId,
+          revisionId: info.resolvedRevision.revisionId,
+          manifestHash: envelope.revision.manifestHash,
+          rulesVersion: MARKDOWN_CONSISTENCY_RULES_VERSION,
+          issuesHash,
+          start: bounded.nextOffset,
+          end: projected.length,
+        }));
     const commitReady = projected.every((issue) => !issue.blocksCommit);
     return Object.freeze({
       mind: info.mind,
@@ -789,7 +792,7 @@ export class MindValidationService {
         advisories: legacyWarnings.length + consistency.advisories.length,
       }),
       issuesTruncated: bounded.issuesTruncated,
-      nextCursor: bounded.nextCursor,
+      nextCursor,
       validationComplete: true,
       validationRulesVersion: MARKDOWN_CONSISTENCY_RULES_VERSION,
       validatedOkfVersion: okfValidation.version,

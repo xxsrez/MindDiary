@@ -283,6 +283,7 @@ async function createHarness() {
     store,
     objects,
     host: HOST,
+    locators,
     authorizer,
   });
   const downloads = new BundleFileDownloadService({

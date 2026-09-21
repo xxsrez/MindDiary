@@ -2101,10 +2101,13 @@ HTTP(S) и source targets другой revision/Mind автоматически 
 consistency errors; `commit_ready` дополнительно учитывает блокирующие warnings
 producer profile. `validation_complete: true` означает, что весь bundle уже
 проверен, даже если diagnostics не помещаются в одну страницу. `next_cursor`
-листает только детерминированный отчёт, привязан к exact `revision_id` и
-`validation_rules_version`; после изменения HEAD или правил старый cursor
-отклоняется. Страница ограничена 100 issues и 64 KiB, клиент следует по cursor
-до `null`.
+листает только детерминированный отчёт и является неподделываемым opaque
+locator, привязанным к Mind, exact `revision_id`, manifest, полному упорядоченному
+набору diagnostics и `validation_rules_version`. Изменение HEAD не инвалидирует
+cursor: continuation остаётся на исходной immutable revision. Изменение правил,
+несовпадающий explicit revision selector, отозванный current access, чужой или
+изменённый cursor отклоняются fail closed. Страница ограничена 100 issues и
+64 KiB, клиент следует по cursor до `null`.
 
 ### `BundleFileDescriptor`
 

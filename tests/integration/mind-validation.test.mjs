@@ -9,6 +9,7 @@ import {
   MindValidationService,
   VALIDATION_ISSUE_LIMIT,
   VALIDATION_MESSAGE_CHARACTER_LIMIT,
+  WebCryptoMindLocatorCodec,
 } from "@mind-diary/application-content";
 import {
   AccountBootstrapService,
@@ -190,6 +191,7 @@ function harness() {
     store,
     objects: observed,
     host: HOST,
+    locators: new WebCryptoMindLocatorCodec(new Uint8Array(32).fill(0x76)),
   });
   let revision = 0;
   return {
@@ -428,7 +430,14 @@ test("validation response is bounded and issue messages do not echo untrusted li
   await assert.rejects(
     env.validation.validateMind(actor(owner.principalId), {
       mind: mind.handle,
-      cursor: `${result.nextCursor}tampered`,
+      cursor: (() => {
+        const index = Math.floor(result.nextCursor.length / 2);
+        const replacement = result.nextCursor[index] === "A" ? "B" : "A";
+        const tampered = `${result.nextCursor.slice(0, index)}${replacement}${result.nextCursor.slice(index + 1)}`;
+        assert.match(tampered, /^[A-Za-z0-9_-]+$/u);
+        assert.equal(tampered.length, result.nextCursor.length);
+        return tampered;
+      })(),
     }),
     expectValidationFailure("invalid_request"),
   );
@@ -505,7 +514,11 @@ test("mixed validation diagnostics paginate deterministically without gaps or du
   const request = { mind: mind.handle };
   const first = await env.validation.validateMind(actor(owner.principalId), request);
   const repeated = await env.validation.validateMind(actor(owner.principalId), request);
-  assert.deepEqual(repeated, first);
+  assert.deepEqual(
+    { ...repeated, nextCursor: null },
+    { ...first, nextCursor: null },
+  );
+  assert.equal(typeof repeated.nextCursor, "string");
   const expectedTotal = first.issueCounts.conformanceErrors +
     first.issueCounts.consistencyErrors + first.issueCounts.advisories;
   assert.ok(expectedTotal > VALIDATION_ISSUE_LIMIT);
@@ -538,6 +551,19 @@ test("mixed validation diagnostics paginate deterministically without gaps or du
   }
   assert.equal(seen.size, expectedTotal);
   assert.deepEqual([...classes].sort(), ["advisory", "conformance", "consistency"]);
+
+  const repeatedContinuation = await env.validation.validateMind(actor(owner.principalId), {
+    mind: mind.handle,
+    cursor: repeated.nextCursor,
+  });
+  const firstContinuation = await env.validation.validateMind(actor(owner.principalId), {
+    mind: mind.handle,
+    cursor: first.nextCursor,
+  });
+  assert.deepEqual(
+    { ...repeatedContinuation, nextCursor: null },
+    { ...firstContinuation, nextCursor: null },
+  );
 });
 
 test("validation cursor continuation rechecks current access after visibility revoke", async () => {

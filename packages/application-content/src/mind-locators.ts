@@ -66,10 +66,23 @@ export interface FileOperationCursorLocatorPayload {
   readonly end: number;
 }
 
+export interface ValidationIssueCursorLocatorPayload {
+  readonly version: 1;
+  readonly kind: "validation_issues";
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly manifestHash: Sha256Digest;
+  readonly rulesVersion: string;
+  readonly issuesHash: Sha256Digest;
+  readonly start: number;
+  readonly end: number;
+}
+
 export type MindLocatorPayload =
   | ExactEntryLocatorPayload
   | BrowseCursorLocatorPayload
   | BundleFileListCursorLocatorPayload
+  | ValidationIssueCursorLocatorPayload
   | FileOperationCursorLocatorPayload;
 
 export interface MindLocatorCodec {
@@ -181,6 +194,26 @@ function parseLocatorPayload(value: unknown): Readonly<MindLocatorPayload> | nul
       spaceId: value.spaceId as SpaceId, revisionId: value.revisionId as RevisionId,
       manifestHash: value.manifestHash as Sha256Digest,
       start: value.start as number, end: value.end as number });
+  }
+  if (value.kind === "validation_issues") {
+    if (!hasExactKeys(value, ["version", "kind", "spaceId", "revisionId", "manifestHash",
+      "rulesVersion", "issuesHash", "start", "end"]) ||
+      !validOpaqueIdentity(value.spaceId) || !validOpaqueIdentity(value.revisionId) ||
+      typeof value.manifestHash !== "string" || !SHA256_PATTERN.test(value.manifestHash) ||
+      !validOpaqueIdentity(value.rulesVersion) ||
+      typeof value.issuesHash !== "string" || !SHA256_PATTERN.test(value.issuesHash) ||
+      !validRange(value.start, value.end, false)) return null;
+    return Object.freeze({
+      version: LOCATOR_VERSION,
+      kind: "validation_issues",
+      spaceId: value.spaceId as SpaceId,
+      revisionId: value.revisionId as RevisionId,
+      manifestHash: value.manifestHash as Sha256Digest,
+      rulesVersion: value.rulesVersion,
+      issuesHash: value.issuesHash as Sha256Digest,
+      start: value.start as number,
+      end: value.end as number,
+    });
   }
   if (value.kind !== "file_operation" ||
     !hasExactKeys(value, ["version", "kind", "operation", "spaceId", "usageVersion", "revisionId",

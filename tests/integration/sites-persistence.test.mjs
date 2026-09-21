@@ -90,6 +90,141 @@ test("Sites metadata reconstructs durable capacity reservations after isolate re
   assert.equal(reservations[0].state, "active");
 });
 
+test("Sites metadata atomically retires an expired heavy reservation after isolate restart", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  const app = services(boundary, ids());
+  const owner = await app.bootstrap.bootstrapAccount(preRegistrationActor(109), {
+    action: "create_isolated_account",
+  });
+  const mind = await app.ordinary.createSpaceWithOwner(
+    actor(owner.principalId, "request_capacity_restart_heavy_mind", T0),
+    {
+      name: "Capacity restart heavy",
+      handle: "capacity-restart-heavy",
+      idempotencyKey: "capacity-restart-heavy-mind",
+    },
+  );
+  const startingEventCount = database.metadataEvents.length;
+  const limits = Object.freeze({
+    ...DEFAULT_CAPACITY_LIMITS,
+    siteTemporaryBytes: 100,
+    activeHeavyPerMind: 1,
+    activeHeavyPerPrincipal: 1,
+    activeHeavyPerSite: 1,
+  });
+  const staleRequest = Object.freeze({
+    reservationId: "capacity:restart:stale-heavy",
+    requestedByPrincipalId: owner.principalId,
+    spaceId: mind.mindId,
+    operation: "import",
+    operationRef: "import_capacity_restart_stale_heavy",
+    baseRevisionId: null,
+    idempotencyKey: idempotencyKey("capacity-restart-stale-heavy"),
+    requested: Object.freeze({
+      physicalCanonicalBytes: 0,
+      temporaryBytes: 16,
+      d1MetadataBytes: 0,
+    }),
+    bulk: true,
+    heavy: true,
+    createdAt: T0,
+    expiresAt: T1,
+  });
+  const first = boundary.metadata;
+  const admitted = await first.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation(staleRequest, limits));
+  assert.equal(admitted.kind, "admitted");
+  assert.equal(database.metadataEvents.length, startingEventCount + 1);
+
+  const successorRequest = Object.freeze({
+    reservationId: "capacity:restart:successor-heavy",
+    requestedByPrincipalId: staleRequest.requestedByPrincipalId,
+    spaceId: staleRequest.spaceId,
+    operation: "export",
+    operationRef: "export_capacity_restart_successor_heavy",
+    baseRevisionId: null,
+    idempotencyKey: idempotencyKey("capacity-restart-successor-heavy"),
+    requested: Object.freeze({
+      physicalCanonicalBytes: 0,
+      temporaryBytes: 1,
+      d1MetadataBytes: 0,
+    }),
+    bulk: true,
+    heavy: true,
+    createdAt: T2,
+    expiresAt: T5,
+  });
+  const restarted = await createSitesMetadataStore(database);
+  const successor = await restarted.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation(successorRequest, limits));
+  assert.equal(successor.kind, "admitted");
+  assert.equal(successor.replayed, false);
+  assert.equal(database.metadataEvents.length, startingEventCount + 2);
+
+  const afterAdmission = await createSitesMetadataStore(database);
+  const reservations = await afterAdmission.listCapacityReservationsForTest();
+  assert.equal(reservations.length, 2);
+  assert.equal(
+    reservations.find(({ reservationId }) =>
+      reservationId === staleRequest.reservationId).state,
+    "cleanup_pending",
+  );
+  assert.equal(
+    reservations.find(({ reservationId }) =>
+      reservationId === staleRequest.reservationId).requested.temporaryBytes,
+    16,
+  );
+  assert.equal(
+    reservations.find(({ reservationId }) =>
+      reservationId === successorRequest.reservationId).state,
+    "active",
+  );
+  const telemetry = await afterAdmission.readCapacityTelemetry(limits, T2);
+  assert.equal(telemetry.staleReservations, 1);
+
+  const pressure = await afterAdmission.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation(Object.freeze({
+      reservationId: "capacity:restart:cleanup-pressure",
+      requestedByPrincipalId: staleRequest.requestedByPrincipalId,
+      spaceId: staleRequest.spaceId,
+      operation: "commit",
+      operationRef: "commit_capacity_restart_cleanup_pressure",
+      baseRevisionId: null,
+      idempotencyKey: idempotencyKey("capacity-restart-cleanup-pressure"),
+      requested: Object.freeze({
+        physicalCanonicalBytes: 0,
+        temporaryBytes: 84,
+        d1MetadataBytes: 0,
+      }),
+      bulk: false,
+      heavy: false,
+      createdAt: T3,
+      expiresAt: T5,
+    }), limits));
+  assert.equal(pressure.kind, "rejected");
+  assert.equal(pressure.reason, "hard_limit");
+
+  const replay = await afterAdmission.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation(successorRequest, limits));
+  assert.equal(replay.kind, "admitted");
+  assert.equal(replay.replayed, true);
+  assert.equal((await afterAdmission.listCapacityReservationsForTest()).length, 2);
+
+  const staleRetry = await afterAdmission.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation(Object.freeze({
+      ...staleRequest,
+      createdAt: T3,
+      expiresAt: T5,
+    }), limits));
+  assert.equal(staleRetry.kind, "rejected");
+  assert.equal(staleRetry.reason, "accounting_untrusted");
+  assert.equal((await afterAdmission.listCapacityReservationsForTest()).length, 2);
+});
+
 class FakeD1Statement {
   #database;
   #sql;
