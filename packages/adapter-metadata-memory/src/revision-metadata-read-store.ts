@@ -162,6 +162,7 @@ import {
   version,
 } from "@mind-diary/application-ports";
 import { RevisionMetadataSnapshotStore } from "./revision-metadata-snapshot-store.js";
+import { cloneCopyOnWriteValue, copyOnWriteMap } from "./copy-on-write.js";
 
 export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshotStore {
   async decommissionLegacyMindBindingsForMigration(): Promise<void> {
@@ -620,12 +621,8 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         const legacy = cloneLegacyCredentialWriteTargetUpgrades(
           this._legacyCredentialWriteTargetUpgrades,
         );
-        const auditEvents = new Map(
-          [...this._auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
-        );
-        const auditOutbox = new Map(
-          [...this._auditOutbox].map(([id, message]) => [id, cloneAuditOutbox(message)]),
-        );
+        const auditEvents = copyOnWriteMap(this._auditEvents, cloneAuditEvent);
+        const auditOutbox = copyOnWriteMap(this._auditOutbox, cloneAuditOutbox);
 
         const generationIdUsed = (generationId: string): boolean =>
           [...owners.values()].some((owner) =>
@@ -962,12 +959,8 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         const owners = clonePrincipalMindUsageOwners(
           this._principalMindUsageOwners,
         );
-        const auditEvents = new Map(
-          [...this._auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
-        );
-        const auditOutbox = new Map(
-          [...this._auditOutbox].map(([id, message]) => [id, cloneAuditOutbox(message)]),
-        );
+        const auditEvents = copyOnWriteMap(this._auditEvents, cloneAuditEvent);
+        const auditOutbox = copyOnWriteMap(this._auditOutbox, cloneAuditOutbox);
         const generationUsed = (generationId: PrincipalMindUsageGenerationId) =>
           [...owners.values()].some((owner) =>
             owner.retiredGenerationIds.has(generationId) ||
@@ -1158,7 +1151,7 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       operation: (transaction: BundleFileStagingTransaction) => Promise<Result>,
     ): Promise<Result> {
       return this._runExclusive(async () => {
-        const stagedBundleFiles = new Map(this._stagedBundleFiles);
+        const stagedBundleFiles = copyOnWriteMap(this._stagedBundleFiles, cloneCopyOnWriteValue);
         const idempotencyRecords = cloneIdempotencyRecords(this._idempotencyRecords);
         const capacityReservations = cloneCapacityReservations(this._capacityReservations);
         const capacityTransaction = this._capacityTransaction(capacityReservations);
@@ -1250,15 +1243,8 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
     ): Promise<Result> {
       return this._runExclusive(async () => {
         const owners = cloneMindBindingOwners(this._mindBindingOwners);
-        const auditEvents = new Map(
-          [...this._auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
-        );
-        const auditOutbox = new Map(
-          [...this._auditOutbox].map(([id, message]) => [
-            id,
-            cloneAuditOutbox(message),
-          ]),
-        );
+        const auditEvents = copyOnWriteMap(this._auditEvents, cloneAuditEvent);
+        const auditOutbox = copyOnWriteMap(this._auditOutbox, cloneAuditOutbox);
         const getOwner = (
           request: Readonly<MindBindingMutationRequest>,
         ): MutableMindBindingOwnerState | ApplyMindBindingMutationResult => {

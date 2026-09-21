@@ -707,6 +707,19 @@ export class SitesMetadataStore {
     }, "read_session");
   }
 
+  async inspectCopyOnWriteStatsForTest(): Promise<Readonly<{
+    readonly metadata: Readonly<ReturnType<InMemoryRevisionMetadataStore["readCopyOnWriteStatsForTest"]>>;
+    readonly tokens: Readonly<ReturnType<InMemoryMcpTokenStore["readCopyOnWriteStatsForTest"]>>;
+  }>> {
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      return Object.freeze({
+        metadata: this.#metadata.readCopyOnWriteStatsForTest(),
+        tokens: this.#tokens.readCopyOnWriteStatsForTest(),
+      });
+    }, "read_session");
+  }
+
   /**
    * Activity is an observational last-seen projection, not canonical product
    * state. Keep it out of the fenced metadata event log so a page view never
@@ -820,10 +833,8 @@ export class SitesMetadataStore {
     const snapshot = await this.#exclusive(async () => {
       await this.#refresh();
       return Object.freeze({
-        metadata: this.#cloneMetadata(this.#metadata),
-        tokens: InMemoryMcpTokenStore.fromDurableSnapshot(
-          this.#tokens.exportDurableSnapshot(),
-        ),
+        metadata: this.#metadata.forkForRead(),
+        tokens: this.#tokens.forkForReadRoot(),
       });
     });
     return operation(this.#consistentReadView(snapshot.metadata, snapshot.tokens));
@@ -1207,10 +1218,8 @@ export class SitesMetadataStore {
     // canonical cache from the small event tail, then clone it in-process.
     await this.#refresh();
     return Object.freeze({
-      metadata: this.#cloneMetadata(this.#metadata),
-      tokens: InMemoryMcpTokenStore.fromDurableSnapshot(
-        this.#tokens.exportDurableSnapshot(),
-      ),
+      metadata: this.#metadata.forkForTransaction(),
+      tokens: this.#tokens.forkForTransactionRoot(),
       sequence: this.#sequence,
     });
   }
@@ -1218,9 +1227,7 @@ export class SitesMetadataStore {
   #cloneMetadata(
     metadata: InMemoryRevisionMetadataStore,
   ): InMemoryRevisionMetadataStore {
-    return InMemoryRevisionMetadataStore.fromDurableSnapshot(
-      metadata.exportDurableSnapshot(),
-    );
+    return metadata.forkForTransaction();
   }
 
   async #runTransaction(
@@ -1428,6 +1435,9 @@ export class SitesMetadataStore {
         // absent materialized snapshot is repaired by contiguous tail replay on
         // the next read/restart; surfacing failure here would report an
         // ambiguous mutation result and invite an unnecessary retry.
+      } finally {
+        metadata.compactCopyOnWriteRootForCheckpoint();
+        tokens.compactCopyOnWriteRootForCheckpoint();
       }
     }
     return true;

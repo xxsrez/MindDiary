@@ -2638,6 +2638,29 @@ test("a detached read-session stays immutable while a nested live mutation compl
   }))?.spaceId, added);
 });
 
+test("detached handle reads use a bounded COW fork as foreign handles scale", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  for (let index = 0; index < 32; index += 1) {
+    assert.equal((await store.reserveHandle({
+      host: HOST,
+      handle: `cow-foreign-${String(index).padStart(3, "0")}`,
+      spaceId: opaqueId(`space_cow_foreign_${index}`),
+    })).kind, "reserved");
+  }
+  const before = await store.inspectCopyOnWriteStatsForTest();
+  await store.withDetachedConsistentRead(async (view) => {
+    assert.deepEqual(
+      await view.resolveHandle({ host: HOST, handle: "cow-foreign-000" }),
+      { kind: "resolved", spaceId: opaqueId("space_cow_foreign_0") },
+    );
+  });
+  const after = await store.inspectCopyOnWriteStatsForTest();
+  assert.ok(after.metadata.mapForks - before.metadata.mapForks < 100);
+  assert.ok(after.metadata.valueClones - before.metadata.valueClones < 10);
+  assert.ok(after.metadata.iterations - before.metadata.iterations < 10);
+});
+
 test("get_mind_info resolves one exact Mind from one D1 read-session", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();

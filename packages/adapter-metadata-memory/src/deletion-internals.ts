@@ -16,6 +16,7 @@ import {
   type SpaceMembership,
   type VerifiedSpaceHost,
 } from "@mind-diary/application-ports";
+import { copyOnWriteMap, isCopyOnWriteMap } from "./copy-on-write.js";
 
 import {
   compareUnicodeScalarValues,
@@ -115,6 +116,9 @@ export function decodePublicCatalogCursor(
 export function clonePublicCatalogSnapshots(
   source: ReadonlyMap<number, readonly SpaceId[]>,
 ): Map<number, readonly SpaceId[]> {
+  if (isCopyOnWriteMap(source)) {
+    return copyOnWriteMap(source, (spaceIds) => Object.freeze([...spaceIds]));
+  }
   return new Map(
     [...source].map(([generation, spaceIds]) => [
       generation,

@@ -84,6 +84,15 @@ import {
   validPrincipalMindUsageOwnersSnapshot,
 } from "./metadata-store-internals.js";
 import { RevisionMetadataSupportStore } from "./revision-metadata-support-store.js";
+import {
+  cloneCopyOnWriteValue,
+  copyOnWriteMap,
+  copyOnWriteSet,
+  copyOnWriteStats,
+  isCopyOnWriteMap,
+  isCopyOnWriteSet,
+  type CopyOnWriteStats,
+} from "./copy-on-write.js";
 
 export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
   implements
@@ -103,6 +112,148 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
     PrincipalMindUsageStore,
     ServiceOperatorDirectoryStore,
     MindBindingStore {
+  /**
+   * Fork the complete metadata root without walking any of its maps.  Each
+   * map records only touched keys and clones a mutable value when it is first
+   * observed by the fork.  This is the boundary used by Sites CAS retries and
+   * detached read sessions.
+   */
+  forkForTransaction(): InMemoryRevisionMetadataStore {
+    return this.#forkRoot();
+  }
+
+  forkForRead(): InMemoryRevisionMetadataStore {
+    return this.#forkRoot();
+  }
+
+  readCopyOnWriteStatsForTest(): Readonly<CopyOnWriteStats> {
+    return copyOnWriteStats(this._copyOnWriteStats);
+  }
+
+  /**
+   * Collapse persistent overlays after a durable checkpoint. Checkpoints
+   * already scan the complete root, so retaining a long overlay chain would
+   * make later recovery and scans pay the same history repeatedly.
+   */
+  compactCopyOnWriteRootForCheckpoint(): void {
+    const map = <Key, Value>(source: Map<Key, Value>): Map<Key, Value> =>
+      isCopyOnWriteMap(source) ? source.materialize() : source;
+    const set = <Value>(source: Set<Value>): Set<Value> =>
+      isCopyOnWriteSet(source) ? source.materialize() : source;
+    this._spaceStates = map(this._spaceStates);
+    this._revisionsById = map(this._revisionsById);
+    this._idempotencyRecords = map(this._idempotencyRecords);
+    this._auditEvents = map(this._auditEvents);
+    this._auditOutbox = map(this._auditOutbox);
+    this._backgroundJobs = map(this._backgroundJobs);
+    this._queuedNotes = map(this._queuedNotes);
+    this._exportJobs = map(this._exportJobs);
+    this._exportDownloadGrants = map(this._exportDownloadGrants);
+    this._bundleFileDownloadGrants = map(this._bundleFileDownloadGrants);
+    this._indexStates = map(this._indexStates);
+    this._stagedBundleFiles = map(this._stagedBundleFiles);
+    this._markdownImportPlans = map(this._markdownImportPlans);
+    this._markdownImportSessions = map(this._markdownImportSessions);
+    this._markdownImportStagedFiles = map(this._markdownImportStagedFiles);
+    this._markdownImportPlanKeys = map(this._markdownImportPlanKeys);
+    this._markdownImportSessionKeys = map(this._markdownImportSessionKeys);
+    this._markdownImportBatchHashes = map(this._markdownImportBatchHashes);
+    this._capacityReservations = map(this._capacityReservations);
+    this._capacityReconciledAt = map(this._capacityReconciledAt);
+    this._capacityUsageLedger = map(this._capacityUsageLedger);
+    this._principals = map(this._principals);
+    this._principalActivities = map(this._principalActivities);
+    this._externalBindings = map(this._externalBindings);
+    this._knowledgeSpaces = map(this._knowledgeSpaces);
+    this._personalBindings = map(this._personalBindings);
+    this._memberships = map(this._memberships);
+    this._invitations = map(this._invitations);
+    this._personalProfileIdempotencyRecords = map(this._personalProfileIdempotencyRecords);
+    this._ordinaryMindIdempotencyRecords = map(this._ordinaryMindIdempotencyRecords);
+    this._membershipMutationRecords = map(this._membershipMutationRecords);
+    this._ordinaryMindDeletionImpacts = map(this._ordinaryMindDeletionImpacts);
+    this._ordinaryMindDeletionCleanup = map(this._ordinaryMindDeletionCleanup);
+    this._accountDeletionImpacts = map(this._accountDeletionImpacts);
+    this._accountDeletionCleanup = map(this._accountDeletionCleanup);
+    this._mindBindingOwners = map(this._mindBindingOwners);
+    this._credentialWriteTargetOwners = map(this._credentialWriteTargetOwners);
+    this._legacyCredentialWriteTargetUpgrades = map(this._legacyCredentialWriteTargetUpgrades);
+    this._principalMindUsageOwners = map(this._principalMindUsageOwners);
+    this._activeHandlesByKey = map(this._activeHandlesByKey);
+    this._activeHandlesBySpace = map(this._activeHandlesBySpace);
+    this._retiredHandles = map(this._retiredHandles);
+    this._publicMindCatalogSpaceIds = set(this._publicMindCatalogSpaceIds);
+    this._publicMindCatalogSnapshots = map(this._publicMindCatalogSnapshots);
+    this._authorizationStates = map(this._authorizationStates);
+  }
+
+  #forkRoot(): InMemoryRevisionMetadataStore {
+    const fork = new InMemoryRevisionMetadataStore();
+    fork._copyOnWriteStats = this._copyOnWriteStats;
+    const stats = this._copyOnWriteStats;
+    const map = <Key, Value>(source: ReadonlyMap<Key, Value>) =>
+      copyOnWriteMap(source, cloneCopyOnWriteValue, stats);
+    fork._spaceStates = map(this._spaceStates);
+    fork._revisionsById = map(this._revisionsById);
+    fork._idempotencyRecords = map(this._idempotencyRecords);
+    fork._auditEvents = map(this._auditEvents);
+    fork._auditOutbox = map(this._auditOutbox);
+    fork._backgroundJobs = map(this._backgroundJobs);
+    fork._queuedNotes = map(this._queuedNotes);
+    fork._exportJobs = map(this._exportJobs);
+    fork._exportDownloadGrants = map(this._exportDownloadGrants);
+    fork._bundleFileDownloadGrants = map(this._bundleFileDownloadGrants);
+    fork._indexStates = map(this._indexStates);
+    fork._stagedBundleFiles = map(this._stagedBundleFiles);
+    fork._markdownImportPlans = map(this._markdownImportPlans);
+    fork._markdownImportSessions = map(this._markdownImportSessions);
+    fork._markdownImportStagedFiles = map(this._markdownImportStagedFiles);
+    fork._markdownImportPlanKeys = map(this._markdownImportPlanKeys);
+    fork._markdownImportSessionKeys = map(this._markdownImportSessionKeys);
+    fork._markdownImportBatchHashes = map(this._markdownImportBatchHashes);
+    fork._capacityReservations = map(this._capacityReservations);
+    fork._capacityReconciledAt = map(this._capacityReconciledAt);
+    fork._capacityUsageLedger = map(this._capacityUsageLedger);
+    fork._principals = map(this._principals);
+    fork._principalActivities = map(this._principalActivities);
+    fork._externalBindings = map(this._externalBindings);
+    fork._knowledgeSpaces = map(this._knowledgeSpaces);
+    fork._personalBindings = map(this._personalBindings);
+    fork._memberships = map(this._memberships);
+    fork._invitations = map(this._invitations);
+    fork._personalProfileIdempotencyRecords = map(this._personalProfileIdempotencyRecords);
+    fork._ordinaryMindIdempotencyRecords = map(this._ordinaryMindIdempotencyRecords);
+    fork._membershipMutationRecords = map(this._membershipMutationRecords);
+    fork._ordinaryMindDeletionImpacts = map(this._ordinaryMindDeletionImpacts);
+    fork._ordinaryMindDeletionCleanup = map(this._ordinaryMindDeletionCleanup);
+    fork._accountDeletionImpacts = map(this._accountDeletionImpacts);
+    fork._accountDeletionCleanup = map(this._accountDeletionCleanup);
+    fork._mindBindingOwners = map(this._mindBindingOwners);
+    fork._credentialWriteTargetOwners = map(this._credentialWriteTargetOwners);
+    fork._legacyCredentialWriteTargetUpgrades = map(this._legacyCredentialWriteTargetUpgrades);
+    fork._principalMindUsageOwners = map(this._principalMindUsageOwners);
+    fork._activeHandlesByKey = map(this._activeHandlesByKey);
+    fork._activeHandlesBySpace = map(this._activeHandlesBySpace);
+    fork._retiredHandles = map(this._retiredHandles);
+    fork._publicMindCatalogSpaceIds = copyOnWriteSet(this._publicMindCatalogSpaceIds, stats);
+    fork._publicMindCatalogSnapshots = map(this._publicMindCatalogSnapshots);
+    fork._authorizationStates = map(this._authorizationStates);
+    fork._reachabilityCounts = this._reachabilityCounts;
+    fork._revisionIndexRecoveryCursor = this._revisionIndexRecoveryCursor;
+    fork._revisionCatalogVisits = this._revisionCatalogVisits;
+    fork._revisionAsOfVisits = this._revisionAsOfVisits;
+    fork._capacityCanonicalKeyVisits = this._capacityCanonicalKeyVisits;
+    fork._capacityQuotaRejects = this._capacityQuotaRejects;
+    fork._objectCleanupCheckpoint = this._objectCleanupCheckpoint;
+    fork._publicMindCatalogGeneration = this._publicMindCatalogGeneration;
+    fork._nextCommitFailure = this._nextCommitFailure;
+    fork._nextAccountBootstrapFailureStage = this._nextAccountBootstrapFailureStage;
+    fork._nextPersonalProfileFailureStage = this._nextPersonalProfileFailureStage;
+    fork._nextOrdinaryMindFailureStage = this._nextOrdinaryMindFailureStage;
+    fork._nextAccountDeletionFailureStage = this._nextAccountDeletionFailureStage;
+    return fork;
+  }
+
   /** Restores a checkpoint produced by exportDurableSnapshot, failing closed on corruption. */
     static fromDurableSnapshot(value: unknown): InMemoryRevisionMetadataStore {
       if (typeof value !== "object" || value === null || Array.isArray(value)) {

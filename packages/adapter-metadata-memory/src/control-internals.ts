@@ -39,6 +39,7 @@ import {
   type TransferOrdinaryMindOwnershipRequest,
   type TransitionInvitationRequest,
 } from "@mind-diary/application-ports";
+import { copyOnWriteMap, isCopyOnWriteMap } from "./copy-on-write.js";
 
 import {
   SHA256_PATTERN,
@@ -143,6 +144,9 @@ export function cloneRecordMap<Key, Value extends object>(
   source: ReadonlyMap<Key, Readonly<Value>>,
   clone: (value: Readonly<Value>) => Readonly<Value>,
 ): Map<Key, Readonly<Value>> {
+  if (isCopyOnWriteMap(source)) {
+    return copyOnWriteMap(source, (value) => clone(value));
+  }
   return new Map([...source].map(([key, value]) => [key, clone(value)]));
 }
 
@@ -310,6 +314,12 @@ export function personalDescriptionIdempotencyKey(
 export function clonePersonalProfileIdempotencyRecords(
   records: ReadonlyMap<string, Readonly<PersonalProfileIdempotencyRecord>>,
 ): Map<string, Readonly<PersonalProfileIdempotencyRecord>> {
+  if (isCopyOnWriteMap(records)) {
+    return copyOnWriteMap(records, (record) => Object.freeze({
+      ...record,
+      profile: freezePersonalMindProfile(record.profile),
+    }));
+  }
   return new Map(
     [...records].map(([key, record]) => [
       key,
@@ -767,40 +777,46 @@ export function ordinaryMindIdempotencySpaceId(
 export function cloneOrdinaryMindIdempotencyRecords(
   records: ReadonlyMap<string, Readonly<OrdinaryMindIdempotencyRecord>>,
 ): Map<string, Readonly<OrdinaryMindIdempotencyRecord>> {
+  if (isCopyOnWriteMap(records)) {
+    return copyOnWriteMap(records, cloneOrdinaryMindIdempotencyRecord);
+  }
   const cloned = new Map<string, Readonly<OrdinaryMindIdempotencyRecord>>();
   for (const [key, record] of records) {
-    if (record.operation === "transfer_ownership") {
-      cloned.set(key, Object.freeze({
-        ...record,
-        transfer: freezeOwnershipTransferSnapshot(record.transfer),
-      }));
-      continue;
-    }
-    if (record.operation === "create_invitation" || record.operation === "reissue_invitation") {
-      cloned.set(key, Object.freeze({
-        ...record,
-        invitation: freezeInvitationSnapshot(record.invitation),
-      }));
-      continue;
-    }
-    if (
-      record.operation === "accept_invitation" ||
-      record.operation === "reject_invitation" ||
-      record.operation === "cancel_invitation"
-    ) {
-      cloned.set(key, Object.freeze({
-        ...record,
-        lifecycle: freezeInvitationLifecycleSnapshot(record.lifecycle),
-      }));
-      continue;
-    }
-    if (!("mind" in record)) throw new TypeError("invalid ordinary idempotency record");
-    cloned.set(key, Object.freeze({
-      ...record,
-      mind: freezeOrdinaryMindSnapshot(record.mind),
-    }));
+    cloned.set(key, cloneOrdinaryMindIdempotencyRecord(record));
   }
   return cloned;
+}
+
+function cloneOrdinaryMindIdempotencyRecord(
+  record: Readonly<OrdinaryMindIdempotencyRecord>,
+): Readonly<OrdinaryMindIdempotencyRecord> {
+  if (record.operation === "transfer_ownership") {
+    return Object.freeze({
+      ...record,
+      transfer: freezeOwnershipTransferSnapshot(record.transfer),
+    });
+  }
+  if (record.operation === "create_invitation" || record.operation === "reissue_invitation") {
+    return Object.freeze({
+      ...record,
+      invitation: freezeInvitationSnapshot(record.invitation),
+    });
+  }
+  if (
+    record.operation === "accept_invitation" ||
+    record.operation === "reject_invitation" ||
+    record.operation === "cancel_invitation"
+  ) {
+    return Object.freeze({
+      ...record,
+      lifecycle: freezeInvitationLifecycleSnapshot(record.lifecycle),
+    });
+  }
+  if (!("mind" in record)) throw new TypeError("invalid ordinary idempotency record");
+  return Object.freeze({
+    ...record,
+    mind: freezeOrdinaryMindSnapshot(record.mind),
+  });
 }
 
 export type MembershipMutationRecord = Readonly<{
@@ -830,6 +846,12 @@ export function membershipMutationKey(
 export function cloneMembershipMutationRecords(
   records: ReadonlyMap<string, MembershipMutationRecord>,
 ): Map<string, MembershipMutationRecord> {
+  if (isCopyOnWriteMap(records)) {
+    return copyOnWriteMap(records, (record) => Object.freeze({
+      ...record,
+      membership: freezeMembership(record.membership),
+    }));
+  }
   return new Map(
     [...records].map(([key, record]) => [
       key,

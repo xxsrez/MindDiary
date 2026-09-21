@@ -55,6 +55,7 @@ import {
 import {
   type OrdinaryMindTransactionState,
 } from "./ordinary-mind-transaction-state.js";
+import { cloneCopyOnWriteValue, copyOnWriteMap } from "./copy-on-write.js";
 
 type OrdinarySpaceAggregate = ReturnType<typeof SpaceAggregate.restoreOrdinary>;
 
@@ -580,7 +581,7 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
             for (const item of updatedSnapshot.invitations) {
               candidateInvitations.set(item.invitationId, freezeInvitation(item));
             }
-            const candidateBackgroundJobs = new Map(tx.backgroundJobs);
+            const candidateBackgroundJobs = copyOnWriteMap(tx.backgroundJobs, cloneCopyOnWriteValue);
             candidateBackgroundJobs.set(expiryJob.jobId, cloneBackgroundJob(expiryJob));
             this._failOrdinaryMindIfRequested("invitation_after_record");
             const candidateIdempotencyRecords =
@@ -943,7 +944,7 @@ export abstract class RevisionMetadataOrdinaryMembershipStore extends RevisionMe
             const snapshot = freezeInvitationSnapshot({ invitation: persisted, target });
             const candidateSpaces = cloneRecordMap(tx.knowledgeSpaces, freezeKnowledgeSpace);
             const candidateInvitations = cloneRecordMap(tx.invitations, freezeInvitation);
-            const candidateJobs = new Map(tx.backgroundJobs);
+            const candidateJobs = copyOnWriteMap(tx.backgroundJobs, cloneCopyOnWriteValue);
             candidateSpaces.set(space.spaceId, freezeKnowledgeSpace(updated.space));
             for (const item of updated.invitations) candidateInvitations.set(item.invitationId, freezeInvitation(item));
             this._failOrdinaryMindIfRequested("invitation_reissue_after_record");

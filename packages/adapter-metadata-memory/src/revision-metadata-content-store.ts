@@ -78,6 +78,7 @@ import {
 import {
   version,
 } from "@mind-diary/application-ports";
+import { cloneCopyOnWriteValue, copyOnWriteMap } from "./copy-on-write.js";
 import { RevisionMetadataOrdinaryStore } from "./revision-metadata-ordinary-store.js";
 
 export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdinaryStore {
@@ -127,7 +128,7 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
     ): Promise<Result> {
       return this._runExclusive(async () => {
         const spaces = cloneSpaces(this._spaces);
-        const revisionsById = new Map(this._revisionsById);
+        const revisionsById = copyOnWriteMap(this._revisionsById, cloneCopyOnWriteValue);
         const knowledgeSpaces = cloneRecordMap(
           this._knowledgeSpaces,
           freezeKnowledgeSpace,
@@ -135,35 +136,22 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         const principals = this._principals;
         const memberships = this._memberships;
         const idempotencyRecords = cloneIdempotencyRecords(this._idempotencyRecords);
-        const auditEvents = new Map(
-          [...this._auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
-        );
-        const auditOutbox = new Map(
-          [...this._auditOutbox].map(([id, message]) => [id, cloneAuditOutbox(message)]),
-        );
-        const backgroundJobs = new Map(
-          [...this._backgroundJobs].map(([id, job]) => [id, cloneBackgroundJob(job)]),
-        );
-        const indexStates = new Map(
-          [...this._indexStates].map(([key, state]) => [key, cloneIndexState(state)]),
-        );
-        const stagedBundleFiles = new Map(this._stagedBundleFiles);
-        const markdownImportPlans = new Map(this._markdownImportPlans);
-        const queuedNotes = new Map(this._queuedNotes);
-        const markdownImportSessions = new Map(this._markdownImportSessions);
-        const markdownImportStagedFiles = new Map(this._markdownImportStagedFiles);
-        const markdownImportPlanKeys = new Map(this._markdownImportPlanKeys);
-        const markdownImportSessionKeys = new Map(this._markdownImportSessionKeys);
-        const markdownImportBatchHashes = new Map(this._markdownImportBatchHashes);
+        const auditEvents = copyOnWriteMap(this._auditEvents, cloneAuditEvent);
+        const auditOutbox = copyOnWriteMap(this._auditOutbox, cloneAuditOutbox);
+        const backgroundJobs = copyOnWriteMap(this._backgroundJobs, cloneBackgroundJob);
+        const indexStates = copyOnWriteMap(this._indexStates, cloneIndexState);
+        const stagedBundleFiles = copyOnWriteMap(this._stagedBundleFiles, cloneCopyOnWriteValue);
+        const markdownImportPlans = copyOnWriteMap(this._markdownImportPlans, cloneCopyOnWriteValue);
+        const queuedNotes = copyOnWriteMap(this._queuedNotes, cloneCopyOnWriteValue);
+        const markdownImportSessions = copyOnWriteMap(this._markdownImportSessions, cloneCopyOnWriteValue);
+        const markdownImportStagedFiles = copyOnWriteMap(this._markdownImportStagedFiles, cloneCopyOnWriteValue);
+        const markdownImportPlanKeys = copyOnWriteMap(this._markdownImportPlanKeys);
+        const markdownImportSessionKeys = copyOnWriteMap(this._markdownImportSessionKeys);
+        const markdownImportBatchHashes = copyOnWriteMap(this._markdownImportBatchHashes);
         const capacityReservations = cloneCapacityReservations(this._capacityReservations);
         const committedCapacityRevisions: Envelope[] = [];
         const capacityTransaction = this._capacityTransaction(capacityReservations);
-        const authorizationStates = new Map(
-          [...this._authorizationStates].map(([key, state]) => [
-            key,
-            cloneAuthorizationState(state),
-          ]),
-        );
+        const authorizationStates = copyOnWriteMap(this._authorizationStates, cloneAuthorizationState);
         const transaction: MarkdownImportMetadataTransaction = Object.freeze({
           ...capacityTransaction,
           readQueuedNote: async (receiptId: string) => queuedNotes.get(receiptId) ?? null,
@@ -626,19 +614,14 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
     ): Promise<Result> {
       return this._runExclusive(async () => {
         const spaces = cloneSpaces(this._spaces);
-        const revisionsById = new Map(this._revisionsById);
+        const revisionsById = copyOnWriteMap(this._revisionsById, cloneCopyOnWriteValue);
         const principals = this._principals;
         const knowledgeSpaces = this._knowledgeSpaces;
         const memberships = this._memberships;
         const idempotencyRecords = cloneIdempotencyRecords(this._idempotencyRecords);
         const exportJobs = cloneExportJobs(this._exportJobs);
         const capacityReservations = cloneCapacityReservations(this._capacityReservations);
-        const authorizationStates = new Map(
-          [...this._authorizationStates].map(([key, state]) => [
-            key,
-            cloneAuthorizationState(state),
-          ]),
-        );
+        const authorizationStates = copyOnWriteMap(this._authorizationStates, cloneAuthorizationState);
         const transaction: ExportStartTransaction = Object.freeze({
           ...this._capacityTransaction(capacityReservations),
           kind: "authorization-transaction" as const,
@@ -742,12 +725,7 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         const exportDownloadGrants = cloneExportDownloadGrants(
           this._exportDownloadGrants,
         );
-        const authorizationStates = new Map(
-          [...this._authorizationStates].map(([key, state]) => [
-            key,
-            cloneAuthorizationState(state),
-          ]),
-        );
+        const authorizationStates = copyOnWriteMap(this._authorizationStates, cloneAuthorizationState);
         const transaction: ExportDownloadGrantTransaction = Object.freeze({
           kind: "authorization-transaction" as const,
           readCredentialWriteTarget: (
@@ -805,12 +783,7 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         const memberships = this._memberships;
         const spaces = this._spaces;
         const revisionsById = this._revisionsById;
-        const authorizationStates = new Map(
-          [...this._authorizationStates].map(([key, state]) => [
-            key,
-            cloneAuthorizationState(state),
-          ]),
-        );
+        const authorizationStates = copyOnWriteMap(this._authorizationStates, cloneAuthorizationState);
         const transaction: BundleFileDownloadGrantTransaction = Object.freeze({
           kind: "authorization-transaction" as const,
           readCredentialWriteTarget: (

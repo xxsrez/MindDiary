@@ -35,6 +35,7 @@ import {
   type WriteMindBinding,
   type WriteMindBindingId,
 } from "@mind-diary/application-ports";
+import { copyOnWriteMap, isCopyOnWriteMap } from "./copy-on-write.js";
 
 import {
   SHA256_PATTERN,
@@ -142,6 +143,9 @@ export function cloneMindBindingOwnerState(
 export function cloneMindBindingOwners(
   owners: ReadonlyMap<MindBindingOwnerId, MutableMindBindingOwnerState>,
 ): Map<MindBindingOwnerId, MutableMindBindingOwnerState> {
+  if (isCopyOnWriteMap(owners)) {
+    return copyOnWriteMap(owners, cloneMindBindingOwnerState);
+  }
   return new Map(
     [...owners].map(([ownerId, state]) => [
       ownerId,
@@ -466,6 +470,9 @@ export function cloneCapacityReservation(
 export function cloneCapacityReservations(
   source: ReadonlyMap<string, Readonly<CapacityReservation>>,
 ): Map<string, Readonly<CapacityReservation>> {
+  if (isCopyOnWriteMap(source)) {
+    return copyOnWriteMap(source, cloneCapacityReservation);
+  }
   return new Map(
     [...source].map(([id, reservation]) => [id, cloneCapacityReservation(reservation)]),
   );

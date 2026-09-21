@@ -43,6 +43,10 @@ import {
   type StagedBundleFileRecord,
   type UtcInstant,
 } from "@mind-diary/application-ports";
+import {
+  copyOnWriteMap,
+  isCopyOnWriteMap,
+} from "./copy-on-write.js";
 
 export type Envelope = Readonly<CanonicalRevisionEnvelope>;
 export type RevisionId = Envelope["revision"]["revisionId"];
@@ -402,40 +406,48 @@ export function ensureSpaceRevisionProjections(
 }
 
 export function cloneSpaces(source: ReadonlyMap<SpaceId, SpaceState>): Map<SpaceId, SpaceState> {
+  if (isCopyOnWriteMap(source)) {
+    return copyOnWriteMap(
+      source as ReadonlyMap<SpaceId, SpaceState>,
+      cloneSpaceState,
+    );
+  }
   return new Map(
-    [...source].map(([spaceId, state]) => {
-      const cloned: SpaceState = {
-        head: state.head,
-        revisions: new Map(state.revisions),
-      };
-      if (state.revisionCatalog !== undefined) {
-        cloned.revisionCatalog = new Map(
-          [...state.revisionCatalog].map(([revisionId, entry]) => [
-            revisionId,
-            Object.freeze({
-              ...entry,
-              revision: Object.freeze({
-                ...entry.revision,
-                committedBy: Object.freeze({ ...entry.revision.committedBy }),
-              }),
-            }),
-          ]),
-        );
-      }
-      if (state.revisionIdsByNumber !== undefined) {
-        cloned.revisionIdsByNumber = new Map(state.revisionIdsByNumber);
-      }
-      if (state.revisionAsOfIndex !== undefined) {
-        cloned.revisionAsOfIndex = Object.freeze(
-          state.revisionAsOfIndex.map((entry) => Object.freeze({ ...entry })),
-        );
-      }
-      if (state.canonicalKeys !== undefined) {
-        cloned.canonicalKeys = new Set(state.canonicalKeys);
-      }
-      return [spaceId, cloned] as const;
-    }),
+    [...source].map(([spaceId, state]) => [spaceId, cloneSpaceState(state)]),
   );
+}
+
+export function cloneSpaceState(state: Readonly<SpaceState>): SpaceState {
+  const cloned: SpaceState = {
+    head: state.head,
+    revisions: new Map(state.revisions),
+  };
+  if (state.revisionCatalog !== undefined) {
+    cloned.revisionCatalog = new Map(
+      [...state.revisionCatalog].map(([revisionId, entry]) => [
+        revisionId,
+        Object.freeze({
+          ...entry,
+          revision: Object.freeze({
+            ...entry.revision,
+            committedBy: Object.freeze({ ...entry.revision.committedBy }),
+          }),
+        }),
+      ]),
+    );
+  }
+  if (state.revisionIdsByNumber !== undefined) {
+    cloned.revisionIdsByNumber = new Map(state.revisionIdsByNumber);
+  }
+  if (state.revisionAsOfIndex !== undefined) {
+    cloned.revisionAsOfIndex = Object.freeze(
+      state.revisionAsOfIndex.map((entry) => Object.freeze({ ...entry })),
+    );
+  }
+  if (state.canonicalKeys !== undefined) {
+    cloned.canonicalKeys = new Set(state.canonicalKeys);
+  }
+  return cloned;
 }
 
 export function authorizationStateKey(query: AuthorizationStateQuery): string {
@@ -507,6 +519,9 @@ export function cloneIdempotencyRecord(
 export function cloneIdempotencyRecords(
   source: ReadonlyMap<string, CompletedIdempotencyRecord>,
 ): Map<string, CompletedIdempotencyRecord> {
+  if (isCopyOnWriteMap(source)) {
+    return copyOnWriteMap(source, cloneIdempotencyRecord);
+  }
   return new Map(
     [...source].map(([key, record]) => [key, cloneIdempotencyRecord(record)]),
   );
@@ -605,6 +620,7 @@ export function cloneExportJob(job: Readonly<ExportJob>): Readonly<ExportJob> {
 export function cloneExportJobs(
   source: ReadonlyMap<JobId, Readonly<ExportJob>>,
 ): Map<JobId, Readonly<ExportJob>> {
+  if (isCopyOnWriteMap(source)) return copyOnWriteMap(source, cloneExportJob);
   return new Map([...source].map(([id, job]) => [id, cloneExportJob(job)]));
 }
 
@@ -617,6 +633,7 @@ export function cloneExportDownloadGrant(
 export function cloneExportDownloadGrants(
   source: ReadonlyMap<string, Readonly<ExportDownloadGrant>>,
 ): Map<string, Readonly<ExportDownloadGrant>> {
+  if (isCopyOnWriteMap(source)) return copyOnWriteMap(source, cloneExportDownloadGrant);
   return new Map(
     [...source].map(([verifier, grant]) => [verifier, cloneExportDownloadGrant(grant)]),
   );
@@ -631,6 +648,7 @@ export function cloneBundleFileDownloadGrant(
 export function cloneBundleFileDownloadGrants(
   source: ReadonlyMap<string, Readonly<BundleFileDownloadGrant>>,
 ): Map<string, Readonly<BundleFileDownloadGrant>> {
+  if (isCopyOnWriteMap(source)) return copyOnWriteMap(source, cloneBundleFileDownloadGrant);
   return new Map(
     [...source].map(([verifier, grant]) => [verifier, cloneBundleFileDownloadGrant(grant)]),
   );

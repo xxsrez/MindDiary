@@ -103,11 +103,19 @@ import {
   isReservedTopLevelHandle,
   parseCanonicalSpaceHandle,
 } from "@mind-diary/application-ports";
+import {
+  newCopyOnWriteStats,
+  type CopyOnWriteStats,
+  isCopyOnWriteMap,
+} from "./copy-on-write.js";
 
 export abstract class RevisionMetadataStoreState {
   readonly kind = "metadata-store" as const;
 
-  private _spaceStates = new Map<SpaceId, SpaceState>();
+  /** Shared instrumentation for the persistent roots descended from this state. */
+  protected _copyOnWriteStats: CopyOnWriteStats = newCopyOnWriteStats();
+
+  protected _spaceStates = new Map<SpaceId, SpaceState>();
 
   /**
    * Transaction boundaries replace the complete Space map. Rebuild missing
@@ -119,8 +127,10 @@ export abstract class RevisionMetadataStoreState {
   }
 
   protected set _spaces(value: Map<SpaceId, SpaceState>) {
-    for (const [spaceId, state] of value) {
-      ensureSpaceRevisionProjections(spaceId, state);
+    if (!isCopyOnWriteMap(value)) {
+      for (const [spaceId, state] of value) {
+        ensureSpaceRevisionProjections(spaceId, state);
+      }
     }
     this._spaceStates = value;
   }
@@ -264,7 +274,7 @@ export abstract class RevisionMetadataStoreState {
       [0, Object.freeze([])],
     ]);
 
-  protected readonly _authorizationStates = new Map<string, AuthorizationState>();
+  protected _authorizationStates = new Map<string, AuthorizationState>();
 
   protected _transactionTail: Promise<void> = Promise.resolve();
 

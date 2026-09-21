@@ -21,6 +21,7 @@ import type {
   SetPrincipalMindUsageModeRequest,
   SetPrincipalMindUsageModeResult,
 } from "@mind-diary/application-ports";
+import { copyOnWriteMap, isCopyOnWriteMap } from "./copy-on-write.js";
 import type {
   KnowledgeSpaceMap,
   MembershipMap,
@@ -48,6 +49,9 @@ export interface MutablePrincipalMindUsageOwnerState {
 export function clonePrincipalMindUsageOwners(
   owners: ReadonlyMap<PrincipalId, MutablePrincipalMindUsageOwnerState>,
 ): Map<PrincipalId, MutablePrincipalMindUsageOwnerState> {
+  if (isCopyOnWriteMap(owners)) {
+    return copyOnWriteMap(owners, clonePrincipalMindUsageOwnerState);
+  }
   return new Map(
     [...owners].map(([principalId, owner]) => [
       principalId,
@@ -69,6 +73,27 @@ export function clonePrincipalMindUsageOwners(
       },
     ]),
   );
+}
+
+function clonePrincipalMindUsageOwnerState(
+  owner: MutablePrincipalMindUsageOwnerState,
+): MutablePrincipalMindUsageOwnerState {
+  return {
+    state: freezePrincipalMindUsageState(owner.state),
+    retiredGenerationIds: new Set(owner.retiredGenerationIds),
+    idempotency: new Map(
+      [...owner.idempotency].map(([key, record]) => [
+        key,
+        Object.freeze({
+          canonicalRequestHash: record.canonicalRequestHash,
+          result: Object.freeze({
+            ...record.result,
+            state: freezePrincipalMindUsageState(record.result.state),
+          }),
+        }),
+      ]),
+    ),
+  };
 }
 
 /** Rotate only the affected Mind's pins, in the same transaction as its description. */

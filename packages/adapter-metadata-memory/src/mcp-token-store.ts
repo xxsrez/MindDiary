@@ -27,6 +27,16 @@ import {
 import {
   compareUnicodeScalarValues,
 } from "./metadata-store-internals.js";
+import {
+  cloneCopyOnWriteValue,
+  copyOnWriteMap,
+  copyOnWriteSet,
+  copyOnWriteStats,
+  isCopyOnWriteMap,
+  isCopyOnWriteSet,
+  newCopyOnWriteStats,
+  type CopyOnWriteStats,
+} from "./copy-on-write.js";
 
 interface StoredMcpToken extends McpTokenMetadata {
   readonly verifier: TokenVerifier;
@@ -82,6 +92,13 @@ function authorizationToken(
   });
 }
 
+function cloneStoredToken(token: StoredMcpToken): StoredMcpToken {
+  return Object.freeze({
+    ...cloneCopyOnWriteValue(token),
+    scopes: Object.freeze([...token.scopes]) as McpTokenMetadata["scopes"],
+  });
+}
+
 function validTokenCreateRequest(request: CreateMcpTokenRequest): boolean {
   const createdAt = Date.parse(request.createdAt);
   const expiresAt = Date.parse(request.expiresAt);
@@ -128,14 +145,47 @@ function principalTokenFingerprint(
 /** Deterministic transactional token adapter for local/unit execution. */
 export class InMemoryMcpTokenStore implements McpTokenStore {
   readonly kind = "metadata-store" as const;
-  readonly #tokensById = new Map<McpTokenMetadata["tokenId"], StoredMcpToken>();
-  readonly #tokenIdByVerifier = new Map<TokenVerifier, McpTokenMetadata["tokenId"]>();
-  readonly #tokenIdByPresentationRef = new Map<string, McpTokenMetadata["tokenId"]>();
-  readonly #deletedPrincipals = new Set<McpTokenMetadata["principalId"]>();
-  readonly #accountDeletionReservations = new Map<
+  #tokensById: Map<McpTokenMetadata["tokenId"], StoredMcpToken> = new Map();
+  #tokenIdByVerifier: Map<TokenVerifier, McpTokenMetadata["tokenId"]> = new Map();
+  #tokenIdByPresentationRef: Map<string, McpTokenMetadata["tokenId"]> = new Map();
+  #deletedPrincipals: Set<McpTokenMetadata["principalId"]> = new Set();
+  #accountDeletionReservations: Map<
     McpTokenMetadata["principalId"],
     string
-  >();
+  > = new Map();
+
+  forkForTransactionRoot(): InMemoryMcpTokenStore {
+    return this.#forkRoot();
+  }
+
+  forkForReadRoot(): InMemoryMcpTokenStore {
+    return this.#forkRoot();
+  }
+
+  readCopyOnWriteStatsForTest(): Readonly<CopyOnWriteStats> {
+    return copyOnWriteStats(this.#copyOnWriteStats);
+  }
+
+  compactCopyOnWriteRootForCheckpoint(): void {
+    if (isCopyOnWriteMap(this.#tokensById)) this.#tokensById = this.#tokensById.materialize();
+    if (isCopyOnWriteMap(this.#tokenIdByVerifier)) this.#tokenIdByVerifier = this.#tokenIdByVerifier.materialize();
+    if (isCopyOnWriteMap(this.#tokenIdByPresentationRef)) this.#tokenIdByPresentationRef = this.#tokenIdByPresentationRef.materialize();
+    if (isCopyOnWriteSet(this.#deletedPrincipals)) this.#deletedPrincipals = this.#deletedPrincipals.materialize();
+    if (isCopyOnWriteMap(this.#accountDeletionReservations)) this.#accountDeletionReservations = this.#accountDeletionReservations.materialize();
+  }
+
+  #copyOnWriteStats: CopyOnWriteStats = newCopyOnWriteStats();
+
+  #forkRoot(): InMemoryMcpTokenStore {
+    const fork = new InMemoryMcpTokenStore();
+    fork.#copyOnWriteStats = this.#copyOnWriteStats;
+    fork.#tokensById = copyOnWriteMap(this.#tokensById, cloneStoredToken, this.#copyOnWriteStats);
+    fork.#tokenIdByVerifier = copyOnWriteMap(this.#tokenIdByVerifier, undefined, this.#copyOnWriteStats);
+    fork.#tokenIdByPresentationRef = copyOnWriteMap(this.#tokenIdByPresentationRef, undefined, this.#copyOnWriteStats);
+    fork.#deletedPrincipals = copyOnWriteSet(this.#deletedPrincipals, this.#copyOnWriteStats);
+    fork.#accountDeletionReservations = copyOnWriteMap(this.#accountDeletionReservations, undefined, this.#copyOnWriteStats);
+    return fork;
+  }
 
   /** Trusted adapter checkpoint; callers must protect the serialized value. */
   exportDurableSnapshot(): unknown {

@@ -38,6 +38,7 @@ import {
 } from "./metadata-store-internals.js";
 
 import { RevisionMetadataOrdinaryTransactionStore } from "./revision-metadata-ordinary-transaction-store.js";
+import { cloneCopyOnWriteValue, copyOnWriteMap } from "./copy-on-write.js";
 
 export abstract class RevisionMetadataOrdinaryStore extends RevisionMetadataOrdinaryTransactionStore {
 async runPersonalMindTransaction<Result>(
@@ -117,9 +118,9 @@ async runPersonalMindTransaction<Result>(
               metadataVersion: version(personalSpace.metadataVersion + 1),
               updatedAt: request.occurredAt,
             });
-            const candidatePrincipals = new Map(principals);
+            const candidatePrincipals = copyOnWriteMap(principals, cloneCopyOnWriteValue);
             candidatePrincipals.set(request.principalId, updatedPrincipal);
-            const candidateSpaces = new Map(knowledgeSpaces);
+            const candidateSpaces = copyOnWriteMap(knowledgeSpaces, cloneCopyOnWriteValue);
             candidateSpaces.set(personalSpace.spaceId, updatedSpace);
             let updatedAccount: Readonly<PrincipalAccountSnapshot> | null;
             try {
@@ -207,7 +208,7 @@ async runPersonalMindTransaction<Result>(
                   metadataVersion: version(personalSpace.metadataVersion + 1),
                   updatedAt: request.occurredAt,
                 });
-            const candidateSpaces = new Map(knowledgeSpaces);
+            const candidateSpaces = copyOnWriteMap(knowledgeSpaces, cloneCopyOnWriteValue);
             candidateSpaces.set(personalSpace.spaceId, updatedSpace);
             let updatedAccount: Readonly<PrincipalAccountSnapshot> | null;
             try {
@@ -266,13 +267,9 @@ async runPersonalMindTransaction<Result>(
         );
         const memberships = cloneRecordMap(this._memberships, freezeMembership);
         const revisionSpaces = cloneSpaces(this._spaces);
-        const revisionsById = new Map(this._revisionsById);
-        const backgroundJobs = new Map(
-          [...this._backgroundJobs].map(([id, job]) => [id, cloneBackgroundJob(job)]),
-        );
-        const indexStates = new Map(
-          [...this._indexStates].map(([key, state]) => [key, cloneIndexState(state)]),
-        );
+        const revisionsById = copyOnWriteMap(this._revisionsById, cloneCopyOnWriteValue);
+        const backgroundJobs = copyOnWriteMap(this._backgroundJobs, cloneBackgroundJob);
+        const indexStates = copyOnWriteMap(this._indexStates, cloneIndexState);
         const transaction: AccountBootstrapTransaction = Object.freeze({
           readAccountByExternalBinding: async (
             lookup: Readonly<ExternalIdentityBindingLookup>,

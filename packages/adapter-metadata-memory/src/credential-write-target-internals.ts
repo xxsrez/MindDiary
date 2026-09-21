@@ -26,6 +26,7 @@ import {
   cloneAuditEvent,
   cloneAuditOutbox,
 } from "./revision-internals.js";
+import { copyOnWriteMap, isCopyOnWriteMap } from "./copy-on-write.js";
 
 export type AppliedCredentialWriteTargetResult = Readonly<
   Extract<ApplyCredentialWriteTargetResult, { readonly kind: "applied" }>
@@ -78,6 +79,9 @@ export function cloneCredentialWriteTargetOwnerState(
 export function cloneCredentialWriteTargetOwners(
   owners: ReadonlyMap<MindBindingOwnerId, MutableCredentialWriteTargetOwnerState>,
 ): Map<MindBindingOwnerId, MutableCredentialWriteTargetOwnerState> {
+  if (isCopyOnWriteMap(owners)) {
+    return copyOnWriteMap(owners, cloneCredentialWriteTargetOwnerState);
+  }
   return new Map(
     [...owners].map(([ownerId, state]) => [
       ownerId,
@@ -218,6 +222,9 @@ export function validLegacyCredentialWriteTargetUpgradesSnapshot(
 export function cloneLegacyCredentialWriteTargetUpgrades(
   owners: ReadonlyMap<MindBindingOwnerId, Readonly<LegacyCredentialWriteTargetUpgradeSnapshot>>,
 ): Map<MindBindingOwnerId, Readonly<LegacyCredentialWriteTargetUpgradeSnapshot>> {
+  if (isCopyOnWriteMap(owners)) {
+    return copyOnWriteMap(owners, (evidence) => Object.freeze({ ...evidence }));
+  }
   return new Map(
     [...owners].map(([ownerId, evidence]) => [
       ownerId,

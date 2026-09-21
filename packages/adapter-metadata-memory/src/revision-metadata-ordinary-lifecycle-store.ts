@@ -54,6 +54,7 @@ import {
 } from "./ordinary-mind-transaction-state.js";
 
 import { RevisionMetadataOrdinaryMembershipStore } from "./revision-metadata-ordinary-membership-store.js";
+import { cloneCopyOnWriteValue, copyOnWriteMap } from "./copy-on-write.js";
 
 export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMetadataOrdinaryMembershipStore {
   protected _lifecycleTransactionMethods(
@@ -150,14 +151,14 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
               freezeMembership,
             );
             const candidateRevisionSpaces = cloneSpaces(tx.revisionSpaces);
-            const candidateRevisionsById = new Map(tx.revisionsById);
+            const candidateRevisionsById = copyOnWriteMap(tx.revisionsById, cloneCopyOnWriteValue);
             const candidateIdempotencyRecords =
               cloneOrdinaryMindIdempotencyRecords(tx.idempotencyRecords);
-            const candidateBackgroundJobs = new Map(tx.backgroundJobs);
-            const candidateIndexStates = new Map(tx.indexStates);
-            const candidateActiveByHandle = new Map(tx.activeByHandle);
-            const candidateActiveBySpace = new Map(tx.activeBySpace);
-            const candidateRetired = new Map(tx.retired);
+            const candidateBackgroundJobs = copyOnWriteMap(tx.backgroundJobs, cloneCopyOnWriteValue);
+            const candidateIndexStates = copyOnWriteMap(tx.indexStates, cloneCopyOnWriteValue);
+            const candidateActiveByHandle = copyOnWriteMap(tx.activeByHandle, cloneCopyOnWriteValue);
+            const candidateActiveBySpace = copyOnWriteMap(tx.activeBySpace, cloneCopyOnWriteValue);
+            const candidateRetired = copyOnWriteMap(tx.retired, cloneCopyOnWriteValue);
 
             const reserved = reserveHandleAgainst(
               {
@@ -545,15 +546,8 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
             );
             const candidateIdempotencyRecords =
               cloneOrdinaryMindIdempotencyRecords(tx.idempotencyRecords);
-            const candidateAuditEvents = new Map(
-              [...tx.auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
-            );
-            const candidateAuditOutbox = new Map(
-              [...tx.auditOutbox].map(([id, message]) => [
-                id,
-                cloneAuditOutbox(message),
-              ]),
-            );
+            const candidateAuditEvents = copyOnWriteMap(tx.auditEvents, cloneAuditEvent);
+            const candidateAuditOutbox = copyOnWriteMap(tx.auditOutbox, cloneAuditOutbox);
             const changedSnapshot = changedAggregate.snapshot();
             candidateKnowledgeSpaces.set(
               request.spaceId,
@@ -808,15 +802,8 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
               tx.memberships,
               freezeMembership,
             );
-            const candidateAuditEvents = new Map(
-              [...tx.auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
-            );
-            const candidateAuditOutbox = new Map(
-              [...tx.auditOutbox].map(([id, message]) => [
-                id,
-                cloneAuditOutbox(message),
-              ]),
-            );
+            const candidateAuditEvents = copyOnWriteMap(tx.auditEvents, cloneAuditEvent);
+            const candidateAuditOutbox = copyOnWriteMap(tx.auditOutbox, cloneAuditOutbox);
             const candidateIdempotencyRecords =
               cloneOrdinaryMindIdempotencyRecords(tx.idempotencyRecords);
             candidateKnowledgeSpaces.set(

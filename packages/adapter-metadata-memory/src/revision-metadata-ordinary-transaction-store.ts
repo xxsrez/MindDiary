@@ -41,6 +41,7 @@ import {
 import type { OrdinaryMindTransactionState } from "./ordinary-mind-transaction-state.js";
 
 import { RevisionMetadataOrdinaryDeletionStore } from "./revision-metadata-ordinary-deletion-store.js";
+import { cloneCopyOnWriteValue, copyOnWriteMap, copyOnWriteSet } from "./copy-on-write.js";
 
 export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionMetadataOrdinaryDeletionStore {
   async runMembershipControlTransaction<Result>(
@@ -60,12 +61,7 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
     ): Promise<Result> {
       return this._runExclusive(async () => {
         let principals = cloneRecordMap(this._principals, freezePrincipal);
-        let principalActivities = new Map(
-          [...this._principalActivities].map(([principalId, summary]) => [
-            principalId,
-            clonePrincipalActivity(summary),
-          ]),
-        );
+        let principalActivities = copyOnWriteMap(this._principalActivities, clonePrincipalActivity);
         let externalBindings = cloneRecordMap(
           this._externalBindings,
           freezeExternalBinding,
@@ -81,7 +77,7 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
         let memberships = cloneRecordMap(this._memberships, freezeMembership);
         let invitations = cloneRecordMap(this._invitations, freezeInvitation);
         let revisionSpaces = cloneSpaces(this._spaces);
-        let revisionsById = new Map(this._revisionsById);
+        let revisionsById = copyOnWriteMap(this._revisionsById, cloneCopyOnWriteValue);
         let idempotencyRecords = cloneOrdinaryMindIdempotencyRecords(
           this._ordinaryMindIdempotencyRecords,
         );
@@ -92,32 +88,20 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
           clonePersonalProfileIdempotencyRecords(
             this._personalProfileIdempotencyRecords,
           );
-        let activeByHandle = new Map(this._activeHandlesByKey);
-        let activeBySpace = new Map(this._activeHandlesBySpace);
-        let retired = new Map(this._retiredHandles);
+        let activeByHandle = copyOnWriteMap(this._activeHandlesByKey, cloneCopyOnWriteValue);
+        let activeBySpace = copyOnWriteMap(this._activeHandlesBySpace, cloneCopyOnWriteValue);
+        let retired = copyOnWriteMap(this._retiredHandles, cloneCopyOnWriteValue);
         let publicCatalogGeneration = this._publicMindCatalogGeneration;
-        let publicCatalogSpaceIds = new Set(this._publicMindCatalogSpaceIds);
+        let publicCatalogSpaceIds = copyOnWriteSet(this._publicMindCatalogSpaceIds);
         let publicCatalogSnapshots = clonePublicCatalogSnapshots(
           this._publicMindCatalogSnapshots,
         );
-        let auditEvents = new Map(
-          [...this._auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
-        );
-        let auditOutbox = new Map(
-          [...this._auditOutbox].map(([id, message]) => [
-            id,
-            cloneAuditOutbox(message),
-          ]),
-        );
+        let auditEvents = copyOnWriteMap(this._auditEvents, cloneAuditEvent);
+        let auditOutbox = copyOnWriteMap(this._auditOutbox, cloneAuditOutbox);
         let contentIdempotencyRecords = cloneIdempotencyRecords(
           this._idempotencyRecords,
         );
-        let backgroundJobs = new Map(
-          [...this._backgroundJobs].map(([id, job]) => [
-            id,
-            cloneBackgroundJob(job),
-          ]),
-        );
+        let backgroundJobs = copyOnWriteMap(this._backgroundJobs, cloneBackgroundJob);
         let exportJobs = cloneExportJobs(this._exportJobs);
         let exportDownloadGrants = cloneExportDownloadGrants(
           this._exportDownloadGrants,
@@ -125,12 +109,7 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
         let bundleFileDownloadGrants = cloneBundleFileDownloadGrants(
           this._bundleFileDownloadGrants,
         );
-        let indexStates = new Map(
-          [...this._indexStates].map(([key, state]) => [
-            key,
-            cloneIndexState(state),
-          ]),
-        );
+        let indexStates = copyOnWriteMap(this._indexStates, cloneIndexState);
         let deletionImpacts = cloneOrdinaryMindDeletionImpacts(
           this._ordinaryMindDeletionImpacts,
         );
@@ -143,12 +122,7 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
         let accountDeletionCleanup = cloneAccountDeletionCleanups(
           this._accountDeletionCleanup,
         );
-        let authorizationStates = new Map(
-          [...this._authorizationStates].map(([key, state]) => [
-            key,
-            cloneAuthorizationState(state),
-          ]),
-        );
+        let authorizationStates = copyOnWriteMap(this._authorizationStates, cloneAuthorizationState);
         let mindBindingOwners = cloneMindBindingOwners(this._mindBindingOwners);
         let credentialWriteTargetOwners = cloneCredentialWriteTargetOwners(
           this._credentialWriteTargetOwners,
@@ -255,9 +229,7 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
         this._legacyCredentialWriteTargetUpgrades =
           state.legacyCredentialWriteTargetUpgrades;
         this._principalMindUsageOwners = state.principalMindUsageOwners;
-        this._authorizationStates.clear();
-        state.authorizationStates.forEach((state, key) =>
-          this._authorizationStates.set(key, state));
+        this._authorizationStates = state.authorizationStates;
         return result;
       });
     }

@@ -53,6 +53,7 @@ import {
   version,
 } from "@mind-diary/application-ports";
 import { RevisionMetadataContentStore } from "./revision-metadata-content-store.js";
+import { cloneCopyOnWriteValue, copyOnWriteMap } from "./copy-on-write.js";
 
 export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataContentStore {
   async claimObjectCleanup(request: Readonly<{
@@ -253,7 +254,7 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
           }
         }
         this._failOrdinaryMindIfRequested("invitation_expiry_after_record");
-        const candidateJobs = new Map(this._backgroundJobs);
+        const candidateJobs = copyOnWriteMap(this._backgroundJobs, cloneBackgroundJob);
         candidateJobs.set(jobId, cloneBackgroundJob({
           ...current,
           state: "succeeded",
@@ -442,8 +443,8 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
         if (existingState || existingJob) {
           return Object.freeze({ kind: "invalid_effects" as const });
         }
-        const jobs = new Map(this._backgroundJobs);
-        const states = new Map(this._indexStates);
+        const jobs = copyOnWriteMap(this._backgroundJobs, cloneBackgroundJob);
+        const states = copyOnWriteMap(this._indexStates, cloneCopyOnWriteValue);
         if (stageInitialRevisionIndexAgainst({
           initialRevision: revision,
           initialIndexJob: job,
@@ -508,9 +509,9 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
             !existingJobs.some((candidate) => candidate.jobId === job.jobId)) {
           return Object.freeze({ kind: "invalid_effects" as const });
         }
-        const candidateJobs = new Map(this._backgroundJobs);
+        const candidateJobs = copyOnWriteMap(this._backgroundJobs, cloneBackgroundJob);
         for (const existing of existingJobs) candidateJobs.delete(existing.jobId);
-        const candidateStates = new Map(this._indexStates);
+        const candidateStates = copyOnWriteMap(this._indexStates, cloneCopyOnWriteValue);
         candidateStates.delete(key);
         if (stageInitialRevisionIndexAgainst({
           initialRevision: revision,
