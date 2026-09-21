@@ -8,8 +8,9 @@ Apps endpoint и выбор профиля удалены. Историческ�
 
 Для текущих изменений исходная точка — работающий код и датированная
 [приёмка единого MCP](reports/2026-09-19-single-mcp-endpoint-uat.md), а не
-исторические ограничения первых релизов ниже. В коде используются manifest v4,
-format-neutral BundleFiles до 256 МиБ и стандартный `fileParams` ingress с
+исторические ограничения первых релизов ниже. В коде новые commits используют
+manifest v5 с revision-anchored range roots, format-neutral BundleFiles до
+256 МиБ и стандартный `fileParams` ingress с
 одним companion fallback. Инженерные ограничения и незакрытые риски сведены в
 [ревью 2026-09-19](reports/2026-09-19-project-hardening-review.md).
 
@@ -219,7 +220,8 @@ SpaceRevision --materialize---------> OKFBundle
 ```
 
 `KnowledgeSpace` — service aggregate и access boundary. Markdown остаётся OKF
-projection. Accepted Release 0.2 manifest v4 может связывать с той же revision
+projection. Accepted Release 0.2 manifest v4 и совместимый Release 0.5 manifest
+v5 могут связывать с той же revision
 arbitrary opaque `BundleFile` exact bytes. Account, handle, ACL, invitations, tokens, staging,
 download grants, idempotency results, audit и indexes — service metadata.
 

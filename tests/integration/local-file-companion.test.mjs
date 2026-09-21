@@ -29,7 +29,7 @@ import {
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import {
   CAPABILITIES,
-  REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   verifiedSpaceHost,
   version,
 } from "@mind-diary/domain";
@@ -385,7 +385,7 @@ test("reference runtime performs credentialless GET-before-PUT and reconciles an
   }
 });
 
-test("local companion stream enters canonical staging and commits manifest v4", async () => {
+test("local companion stream enters canonical staging and commits manifest v5", async () => {
   const root = await mkdtemp(join(tmpdir(), "mind-diary-md272-v4-"));
   try {
     const path = join(root, "fixture.epub");
@@ -449,7 +449,7 @@ test("local companion stream enters canonical staging and commits manifest v4", 
       }],
     });
     assert.equal(committed.kind, "committed");
-    assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V4);
+    assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V5);
     assert.equal(
       committed.envelope.manifest.entries.find((entry) =>
         entry.path === "assets/fixture.epub").mediaType,

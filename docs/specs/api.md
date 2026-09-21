@@ -69,7 +69,9 @@ authority.
 
 ADR-0015 и [BundleFile specification](bundle-files.md) сохраняют immutable
 staging/commit/download baseline; ADR-0021 принимает Release 0.2 wire target:
-manifest v4, open advisory media и 256 MiB streaming. Current implementation
+manifest v4, open advisory media и 256 MiB streaming. Release 0.5 manifest v5
+добавляет optional revision-anchored `integrity_root` для bounded range reads.
+Current implementation
 status remains legacy raster/PDF/ZIP + 64 MiB after MD-247–MD-249; MD-304 owns
 runtime migration. Поэтому deployed claims пока не включают format-neutral
 native-file flow.
@@ -3637,8 +3639,9 @@ authentication не раскрывает existence/metadata.
 22. Product Site binding UI разделяет ACL и selection, redacts inaccessible
     target metadata, требует CSRF + exact credential ownership + binding CAS,
     перечитывает server state после success и fail closed после revoke.
-23. Manifest v1/v2/v3 compatibility, v4 canonicalization and exact historical
-    opaque bytes after replace/delete without rewriting legacy semantics.
+23. Manifest v1/v2/v3/v4 compatibility, v5 canonicalization with optional
+    revision-anchored object integrity root, and exact historical opaque bytes
+    after replace/delete without rewriting legacy semantics.
 24. Native file metadata, provider-host/redirect/counting-stream limits,
     exact 256 MiB/+1 boundary, arbitrary-format/octet-stream fallback, stage
     ownership/TTL/quota/idempotency and privacy redaction.

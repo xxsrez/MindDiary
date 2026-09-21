@@ -231,6 +231,8 @@ export function serializeObjectIntegrityManifest(proof: Readonly<ObjectIntegrity
 export interface SpaceCanonicalObjectPutResult {
   readonly object: Readonly<SpaceCanonicalObjectMetadata>;
   readonly status: "stored" | "already_exists";
+  /** Root derived while verifying the supplied bytes; safe to anchor in revision metadata. */
+  readonly integrityRoot: Sha256Digest;
 }
 
 export interface SpaceCanonicalObjectListRequest {
@@ -364,6 +366,8 @@ export interface OpenedBundleFileObject extends BundleFileObjectMetadata {
 export interface BundleFileObjectPutResult {
   readonly object: Readonly<BundleFileObjectMetadata>;
   readonly status: "stored" | "already_exists";
+  /** Absent only when an existing canonical object was not re-derived from trusted bytes. */
+  readonly integrityRoot?: Sha256Digest;
 }
 
 export interface BundleFileObjectListRequest {

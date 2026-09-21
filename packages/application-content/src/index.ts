@@ -24,6 +24,7 @@ import {
   REVISION_MANIFEST_FORMAT_V2,
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   canonicalMarkdownPath,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
@@ -771,7 +772,8 @@ export class CanonicalRevisionCoordinator {
       try {
         object = entry.kind === "markdown"
           ? envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
-              envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
+              envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4 ||
+              envelope.manifest.format === REVISION_MANIFEST_FORMAT_V5
             ? await this.#objects.getSpaceCanonicalObject("markdown", spaceId, entry.sha256) ??
               await this.#objects.getImmutable(entry.sha256)
             : await this.#objects.getImmutable(entry.sha256)
@@ -890,7 +892,8 @@ export class CanonicalRevisionCoordinator {
     try {
       object = entry.kind === "markdown"
         ? envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
-            envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
+            envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4 ||
+            envelope.manifest.format === REVISION_MANIFEST_FORMAT_V5
           ? await this.#objects.getSpaceCanonicalObject("markdown", spaceId, entry.sha256) ??
             await this.#objects.getImmutable(entry.sha256)
           : await this.#objects.getImmutable(entry.sha256)
@@ -1013,7 +1016,8 @@ export class CanonicalRevisionCoordinator {
     }
     if (
       projected.manifest.format !== REVISION_MANIFEST_FORMAT_V3 &&
-      projected.manifest.format !== REVISION_MANIFEST_FORMAT_V4
+      projected.manifest.format !== REVISION_MANIFEST_FORMAT_V4 &&
+      projected.manifest.format !== REVISION_MANIFEST_FORMAT_V5
     ) {
       const actual = await this.#objects.calculateSha256(
         new TextEncoder().encode(serializeRevisionManifest(projected.manifest)),
@@ -1062,7 +1066,8 @@ export class CanonicalRevisionCoordinator {
     const hydrated = Object.freeze({ revision: projected.revision, manifest });
     if (
       (manifest.format !== REVISION_MANIFEST_FORMAT_V3 &&
-        manifest.format !== REVISION_MANIFEST_FORMAT_V4) ||
+        manifest.format !== REVISION_MANIFEST_FORMAT_V4 &&
+        manifest.format !== REVISION_MANIFEST_FORMAT_V5) ||
       !revisionEnvelopesEqual(hydrated, projected)
     ) throw new CanonicalRevisionError(
       "manifest_integrity_failure",

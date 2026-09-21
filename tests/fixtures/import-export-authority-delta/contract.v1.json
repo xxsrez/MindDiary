@@ -225,9 +225,9 @@
     },
     {
       "id": "SC-IMPORT-MANIFEST",
-      "current": "mind-diary-revision-manifest-v4",
-      "target": "mind-diary-revision-manifest-v4",
-      "disposition": "change-normative-doc-from-v3"
+      "current": "mind-diary-revision-manifest-v5",
+      "target": "mind-diary-revision-manifest-v5",
+      "disposition": "extend-v4-with-revision-anchored-range-root"
     },
     {
       "id": "SC-EXPORT-REQUEST",

@@ -17,6 +17,7 @@ import {
   MARKDOWN_MEDIA_TYPE,
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
   serializeRevisionManifest,
@@ -686,7 +687,7 @@ test("small add/update/delete over a large v3 Mind read no unchanged content and
   );
   assert.equal(
     (await metadata.listReachableSpaceCanonicalObjects()).length,
-    2_005,
+    2_006,
   );
 });
 
@@ -811,7 +812,7 @@ test("legacy v2 corpus stays exact-readable while its first v3 change remains a 
     }],
   });
   assert.equal(result.kind, "committed");
-  assert.equal(result.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V4);
+  assert.equal(result.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V5);
   assert.equal(counted.metrics.markdownReadBytes, 0);
   assert.equal(counted.metrics.markdownPutCount, 1);
   assert.equal(counted.metrics.markdownPutBytes, ENCODER.encode(replacement).byteLength);

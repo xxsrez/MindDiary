@@ -223,6 +223,7 @@ export interface ChangesetCandidateFile {
   readonly sha256: Sha256Digest | null;
   readonly size: number;
   readonly writeRequired: boolean;
+  readonly integrityRoot?: Sha256Digest;
 }
 
 export interface ChangesetCandidateBundleFile {
@@ -232,6 +233,7 @@ export interface ChangesetCandidateBundleFile {
   readonly sha256: Sha256Digest;
   readonly size: number;
   readonly stagedFileId: StagedBundleFileId | null;
+  readonly integrityRoot?: Sha256Digest;
 }
 
 export type ChangesetCandidateRevisionFile =
@@ -293,6 +295,7 @@ interface WorkingFile {
   readonly sha256: Sha256Digest | null;
   readonly size: number;
   readonly writeRequired: boolean;
+  readonly integrityRoot?: Sha256Digest;
 }
 
 
@@ -303,6 +306,7 @@ interface WorkingBundleFile {
   readonly sha256: Sha256Digest;
   readonly size: number;
   readonly stagedFileId: StagedBundleFileId | null;
+  readonly integrityRoot?: Sha256Digest;
 }
 
 type WorkingRevisionFile = WorkingFile | WorkingBundleFile;
@@ -1379,6 +1383,7 @@ export class ChangesetPreflightService {
               sha256: entry.sha256,
               size: entry.size,
               writeRequired: false,
+              ...(entry.integrityRoot === undefined ? {} : { integrityRoot: entry.integrityRoot }),
             })
           : Object.freeze({
               kind: "opaque" as const,
@@ -1387,6 +1392,7 @@ export class ChangesetPreflightService {
               sha256: entry.sha256,
               size: entry.size,
               stagedFileId: null,
+              ...(entry.integrityRoot === undefined ? {} : { integrityRoot: entry.integrityRoot }),
             }));
       }
     } else {
@@ -1474,6 +1480,7 @@ export class ChangesetPreflightService {
             sha256: current.sha256,
             size: ENCODER.encode(operation.text).byteLength,
             writeRequired: true,
+            ...(current.integrityRoot === undefined ? {} : { integrityRoot: current.integrityRoot }),
           }),
         );
       } else if (operation.type === "delete_file") {

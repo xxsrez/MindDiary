@@ -4,6 +4,7 @@ import {
   REVISION_MANIFEST_FORMAT_V2,
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
 } from "@mind-diary/domain";
 import { REVISION_MANIFEST_MEDIA_TYPE } from "@mind-diary/application-ports";
 
@@ -266,7 +267,8 @@ export function systemBackupObjectSeeds(value: unknown): readonly SystemBackupOb
       throw new TypeError("system backup revision envelope is invalid");
     }
     const modern = format === REVISION_MANIFEST_FORMAT_V3 ||
-      format === REVISION_MANIFEST_FORMAT_V4;
+      format === REVISION_MANIFEST_FORMAT_V4 ||
+      format === REVISION_MANIFEST_FORMAT_V5;
     if (!modern && format !== REVISION_MANIFEST_FORMAT_V1 &&
       format !== REVISION_MANIFEST_FORMAT_V2) {
       throw new TypeError("system backup revision manifest format is unsupported");

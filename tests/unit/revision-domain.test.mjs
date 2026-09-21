@@ -5,6 +5,7 @@ import {
   MARKDOWN_MEDIA_TYPE,
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   RevisionEnvelopeError,
   canonicalMarkdownPath,
   createCanonicalRevisionEnvelope,
@@ -64,6 +65,26 @@ test("manifest v4 accepts open safe media while v3 keeps its historical allowlis
     mediaType: "text/html",
     size: 17,
   }], REVISION_MANIFEST_FORMAT_V3), RevisionEnvelopeError);
+});
+
+test("manifest v5 canonically anchors optional object integrity roots", () => {
+  const v5 = createRevisionManifest([{
+    path: "index.md",
+    sha256: A,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    size: 1,
+    integrityRoot: B,
+  }], REVISION_MANIFEST_FORMAT_V5);
+  const serialized = serializeRevisionManifest(v5);
+  assert.match(serialized, /"integrity_root":"sha256:b{64}"/u);
+  assert.deepEqual(parseRevisionManifest(serialized), v5);
+  assert.throws(() => createRevisionManifest([{
+    path: "index.md",
+    sha256: A,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    size: 1,
+    integrityRoot: B,
+  }], REVISION_MANIFEST_FORMAT_V4), RevisionEnvelopeError);
 });
 
 test("revision values reject invalid digest, path, media, size, number and UTC metadata", () => {

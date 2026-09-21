@@ -16,8 +16,9 @@ export const REVISION_MANIFEST_FORMAT_V1 = "mind-diary-revision-manifest-v1" as 
 export const REVISION_MANIFEST_FORMAT_V2 = "mind-diary-revision-manifest-v2" as const;
 export const REVISION_MANIFEST_FORMAT_V3 = "mind-diary-revision-manifest-v3" as const;
 export const REVISION_MANIFEST_FORMAT_V4 = "mind-diary-revision-manifest-v4" as const;
-/** Delta-aware commits use v4; legacy builders may still explicitly retain v1/v2/v3. */
-export const REVISION_MANIFEST_FORMAT = REVISION_MANIFEST_FORMAT_V4;
+export const REVISION_MANIFEST_FORMAT_V5 = "mind-diary-revision-manifest-v5" as const;
+/** Range-authenticated commits use v5; legacy builders may explicitly retain older formats. */
+export const REVISION_MANIFEST_FORMAT = REVISION_MANIFEST_FORMAT_V5;
 
 export const BUNDLE_FILE_MEDIA_TYPES = Object.freeze([
   "image/png",
@@ -40,12 +41,15 @@ export type RevisionManifestFormat =
   | typeof REVISION_MANIFEST_FORMAT_V1
   | typeof REVISION_MANIFEST_FORMAT_V2
   | typeof REVISION_MANIFEST_FORMAT_V3
-  | typeof REVISION_MANIFEST_FORMAT_V4;
+  | typeof REVISION_MANIFEST_FORMAT_V4
+  | typeof REVISION_MANIFEST_FORMAT_V5;
 
 interface RevisionManifestEntryBase {
   readonly path: string;
   readonly sha256: Sha256Digest;
   readonly size: number;
+  /** Trusted Merkle root for bounded reads; absent entries require full-digest verification. */
+  readonly integrityRoot?: Sha256Digest;
 }
 
 export interface MarkdownRevisionManifestEntry extends RevisionManifestEntryBase {
@@ -252,7 +256,8 @@ export function createRevisionManifest(
     format !== REVISION_MANIFEST_FORMAT_V1 &&
     format !== REVISION_MANIFEST_FORMAT_V2 &&
     format !== REVISION_MANIFEST_FORMAT_V3 &&
-    format !== REVISION_MANIFEST_FORMAT_V4
+    format !== REVISION_MANIFEST_FORMAT_V4 &&
+    format !== REVISION_MANIFEST_FORMAT_V5
   ) {
     throw new RevisionEnvelopeError("invalid_media_type", "revision manifest format is invalid");
   }
@@ -276,6 +281,16 @@ export function createRevisionManifest(
     }
     seen.add(path);
     const digest = sha256Digest(entry.sha256);
+    const integrityRoot = entry.integrityRoot === undefined
+      ? undefined
+      : format === REVISION_MANIFEST_FORMAT_V5
+        ? sha256Digest(entry.integrityRoot)
+        : (() => {
+            throw new RevisionEnvelopeError(
+              "invalid_digest",
+              "object integrity roots require revision manifest v5",
+            );
+          })();
     const mediaType = kind === "markdown"
       ? entry.mediaType === MARKDOWN_MEDIA_TYPE
         ? MARKDOWN_MEDIA_TYPE
@@ -285,7 +300,7 @@ export function createRevisionManifest(
               `Markdown revision objects must use ${MARKDOWN_MEDIA_TYPE}`,
             );
           })()
-      : format === REVISION_MANIFEST_FORMAT_V4
+      : format === REVISION_MANIFEST_FORMAT_V4 || format === REVISION_MANIFEST_FORMAT_V5
         ? bundleFileMediaType(entry.mediaType)
         : legacyBundleFileMediaType(entry.mediaType);
     if (!Number.isSafeInteger(entry.size) || entry.size < 0) {
@@ -300,6 +315,7 @@ export function createRevisionManifest(
       sha256: digest,
       mediaType,
       size: entry.size,
+      ...(integrityRoot === undefined ? {} : { integrityRoot }),
     }) as Readonly<RevisionManifestEntry>;
   });
   normalized.sort((left, right) =>
@@ -319,11 +335,14 @@ export function serializeRevisionManifest(manifest: RevisionManifest): string {
       sha256: entry.sha256,
       media_type: entry.mediaType,
       size: entry.size,
+      ...(format === REVISION_MANIFEST_FORMAT_V5 && entry.integrityRoot !== undefined
+        ? { integrity_root: entry.integrityRoot }
+        : {}),
     })),
   })}\n`;
 }
 
-/** Strictly parses canonical v1/v2/v3/v4 manifest bytes and rejects non-canonical JSON. */
+/** Strictly parses canonical v1/v2/v3/v4/v5 manifest bytes and rejects non-canonical JSON. */
 export function parseRevisionManifest(source: string): Readonly<RevisionManifest> {
   let parsed: unknown;
   try {
@@ -343,7 +362,8 @@ export function parseRevisionManifest(source: string): Readonly<RevisionManifest
     value.format !== REVISION_MANIFEST_FORMAT_V1 &&
     value.format !== REVISION_MANIFEST_FORMAT_V2 &&
     value.format !== REVISION_MANIFEST_FORMAT_V3 &&
-    value.format !== REVISION_MANIFEST_FORMAT_V4
+    value.format !== REVISION_MANIFEST_FORMAT_V4 &&
+    value.format !== REVISION_MANIFEST_FORMAT_V5
   ) {
     throw new RevisionEnvelopeError("invalid_media_type", "revision manifest format is invalid");
   }
@@ -355,14 +375,18 @@ export function parseRevisionManifest(source: string): Readonly<RevisionManifest
       throw new RevisionEnvelopeError("invalid_media_type", "revision manifest entry is invalid");
     }
     const entry = candidate as Record<string, unknown>;
-    const expectedKeys = value.format === REVISION_MANIFEST_FORMAT_V1
+    const requiredKeys = value.format === REVISION_MANIFEST_FORMAT_V1
       ? ["path", "sha256", "media_type", "size"]
       : ["path", "kind", "sha256", "media_type", "size"];
+    const allowedKeys = value.format === REVISION_MANIFEST_FORMAT_V5
+      ? [...requiredKeys, "integrity_root"]
+      : requiredKeys;
     if (
-      Object.keys(entry).length !== expectedKeys.length ||
-      !expectedKeys.every((key) => Object.hasOwn(entry, key)) ||
+      !requiredKeys.every((key) => Object.hasOwn(entry, key)) ||
+      Object.keys(entry).some((key) => !allowedKeys.includes(key)) ||
       typeof entry.path !== "string" || typeof entry.sha256 !== "string" ||
       typeof entry.media_type !== "string" || typeof entry.size !== "number" ||
+      (Object.hasOwn(entry, "integrity_root") && typeof entry.integrity_root !== "string") ||
       (value.format !== REVISION_MANIFEST_FORMAT_V1 &&
         entry.kind !== "markdown" && entry.kind !== "opaque")
     ) {
@@ -374,6 +398,7 @@ export function parseRevisionManifest(source: string): Readonly<RevisionManifest
       sha256: entry.sha256,
       mediaType: entry.media_type,
       size: entry.size,
+      ...(typeof entry.integrity_root === "string" ? { integrityRoot: entry.integrity_root } : {}),
     } as RevisionManifestEntryInput;
   });
   const manifest = createRevisionManifest(entries, value.format);
@@ -423,12 +448,13 @@ export function createCanonicalRevisionEnvelope(
   ).byteLength;
   if (
     (manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
-      manifest.format === REVISION_MANIFEST_FORMAT_V4) &&
+      manifest.format === REVISION_MANIFEST_FORMAT_V4 ||
+      manifest.format === REVISION_MANIFEST_FORMAT_V5) &&
     input.manifestSize !== canonicalManifestSize
   ) {
     throw new RevisionEnvelopeError(
       "invalid_size",
-      "revision manifest v3/v4 requires its exact canonical byte size",
+      "revision manifest v3/v4/v5 requires its exact canonical byte size",
     );
   }
   const revision: SpaceRevision = Object.freeze({

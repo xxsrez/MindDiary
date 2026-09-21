@@ -26,8 +26,10 @@ cleanup. Весь extension пока не проверен на exact UAT deploy
 ADR-0021 accepts manifest v4 as the Release 0.2 format-neutral successor. V4
 keeps the separately digested Space-scoped layout but opens opaque media and
 raises the per-file/counting-stream boundary to 256 MiB. Historical candidates
-до MD-304 писали v3/legacy closed-media objects; current local implementation
-пишет v4, сохраняя version-aware чтение immutable v1/v2/v3 revisions.
+до MD-304 писали v3/legacy closed-media objects. MD-482 добавляет manifest v5:
+новая revision может закрепить в canonical manifest доверенный Merkle root
+объекта для bounded range reads. Current implementation пишет v5, сохраняя
+version-aware чтение immutable v1/v2/v3/v4 revisions.
 
 MD-271 задаёт общий [file-ingress contract](file-ingress.md) для source bytes,
 которые могут быть staged как `BundleFile`. Этот документ отвечает только за
@@ -133,13 +135,20 @@ R2; projection drift никогда не меняет revision meaning.
 
 ### Immutable manifest and HEAD CAS
 
-Release 0.2 new revision uses canonical manifest format
+Release 0.2 introduced canonical manifest format
 `mind-diary-revision-manifest-v4`. It keeps v3's separately digested storage
 contract and exact `path + kind + media_type + sha256 + size`, deterministic
 Unicode-scalar ordering and canonical one-line JSON with final newline. V4
 changes opaque `media_type` from a closed enum to open advisory metadata with
 header-safe `application/octet-stream` fallback. MD-304 завершил local v4 write
 promotion; это не переписывает и не переинтерпретирует historical v1/v2/v3.
+
+Release 0.5 new revisions use
+`mind-diary-revision-manifest-v5`. V5 сохраняет v4 semantics и добавляет к
+entry optional `integrity_root`. Root вычисляется из проверенных bytes и
+закрепляется внутри canonical manifest, digest которого хранится в revision
+metadata. Отсутствующий root означает обязательный full-digest fallback; он
+не может быть восстановлен из недоверенных object metadata или sidecar.
 
 Commit строит новый manifest как delta от exact parent:
 
@@ -165,7 +174,7 @@ canonical request/idempotency key возвращает прежний result; н
 ## Historical read and search
 
 Canonical browse/fetch/list/history всегда materialize exact manifest and
-object digests; HEAD никогда не подмешивается. V1/v2/v3/v4 manifests читаются
+object digests; HEAD никогда не подмешивается. V1/v2/v3/v4/v5 manifests читаются
 одним version-aware compatibility reader и проверяются по stored digest. Each
 legacy format retains its historical meaning; no read path re-sniffs or
 rewrites old manifest bytes.
@@ -435,7 +444,7 @@ against the retained opaque entries of the exact base revision; terminal
 sanitized failures schedule cleanup.
 
 Commit/finalize promotes verified objects into the Space-scoped canonical
-namespace in durable pages of at most 100 files / 4 MiB, then writes one v4
+namespace in durable pages of at most 100 files / 4 MiB, then writes one v5
 manifest and uses the normal D1 HEAD transaction. Exactly one new immutable
 revision becomes visible or nothing does. Search index job is queued after
 commit; canonical browse/fetch works immediately. Finalize records the
@@ -498,8 +507,8 @@ an explicit future decision.
 
 Migration is forward-only, resumable and non-destructive:
 
-1. Keep dual reader for legacy embedded v1/v2 and separately stored v3
-   manifests; add explicit v4 read/write without changing the old branches.
+1. Keep version-aware readers for legacy embedded v1/v2 and separately stored
+   v3/v4 manifests; add explicit v5 read/write without changing old branches.
 2. Inventory legacy revisions from D1 in bounded pages; create Space-scoped R2
    objects/manifests, verifying exact digest/size without changing HEAD.
    Global legacy Markdown `canonical/sha256/*` is copied per reachable Space;
@@ -507,9 +516,11 @@ Migration is forward-only, resumable and non-destructive:
    rewritten. Embedded v1/v2 manifest bytes retain their original digest.
 3. Record backfill checkpoint and shadow-compare exact materialization,
    retained usage and representative historical reads.
-4. Existing v3 delta revisions stay valid. MD-304 enabled v4 writes after
+4. Existing v3/v4 revisions stay valid. MD-304 enabled v4 writes after
    verifying arbitrary media, exact 256 MiB streaming and all reachable parent
-   objects for a Space; old revisions stay immutable and readable.
+   objects for a Space; old revisions stay immutable and readable. MD-482
+   enables v5 writes only after the object proof root has been derived from
+   verified bytes; entries without such a root keep the full-read path.
 5. Reconcile ledger/refcounts from canonical manifests before enabling hard
    admission; until then growth fails closed but reads/deletes continue.
 6. Enable import, streaming export and GC in dependency order only after their
@@ -517,9 +528,10 @@ Migration is forward-only, resumable and non-destructive:
 
 Before the first v3 commit, application rollback may restore the last v2-capable
 deployment. After any v3 commit, rollback target must be dual-read/v3-aware;
-after any v4 commit it must also be v4-aware. Deploying older code is forbidden.
+after any v4 commit it must also be v4-aware; after any v5 commit it must be
+v5-aware. Deploying older code is forbidden.
 Operational rollback disables new writes/import jobs and preserves bytes/state;
-it never rewrites history or deletes v3/v4 objects. Backfill failures quarantine
+it never rewrites history or deletes v3/v4/v5 objects. Backfill failures quarantine
 only the affected Space for growth and remain resumable.
 
 Post-MVP task sequence is normative: MD-264 contract -> MD-265 delta manifests/commit ->
@@ -685,15 +697,21 @@ Cold/restart/eviction не меняют ordering и не требуют повт
 всю историю.
 
 Canonical object port предоставляет verified bounded range/tail read и
-streaming fetch. Современный range path возвращает только bounded chunk,
+streaming fetch. Современный v5 range path возвращает только bounded chunk,
 который authenticated cryptographically и привязан к `space_id`, exact
-revision/manifest, object digest, offset/length и request generation. Server
+revision/manifest через доверенный `integrity_root`, object digest,
+offset/length и request generation. Root внутри R2 object metadata или sidecar
+сам по себе не является trust anchor: proof принимается только при exact match
+с root из проверенного revision manifest. Поэтому согласованная подмена object,
+sidecar и R2 custom metadata не проходит без изменения D1-anchored manifest
+digest. Server
 проверяет proof до декодирования и повторно проверяет current authorization;
 tamper, foreign chunk, wrong range или incomplete proof дают
 `revision_integrity_failure` и не возвращают partial success. UTF-8 text range
 дополнительно обязан заканчиваться на valid scalar boundary.
 
-Для legacy v1/v2 objects, provider без range proof или adapter без range
+Для legacy v1/v2/v3/v4 entries, v5 entry без `integrity_root`, provider без
+range proof или adapter без range
 capability используется full-read fallback: полный object читается boundedным
 потоком, сверяется с declared size и SHA-256, затем из verified bytes берётся
 requested range. Это совместимость с legacy storage, а не разрешение читать

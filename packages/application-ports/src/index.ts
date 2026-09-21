@@ -25,6 +25,7 @@ export {
   PrincipalAccount,
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   RESERVED_TOP_LEVEL_HANDLES,
   SpaceAggregate,
   isReservedTopLevelHandle,

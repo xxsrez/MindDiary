@@ -219,6 +219,10 @@ schemas, migration и UI в MD-336 не входят.
   Unknown/missing/conflicting media becomes `application/octet-stream` and does
   not block storage. Existing committed v1/v2/v3 remains immutable/readable
   under each version's historical semantics.
+- Release 0.5 revision manifest v5 сохраняет v4 semantics и добавляет optional
+  `integrity_root`. Только root из проверенного canonical manifest разрешает
+  bounded range proof; v1-v4 и v5 entry без root используют полную SHA-256
+  проверку объекта.
 - Post-MVP `stage_bundle_file` quarantines and verifies exact bytes under current
   credential/write binding; только atomic `commit_changeset` связывает ref с
   canonical path и одновременно может обновить Markdown link.
@@ -958,7 +962,7 @@ network, которого Sites пока не обещает. Если Streamabl
 Эти rows сохраняют technical traceability, но не участвуют в terminal
 acceptance Release 0.1.
 
-- `BF1`: manifest v1/v2/v3 compatibility и canonical v4
+- `BF1`: manifest v1/v2/v3/v4 compatibility и canonical v5
   `markdown | opaque` проходят exact digest/size/path fixtures without rewriting
   committed revisions or re-sniffing historical media.
 - `BF2`: DOCX, HEIC, EPUB, OPUS, HTML, notebook, ZIP and unknown binary stage

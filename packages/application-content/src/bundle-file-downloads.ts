@@ -11,6 +11,7 @@ import {
 import {
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   canonicalBundleFilePath,
   parseRevisionManifest,
   revisionEnvelopesEqual,
@@ -475,7 +476,8 @@ export class BundleFileDownloadService {
     try {
       if (
         manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
-        manifest.format === REVISION_MANIFEST_FORMAT_V4
+        manifest.format === REVISION_MANIFEST_FORMAT_V4 ||
+        manifest.format === REVISION_MANIFEST_FORMAT_V5
       ) {
         const stored = await this.#objects.getSpaceCanonicalObject(
           "revision_manifest",

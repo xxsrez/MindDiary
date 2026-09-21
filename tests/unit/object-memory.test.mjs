@@ -141,11 +141,12 @@ test("canonical range proofs authenticate crossed chunks and bounded UTF-8 tail 
     mediaType: MARKDOWN_MEDIA_TYPE,
     sha256: put.object.sha256,
     size: bytes.byteLength,
+    integrityRoot: put.integrityRoot,
   };
   const ranged = await loadTextFileRange(
     store,
     "space_range_proof",
-    "mind-diary-revision-manifest-v4",
+    "mind-diary-revision-manifest-v5",
     entry,
     70_000,
     170_000,
@@ -167,7 +168,7 @@ test("canonical range proofs authenticate crossed chunks and bounded UTF-8 tail 
   const tail = await loadTextFileTail(
     boundedStore,
     "space_range_proof",
-    "mind-diary-revision-manifest-v4",
+    "mind-diary-revision-manifest-v5",
     entry,
     2,
     undefined,
@@ -193,6 +194,7 @@ test("canonical range proofs authenticate crossed chunks and bounded UTF-8 tail 
     mediaType: MARKDOWN_MEDIA_TYPE,
     sha256: boundaryPut.object.sha256,
     size: boundaryBytes.byteLength,
+    integrityRoot: boundaryPut.integrityRoot,
   };
   let boundaryRangeReads = 0;
   const boundaryStore = {
@@ -205,7 +207,7 @@ test("canonical range proofs authenticate crossed chunks and bounded UTF-8 tail 
   const boundaryTail = await loadTextFileTail(
     boundaryStore,
     "space_range_utf8_boundary",
-    "mind-diary-revision-manifest-v4",
+    "mind-diary-revision-manifest-v5",
     boundaryEntry,
     2,
     undefined,
@@ -233,6 +235,7 @@ test("range proof corruption fails and legacy ranges use one verified full-read 
     mediaType: MARKDOWN_MEDIA_TYPE,
     sha256: put.object.sha256,
     size: bytes.byteLength,
+    integrityRoot: put.integrityRoot,
   };
   const corruptProofStore = {
     calculateSha256: (candidate) => store.calculateSha256(candidate),
@@ -248,7 +251,7 @@ test("range proof corruption fails and legacy ranges use one verified full-read 
     loadTextFileRange(
       corruptProofStore,
       "space_range_corruption",
-      "mind-diary-revision-manifest-v4",
+      "mind-diary-revision-manifest-v5",
       entry,
       1,
       100,

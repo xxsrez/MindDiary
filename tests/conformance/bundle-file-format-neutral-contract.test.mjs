@@ -25,7 +25,7 @@ test("MD-303 fixes the format-neutral v4 manifest and legacy read boundary", asy
   assert.match(spec, /\| v1 \| Markdown-only;/i);
   assert.match(spec, /\| v2 \| Inline mixed manifest with closed raster\/PDF\/ZIP/i);
   assert.match(spec, /\| v3 \| Separately digested R2 manifest with v2 entry semantics/i);
-  assert.match(spec, /first ordinary change from v1\/v2\/v3[\s\S]*creates a new v4 child/i);
+  assert.match(spec, /first ordinary change from v1\/v2\/v3\/v4[\s\S]*creates a new v5 child/i);
   assert.match(spec, /Unknown manifest format fails closed/i);
   assert.match(adr, /заменяет closed MIME admission[\s\S]*64 MiB limit/i);
   assert.match(adr, /repository runtime.*legacy bounded baseline/is);

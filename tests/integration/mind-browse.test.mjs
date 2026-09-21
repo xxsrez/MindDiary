@@ -28,7 +28,7 @@ import {
 import {
   CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
-  REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
   serializeRevisionManifest,
@@ -326,6 +326,7 @@ async function commitMixedFiles(env, owner, mind, markdownFiles, opaqueFiles, su
       sha256: markdownObjects[index].object.sha256,
       mediaType: MARKDOWN_MEDIA_TYPE,
       size: markdownObjects[index].object.size,
+      integrityRoot: markdownObjects[index].integrityRoot,
     })),
     ...opaqueFiles.map((file, index) => ({
       kind: "opaque",
@@ -333,8 +334,9 @@ async function commitMixedFiles(env, owner, mind, markdownFiles, opaqueFiles, su
       sha256: opaqueObjects[index].object.sha256,
       mediaType: file.mediaType,
       size: opaqueObjects[index].object.size,
+      integrityRoot: opaqueObjects[index].integrityRoot,
     })),
-  ], REVISION_MANIFEST_FORMAT_V4);
+  ], REVISION_MANIFEST_FORMAT_V5);
   const manifestObject = await env.objects.putSpaceCanonicalObject({
     kind: "revision_manifest",
     spaceId: mind.mindId,

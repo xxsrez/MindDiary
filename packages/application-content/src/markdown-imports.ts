@@ -16,7 +16,7 @@ import {
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
-  REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   canonicalMarkdownPath,
   compareUnicodeScalarValues,
   createCanonicalRevisionEnvelope,
@@ -991,7 +991,7 @@ export class MarkdownImportService {
       }
       entries.push(entry);
     }
-    const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V4);
+    const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V5);
     const manifestBytes = ENCODER.encode(serializeRevisionManifest(manifest));
     const manifestPut = await this.#objects.putSpaceCanonicalObject({
       kind: "revision_manifest",

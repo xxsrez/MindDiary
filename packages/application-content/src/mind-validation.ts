@@ -12,6 +12,7 @@ import {
 import {
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   parseRevisionManifest,
   revisionEnvelopesEqual,
   serializeRevisionManifest,
@@ -504,7 +505,8 @@ export class MindValidationService {
     try {
       if (
         manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
-        manifest.format === REVISION_MANIFEST_FORMAT_V4
+        manifest.format === REVISION_MANIFEST_FORMAT_V4 ||
+        manifest.format === REVISION_MANIFEST_FORMAT_V5
       ) {
         const stored = "getSpaceCanonicalObject" in this.#objects
           ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
@@ -590,7 +592,8 @@ export class MindValidationService {
           let object;
           try {
             object = (manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
-                manifest.format === REVISION_MANIFEST_FORMAT_V4) &&
+                manifest.format === REVISION_MANIFEST_FORMAT_V4 ||
+                manifest.format === REVISION_MANIFEST_FORMAT_V5) &&
                 "getSpaceCanonicalObject" in this.#objects
               ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
                   "markdown",

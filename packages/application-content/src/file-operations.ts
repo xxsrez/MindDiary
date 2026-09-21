@@ -17,6 +17,7 @@ import {
 import {
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   type CanonicalRevisionEnvelope,
   type RevisionId,
   type RevisionManifestEntry,
@@ -688,6 +689,8 @@ async function verifyObjectIntegrityRange(
     proof.chunkSize !== OBJECT_INTEGRITY_CHUNK_SIZE ||
     !Number.isSafeInteger(proof.chunkCount) ||
     proof.chunkCount !== Math.ceil(entry.size / OBJECT_INTEGRITY_CHUNK_SIZE) ||
+    entry.integrityRoot === undefined ||
+    proof.root !== entry.integrityRoot ||
     !OBJECT_DIGEST_PATTERN.test(proof.root) ||
     proof.chunks.length === 0
   ) fail();
@@ -823,7 +826,7 @@ async function loadTextFileRangeInternal(
   try {
     if (
       entry.kind === "markdown" &&
-      (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
+      manifestFormat === REVISION_MANIFEST_FORMAT_V5 && entry.integrityRoot !== undefined &&
       "openSpaceCanonicalObjectRange" in objects &&
       typeof (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObjectRange === "function"
     ) {
@@ -831,7 +834,8 @@ async function loadTextFileRangeInternal(
         "markdown", spaceId, entry.sha256, { offset: start, length },
       );
     } else if (
-      entry.kind === "opaque" &&
+      entry.kind === "opaque" && manifestFormat === REVISION_MANIFEST_FORMAT_V5 &&
+      entry.integrityRoot !== undefined &&
       "openBundleFileRange" in objects &&
       typeof (objects as BundleFileObjectStore).openBundleFileRange === "function"
     ) {
@@ -960,7 +964,8 @@ export async function loadTextFileHead(
     try {
       if (
         entry.kind === "markdown" &&
-        (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
+        (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4 ||
+          manifestFormat === REVISION_MANIFEST_FORMAT_V5) &&
         "openSpaceCanonicalObject" in objects &&
         typeof (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject === "function"
       ) {
@@ -1011,10 +1016,11 @@ export async function loadTextFileHead(
   }
 
   const hasAuthenticatedRange = entry.kind === "markdown"
-    ? (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
+    ? manifestFormat === REVISION_MANIFEST_FORMAT_V5 && entry.integrityRoot !== undefined &&
       "openSpaceCanonicalObjectRange" in objects &&
       typeof (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObjectRange === "function"
-    : "openBundleFileRange" in objects &&
+    : manifestFormat === REVISION_MANIFEST_FORMAT_V5 && entry.integrityRoot !== undefined &&
+      "openBundleFileRange" in objects &&
       typeof (objects as BundleFileObjectStore).openBundleFileRange === "function";
   if (!hasAuthenticatedRange) return selectVerifiedHead(await loadVerifiedFull());
 

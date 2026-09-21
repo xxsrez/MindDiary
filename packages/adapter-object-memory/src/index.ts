@@ -436,7 +436,11 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       if (compareUtc(request.createdAt, existing.protectedAt) > 0) {
         existing.protectedAt = request.createdAt;
       }
-      return Object.freeze({ object: this.#spaceCanonicalMetadata(existing), status: "already_exists" });
+      return Object.freeze({
+        object: this.#spaceCanonicalMetadata(existing),
+        status: "already_exists",
+        integrityRoot: existing.integrityManifest.root,
+      });
     }
     const stored: StoredSpaceCanonicalObject = {
       kind: request.kind,
@@ -456,7 +460,11 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       ),
     };
     this.#spaceCanonicalObjects.set(key, stored);
-    return Object.freeze({ object: this.#spaceCanonicalMetadata(stored), status: "stored" });
+    return Object.freeze({
+      object: this.#spaceCanonicalMetadata(stored),
+      status: "stored",
+      integrityRoot: stored.integrityManifest.root,
+    });
   }
 
   async getSpaceCanonicalObject(
@@ -606,6 +614,7 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       return Object.freeze({
         object: this.#bundleMetadata(existing),
         status: "already_exists",
+        integrityRoot: existing.integrityManifest.root,
       });
     }
     const stored: StoredBundleFile = {
@@ -625,7 +634,11 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       ),
     };
     this.#bundleFiles.set(key, stored);
-    return Object.freeze({ object: this.#bundleMetadata(stored), status: "stored" });
+    return Object.freeze({
+      object: this.#bundleMetadata(stored),
+      status: "stored",
+      integrityRoot: stored.integrityManifest.root,
+    });
   }
 
   async getBundleFile(

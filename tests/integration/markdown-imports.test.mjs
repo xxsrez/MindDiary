@@ -16,6 +16,7 @@ import {
   CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
   REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   bundleFileMediaType,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
@@ -887,7 +888,7 @@ test("snapshot replacement preserves disjoint opaque paths and validates the ful
     MINDS.ordinary.spaceId,
     "revision_import_preserves_opaque",
   );
-  assert.equal(materialized.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V4);
+  assert.equal(materialized.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V5);
   assert.deepEqual(materialized.files.map((file) => file.path), [
     "assets/existing.png",
     "concepts/new.md",

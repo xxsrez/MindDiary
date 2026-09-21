@@ -212,17 +212,17 @@ test("current source exposes Site export control and omits administrative export
   assert.equal(disposition.get("IM-COMMIT"), "keep-clarify-v4");
 });
 
-test("import keeps resumable exact-snapshot publication and records actual v4 promotion", () => {
+test("import keeps resumable exact-snapshot publication and records actual v5 promotion", () => {
   assert.match(
     markdownImports,
-    /createRevisionManifest\(entries, REVISION_MANIFEST_FORMAT_V4\)/u,
+    /createRevisionManifest\(entries, REVISION_MANIFEST_FORMAT_V5\)/u,
   );
   const manifestSchema = fixture.schemas.find(({ id }) => id === "SC-IMPORT-MANIFEST");
   assert.deepEqual(manifestSchema, {
     id: "SC-IMPORT-MANIFEST",
-    current: "mind-diary-revision-manifest-v4",
-    target: "mind-diary-revision-manifest-v4",
-    disposition: "change-normative-doc-from-v3",
+    current: "mind-diary-revision-manifest-v5",
+    target: "mind-diary-revision-manifest-v5",
+    disposition: "extend-v4-with-revision-anchored-range-root",
   });
   assert.deepEqual(fixture.policies.import.publish_roles, ["editor", "admin", "owner"]);
   assert.equal(fixture.policies.import.actor, "registered-sites-principal");

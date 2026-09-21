@@ -228,9 +228,10 @@ Stub сохраняется минимум один UAT release после cutov
 3. Versioned `mind-diary/mcp-operation-moved/v1` stub ещё не существует.
 4. `docs/specs/api.md` и
    `docs/specs/sites-storage-capacity-import.md` всё ещё называют terminal
-   Markdown import manifest v3, тогда как current code и domain default уже v4.
-   Shared normative text must be corrected during integration without rewriting
-   historical v1/v2/v3 revisions.
+   Markdown import manifest v3, тогда как Release 0.2 code and domain default
+   перешли на v4. Release 0.5 current code пишет v5 с optional
+   revision-anchored range root, не переписывая historical v1/v2/v3/v4
+   revisions.
 5. Runtime cutover, generated route/tool schemas, dev smoke, UAT and rollback
    evidence принадлежат отдельной Release 0.3 implementation/release работе;
    MD-359 не выполняет и не объявляет их.

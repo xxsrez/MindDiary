@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createSitesObjectStore } from "@mind-diary/adapter-object-sites";
-import { OBJECT_INTEGRITY_CHUNK_SIZE } from "@mind-diary/application-ports";
+import {
+  OBJECT_INTEGRITY_CHUNK_SIZE,
+  objectIntegrityLeafInput,
+  objectIntegrityNodeInput,
+  serializeObjectIntegrityManifest,
+} from "@mind-diary/application-ports";
 import { loadTextFileHead } from "@mind-diary/application-content";
 import {
   MARKDOWN_MEDIA_TYPE,
-  REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
 } from "@mind-diary/domain";
 
 const PNG = Uint8Array.from([
@@ -147,6 +152,39 @@ function foreignStagedRecord(stagedFileId) {
     bytes: Uint8Array.from([0x01, 0x02, 0x03]),
     etag: "foreign-etag",
     customMetadata: {},
+  };
+}
+
+async function forgeIntegrityManifest(objects, source, bytes) {
+  const chunkDigests = [];
+  for (let offset = 0; offset < bytes.byteLength; offset += source.chunkSize) {
+    chunkDigests.push(await objects.calculateSha256(
+      bytes.slice(offset, Math.min(bytes.byteLength, offset + source.chunkSize)),
+    ));
+  }
+  const encoder = new TextEncoder();
+  let level = await Promise.all(chunkDigests.map((digest, index) =>
+    objects.calculateSha256(encoder.encode(objectIntegrityLeafInput(
+      source,
+      index,
+      index * source.chunkSize,
+      Math.min(source.chunkSize, source.size - index * source.chunkSize),
+      digest,
+    )))));
+  while (level.length > 1) {
+    const next = [];
+    for (let index = 0; index < level.length; index += 2) {
+      next.push(await objects.calculateSha256(encoder.encode(objectIntegrityNodeInput(
+        level[index],
+        level[index + 1] ?? level[index],
+      ))));
+    }
+    level = next;
+  }
+  return {
+    ...source,
+    root: level[0],
+    chunkDigests,
   };
 }
 
@@ -358,6 +396,7 @@ test("bounded head reads authenticate returned Sites bytes before stopping at a 
     mediaType: MARKDOWN_MEDIA_TYPE,
     sha256: stored.object.sha256,
     size: bytes.byteLength,
+    integrityRoot: stored.integrityRoot,
   });
   const loadFull = async () => {
     throw new Error("authenticated range support must not fall back to a full object read");
@@ -366,7 +405,7 @@ test("bounded head reads authenticate returned Sites bytes before stopping at a 
   const clean = await loadTextFileHead(
     objects,
     spaceId,
-    REVISION_MANIFEST_FORMAT_V4,
+    REVISION_MANIFEST_FORMAT_V5,
     entry,
     1,
     undefined,
@@ -385,12 +424,76 @@ test("bounded head reads authenticate returned Sites bytes before stopping at a 
     loadTextFileHead(
       objects,
       spaceId,
-      REVISION_MANIFEST_FORMAT_V4,
+      REVISION_MANIFEST_FORMAT_V5,
       entry,
       1,
       undefined,
       Date.now() + 1_000,
       loadFull,
+    ),
+    (error) => error?.code === "revision_integrity_failure",
+  );
+});
+
+test("revision-anchored root rejects coordinated object, sidecar and R2 metadata forgery", async () => {
+  const bucket = new StreamingBucket();
+  const objects = await createSitesObjectStore(bucket);
+  const spaceId = "space_sites_coordinated_forgery";
+  const bytes = new TextEncoder().encode(`trusted\n${"body".repeat(20_000)}\n`);
+  const stored = await objects.putSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId,
+    bytes,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: CREATED_AT,
+  });
+  const canonicalKey = [...bucket.records.keys()].find((key) =>
+    key.endsWith(`/objects/sha256/${stored.object.sha256.slice(7)}`));
+  assert.ok(canonicalKey);
+  const canonical = bucket.records.get(canonicalKey);
+  const sidecarEntry = [...bucket.records.entries()].find(([, record]) =>
+    record.customMetadata.objectKey === canonicalKey);
+  assert.ok(sidecarEntry);
+  const [sidecarKey, sidecar] = sidecarEntry;
+  const originalManifest = JSON.parse(new TextDecoder().decode(sidecar.bytes));
+
+  canonical.bytes[0] = "f".charCodeAt(0);
+  const forgedManifest = await forgeIntegrityManifest(objects, originalManifest, canonical.bytes);
+  assert.notEqual(forgedManifest.root, stored.integrityRoot);
+  const forgedBytes = new TextEncoder().encode(serializeObjectIntegrityManifest(forgedManifest));
+  const forgedDigest = await objects.calculateSha256(forgedBytes);
+  sidecar.bytes = forgedBytes;
+  sidecar.customMetadata.root = forgedManifest.root;
+  sidecar.customMetadata.manifestDigest = forgedDigest;
+  canonical.customMetadata.integrityProofRoot = forgedManifest.root;
+  canonical.customMetadata.integrityProofDigest = forgedDigest;
+  bucket.records.set(sidecarKey, sidecar);
+
+  const opened = await objects.openSpaceCanonicalObjectRange(
+    "markdown",
+    spaceId,
+    stored.object.sha256,
+    { offset: 0, length: 7 },
+  );
+  assert.equal(opened.integrityProof.root, forgedManifest.root);
+  const entry = Object.freeze({
+    path: "index.md",
+    kind: "markdown",
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    sha256: stored.object.sha256,
+    size: bytes.byteLength,
+    integrityRoot: stored.integrityRoot,
+  });
+  await assert.rejects(
+    loadTextFileHead(
+      objects,
+      spaceId,
+      REVISION_MANIFEST_FORMAT_V5,
+      entry,
+      1,
+      undefined,
+      Date.now() + 1_000,
+      async () => { throw new Error("range proof must fail before full fallback"); },
     ),
     (error) => error?.code === "revision_integrity_failure",
   );

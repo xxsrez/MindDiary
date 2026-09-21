@@ -990,7 +990,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           onlyIf: { etagDoesNotMatch: "*" },
         });
         if (!stored) continue;
-        return Object.freeze({ object: spaceCanonicalMetadataFromR2(stored), status: "stored" });
+        return Object.freeze({ object: spaceCanonicalMetadataFromR2(stored), status: "stored", integrityRoot: integrityManifest.root });
       }
       const metadata = spaceCanonicalMetadataFromR2(existing);
       const existingBytes = await bodyBytes(existing);
@@ -1027,12 +1027,9 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           onlyIf: { etagMatches: existing.etag },
         });
         if (!updated) continue;
-        return Object.freeze({
-          object: spaceCanonicalMetadataFromR2(updated),
-          status: "already_exists",
-        });
+        return Object.freeze({ object: spaceCanonicalMetadataFromR2(updated), status: "already_exists", integrityRoot: integrityManifest.root });
       }
-      return Object.freeze({ object: metadata, status: "already_exists" });
+      return Object.freeze({ object: metadata, status: "already_exists", integrityRoot: integrityManifest.root });
     }
     throw new Error("R2 Space canonical CAS retry budget exhausted");
   }
@@ -1275,7 +1272,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           onlyIf: { etagDoesNotMatch: "*" },
         });
         if (!stored) continue;
-        return Object.freeze({ object: this.#bundleMetadata(stored), status: "stored" });
+        return Object.freeze({ object: this.#bundleMetadata(stored), status: "stored", integrityRoot: integrityManifest.root });
       }
       const metadata = this.#bundleMetadata(existing);
       const existingBytes = await bodyBytes(existing);
@@ -1307,12 +1304,9 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           onlyIf: { etagMatches: existing.etag },
         });
         if (!updated) continue;
-        return Object.freeze({
-          object: this.#bundleMetadata(updated),
-          status: "already_exists",
-        });
+        return Object.freeze({ object: this.#bundleMetadata(updated), status: "already_exists", integrityRoot: integrityManifest.root });
       }
-      return Object.freeze({ object: metadata, status: "already_exists" });
+      return Object.freeze({ object: metadata, status: "already_exists", integrityRoot: integrityManifest.root });
     }
     throw new Error("R2 BundleFile CAS retry budget exhausted");
   }
@@ -1804,7 +1798,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         await this.#bucket.delete(canonicalKey).catch(() => undefined);
         throw new ObjectStoreFailure("object_tampered", "promoted BundleFile size mismatch");
       }
-      return Object.freeze({ object: metadata, status: "stored" });
+      return Object.freeze({ object: metadata, status: "stored", integrityRoot: integrityManifest.root });
     }
     throw new Error("R2 BundleFile promotion CAS retry budget exhausted");
   }

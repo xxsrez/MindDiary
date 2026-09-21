@@ -16,7 +16,7 @@ import {
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
-  REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
   canonicalBundleFilePath,
@@ -869,6 +869,7 @@ export class ChangesetCommitService {
                 sha256: file.sha256,
                 mediaType: MARKDOWN_MEDIA_TYPE,
                 size: file.size,
+                ...(file.integrityRoot === undefined ? {} : { integrityRoot: file.integrityRoot }),
               }),
               physicalGrowth: 0,
             });
@@ -883,6 +884,7 @@ export class ChangesetCommitService {
                 sha256: digest,
                 mediaType: MARKDOWN_MEDIA_TYPE,
                 size: bytes.byteLength,
+                ...(file.integrityRoot === undefined ? {} : { integrityRoot: file.integrityRoot }),
               }),
               physicalGrowth: 0,
             });
@@ -901,6 +903,7 @@ export class ChangesetCommitService {
               sha256: put.object.sha256,
               mediaType: MARKDOWN_MEDIA_TYPE,
               size: put.object.size,
+              integrityRoot: put.integrityRoot,
             }),
             physicalGrowth: put.status === "stored" ? put.object.size : 0,
           });
@@ -913,6 +916,7 @@ export class ChangesetCommitService {
               sha256: file.sha256,
               mediaType: file.mediaType,
               size: file.size,
+              ...(file.integrityRoot === undefined ? {} : { integrityRoot: file.integrityRoot }),
             }),
             physicalGrowth: 0,
           });
@@ -951,6 +955,7 @@ export class ChangesetCommitService {
             sha256: file.sha256,
             mediaType: file.mediaType,
             size: file.size,
+            ...(put.integrityRoot === undefined ? {} : { integrityRoot: put.integrityRoot }),
           }),
           physicalGrowth: put.status === "stored" ? put.object.size : 0,
         });
@@ -972,7 +977,7 @@ export class ChangesetCommitService {
       actualPhysicalGrowth += result.physicalGrowth;
       return result.entry;
     });
-    const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V4);
+    const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V5);
     const manifestBytes = ENCODER.encode(serializeRevisionManifest(manifest));
     const manifestPut = await this.#objects.putSpaceCanonicalObject({
       kind: "revision_manifest",
@@ -1092,14 +1097,27 @@ export class ChangesetCommitService {
       const envelope = preflight.producerCertificate === undefined
         ? baseEnvelope
         : (() => {
-            if (preflight.producerCertificate.manifestFingerprint !== manifestHash) {
+            const entriesByPath = new Map(manifest.entries.map((entry) => [entry.path, entry] as const));
+            if (
+              preflight.producerCertificate.files.length !== manifest.entries.length ||
+              preflight.producerCertificate.files.some((file) => {
+                const entry = entriesByPath.get(file.path);
+                return entry === undefined || entry.kind !== file.kind ||
+                  entry.mediaType !== file.mediaType || entry.sha256 !== file.sha256 ||
+                  entry.size !== file.size;
+              })
+            ) {
               throw new ChangesetCommitFailure(
                 "invalid_revision_chain",
-                "producer validation certificate does not match the committed manifest",
+                "producer validation certificate does not match committed files",
               );
             }
             const producerCertificate = Object.freeze({
               ...preflight.producerCertificate,
+              // The preflight certificate proves logical file digests. The
+              // commit adds adapter-derived integrity roots and binds the
+              // durable certificate to the resulting canonical v5 manifest.
+              manifestFingerprint: manifestHash,
               revisionId,
             });
             return Object.freeze({

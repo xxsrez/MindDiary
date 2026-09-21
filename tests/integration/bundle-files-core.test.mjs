@@ -24,7 +24,7 @@ import {
   REVISION_MANIFEST_FORMAT_V1,
   REVISION_MANIFEST_FORMAT_V2,
   REVISION_MANIFEST_FORMAT_V3,
-  REVISION_MANIFEST_FORMAT_V4,
+  REVISION_MANIFEST_FORMAT_V5,
   bindingVersion,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
@@ -548,17 +548,20 @@ test("staging contains spoofed types and atomically consumes a binding-pinned re
     }],
   });
   assert.equal(committed.kind, "committed");
-  assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V4);
+  assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V5);
+  const committedOpaque = committed.envelope.manifest.entries.find((entry) => entry.kind === "opaque");
   assert.deepEqual(
-    committed.envelope.manifest.entries.find((entry) => entry.kind === "opaque"),
+    { ...committedOpaque, integrityRoot: undefined },
     {
       kind: "opaque",
       path: "assets/diagram.png",
       sha256: staged.record.sha256,
       mediaType: "image/png",
       size: PNG.byteLength,
+      integrityRoot: undefined,
     },
   );
+  assert.match(committedOpaque.integrityRoot, /^sha256:[0-9a-f]{64}$/u);
   assert.equal(
     (await env.metadata.readStagedBundleFile(staged.record.stagedFileId)).state,
     "consumed",
@@ -1077,7 +1080,7 @@ test("arbitrary opaque formats stage and commit atomically with bounded safe med
     })),
   });
   assert.equal(committed.kind, "committed");
-  assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V4);
+  assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V5);
   const exact = await env.revisions.materialize(
     MINDS.ordinary.spaceId,
     committed.envelope.revision.revisionId,

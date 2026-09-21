@@ -110,27 +110,32 @@ application получает exact bytes и безопасные canonical metad
 identity или manifest path. Нормативные детали находятся в
 [file-ingress specification](file-ingress.md).
 
-## Revision manifest v4
+## Revision manifest v4/v5
 
-После включения MD-304 каждая новая revision записывает service manifest v4:
+MD-304 ввёл service manifest v4. После MD-482 каждая новая revision записывает
+v5; `integrity_root` присутствует только когда root выведен из проверенных
+bytes и может служить trust anchor для bounded range proof:
+Historical v4 identifier remains `mind-diary-revision-manifest-v4`.
 
 ```json
 {
-  "format": "mind-diary-revision-manifest-v4",
+  "format": "mind-diary-revision-manifest-v5",
   "entries": [
     {
       "path": "concepts/trip.md",
       "kind": "markdown",
       "sha256": "sha256:<64 lowercase hex>",
       "media_type": "text/markdown; charset=utf-8",
-      "size": 1234
+      "size": 1234,
+      "integrity_root": "sha256:<64 lowercase hex>"
     },
     {
       "path": "sources/interview.opus",
       "kind": "opaque",
       "sha256": "sha256:<64 lowercase hex>",
       "media_type": "audio/ogg",
-      "size": 4567
+      "size": 4567,
+      "integrity_root": "sha256:<64 lowercase hex>"
     }
   ]
 }
@@ -146,6 +151,9 @@ identity или manifest path. Нормативные детали находя�
   Digest and size always describe exact immutable object bytes.
 - V4 сохраняет v3 Space-scoped manifest-object layout, но меняет media policy
   явно. Он не выдаётся за compatible v3 bytes и не переписывает старые hashes.
+- V5 сохраняет v4 media semantics. Optional `integrity_root` закреплён SHA-256
+  самого manifest в revision metadata; object/sidecar metadata не может
+  заменить этот anchor. Entry без root читается через full-digest fallback.
 - Search/index jobs consume only `kind: markdown`. Opaque files are not
   `KnowledgeEntry`, snippets or MCP text Resources.
 
@@ -162,9 +170,10 @@ revisions of the same Space.
 | v2 | Inline mixed manifest with closed raster/PDF/ZIP media baseline | Reader uses stored kind/media/path exactly; it does not re-sniff or broaden the historical admission decision. |
 | v3 | Separately digested R2 manifest with v2 entry semantics | Reader verifies the stored manifest digest/size and preserves the exact historical projection. |
 | v4 | Separately digested format-neutral manifest with open advisory media | New ordinary commits after MD-304 write v4. |
+| v5 | V4 semantics plus optional revision-anchored object integrity root | Current writes use v5; missing roots require full-digest reads. |
 
-No bulk migration is required. The first ordinary change from v1/v2/v3 reads
-the exact parent and creates a new v4 child; the parent remains independently
+No bulk migration is required. The first ordinary change from v1/v2/v3/v4 reads
+the exact parent and creates a new v5 child; the parent remains independently
 readable/exportable. Unknown manifest format fails closed without guessing its
 kind/media semantics. Unknown OKF `type` and producer fields inside Markdown
 remain source bytes and must survive read-modify-write/export; service manifest
