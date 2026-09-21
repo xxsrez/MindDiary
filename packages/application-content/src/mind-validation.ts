@@ -348,8 +348,13 @@ function issueCursor(input: Readonly<{
   return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/gu, "");
 }
 
-function cursorOffset(cursor: unknown, revisionId: string, issueCount: number): number {
-  if (cursor === undefined) return 0;
+interface ParsedIssueCursor {
+  readonly revisionId: string;
+  readonly offset: number;
+}
+
+function parseIssueCursor(cursor: unknown): Readonly<ParsedIssueCursor> | null {
+  if (cursor === undefined) return null;
   if (typeof cursor !== "string" || cursor.length === 0 || cursor.length > 2048) {
     throw new MindValidationFailure("invalid_request", "Validation cursor is invalid.");
   }
@@ -361,16 +366,31 @@ function cursorOffset(cursor: unknown, revisionId: string, issueCount: number): 
     const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
     if (
       !isRecord(value) ||
-      value.revisionId !== revisionId ||
+      typeof value.revisionId !== "string" ||
+      value.revisionId.length === 0 ||
       value.rulesVersion !== MARKDOWN_CONSISTENCY_RULES_VERSION ||
       !Number.isSafeInteger(value.offset) ||
-      (value.offset as number) <= 0 ||
-      (value.offset as number) >= issueCount
+      (value.offset as number) <= 0
     ) throw new Error("cursor mismatch");
-    return value.offset as number;
+    return Object.freeze({
+      revisionId: value.revisionId,
+      offset: value.offset as number,
+    });
   } catch {
     throw new MindValidationFailure("invalid_request", "Validation cursor is invalid.");
   }
+}
+
+function cursorOffset(
+  cursor: Readonly<ParsedIssueCursor> | null,
+  revisionId: string,
+  issueCount: number,
+): number {
+  if (cursor === null) return 0;
+  if (cursor.revisionId !== revisionId || cursor.offset >= issueCount) {
+    throw new MindValidationFailure("invalid_request", "Validation cursor is invalid.");
+  }
+  return cursor.offset;
 }
 
 function boundedIssues(
@@ -462,12 +482,18 @@ export class MindValidationService {
     queryValue: unknown,
   ): Promise<Readonly<MindValidationResult>> {
     const query = normalizeQuery(queryValue);
+    const parsedCursor = parseIssueCursor(query.cursor);
     let info;
     try {
       info = await this.#discovery.getMindInfo(
         actor,
         query.mind,
-        query.revisionSelector,
+        query.revisionSelector ?? (parsedCursor === null
+          ? undefined
+          : Object.freeze({
+              kind: "revision" as const,
+              revisionId: parsedCursor.revisionId,
+            })),
       );
     } catch (error) {
       mapDiscoveryFailure(error);
@@ -736,7 +762,7 @@ export class MindValidationService {
       left.code.localeCompare(right.code) ||
       (left.target ?? "").localeCompare(right.target ?? "")));
     const offset = cursorOffset(
-      query.cursor,
+      parsedCursor,
       info.resolvedRevision.revisionId,
       projected.length,
     );

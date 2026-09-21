@@ -180,9 +180,9 @@
     {
       "name": "validate_mind",
       "source": "mind-diary-hosted-mcp-tools-list",
-      "input_schema_sha256": "sha256:7572b22c658ec6f1dc159561f116d9812ef8d4bc890e14972ccbf13aa282b3a3",
+      "input_schema_sha256": "sha256:511d328773f67ec3f837a09498f1b0c206ea14c81919d21cd0c74768a8d5930f",
       "output_schema_sha256": "sha256:c69b1e19d48d381371eb0d2ab3d7f1d8094815f4240783fd1afc38c40b3b1770",
-      "descriptor_sha256": "sha256:2b577b65f53930127441bff2c48f560ade92f06c27038ad75f1d1c389708a5dd"
+      "descriptor_sha256": "sha256:d80eb0c8ae5267eb7abd16d2f8389a3725ba2def646099611069eb2e867bb6ef"
     }
   ]
 }

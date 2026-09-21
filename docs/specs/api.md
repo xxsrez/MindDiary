@@ -2500,7 +2500,14 @@ Output содержит `mind`, exact `revision` и safe manifest summary
 
 ### `validate_mind`
 
-Input: `mind` + optional `revision_selector`.
+Input: `mind` + optional `revision_selector` + optional opaque `cursor` из
+предыдущего ответа для того же Mind. Первый ответ без exact selector разрешает
+HEAD один раз; `next_cursor` закрепляет продолжение за найденной immutable
+revision и validation-rules version. Поэтому продолжение остаётся на исходной
+revision даже после смены HEAD. Если caller одновременно передаёт
+`revision_selector`, он обязан разрешиться в ту же revision, иначе request
+отклоняется как invalid. Каждый page заново проверяет текущий доступ; cursor
+другого Mind, повреждённый cursor и продолжение после revoke fail closed.
 
 Output:
 

@@ -312,6 +312,66 @@ test("expired reservations become bounded cleanup work and telemetry stays conte
   assert.equal(retryAfterCleanup.replayed, false);
 });
 
+test("admission atomically retires an expired heavy reservation after restart", async () => {
+  const metadata = new InMemoryRevisionMetadataStore();
+  const constrained = limits({
+    activeHeavyPerMind: 1,
+    activeHeavyPerPrincipal: 1,
+    activeHeavyPerSite: 1,
+  });
+  const staleRequest = request({
+    suffix: "stale-heavy",
+    heavy: true,
+    requested: { physicalCanonicalBytes: 0, temporaryBytes: 16 },
+  });
+  const admitted = await metadata.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation(staleRequest, constrained));
+  assert.equal(admitted.kind, "admitted");
+
+  const restarted = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    metadata.exportDurableSnapshot(),
+  );
+  const successorRequest = request({
+    suffix: "successor-heavy",
+    operation: "export",
+    heavy: true,
+    createdAt: "2026-08-22T14:00:00.000Z",
+    expiresAt: "2026-08-23T14:00:00.000Z",
+    requested: { physicalCanonicalBytes: 0, temporaryBytes: 1 },
+  });
+  const successor = await restarted.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation(successorRequest, constrained));
+  assert.equal(successor.kind, "admitted");
+  assert.equal(successor.replayed, false);
+
+  const reservations = await restarted.listCapacityReservationsForTest();
+  assert.equal(
+    reservations.find(({ reservationId }) =>
+      reservationId === staleRequest.reservationId).state,
+    "cleanup_pending",
+  );
+  assert.equal(
+    reservations.find(({ reservationId }) =>
+      reservationId === successorRequest.reservationId).state,
+    "active",
+  );
+
+  const replay = await restarted.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation(successorRequest, constrained));
+  assert.equal(replay.kind, "admitted");
+  assert.equal(replay.replayed, true);
+  assert.equal((await restarted.listCapacityReservationsForTest()).length, 2);
+
+  const staleRetry = await restarted.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation({
+      ...staleRequest,
+      createdAt: "2026-08-22T14:00:01.000Z",
+      expiresAt: "2026-08-23T14:00:01.000Z",
+    }, constrained));
+  assert.equal(staleRetry.kind, "rejected");
+  assert.equal(staleRetry.reason, "accounting_untrusted");
+});
+
 test("selected capacity usage is independent of foreign history and jobs", async () => {
   const metadata = new InMemoryRevisionMetadataStore();
   const objects = new InMemoryObjectStore();

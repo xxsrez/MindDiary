@@ -116,9 +116,12 @@ function principalMountedMetadata(metadata) {
   });
 }
 
-function countedStore(objects) {
+function countedStore(objects, { markdownReadDelayMs = 0 } = {}) {
   const metrics = {
     markdownReadBytes: 0,
+    markdownReadCount: 0,
+    markdownReadActive: 0,
+    markdownReadMaximum: 0,
     markdownPutBytes: 0,
     markdownPutCount: 0,
     manifestReadBytes: 0,
@@ -130,12 +133,27 @@ function countedStore(objects) {
     get(target, property) {
       if (property === "getSpaceCanonicalObject") {
         return async (kind, spaceId, digest) => {
-          const result = await target.getSpaceCanonicalObject(kind, spaceId, digest);
-          if (result) {
-            if (kind === "markdown") metrics.markdownReadBytes += result.size;
-            else metrics.manifestReadBytes += result.size;
+          if (kind === "markdown") {
+            metrics.markdownReadCount += 1;
+            metrics.markdownReadActive += 1;
+            metrics.markdownReadMaximum = Math.max(
+              metrics.markdownReadMaximum,
+              metrics.markdownReadActive,
+            );
           }
-          return result;
+          try {
+            if (kind === "markdown" && markdownReadDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, markdownReadDelayMs));
+            }
+            const result = await target.getSpaceCanonicalObject(kind, spaceId, digest);
+            if (result) {
+              if (kind === "markdown") metrics.markdownReadBytes += result.size;
+              else metrics.manifestReadBytes += result.size;
+            }
+            return result;
+          } finally {
+            if (kind === "markdown") metrics.markdownReadActive -= 1;
+          }
         };
       }
       if (property === "putSpaceCanonicalObject") {
@@ -232,7 +250,7 @@ test("producer additive validation reads only changed files and the retained roo
   const metadata = principalMountedMetadata(new InMemoryRevisionMetadataStore());
   const fileCount = 500;
   const initial = await seedLargeV3(objects, metadata, fileCount, true);
-  const counted = countedStore(objects);
+  const counted = countedStore(objects, { markdownReadDelayMs: 2 });
   const revisions = new CanonicalRevisionCoordinator({
     objects: counted.store,
     revisions: metadata,
@@ -293,6 +311,9 @@ test("producer additive validation reads only changed files and the retained roo
   );
   assert.ok(proof.envelope.revision.producerCertificate.files.length > fileCount);
   assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
+  assert.ok(counted.metrics.markdownReadMaximum > 1);
+  assert.ok(counted.metrics.markdownReadMaximum <= 8);
+  assert.ok(counted.metrics.markdownReadCount >= fileCount);
 
   counted.reset();
   const additive = await service.preflight({
@@ -464,6 +485,8 @@ test("producer additive validation reads only changed files and the retained roo
   });
   assert.equal(staleCertificate.kind, "ready");
   assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
+  assert.ok(counted.metrics.markdownReadMaximum > 1);
+  assert.ok(counted.metrics.markdownReadMaximum <= 8);
 });
 
 test("producer additive validation cannot trust an unproved consumer-warning parent", async () => {

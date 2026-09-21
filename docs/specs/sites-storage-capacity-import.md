@@ -318,6 +318,14 @@ job result, а background work планируется повторно без в
 Несовпадающий export и любая другая heavy operation продолжают получать обычный
 `capacity_fairness_limit`.
 
+Admission transaction сама применяет expiry как authority transition: перед
+расчётом quota и heavy lane она атомарно переводит каждую active reservation с
+`expires_at <= request.created_at` в `cleanup_pending`. Поэтому пропущенный или
+задержавшийся background collector не удерживает import/export lane бесконечно
+после restart. Requested temporary/physical bytes остаются учтены как cleanup
+state до durable release; exact retry незавершённой heavy operation не создаёт
+вторую reservation.
+
 ## Sites-only Markdown import profile
 
 Workflow: `plan -> reserve -> stage batches -> validate -> commit -> finalize`.
@@ -544,7 +552,7 @@ capacity/import evidence.
 
 Статус: accepted behavior contract, 2026-09-21. Этот раздел сохраняет
 reopened acceptance MD-473, MD-474, MD-476, MD-481 и MD-482 и добавляет
-MD-484—MD-487. Он не меняет canonical revision, authorization, HEAD CAS,
+MD-484—MD-488. Он не меняет canonical revision, authorization, HEAD CAS,
 immutable history или recovery contracts. Текущий или будущий implementation
 может ещё не иметь полного evidence этого контракта; наличие локального
 fast-path, process cache или optional adapter method само по себе не является
@@ -569,6 +577,7 @@ resumable validation являются implementation choices, если они с
 | MD-485 | Import/export capacity и heavy-operation отказ имеют стабильный code плюс безопасные operation/scope/metric/state details и точную retry policy. | Внутренний diagnostics logger и storage для receipts. |
 | MD-486 | Changeset с 72+ обычными операциями materializes objects boundedly и публикует ровно одну revision либо ни одной; partial revision запрещена. | Размер одной I/O порции и конкретная очередь workers. |
 | MD-487 | Каждая проверка восстанавливает цепочку complaint → real entrypoint → cold/warm/legacy/failure → hosted evidence с exact candidate/deployment identity. | Формат private evidence files и CI/UAT runner. |
+| MD-488 | `validate_mind` публикует report cursor в MCP schema; continuation остаётся привязан к первой exact immutable revision при смене HEAD, заново проверяет current access, отклоняет foreign/invalid cursor и возвращает каждую diagnostic ровно один раз в deterministic order. | Cursor encoding и page-size implementation. |
 
 ### Small changeset validation
 

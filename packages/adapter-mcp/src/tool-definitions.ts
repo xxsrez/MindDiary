@@ -618,6 +618,7 @@ const VALIDATE_MIND_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
     revision_selector: REVISION_SELECTOR_SCHEMA,
+    cursor: OPAQUE_ID_SCHEMA,
   },
   ["mind"],
 );

@@ -1326,6 +1326,10 @@ test("Product Site publishes one modern file input and keeps exact transport ver
   };
   const directTools = await listTools(directRuntime, "native-direct-list");
   assert.equal(matchesExactMcpToolInventory(directTools), true, "product HTTP catalog must match all descriptors");
+  const validateMindDefinition = directTools.find(({ name }) => name === "validate_mind");
+  assert.ok(validateMindDefinition);
+  assert.ok("cursor" in validateMindDefinition.inputSchema.properties);
+  assert.equal(validateMindDefinition.inputSchema.additionalProperties, false);
   const directStageDefinition = directTools.find(({ name }) => name === "stage_bundle_file");
   assert.deepEqual(directStageDefinition._meta, { "openai/fileParams": ["file"] });
   const directCapabilities = await modernTool(

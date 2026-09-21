@@ -308,6 +308,27 @@ export abstract class RevisionMetadataStoreState {
               utilization: "normal",
             });
           }
+          // Expiry is part of admission authority, not merely background
+          // housekeeping. Atomically retire stale active reservations before
+          // computing quota and heavy-operation fairness so a missed collector
+          // pass cannot hold the lane indefinitely. Cleanup-pending bytes stay
+          // charged until their durable cleanup completes.
+          const admissionTime = Date.parse(request.createdAt);
+          for (const reservation of reservations.values()) {
+            if (
+              reservation.state === "active" &&
+              Date.parse(reservation.expiresAt) <= admissionTime
+            ) {
+              reservations.set(
+                reservation.reservationId,
+                cloneCapacityReservation(Object.freeze({
+                  ...reservation,
+                  state: "cleanup_pending" as const,
+                  updatedAt: request.createdAt,
+                })),
+              );
+            }
+          }
           const existing = reservations.get(request.reservationId);
           if (existing !== undefined) {
             if (!capacityReservationMatches(existing, request)) {
@@ -317,11 +338,9 @@ export abstract class RevisionMetadataStoreState {
                   utilization: "normal",
                 });
             }
-            const expiredActive = existing.state === "active" &&
-              Date.parse(existing.expiresAt) <= Date.parse(request.createdAt);
             const resumableCommit = request.operation === "commit" &&
-              (existing.state === "cleanup_pending" || expiredActive);
-            if ((existing.state === "cleanup_pending" || expiredActive) && !resumableCommit) {
+              existing.state === "cleanup_pending";
+            if (existing.state === "cleanup_pending" && !resumableCommit) {
               this._capacityQuotaRejects += 1;
               return Object.freeze({
                 kind: "rejected",

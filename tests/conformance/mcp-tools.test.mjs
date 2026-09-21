@@ -259,6 +259,11 @@ test("schemas require one explicit Mind and one revision selector shape", () => 
     "mind",
     "revision_id",
   ]);
+  const validation = definitions.get("validate_mind");
+  assert.deepEqual(validation.inputSchema.required, ["mind"]);
+  assert.ok("cursor" in validation.inputSchema.properties);
+  assert.equal(validation.inputSchema.properties.cursor.type, "string");
+  assert.equal(validation.inputSchema.additionalProperties, false);
 
   let nestedFilter = definitions.get("list_files").inputSchema.properties.where;
   for (let depth = 0; depth < 4; depth += 1) {

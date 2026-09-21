@@ -406,12 +406,183 @@ test("validation response is bounded and issue messages do not echo untrusted li
     [{ path: "index.md", text: rootIndex("# Fresh HEAD\n") }],
     "Move HEAD after validation pagination",
   );
+  const afterHeadChange = await env.validation.validateMind(actor(owner.principalId), {
+    mind: mind.handle,
+    cursor: result.nextCursor,
+  });
+  assert.equal(
+    afterHeadChange.resolvedRevision.revisionId,
+    result.resolvedRevision.revisionId,
+  );
+  assert.equal(afterHeadChange.consistencyErrors.length, 5);
+  assert.equal(afterHeadChange.nextCursor, null);
+
   await assert.rejects(
     env.validation.validateMind(actor(owner.principalId), {
       mind: mind.handle,
+      revisionSelector: { kind: "head" },
       cursor: result.nextCursor,
     }),
     expectValidationFailure("invalid_request"),
+  );
+  await assert.rejects(
+    env.validation.validateMind(actor(owner.principalId), {
+      mind: mind.handle,
+      cursor: `${result.nextCursor}tampered`,
+    }),
+    expectValidationFailure("invalid_request"),
+  );
+
+  const foreignMind = await createMind(env, owner, "foreign-pagination");
+  await assert.rejects(
+    env.validation.validateMind(actor(owner.principalId), {
+      mind: foreignMind.handle,
+      cursor: result.nextCursor,
+    }),
+    expectValidationFailure("revision_not_found"),
+  );
+});
+
+test("validation diagnostic pagination preserves 0, 100 and 101 issue boundaries", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Boundary Owner");
+  const ownerActor = actor(owner.principalId);
+
+  for (const issueCount of [0, VALIDATION_ISSUE_LIMIT, VALIDATION_ISSUE_LIMIT + 1]) {
+    const mind = await createMind(env, owner, `boundary-${issueCount}`);
+    const links = Array.from(
+      { length: issueCount },
+      (_, index) => `- [Missing ${index}](missing-${issueCount}-${index}.md)`,
+    ).join("\n");
+    await commitFiles(
+      env,
+      owner,
+      mind,
+      [{ path: "index.md", text: rootIndex(links.length === 0 ? "" : `${links}\n`) }],
+      `Commit ${issueCount} validation issues`,
+    );
+    const first = await env.validation.validateMind(ownerActor, { mind: mind.handle });
+    assert.equal(first.issueCounts.consistencyErrors, issueCount);
+    assert.equal(first.consistencyErrors.length, Math.min(issueCount, VALIDATION_ISSUE_LIMIT));
+    assert.equal(first.issuesTruncated, issueCount > VALIDATION_ISSUE_LIMIT);
+    assert.equal(first.nextCursor === null, issueCount <= VALIDATION_ISSUE_LIMIT);
+    if (first.nextCursor !== null) {
+      const second = await env.validation.validateMind(ownerActor, {
+        mind: mind.handle,
+        cursor: first.nextCursor,
+      });
+      assert.equal(second.consistencyErrors.length, 1);
+      assert.equal(second.nextCursor, null);
+    }
+  }
+});
+
+test("mixed validation diagnostics paginate deterministically without gaps or duplicates", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Mixed Diagnostics Owner");
+  const mind = await createMind(env, owner, "mixed-diagnostics");
+  const missingLinks = Array.from(
+    { length: VALIDATION_ISSUE_LIMIT + 5 },
+    (_, index) => `- [Missing ${index}](mixed-missing-${index}.md)`,
+  ).join("\n");
+  await commitFiles(
+    env,
+    owner,
+    mind,
+    [{
+      path: "index.md",
+      text: rootIndex(`- [Warning](concepts/warning.md)\n${missingLinks}\n`),
+    }, {
+      path: "concepts/warning.md",
+      text: "---\ntype: Generated Knowledge\nstatus: reviewed\n---\n\n# Warning\n",
+    }, {
+      path: "raw/nonconformant.md",
+      text: "# Missing frontmatter\n",
+    }],
+    "Commit mixed paginated diagnostics",
+  );
+
+  const request = { mind: mind.handle };
+  const first = await env.validation.validateMind(actor(owner.principalId), request);
+  const repeated = await env.validation.validateMind(actor(owner.principalId), request);
+  assert.deepEqual(repeated, first);
+  const expectedTotal = first.issueCounts.conformanceErrors +
+    first.issueCounts.consistencyErrors + first.issueCounts.advisories;
+  assert.ok(expectedTotal > VALIDATION_ISSUE_LIMIT);
+
+  const seen = new Set();
+  const classes = new Set();
+  let page = first;
+  for (;;) {
+    for (const issue of [
+      ...page.conformanceErrors,
+      ...page.consistencyErrors,
+      ...page.advisories,
+    ]) {
+      const identity = JSON.stringify([
+        issue.class,
+        issue.code,
+        issue.path,
+        issue.line ?? null,
+        issue.target ?? null,
+      ]);
+      assert.equal(seen.has(identity), false, identity);
+      seen.add(identity);
+      classes.add(issue.class);
+    }
+    if (page.nextCursor === null) break;
+    page = await env.validation.validateMind(actor(owner.principalId), {
+      mind: mind.handle,
+      cursor: page.nextCursor,
+    });
+  }
+  assert.equal(seen.size, expectedTotal);
+  assert.deepEqual([...classes].sort(), ["advisory", "conformance", "consistency"]);
+});
+
+test("validation cursor continuation rechecks current access after visibility revoke", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Cursor Revoke Owner");
+  const outsider = await createAccount(env, 2, "Cursor Revoke Reader");
+  const mind = await createMind(env, owner, "cursor-revoke");
+  const links = Array.from(
+    { length: VALIDATION_ISSUE_LIMIT + 1 },
+    (_, index) => `- [Missing ${index}](revoke-missing-${index}.md)`,
+  ).join("\n");
+  await commitFiles(
+    env,
+    owner,
+    mind,
+    [{ path: "index.md", text: rootIndex(`${links}\n`) }],
+    "Commit cursor revoke fixture",
+  );
+  const privateState = await env.metadata.inspectOrdinaryMindStateForTest(mind.mindId);
+  assert.ok(privateState);
+  await env.visibility.changeVisibility(actor(owner.principalId), {
+    mindId: mind.mindId,
+    visibility: "public",
+    acknowledgeLiveHeadAndHistoryExposure: true,
+    expectedMetadataVersion: privateState.space.metadataVersion,
+    idempotencyKey: "open-cursor-revoke",
+  });
+  const first = await env.validation.validateMind(actor(outsider.principalId), {
+    mind: mind.handle,
+  });
+  assert.equal(typeof first.nextCursor, "string");
+  const publicState = await env.metadata.inspectOrdinaryMindStateForTest(mind.mindId);
+  assert.ok(publicState);
+  await env.visibility.changeVisibility(actor(owner.principalId), {
+    mindId: mind.mindId,
+    visibility: "private",
+    expectedMetadataVersion: publicState.space.metadataVersion,
+    idempotencyKey: "close-cursor-revoke",
+  });
+  await assert.rejects(
+    env.validation.validateMind(actor(outsider.principalId), {
+      mind: mind.handle,
+      cursor: first.nextCursor,
+    }),
+    expectValidationFailure("mind_not_found"),
   );
 });
 

@@ -56,6 +56,46 @@ import {
 import { materializeLogEntry } from "./reserved-content.js";
 import { IncrementalSha256 } from "./incremental-sha256.js";
 
+const MAX_PREFLIGHT_OBJECT_CONCURRENCY = 8;
+
+async function mapPreflightReadsBounded<Input, Output>(
+  values: readonly Input[],
+  operation: (value: Input, index: number) => Promise<Output>,
+): Promise<readonly Output[]> {
+  const results: Array<PromiseSettledResult<Output> | undefined> =
+    new Array(values.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(MAX_PREFLIGHT_OBJECT_CONCURRENCY, values.length) },
+    async () => {
+      for (;;) {
+        const index = next;
+        next += 1;
+        if (index >= values.length) return;
+        try {
+          results[index] = {
+            status: "fulfilled",
+            value: await operation(values[index]!, index),
+          };
+        } catch (reason) {
+          results[index] = { status: "rejected", reason };
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  const rejected = results.find(
+    (result): result is PromiseRejectedResult => result?.status === "rejected",
+  );
+  if (rejected !== undefined) throw rejected.reason;
+  return Object.freeze(results.map((result) => {
+    if (result?.status !== "fulfilled") {
+      throw new TypeError("bounded preflight materialization did not complete");
+    }
+    return result.value;
+  }));
+}
+
 export interface CreateFileOperation {
   readonly type: "create_file";
   readonly path: string;
@@ -1739,9 +1779,19 @@ export class ChangesetPreflightService {
         (request.producerProfile === true && !incrementalProducerValidation)
       )
     ) {
-      for (const [path, file] of working) {
-        if (file.kind !== "markdown" || file.text !== undefined) continue;
-        const loaded = await readParentFile(path);
+      const unreadMarkdown = [...working]
+        .filter((entry): entry is [string, Extract<WorkingRevisionFile, { kind: "markdown" }>] =>
+          entry[1].kind === "markdown" && entry[1].text === undefined,
+        );
+      const loadedMarkdown = await mapPreflightReadsBounded(
+        unreadMarkdown,
+        async ([path, file]) => Object.freeze({
+          path,
+          file,
+          loaded: await readParentFile(path),
+        }),
+      );
+      for (const { path, file, loaded } of loadedMarkdown) {
         if (!loaded || loaded.kind !== "markdown" || loaded.sha256 !== file.sha256) {
           return invalid("okf_validation_failed", "exact parent file cannot be verified", {
             path,
