@@ -30,6 +30,8 @@ test("Markdown import checks local shape and keeps server planning authoritative
 
 test("Markdown import exposes bounded progress, cancel, replan, receipt and safe denial", () => {
   assert.match(client, /Math\.max\(0, Math\.min\(100/u);
+  assert.match(client, /const maxBatchFiles = 20;/u);
+  assert.match(client, /batch\.length >= maxBatchFiles/u);
   assert.match(client, /\/batches\/\$\{index \+ 1\}`,[\s\S]*method: "PUT"/u);
   assert.match(client, /"DELETE",[\s\S]*expected_version: session\.version/u);
   assert.match(client, /showReceipt\(/u);

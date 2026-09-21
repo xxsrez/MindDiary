@@ -27,6 +27,7 @@
   const openStates = new Set(["active", "validating", "validated", "finalizing"]);
   const terminalStates = new Set(["canceled", "expired", "validation_failed"]);
   const importIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+  const maxBatchFiles = 20;
   const utf8 = new TextEncoder();
   const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
   let files = [];
@@ -277,7 +278,7 @@
     let batch = [];
     let bytes = 0;
     for (const file of selected) {
-      if (batch.length > 0 && (batch.length >= 256 || bytes + file.size > 4_194_304)) {
+      if (batch.length > 0 && (batch.length >= maxBatchFiles || bytes + file.size > 4_194_304)) {
         result.push(batch);
         batch = [];
         bytes = 0;

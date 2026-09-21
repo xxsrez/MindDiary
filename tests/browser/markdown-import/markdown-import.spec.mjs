@@ -88,6 +88,34 @@ test("writer reviews exact changes and commits one mobile-safe revision receipt"
   expect(state.commit_calls).toBe(1);
 });
 
+test("many small files use request-budgeted batches before one commit", async ({ page, request }) => {
+  await reset(request, "fresh");
+  await page.goto(`${origin}/research-notes`);
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
+
+  await page.locator("[data-import-files]").evaluate((input) => {
+    const transfer = new DataTransfer();
+    for (let index = 0; index < 41; index += 1) {
+      transfer.items.add(new File(
+        [`# Note ${String(index).padStart(2, "0")}\n`],
+        index === 0 ? "index.md" : `note-${String(index).padStart(2, "0")}.md`,
+        { type: "text/markdown" },
+      ));
+    }
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await page.locator("[data-plan-markdown-import]").click();
+  await page.locator("[data-import-confirm]").check();
+  await page.locator("[data-start-markdown-import]").click();
+
+  await expect(page.locator("[data-import-receipt-revision]")).toHaveText("revision_import_fixture");
+  const state = await (await request.get(`${origin}/_fixture/state`)).json();
+  expect(state.batch_calls).toBe(3);
+  expect(state.start_calls).toBe(1);
+  expect(state.commit_calls).toBe(1);
+});
+
 test("empty, path, UTF-8 and capacity conflicts stay before confirmation", async ({ page, request }) => {
   await reset(request, "fresh");
   await page.goto(`${origin}/research-notes`);

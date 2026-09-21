@@ -420,7 +420,9 @@ Markdown-only и корректность UTF-8 выбранного снимк�
 
 ### Stage and checkpoint
 
-After reservation, client uploads ordered batches of at most 256 files / 4 MiB.
+After reservation, client uploads ordered batches within the server ceiling of
+256 files / 4 MiB. The hosted browser client uses a stricter 20-file / 4 MiB
+bound so many-small-file corpora stay below the Sites request-duration budget.
 Each batch has session ID, monotonic checkpoint, file digests and a
 session-scoped idempotency key. Exact replay returns the same checkpoint;
 changed bytes/metadata return `idempotency_conflict`. Server verifies streaming

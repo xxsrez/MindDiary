@@ -29,6 +29,7 @@ let plan = null;
 let session = null;
 let startCalls = 0;
 let commitCalls = 0;
+let batchCalls = 0;
 let statusReadCalls = 0;
 let statusFailuresRemaining = 0;
 let revoked = false;
@@ -89,6 +90,7 @@ function reset(nextScenario) {
           : null;
   startCalls = 0;
   commitCalls = 0;
+  batchCalls = 0;
   statusReadCalls = 0;
   statusFailuresRemaining = nextScenario === "transient-once" ? 1 : 0;
   revoked = false;
@@ -154,6 +156,7 @@ const server = createServer(async (request, response) => {
         scenario,
         start_calls: startCalls,
         commit_calls: commitCalls,
+        batch_calls: batchCalls,
         status_read_calls: statusReadCalls,
         session,
       });
@@ -226,6 +229,7 @@ const server = createServer(async (request, response) => {
 
     const batchMatch = url.pathname.match(/^\/api\/v1\/markdown-imports\/([^/]+)\/batches\/(\d+)$/u);
     if (batchMatch && request.method === "PUT") {
+      batchCalls += 1;
       session = {
         ...session,
         checkpoint: Number(batchMatch[2]),

@@ -3230,7 +3230,10 @@ exact HEAD, acquires the conservative capacity reservation and returns
 session TTL is 24 hours. A plan cannot be rebound or adopted by another
 principal or Mind.
 
-Batch request is `multipart/form-data`, at most 256 files / 4 MiB total. One
+Batch request is `multipart/form-data`, at most 256 files / 4 MiB total. The
+hosted browser producer limits itself to 20 files / 4 MiB per request because
+the adapter persists every file separately and the Sites request budget is
+lower than the protocol ceiling for many-small-file batches. One
 JSON `manifest` part contains only:
 
 ```json
