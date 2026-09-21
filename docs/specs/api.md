@@ -2083,7 +2083,9 @@ code, относительные и root-relative пути, Unicode heading anch
 суффиксы повторных headings. Он раздельно проверяет существование target file
 и section, exact local sources и достижимость Markdown из корневого
 `index.md`; циклы допустимы. `raw/`, `output/` и `log.md` не обязаны входить в
-пользовательскую навигацию.
+пользовательскую навигацию. Materialization выполняется boundedным числом
+concurrent object reads и повторно проверяет current access между пакетами и
+перед итогом; частично прочитанный bundle никогда не получает `valid=true`.
 
 HTTP(S) и source targets другой revision/Mind автоматически не читаются. Они
 возвращаются как `external_link_unchecked` или `source_check_unsupported` с
@@ -2443,12 +2445,18 @@ Output: `{ "fetched": FetchedEntry }`.
 
 `id` всегда фиксирует exact revision. Новый producer выдаёт compact `mdl2_`
 handle, не зависящий от длины path/revision ID; encrypted payload хранится в D1
-и истекает через один час. Server проверяет current access перед каждым page
-fetch. Tamper/expiry/unknown handle дают одинаковый `locator_not_found` без
-metadata leakage. Ранее выданные AES-GCM `mdl1_` IDs продолжают читаться при
-том же deployment key как migration compatibility path; новые `mdl1_` больше
-не выпускаются. Delete из HEAD не мешает fetch старой revision при
-сохранившемся current history access; whole-Mind deletion инвалидирует IDs.
+и истекает через один час. Payload authenticated и связывает Space, revision,
+manifest/object digest и byte range; server проверяет current access перед
+каждым page fetch. Tamper/expiry/unknown/foreign handle дают одинаковый
+`locator_not_found` без metadata leakage. При range-capable storage каждый
+partial chunk дополнительно проверяет cryptographic proof до возврата bytes;
+при legacy/no-range adapter server делает полный verified read и только затем
+возвращает запрошенный page/range. Это не меняет wire semantics и не
+разрешает partial bytes без declared size/digest verification. Ранее выданные
+AES-GCM `mdl1_` IDs продолжают читаться при том же deployment key как
+migration compatibility path; новые `mdl1_` больше не выпускаются. Delete из
+HEAD не мешает fetch старой revision при сохранившемся current history access;
+whole-Mind deletion инвалидирует IDs.
 
 ### `list_revisions`
 
@@ -2501,12 +2509,66 @@ Output:
   "valid": false,
   "conformance_errors": [],
   "quality_warnings": [],
-  "validated_okf_version": "0.2"
+  "validated_okf_version": "0.2",
+  "validation_complete": true,
+  "progress": {
+    "phase": "complete",
+    "processed_entries": 4,
+    "total_entries": 4
+  },
+  "next_cursor": null
 }
 ```
 
 Validator проверяет весь выбранный bundle, а не только `wiki/` или найденные
-entries.
+entries. `validation_complete=true` означает, что exact revision полностью
+прочитана и проверена; `next_cursor` может листать только bounded diagnostics,
+а не скрытую непроверенную часть bundle. Content conformance/consistency
+findings return the completed `valid=false` diagnostics envelope. Digest/size
+mismatch, current-access revoke, deadline or object-read failure returns a
+fail-closed application error and never a partial `valid` result.
+
+Runtime может выполнить этот contract boundedным one-shot worker pool. Если
+request budget не позволяет этого, adapter может вернуть resumable progress с
+`validation_complete=false` и opaque validation continuation, bound to exact
+Space/revision/manifest/rules fingerprint. Each continuation rechecks current
+access and exact revision; changing HEAD, ACL, rules or fingerprint invalidates
+it. Progress is not validity or commit readiness, and a failed continuation
+does not publish a revision.
+
+### Release 0.5 bounded proof, reads and batch validation
+
+`preflight_changeset`/`commit_changeset` may reuse a producer proof only when
+the server has a durable exact-revision proof containing Space, revision,
+validation rules, manifest fingerprint and dependency/reference fingerprint.
+The proof is an integrity fact, never a client-provided authority or a bypass
+of current ACL, scope, generation or HEAD CAS. Its dependency closure covers
+the actual operation class: create, ordinary replace, delete, `replace_index`,
+`add_log_entry` and mixed changesets. Delete is accepted only after remaining
+inbound references are proven absent; any unproved closure uses full exact
+producer validation. Cold start, process restart, redeploy and cache eviction
+must either reload that durable proof or take the same full fallback.
+
+The object read path prefers authenticated bounded ranges for modern
+Space-scoped objects. A returned chunk is bound to exact Space/revision/object
+digest and offset/length, and is rejected on invalid proof, wrong metadata,
+UTF-8 boundary or incomplete stream. Legacy v1/v2 or a provider without
+authenticated ranges uses a full verified read plus local slice, subject to the
+same file and response budgets. The client sees exact requested range semantics
+and never a successful unverified partial response.
+
+One `commit_changeset` supports at least 72 ordinary operations in a single
+atomic request, including reserved `index.md`/`log.md` operations and mixed
+Markdown/BundleFile entries, when existing per-file, manifest, capacity and
+BundleFile limits are respected. Candidate object I/O is bounded and keeps
+deterministic input order. All materialization, proof and producer validation
+finish before the HEAD transaction; any pre-commit failure leaves no revision,
+HEAD transition, idempotency completion or commit audit event. Unreachable
+objects may remain for bounded cleanup, but no partial revision is visible.
+An uncertain outcome is resolved only with the exact original payload and
+idempotency key through `reconcile_changeset`. The existing BundleFile
+20-operation/256 MiB staged limit remains unchanged; 72+ is the supported
+ordinary changeset floor, not a new capacity limit.
 
 ### `get_file_ingress_capabilities`
 
@@ -3005,6 +3067,14 @@ Rules:
   `file_digest_mismatch`, malformed digest — `invalid_operation`;
 - all resulting Markdown files are valid UTF-8/OKF; opaque entries pass the
   producer path/size/reference/integrity contract; media type is advisory;
+- producer proof reuse is allowed only for a durable exact-revision proof and
+  the dependency closure of this changeset; create, ordinary replace, delete,
+  `replace_index`, `add_log_entry` and mixed operations use the same strict
+  rules. Missing proof, cold/restart/eviction without proof or an unproved
+  reference falls back to full exact producer validation;
+- candidate object materialization uses bounded concurrency and deterministic
+  operation order. A 72+ ordinary-operation changeset is supported when the
+  existing per-file, manifest, capacity and BundleFile-specific limits hold;
 - concept + index + log применяются all-or-nothing;
 - успех создаёт ровно одну revision и одну HEAD transition.
 
@@ -3215,7 +3285,29 @@ capacity_accounting_untrusted
 capacity_soft_limit
 capacity_hard_limit
 capacity_fairness_limit
+staging_quota_exceeded
 ```
+
+Capacity errors for import and export carry the same safe structured details;
+only the operation stage differs. `details` may contain
+`operation`, `space_scope`, `metric`, `requested`, `committed`, `reserved`,
+`state`, `heavy` and bounded `recovery.action`, but never paths, content,
+provider keys, email or signed URLs. The stable mapping is:
+
+| Code | Meaning | Retry policy |
+|---|---|---|
+| `capacity_accounting_untrusted` | Accounting drift or recovery state is not trustworthy. | Retry the same payload/key after bounded reconcile. |
+| `capacity_soft_limit` | Soft threshold rejects bulk/heavy reservation or requested growth. | Retry after release/reduction; net-shrink remains allowed. |
+| `capacity_hard_limit` | Committed usage plus active reservations reach the hard limit. | Do not retry unchanged growth until capacity changes. |
+| `capacity_fairness_limit` | Per-Space/principal/Site heavy-operation lane is occupied. | Retry after the prior heavy operation completes or expires. |
+| `staging_quota_exceeded` | Owner/session outstanding staged bytes exceed the quota. | Retry after cleanup/release or with a smaller batch. |
+
+`state` is one of `normal | warning | soft_limit | hard_limit | untrusted`;
+`stage` is one of `plan | stage | validate | promote | export`. Import and
+export are bulk/heavy operations according to their operation policy even when
+one payload is small; ordinary content commits use verified reserved growth.
+Public REST/MCP responses preserve the stable code and retry semantics, while
+private receipts may retain the bounded stage and measured counters.
 
 Implementation must keep current generic request/body limits for ordinary
 routes and add explicit streaming multipart limits here. UI admission does not

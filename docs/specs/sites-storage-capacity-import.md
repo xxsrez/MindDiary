@@ -527,15 +527,66 @@ capacity/import evidence.
 
 ## Release 0.5: bounded foreground work and incremental projections
 
-Статус: accepted implementation contract, 2026-09-20. Этот раздел устраняет
-подтверждённые MD-473–MD-482 bottlenecks, не меняя canonical revision,
-authorization, HEAD CAS, immutable history и recovery contracts.
+Статус: accepted behavior contract, 2026-09-21. Этот раздел сохраняет
+reopened acceptance MD-473, MD-474, MD-476, MD-481 и MD-482 и добавляет
+MD-484—MD-487. Он не меняет canonical revision, authorization, HEAD CAS,
+immutable history или recovery contracts. Текущий или будущий implementation
+может ещё не иметь полного evidence этого контракта; наличие локального
+fast-path, process cache или optional adapter method само по себе не является
+приёмкой.
+
+### Acceptance boundary and implementation latitude
+
+Принятые гарантии перечислены ниже. Внутренний формат durable proof,
+названия D1 tables/indexes, способ кодирования authenticated chunk proof,
+фиксированный размер worker pool и выбор между bounded one-shot validation и
+resumable validation являются implementation choices, если они сохраняют
+наблюдаемую семантику, privacy и fail-closed правила.
+
+| Issue | Accepted behavior | Не является обязательной реализацией |
+|---|---|---|
+| MD-473 | Producer proof точен для одной Space и exact revision, переживает cold start/restart/eviction и используется только после current authorization; отсутствие либо устаревание proof вызывает полный exact fallback. | Конкретные proof rows, cache layout и hash encoding. |
+| MD-474 | Metadata transaction/read path адресуем, ограничен по очереди и не требует foreground полного checkpoint; atomic read view и ordered recovery events сохраняются. | Один конкретный lock, queue implementation или snapshot cadence. |
+| MD-476 | Capacity/reachability admission имеет canonical per-Space keys и обновляется транзакционно с revision/HEAD; aggregate counters являются производными. | Физическая D1 partition/index схема. |
+| MD-481 | History и `asOf` обслуживаются из durable compact catalog, который поддерживает keyset pagination и exact UTC resolution без загрузки manifest bodies всей истории. | Название catalog table и конкретный compaction алгоритм. |
+| MD-482 | Partial read возвращает только current-authorized exact range с cryptographic object/chunk authentication; legacy/no-range path делает полный verified read и затем slice. | Merkle proof, per-chunk MAC или provider-specific range API. |
+| MD-484 | `validate_mind` проверяет весь exact revision с bounded object I/O, current-access fences и без частичного valid результата; resumable continuation допустим только с теми же fences. | Число workers и durable/provisional continuation record. |
+| MD-485 | Import/export capacity и heavy-operation отказ имеют стабильный code плюс безопасные operation/scope/metric/state details и точную retry policy. | Внутренний diagnostics logger и storage для receipts. |
+| MD-486 | Changeset с 72+ обычными операциями materializes objects boundedly и публикует ровно одну revision либо ни одной; partial revision запрещена. | Размер одной I/O порции и конкретная очередь workers. |
+| MD-487 | Каждая проверка восстанавливает цепочку complaint → real entrypoint → cold/warm/legacy/failure → hosted evidence с exact candidate/deployment identity. | Формат private evidence files и CI/UAT runner. |
 
 ### Small changeset validation
 
-Producer changeset не перечитывает все неизменённые Markdown bodies, когда
-операции только добавляют новые Markdown files и/или изменяют reserved index и
-log через предназначенные для этого операции. В таком fast path он обязан:
+Producer proof — это durable integrity/validation fact, а не authorization и
+не право на запись. Его identity включает как минимум `space_id`, exact
+`revision_id`, validation profile/rules version, deterministic manifest
+fingerprint и dependency/reference fingerprint. Proof не может быть выведен
+из client payload или из одного process-local flag. Он invalidated при любом
+изменении content, path, media type, size, digest, dependency graph или
+validation rules; current actor/ACL/scope/HEAD проверяются заново при каждом
+использовании.
+
+Для exact revision producer хранит bounded dependency information, достаточную
+для определения затронутого closure. Поэтому допустимый incremental path
+выбирается по фактической операции, а не по имени fast path:
+
+- `create_file` проверяет новый file и его outgoing/incoming dependencies;
+- ordinary `replace_file` проверяет changed file и все затронутые references;
+- `delete_file` доказывает отсутствие оставшихся inbound references либо
+  отклоняет changeset без изменения HEAD;
+- `replace_index` проверяет новый navigation graph и сохранение необходимых
+  targets;
+- `add_log_entry` проверяет reserved log semantics и ссылки на candidate;
+- mixed changeset проверяет объединённое dependency closure атомарно.
+
+Когда closure нельзя доказать boundedly, применяется полный exact producer
+validation. Это правило одинаково для cold start, process restart, deploy,
+cache eviction и восстановления после ошибки: durable proof можно
+переиспользовать, process-local proof — только ускорение lookup; его потеря
+не является основанием считать bundle валидным.
+
+В incremental path producer не перечитывает все неизменённые Markdown bodies,
+когда proof доказывает сохранение их integrity и dependency closure. Он обязан:
 
 - проверить exact base revision, operation/path/digest limits и candidate
   manifest так же, как полный path;
@@ -546,36 +597,56 @@ log через предназначенные для этого операции
   локальные Markdown targets не исчезли из нового index;
 - использовать только integrity уже committed immutable parent content, а не
   недоверенное утверждение клиента о его корректности;
-- автоматически перейти к прежней полной producer validation при delete,
-  ordinary replace, BundleFile mutation, неразрешимой fragment/reference
-  проверке или любом другом случае, где локальная проверка не доказывает
-  сохранение bundle-wide invariants.
+- автоматически перейти к полной producer validation при BundleFile mutation,
+  отсутствии durable proof, cold/restart recovery без proof, неразрешимой
+  fragment/reference проверке или любом другом случае, где локальная проверка
+  не доказывает сохранение bundle-wide invariants. Для `replace_file` и
+  `delete_file` dependency-aware closure обязателен; если proof его не покрывает,
+  применяется full fallback, а не узкий additive fast path.
 
-Fast path не ослабляет invalid-content rejection, idempotency, authorization
-или HEAD CAS. Тестовый large-Mind scenario обязан отдельно доказывать, что
-малое additive изменение не читает unrelated bodies, а потенциально
-инвалидирующее изменение включает полный fallback.
+Incremental path не ослабляет invalid-content rejection, idempotency,
+authorization или HEAD CAS. Proof записывается только после завершённой
+producer validation exact candidate; failed validation не создаёт пригодный
+proof. Тестовый large-Mind scenario обязан отдельно доказывать additive,
+ordinary replace/create/delete/index/log/mixed cases в warm, cold/restart,
+evicted-proof и injected-failure вариантах.
 
 ### Metadata transactions and read isolation
 
-Read-only metadata transaction не создаёт durable event или checkpoint. Один
-content/capacity write создаёт ровно один ordered event; full snapshot
-checkpoint выполняется по bounded cadence и при recovery-sensitive event, а не
-после каждого content write. Consistent read фиксирует immutable in-memory
-snapshot под короткой очередью и выполняет callback после освобождения очереди:
-медленный R2/search callback одного запроса не блокирует metadata writes и
-reads других запросов. Snapshot по-прежнему сохраняет atomic view одной
-операции и не разрешает stale authorization bypass.
+Каждый metadata transaction имеет addressable `space_id` + monotonic sequence
+и opaque transaction/operation reference; event, idempotency result и
+recovery cursor сохраняют эту связь. Read-only transaction не создаёт durable
+event или checkpoint. Один content/capacity write создаёт ровно один ordered
+event, который можно прочитать bounded страницей по Space/sequence без
+глобального scan.
+
+Foreground request не обязан строить или публиковать полный metadata
+checkpoint. Full snapshot checkpoint выполняется по bounded cadence и при
+recovery-sensitive event, а не после каждого content write; payload остаётся
+chunked и atomic по exact sequence head. Consistent read фиксирует immutable
+in-memory view под короткой очередью и выполняет callback после освобождения
+очереди: медленный R2/search callback одного запроса не блокирует metadata
+writes и reads других запросов. Snapshot сохраняет atomic view одной операции
+и не разрешает stale authorization bypass. Потеря addressable event/snapshot
+целостности даёт bounded fail-closed recovery result, а не foreground full
+rebuild.
 
 ### Incremental capacity accounting
 
 Foreground capacity admission использует persisted logical/physical usage
 ledger и per-object reachability counts, обновляемые в той же metadata
-transaction, что и revision/HEAD. Стоимость обычного commit зависит от delta
-candidate manifest, а не от полной истории Space, principal или Site.
-Reconciliation остаётся отдельным bounded repair path: mismatch переводит
-accounting в untrusted/fail-closed state до исправления и не позволяет ledger
-стать вторым источником revision truth.
+transaction, что и revision/HEAD. Canonical accounting key содержит opaque
+`space_id` и metric/object identity; digest без Space, R2 listing или Site-wide
+full scan не являются authority. Capacity rows для principal/Site агрегируются
+из Space rows и не могут позволить одному Space использовать чужое
+зарезервированное место.
+
+Стоимость обычного commit зависит от delta candidate manifest, а не от полной
+истории Space, principal или Site. Reservation, consume, release и reconcile
+идемпотентны в том же Space-scoped namespace; concurrent commits не обходят
+per-Space hard limit. Reconciliation остаётся отдельным bounded repair path:
+mismatch переводит accounting в untrusted/fail-closed state до исправления и
+не позволяет ledger стать вторым источником revision truth.
 
 ### Exact-revision index and search
 
@@ -595,15 +666,94 @@ index generation и normalized query; изменение любого bind от�
 
 ### Bounded history and object reads
 
-History list/as-of использует отдельный compact revision catalog без manifest
-bodies; manifest загружается только для выбранной revision. List pagination и
-UTC selector сохраняют deterministic ordering и текущую authorization.
+Каждая committed revision атомарно добавляет в durable compact revision
+catalog `space_id`, revision number/id, parent, commit UTC, manifest digest,
+file count и logical bytes. Catalog не содержит manifest bodies и maintained
+при обычном commit/delete/reconcile; его rows можно читать keyset-страницами
+и адресно разрешать `asOf` как последнюю revision с `commit_at <= asOf` в
+deterministic order. `list_revisions`/`asOf` сначала проверяют current access,
+а затем загружают manifest только выбранной revision. Старый ACL не
+воскрешается.
+
+Catalog gap, corruption или stale repair cursor не разрешают fallback на HEAD
+или полный foreground history scan: операция возвращает bounded
+`history_catalog_unavailable`/integrity failure и оставляет repair resumable.
+Cold/restart/eviction не меняют ordering и не требуют повторно материализовать
+всю историю.
 
 Canonical object port предоставляет verified bounded range/tail read и
-streaming fetch. Range/tail не материализуют полный object; streaming path
-проверяет declared size/digest до успешного завершения и не выдаёт partial
-bytes как успешный fetch. Manifest/session authorization и digest fences
-остаются обязательными.
+streaming fetch. Современный range path возвращает только bounded chunk,
+который authenticated cryptographically и привязан к `space_id`, exact
+revision/manifest, object digest, offset/length и request generation. Server
+проверяет proof до декодирования и повторно проверяет current authorization;
+tamper, foreign chunk, wrong range или incomplete proof дают
+`revision_integrity_failure` и не возвращают partial success. UTF-8 text range
+дополнительно обязан заканчиваться на valid scalar boundary.
+
+Для legacy v1/v2 objects, provider без range proof или adapter без range
+capability используется full-read fallback: полный object читается boundedным
+потоком, сверяется с declared size и SHA-256, затем из verified bytes берётся
+requested range. Это совместимость с legacy storage, а не разрешение читать
+непроверенные partial bytes; при превышении full-read budget возвращается
+bounded failure. Modern caller получает ту же exact range semantics независимо
+от выбранного пути, а private evidence отдельно фиксирует `range` либо
+`full_read_fallback`.
+
+### Full exact-revision validation and bounded batch commit
+
+`validate_mind` и producer validation всегда относятся к одной явно resolved
+revision. Полный результат обязан охватывать все manifest entries, Markdown
+references, BundleFile envelopes и dependency checks; `valid=true` нельзя
+выдать после частичного чтения. Object materialization выполняется boundedным
+числом concurrent I/O workers и пере-проверяет current authorization между
+пакетами и перед итогом. Ошибка object read, digest/size mismatch, revoke,
+deadline или restart даёт fail-closed result без partial valid result.
+
+Если один request не может безопасно завершить full validation, допустима
+resumable форма с opaque validation id/cursor, exact revision + manifest/rules
+fingerprint, bounded progress and failure state. Каждое продолжение повторно
+проверяет access и exact revision; `validation_complete=false` — только
+прогресс, не доказательство validity/commit readiness. Изменение HEAD, rules,
+ACL или fingerprint инвалидирует continuation.
+
+`commit_changeset` поддерживает batch из 72 и более обычных operations (включая
+create/replace/delete, reserved index/log и mixed Markdown/BundleFile) при
+соблюдении действующих per-file, manifest, capacity и BundleFile-specific
+limits. Object I/O выполняется boundedly и deterministic order is preserved.
+Все candidate objects/proofs и producer checks завершаются до HEAD transaction;
+ошибка до commit оставляет revision, HEAD, idempotency result и audit event
+отсутствующими. Уже записанные unreachable objects допускаются только как
+cleanup input. Успех публикует ровно одну immutable revision; mixed batch не
+может дать partial revision. Неопределённый transport outcome разрешается
+только через exact `reconcile_changeset` с тем же payload/key.
+
+BundleFile-specific 20-operation/256 MiB staged limit остаётся в силе; требование
+72+ относится к supported large ordinary changesets и не поднимает никакой
+capacity limit.
+
+### Import/export capacity and heavy-operation diagnostics
+
+Import plan/start/stage/validate/commit и export start/run используют одну
+structured diagnostic taxonomy. Stable `code` remains the machine contract;
+safe `details` additionally identify only operation, affected scope, metric,
+utilization state, reservation/heavy classification and retry policy:
+
+| Code | Meaning | Retry |
+|---|---|---|
+| `capacity_accounting_untrusted` | Space/Site accounting не доказан после drift/recovery. | Да, после bounded reconcile; payload/key сохраняются. |
+| `capacity_soft_limit` | Soft threshold запрещает bulk/heavy reservation либо не допускает requested growth. | Да после освобождения/уменьшения reservation; ordinary net-shrink разрешён. |
+| `capacity_hard_limit` | Committed + active reservations достигли hard limit. | Нет для того же growth без изменения capacity state. |
+| `capacity_fairness_limit` | Достигнут per-Space/principal/Site heavy-operation lane. | Да после завершения/expiry предыдущей heavy operation. |
+| `staging_quota_exceeded` | Превышен owner/session outstanding staged-byte quota. | Да после cleanup/release или меньшего batch. |
+
+`details` содержит `operation`, `space_scope`, `metric`, `requested`,
+`committed`, `reserved`, `state` (`normal|warning|soft_limit|hard_limit|
+untrusted`), `heavy` и bounded `recovery.action`; не содержит paths, content,
+provider keys, emails или signed URLs. Import/export сами остаются heavy/bulk
+operations даже при малом одном файле, если их operation policy требует
+reservation; ordinary commit классифицируется по verified reserved growth.
+Failure stage (`plan|stage|validate|promote|export`) сохраняется в private
+receipt, а public response использует тот же code и retry semantics.
 
 ## Alternatives rejected
 
@@ -624,15 +774,23 @@ bytes как успешный fetch. Manifest/session authorization и digest fe
 
 ## Required evidence
 
-Repository tests must prove delta bytes read/written on a large synthetic
-corpus, deterministic manifests, v1/v2 compatibility, CAS/idempotency races,
-shared-digest accounting, reservation failure before/after HEAD, reconcile,
-bounded GC/export and import interrupt/resume/cancel/conflict.
+Repository tests must prove durable producer proof and dependency-aware
+create/replace/delete/index/log/mixed validation after cold start/restart,
+cache eviction and injected failure; addressable metadata transactions with
+no foreground full checkpoint; per-Space capacity keys; maintained history/
+asOf catalog; authenticated range chunks plus verified full-read legacy
+fallback; full exact-revision validation with bounded concurrency or explicit
+resumable semantics; import/export diagnostics; deterministic 72+ changeset
+materialization with bounded object I/O, no partial revision and exact
+reconcile. Existing reopened MD-473/474/476/481/482 acceptance remains
+required; MD-484—MD-487 add coverage rather than narrow it.
 
 UAT evidence для продвижения этого post-MVP slice must join exact Git SHA,
 Sites version/deployment and large private
 fixture fingerprints; show D1/R2 usage/headroom without content; prove small
 delta, restart/redeploy persistence, quota warning/soft/hard behavior, bounded
-memory/latency, import resume and final exact search/fetch. Local tests or a
-deployment alone are not UAT acceptance. Эти rows не входят в final receipt
-Release 0.1.
+memory/latency, import resume and final exact search/fetch. Every R05 row also
+preserves traceability from the original complaint to the real entrypoint,
+then to cold/warm/legacy/failure observations and hosted read-back. Local
+tests or a deployment alone are not UAT acceptance. Эти rows не входят в
+final receipt Release 0.1.

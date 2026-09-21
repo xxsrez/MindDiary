@@ -135,9 +135,13 @@ memory. Ищутся O(N) вместо lookup, O(N²), N+1, повторный f
 offset pagination, no-op writes, amplification и event-loop blocking.
 
 Использовать детерминированные counters рядом с временем. Для timing записать
-warm/cold state, размеры `1x/10x/100x`, повторы, median/tail и шум. Обязательно
-проверить MD-473—MD-482: producer validation, metadata snapshots/read queue,
-capacity ledger, index build/cleanup/search, grep, history и ranged reads.
+warm/cold state, размеры `1x/10x/100x`, повторы, median/tail и шум. В применимом
+Release 0.5 targeted scenario pack проверяются reopened MD-473, MD-474, MD-476,
+MD-481, MD-482 и новые MD-484—MD-487: producer validation, metadata
+transactions/read queue, per-Space capacity ledger, index build/cleanup/search,
+grep, maintained history/asOf catalog, authenticated partial reads, full
+validation, import/export diagnostics и 72+ batch commit. Это сценарии для
+соразмерной приёмки; они не запускают полный аудит автоматически.
 
 ### Конкурентность и отказы
 
@@ -164,6 +168,55 @@ Hosted performance выполняется по `performance-gate.md`; autonomous
 `autonomous-acceptance.md`. Их receipts принимаются только при совпадении exact
 candidate/deployment и восстановленном baseline. Недоступная платформа или
 credential даёт `blocked`, а не synthetic `pass`. Production не используется.
+
+### Release 0.5 targeted scenario pack and traceability
+
+Эти строки добавляются в matrix только когда применимы к выбранному Release
+0.5 scope или прямо запрошены как targeted check. Они не меняют право запуска
+полного тщательного аудита из раздела «Право на запуск»: release, performance
+regression, hot-path change или внешний Task Manager status сами по себе его не
+запускают.
+
+Каждая строка R05 matrix сохраняет причинную цепочку:
+
+```text
+original complaint
+  -> observed symptom and real product entrypoint
+  -> cold | warm | legacy | injected-failure variant
+  -> local source/test receipt
+  -> exact candidate and hosted UAT deployment/read-back
+```
+
+`original complaint` — короткая точная цитата либо redacted user requirement;
+`real product entrypoint` содержит adapter/route/tool/use-case и storage
+boundary, а не только имя исправленного helper. Для каждой variant фиксируются
+exact revision/Space fixture fingerprint, operation, expected invariant,
+visited records/object I/O/peak memory, outcome и evidence refs. Hosted row
+остаётся `blocked` или `not_run`, если exact candidate/deployment/read-back
+нет; локальный pass её не заменяет. Bodies, paths, credentials, URLs и private
+Mind names остаются за пределами публичного matrix/report.
+
+Минимальный стабильный каталог сценариев:
+
+| ID | Contract row | Required variants |
+|---|---|---|
+| `r05-md473-proof` | Durable exact-revision producer proof и dependency-aware create/replace/delete/index/log/mixed validation. | warm, cold/restart, proof eviction, injected failure, hosted persistence. |
+| `r05-md474-metadata` | Addressable metadata transactions, bounded queue/read isolation, no foreground full checkpoint. | concurrent read/write, cold/restart, snapshot/event failure. |
+| `r05-md476-capacity` | Per-Space capacity/reachability keys and atomic reservation/reconcile. | same/different Space, warning/soft/hard, reservation failure and recovery. |
+| `r05-md481-history` | Maintained compact history and exact UTC `asOf` catalog. | warm, cold/restart/eviction, missing/corrupt catalog, revoked access. |
+| `r05-md482-range` | Authenticated cryptographic partial-read chunks with full-read legacy fallback. | modern range, v1/v2/no-range, bad proof, UTF-8 boundary, timeout. |
+| `r05-md484-validation` | Full exact-revision `validate_mind`, bounded concurrency or resumable progress, current access and failure behavior. | 72+ entries, cold/restart, revoke between batches, object failure/deadline. |
+| `r05-md485-capacity-diagnostics` | Import/export capacity and heavy-operation stable codes/details/retry policy. | plan/stage/validate/promote/export, each threshold and fairness lane. |
+| `r05-md486-batch-commit` | 72+ ordinary operations, bounded object I/O, no partial revision, exact reconcile. | mixed files, injected object failure, unknown transport outcome, retry. |
+| `r05-md487-traceability` | Complaint-to-entrypoint-to-variant-to-hosted evidence join. | one complete trace per reopened/new row, redacted public summary. |
+
+Каждая строка дополнительно отмечает `legacy` variant для применимого
+manifest/object/adapter path; если legacy path к сценарию неприменим, matrix
+содержит явное `not_applicable` с причиной, а не молча пропускает ось.
+
+The pack may be executed by repository tests, a targeted UAT probe or both.
+It never mutates Production and never upgrades a targeted receipt into a claim
+that the full audit has run.
 
 ## Фаза 4. Канонические команды
 
