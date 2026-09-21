@@ -6,10 +6,14 @@ import {
   migrateLegacyMindBindingOwners,
 } from "./credential-write-target-internals.js";
 import { clonePrincipalMindUsageOwners } from "./principal-mind-usage-internals.js";
+import { ensureSpaceRevisionProjections } from "./revision-internals.js";
 
 export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStoreState {
   /** Trusted adapter checkpoint; canonical objects remain outside this projection. */
     exportDurableSnapshot(): unknown {
+      for (const [spaceId, state] of this._spaces) {
+        ensureSpaceRevisionProjections(spaceId, state);
+      }
       const reachabilityCounts = this._objectReachabilityCounts();
       this._ensureCapacityUsageLedger(new Set(this._spaces.keys()));
       const legacyCredentialWriteTargetUpgrades = new Map(

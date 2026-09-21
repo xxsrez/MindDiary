@@ -690,7 +690,7 @@ export function capacityUsageFromCanonicalLedger(input: Readonly<{
   queuedNotes?: ReadonlyMap<string, Readonly<import("@mind-diary/application-ports").QueuedNote>>;
   spaceIds: ReadonlySet<SpaceId>;
   ledger: ReadonlyMap<SpaceId, Readonly<CapacityUsageSnapshot>>;
-  committedCanonicalKeys?: Iterable<string>;
+  canonicalKeysBySpace: ReadonlyMap<SpaceId, ReadonlySet<string>>;
   stagedBundleFiles: ReadonlyMap<StagedBundleFileId, Readonly<StagedBundleFileRecord>>;
   exportJobs: ReadonlyMap<JobId, Readonly<ExportJob>>;
   markdownImportPlans?: ReadonlyMap<string, Readonly<MarkdownImportPlan>>;
@@ -707,9 +707,8 @@ export function capacityUsageFromCanonicalLedger(input: Readonly<{
   let latestReconciledAt: UtcInstant | null = null;
   const uniqueCanonical = new Set<string>();
 
-  for (const key of input.committedCanonicalKeys ?? []) {
-    const separator = key.indexOf("\u0000");
-    if (separator > 0 && input.spaceIds.has(key.slice(0, separator) as SpaceId)) {
+  for (const spaceId of input.spaceIds) {
+    for (const key of input.canonicalKeysBySpace.get(spaceId) ?? []) {
       uniqueCanonical.add(key);
     }
   }

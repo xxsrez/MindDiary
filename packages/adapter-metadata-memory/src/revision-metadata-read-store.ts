@@ -61,6 +61,7 @@ import type {
   PublicMindCatalogPageRequest,
   PublicMindCatalogPageResult,
   RecordPrincipalActivityRequest,
+  RevisionCatalogEntry,
   RevokeMindBindingOwnerRequest,
   RevokeMindBindingOwnerResult,
   RevokeCredentialWriteTargetOwnerRequest,
@@ -103,6 +104,7 @@ import {
   cloneLegacyCredentialWriteTargetUpgrades,
   clonePrincipalMindUsageOwners,
   cloneEnvelope,
+  cloneRevisionCatalogEntry,
   cloneIdempotencyRecords,
   cloneMindBindingOwners,
   clonePrincipalActivity,
@@ -120,11 +122,13 @@ import {
   encodePublicCatalogCursor,
   encodeServiceOperatorCursor,
   freezeStagedBundleFile,
+  ensureSpaceRevisionProjections,
   maxUtilizationState,
   mindBindingEffectsAvailable,
   mindBindingSnapshot,
   migrateLegacyMindBindingOwners,
   normalizeDirectorySearch,
+  normalizedUtcInstant,
   ownedCapacitySpaceIds,
   personalMindProfileFromAccount,
   readMembershipReplay,
@@ -158,14 +162,6 @@ import {
   version,
 } from "@mind-diary/application-ports";
 import { RevisionMetadataSnapshotStore } from "./revision-metadata-snapshot-store.js";
-
-function normalizedUtcInstant(value: UtcInstant): string {
-  const withoutZone = value.slice(0, -1);
-  const separator = withoutZone.lastIndexOf(".");
-  const seconds = separator === -1 ? withoutZone : withoutZone.slice(0, separator);
-  const fraction = separator === -1 ? "" : withoutZone.slice(separator + 1);
-  return `${seconds}.${fraction.padEnd(9, "0")}Z`;
-}
 
 export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshotStore {
   async decommissionLegacyMindBindingsForMigration(): Promise<void> {
@@ -1735,6 +1731,25 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       });
     }
 
+  /** Exposes bounded projection work for deterministic adapter integration tests. */
+  inspectProjectionVisitsForTest(): Readonly<{
+    readonly revisionCatalog: number;
+    readonly revisionAsOf: number;
+    readonly capacityCanonicalKeys: number;
+  }> {
+    return Object.freeze({
+      revisionCatalog: this._revisionCatalogVisits,
+      revisionAsOf: this._revisionAsOfVisits,
+      capacityCanonicalKeys: this._capacityCanonicalKeyVisits,
+    });
+  }
+
+  resetProjectionVisitsForTest(): void {
+    this._revisionCatalogVisits = 0;
+    this._revisionAsOfVisits = 0;
+    this._capacityCanonicalKeyVisits = 0;
+  }
+
   async readHead(spaceId: SpaceId): Promise<RevisionId | null> {
       return this._spaces.get(spaceId)?.head ?? null;
     }
@@ -1763,58 +1778,69 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       if (!Number.isSafeInteger(query.limit) || query.limit < 1) {
         throw new TypeError("revision catalog limit must be positive");
       }
-      const revisions = [...(this._spaces.get(spaceId)?.revisions.values() ?? [])]
-        .sort((left, right) =>
-          right.revision.revisionNumber - left.revision.revisionNumber);
-      let candidates = revisions;
+      const state = this._spaces.get(spaceId);
+      if (state !== undefined) ensureSpaceRevisionProjections(spaceId, state);
+      const catalog = state?.revisionCatalog;
+      const revisionIdsByNumber = state?.revisionIdsByNumber;
+      let startNumber: number;
       if (query.beforeRevisionId !== null) {
-        const boundary = revisions.find((entry) =>
-          entry.revision.revisionId === query.beforeRevisionId);
+        const boundary = catalog?.get(query.beforeRevisionId);
         if (boundary === undefined) return Object.freeze({
           entries: Object.freeze([]),
           hasMore: false,
           boundaryFound: false,
         });
-        candidates = revisions.filter((entry) =>
-          entry.revision.revisionNumber < boundary.revision.revisionNumber);
+        startNumber = boundary.revision.revisionNumber - 1;
+      } else {
+        const head = state?.head === null || state?.head === undefined
+          ? undefined
+          : catalog?.get(state.head);
+        startNumber = head?.revision.revisionNumber ?? 0;
       }
-      const page = candidates.slice(0, query.limit);
+      // The revision chain is contiguous, so an addressable number map lets
+      // this keyset page visit only limit + 1 catalog rows.
+      const page: Readonly<RevisionCatalogEntry>[] = [];
+      for (
+        let revisionNumber = startNumber;
+        revisionNumber > 0 && page.length <= query.limit;
+        revisionNumber -= 1
+      ) {
+        const revisionId = revisionIdsByNumber?.get(revisionNumber);
+        if (revisionId === undefined) break;
+        const entry = catalog?.get(revisionId);
+        if (entry === undefined) break;
+        this._revisionCatalogVisits += 1;
+        page.push(entry);
+      }
+      const hasMore = page.length > query.limit;
+      const selectedPage = page.slice(0, query.limit);
       return Object.freeze({
-        entries: Object.freeze(page.map((envelope) => {
-          let totalBytes = 0;
-          for (const entry of envelope.manifest.entries) totalBytes += entry.size;
-          return Object.freeze({
-            revision: Object.freeze({
-              ...envelope.revision,
-              committedBy: Object.freeze({ ...envelope.revision.committedBy }),
-            }),
-            fileCount: envelope.manifest.entries.length,
-            totalBytes,
-          });
-        })),
-        hasMore: candidates.length > page.length,
+        entries: Object.freeze(selectedPage.map(cloneRevisionCatalogEntry)),
+        hasMore,
         boundaryFound: true,
       });
     }
 
   async resolveRevisionAsOf(spaceId: SpaceId, asOf: UtcInstant) {
       const normalizedAsOf = normalizedUtcInstant(asOf);
-      const selected = [...(this._spaces.get(spaceId)?.revisions.values() ?? [])]
-        .filter((entry) =>
-          normalizedUtcInstant(entry.revision.committedAt) <= normalizedAsOf)
-        .sort((left, right) =>
-          right.revision.revisionNumber - left.revision.revisionNumber)[0];
-      if (selected === undefined) return null;
-      let totalBytes = 0;
-      for (const entry of selected.manifest.entries) totalBytes += entry.size;
-      return Object.freeze({
-        revision: Object.freeze({
-          ...selected.revision,
-          committedBy: Object.freeze({ ...selected.revision.committedBy }),
-        }),
-        fileCount: selected.manifest.entries.length,
-        totalBytes,
-      });
+      const state = this._spaces.get(spaceId);
+      if (state !== undefined) ensureSpaceRevisionProjections(spaceId, state);
+      const index = state?.revisionAsOfIndex ?? [];
+      const catalog = state?.revisionCatalog;
+      let low = 0;
+      let high = index.length;
+      // Upper-bound search selects the last row at or before the instant. The
+      // index's tie order makes equal timestamps deterministic by revision
+      // number, then revision ID.
+      while (low < high) {
+        const middle = low + Math.floor((high - low) / 2);
+        this._revisionAsOfVisits += 1;
+        if (index[middle]!.committedAt <= normalizedAsOf) low = middle + 1;
+        else high = middle;
+      }
+      if (low === 0) return null;
+      const selected = catalog?.get(index[low - 1]!.revisionId);
+      return selected === undefined ? null : cloneRevisionCatalogEntry(selected);
     }
 
   async readAccount(

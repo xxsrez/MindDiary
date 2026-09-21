@@ -76,6 +76,7 @@ import {
   SHA256_PATTERN,
   activeReservationAmounts,
   canonicalManifestSource,
+  canonicalKeysForEnvelope,
   capacityOwnerForSpace,
   capacityReservationMatches,
   canonicalCapacityUsageForSpace,
@@ -83,11 +84,15 @@ import {
   cloneCapacityReservation,
   cloneEnvelope,
   currentSitesAuthorizationStateFromMaps,
+  ensureSpaceRevisionProjections,
   envelopesEqual,
   freezeKnowledgeSpace,
+  insertRevisionAsOfIndexEntry,
   maxUtilizationState,
+  normalizedUtcInstant,
   ordinaryMindSnapshotFromMaps,
   ownedCapacitySpaceIds,
+  revisionCatalogEntryFromEnvelope,
   sha256,
   validCapacityAdmissionRequest,
   validCapacityAmounts,
@@ -102,7 +107,23 @@ import {
 export abstract class RevisionMetadataStoreState {
   readonly kind = "metadata-store" as const;
 
-  protected _spaces = new Map<SpaceId, SpaceState>();
+  private _spaceStates = new Map<SpaceId, SpaceState>();
+
+  /**
+   * Transaction boundaries replace the complete Space map. Rebuild missing
+   * projections at that boundary so delete/account-cascade rewrites cannot
+   * leave a later history read with a manifest-scan fallback.
+   */
+  protected get _spaces(): Map<SpaceId, SpaceState> {
+    return this._spaceStates;
+  }
+
+  protected set _spaces(value: Map<SpaceId, SpaceState>) {
+    for (const [spaceId, state] of value) {
+      ensureSpaceRevisionProjections(spaceId, state);
+    }
+    this._spaceStates = value;
+  }
 
   protected _revisionsById = new Map<RevisionId, Envelope>();
 
@@ -126,6 +147,13 @@ export abstract class RevisionMetadataStoreState {
   protected _indexStates = new Map<string, Readonly<RevisionIndexState>>();
 
   protected _revisionIndexRecoveryCursor = 0;
+
+  /** Test-only deterministic counters for bounded projection reads. */
+  protected _revisionCatalogVisits = 0;
+
+  protected _revisionAsOfVisits = 0;
+
+  protected _capacityCanonicalKeyVisits = 0;
 
   protected _stagedBundleFiles = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
 
@@ -612,9 +640,35 @@ export abstract class RevisionMetadataStoreState {
 
       const stored = cloneEnvelope(envelope);
       const nextState = state ?? { head: null, revisions: new Map<RevisionId, Envelope>() };
+      // Transactions pass cloned SpaceState values, so projection updates stay
+      // atomic with the candidate revision and disappear with a rolled-back
+      // candidate. A legacy state is rebuilt once here if it predates the
+      // compact projections.
+      ensureSpaceRevisionProjections(revision.spaceId, nextState);
+      const revisionCatalog = new Map(nextState.revisionCatalog ?? []);
+      const revisionIdsByNumber = new Map(nextState.revisionIdsByNumber ?? []);
+      let revisionAsOfIndex = [...(nextState.revisionAsOfIndex ?? [])];
+      const canonicalKeys = new Set(nextState.canonicalKeys ?? []);
       // These adjacent synchronous mutations are the in-memory transaction boundary.
       nextState.revisions.set(revision.revisionId, stored);
       nextState.head = revision.revisionId;
+      revisionCatalog.set(
+        revision.revisionId,
+        revisionCatalogEntryFromEnvelope(stored),
+      );
+      revisionIdsByNumber.set(revision.revisionNumber, revision.revisionId);
+      revisionAsOfIndex = insertRevisionAsOfIndexEntry(revisionAsOfIndex, {
+        committedAt: normalizedUtcInstant(revision.committedAt),
+        revisionNumber: revision.revisionNumber,
+        revisionId: revision.revisionId,
+      });
+      for (const key of canonicalKeysForEnvelope(revision.spaceId, stored)) {
+        canonicalKeys.add(key);
+      }
+      nextState.revisionCatalog = revisionCatalog;
+      nextState.revisionIdsByNumber = revisionIdsByNumber;
+      nextState.revisionAsOfIndex = Object.freeze(revisionAsOfIndex);
+      nextState.canonicalKeys = canonicalKeys;
       spaces.set(revision.spaceId, nextState);
       revisionsById.set(revision.revisionId, stored);
       return Object.freeze({ kind: "committed", envelope: stored, replayed: false });
@@ -722,10 +776,19 @@ export abstract class RevisionMetadataStoreState {
       }> = {},
     ): Readonly<CapacityUsageSnapshot> {
       this._ensureCapacityUsageLedger(spaceIds);
+      const canonicalKeysBySpace = new Map<SpaceId, ReadonlySet<string>>();
+      for (const spaceId of spaceIds) {
+        const state = this._spaces.get(spaceId);
+        if (state === undefined) continue;
+        ensureSpaceRevisionProjections(spaceId, state);
+        const canonicalKeys = state.canonicalKeys ?? new Set<string>();
+        this._capacityCanonicalKeyVisits += canonicalKeys.size;
+        canonicalKeysBySpace.set(spaceId, canonicalKeys);
+      }
       return capacityUsageFromCanonicalLedger({
         spaceIds,
         ledger: this._capacityUsageLedger,
-        committedCanonicalKeys: this._objectReachabilityCounts().capacity.keys(),
+        canonicalKeysBySpace,
         stagedBundleFiles: overrides.stagedBundleFiles ?? this._stagedBundleFiles,
         queuedNotes: overrides.queuedNotes ?? this._queuedNotes,
         exportJobs: overrides.exportJobs ?? this._exportJobs,

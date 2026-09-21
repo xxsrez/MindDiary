@@ -385,6 +385,81 @@ test("as_of treats equivalent UTC fractions as the same instant", async () => {
   assert.equal(oneNanosecondEarlier.resolvedRevisionId, initialRevision);
 });
 
+test("revision catalog and UTC projections stay bounded, deterministic, and durable", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 21, "Projection Owner");
+  const mind = await createMind(env, owner, "projection-history");
+  const committedAt = "2026-08-07T20:02:00.100Z";
+  let latestRevisionId = mind.headRevisionId;
+  for (let index = 0; index < 128; index += 1) {
+    latestRevisionId = await commitFiles(
+      env,
+      owner,
+      mind,
+      [{ path: "index.md", text: indexFile() }],
+      `Projection commit ${index}`,
+      committedAt,
+    );
+  }
+
+  env.metadata.resetProjectionVisitsForTest();
+  const firstPage = await env.metadata.listRevisionCatalog(mind.mindId, {
+    beforeRevisionId: null,
+    limit: 3,
+  });
+  assert.equal(firstPage.entries.length, 3);
+  assert.equal(firstPage.hasMore, true);
+  assert.ok(env.metadata.inspectProjectionVisitsForTest().revisionCatalog <= 4);
+  const secondPage = await env.metadata.listRevisionCatalog(mind.mindId, {
+    beforeRevisionId: firstPage.entries.at(-1).revision.revisionId,
+    limit: 3,
+  });
+  assert.equal(secondPage.entries.length, 3);
+  assert.deepEqual(
+    secondPage.entries.map((entry) => entry.revision.revisionNumber),
+    firstPage.entries.map((entry) => entry.revision.revisionNumber - 3),
+  );
+  assert.ok(env.metadata.inspectProjectionVisitsForTest().revisionCatalog <= 8);
+
+  env.metadata.resetProjectionVisitsForTest();
+  const asOf = await env.metadata.resolveRevisionAsOf(mind.mindId, committedAt);
+  assert.equal(asOf.revision.revisionId, latestRevisionId);
+  assert.equal(asOf.revision.committedAt, committedAt);
+  assert.ok(env.metadata.inspectProjectionVisitsForTest().revisionAsOf <= 9);
+
+  const restored = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    env.metadata.exportDurableSnapshot(),
+  );
+  restored.resetProjectionVisitsForTest();
+  const restoredPage = await restored.listRevisionCatalog(mind.mindId, {
+    beforeRevisionId: null,
+    limit: 3,
+  });
+  assert.deepEqual(
+    restoredPage.entries.map((entry) => entry.revision.revisionId),
+    firstPage.entries.map((entry) => entry.revision.revisionId),
+  );
+  const restoredAsOf = await restored.resolveRevisionAsOf(mind.mindId, committedAt);
+  assert.equal(restoredAsOf.revision.revisionId, latestRevisionId);
+  assert.ok(restored.inspectProjectionVisitsForTest().revisionCatalog <= 4);
+  assert.ok(restored.inspectProjectionVisitsForTest().revisionAsOf <= 9);
+
+  const legacySnapshot = env.metadata.exportDurableSnapshot();
+  legacySnapshot.spaces = new Map(
+    [...legacySnapshot.spaces].map(([spaceId, state]) => [
+      spaceId,
+      { head: state.head, revisions: new Map(state.revisions) },
+    ]),
+  );
+  const restoredLegacy = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    legacySnapshot,
+  );
+  restoredLegacy.resetProjectionVisitsForTest();
+  const legacyAsOf = await restoredLegacy.resolveRevisionAsOf(mind.mindId, committedAt);
+  assert.equal(legacyAsOf.revision.revisionId, latestRevisionId);
+  assert.ok(restoredLegacy.inspectProjectionVisitsForTest().revisionAsOf <= 9);
+});
+
 test("a file deleted from HEAD remains fetchable from its authorized exact revision", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Fetch Owner");

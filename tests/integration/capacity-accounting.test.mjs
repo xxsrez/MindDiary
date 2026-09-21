@@ -311,3 +311,75 @@ test("expired reservations become bounded cleanup work and telemetry stays conte
   assert.equal(retryAfterCleanup.kind, "admitted");
   assert.equal(retryAfterCleanup.replayed, false);
 });
+
+test("selected capacity usage is independent of foreign history and jobs", async () => {
+  const metadata = new InMemoryRevisionMetadataStore();
+  const objects = new InMemoryObjectStore();
+  const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
+  const selectedSeed = await revisions.commit({
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: null,
+    revisionId: REVISIONS.initial.revisionId,
+    committedAt: REVISIONS.initial.committedAt,
+    committedBy: REVISION_AUTHORS.active,
+    summary: "selected capacity seed",
+    files: CANONICAL_REVISION_FILES,
+  });
+  assert.equal(selectedSeed.kind, "committed");
+  const foreignSpaceId = "space_foreign_capacity_growth";
+  const foreignRevisionPrefix = "revision_foreign_capacity_growth";
+  let foreignHead = null;
+  for (let index = 0; index < 96; index += 1) {
+    const revisionId = opaqueId(`${foreignRevisionPrefix}_${index}`);
+    const result = await revisions.commit({
+      spaceId: foreignSpaceId,
+      expectedRevisionId: foreignHead,
+      revisionId,
+      committedAt: `2026-08-22T12:${String(index % 60).padStart(2, "0")}:00.000Z`,
+      committedBy: REVISION_AUTHORS.active,
+      summary: `foreign capacity ${index}`,
+      files: CANONICAL_REVISION_FILES,
+    });
+    assert.equal(result.kind, "committed");
+    foreignHead = revisionId;
+  }
+  const before = await metadata.readMindCapacityUsage(MINDS.ordinary.spaceId);
+  assert.ok(before);
+  metadata.resetProjectionVisitsForTest();
+  await metadata.readMindCapacityUsage(MINDS.ordinary.spaceId);
+  const baselineVisits = metadata.inspectProjectionVisitsForTest().capacityCanonicalKeys;
+  assert.ok(baselineVisits > 0);
+
+  const snapshot = metadata.exportDurableSnapshot();
+  for (let index = 0; index < 96; index += 1) {
+    snapshot.exportJobs.set(`foreign_export_job_${index}`, {
+      jobId: `foreign_export_job_${index}`,
+      requestedByPrincipalId: PRINCIPALS.owner.principalId,
+      spaceId: foreignSpaceId,
+      revisionId: foreignHead,
+      idempotencyKey: `foreign_export_key_${index}`,
+      profile: "MD-OKF-ZIP-1",
+      state: "queued",
+      version: 1,
+      attempts: 0,
+      availableAt: CREATED,
+      createdAt: CREATED,
+      updatedAt: CREATED,
+      claimExpiresAt: null,
+      completedAt: null,
+      expiresAt: EXPIRES,
+      lastFailureCode: null,
+      archive: null,
+      archiveCleanedAt: null,
+    });
+  }
+  const restored = InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot);
+  restored.resetProjectionVisitsForTest();
+  const after = await restored.readMindCapacityUsage(MINDS.ordinary.spaceId);
+  assert.ok(after);
+  assert.deepEqual(after, before);
+  assert.equal(
+    restored.inspectProjectionVisitsForTest().capacityCanonicalKeys,
+    baselineVisits,
+  );
+});

@@ -34,12 +34,14 @@ import {
   type PrincipalActivitySummary,
   type PrincipalId,
   type RevisionIndexState,
+  type RevisionCatalogEntry,
   type ServiceOperatorDirectoryQuery,
   type ServiceOperatorPrincipalProjection,
   type StageContentCommitEffectsRequest,
   type StageContentCommitEffectsResult,
   type StagedBundleFileId,
   type StagedBundleFileRecord,
+  type UtcInstant,
 } from "@mind-diary/application-ports";
 
 export type Envelope = Readonly<CanonicalRevisionEnvelope>;
@@ -53,6 +55,20 @@ export type OutboxMessageId = AuditOutboxMessage["outboxMessageId"];
 export interface SpaceState {
   head: RevisionId | null;
   revisions: Map<RevisionId, Envelope>;
+  /** Compact metadata projection used by history reads; manifests stay out. */
+  revisionCatalog?: Map<RevisionId, Readonly<RevisionCatalogEntry>>;
+  /** Addressable revision numbers make before-cursor lookup keyset based. */
+  revisionIdsByNumber?: Map<number, RevisionId>;
+  /** Sorted by UTC instant, revision number, then revision ID. */
+  revisionAsOfIndex?: readonly RevisionAsOfIndexEntry[];
+  /** Space-local canonical keys used for bounded capacity deduplication. */
+  canonicalKeys?: ReadonlySet<string>;
+}
+
+export interface RevisionAsOfIndexEntry {
+  readonly committedAt: string;
+  readonly revisionNumber: number;
+  readonly revisionId: RevisionId;
 }
 
 export type AuthorizationState = Readonly<CurrentAuthorizationState>;
@@ -241,12 +257,184 @@ export function cloneEnvelope(envelope: Envelope): Envelope {
   });
 }
 
+/**
+ * Normalize the precision used by the UTC selector index. Revision envelopes
+ * accept one to nine fractional digits, while the selector contract treats
+ * equivalent instants as equal at nanosecond precision.
+ */
+export function normalizedUtcInstant(value: UtcInstant): string {
+  const withoutZone = value.slice(0, -1);
+  const separator = withoutZone.lastIndexOf(".");
+  const seconds = separator === -1 ? withoutZone : withoutZone.slice(0, separator);
+  const fraction = separator === -1 ? "" : withoutZone.slice(separator + 1);
+  return `${seconds}.${fraction.padEnd(9, "0")}Z`;
+}
+
+export function compareRevisionAsOfIndexEntries(
+  left: Readonly<RevisionAsOfIndexEntry>,
+  right: Readonly<RevisionAsOfIndexEntry>,
+): number {
+  const committedAt = left.committedAt < right.committedAt
+    ? -1
+    : left.committedAt > right.committedAt
+      ? 1
+      : 0;
+  return committedAt ||
+    left.revisionNumber - right.revisionNumber ||
+    compareUnicodeScalarValues(left.revisionId, right.revisionId);
+}
+
+export function insertRevisionAsOfIndexEntry(
+  index: readonly RevisionAsOfIndexEntry[],
+  entry: RevisionAsOfIndexEntry,
+): RevisionAsOfIndexEntry[] {
+  const result = [...index];
+  const last = result.at(-1);
+  if (last === undefined || compareRevisionAsOfIndexEntries(last, entry) <= 0) {
+    result.push(entry);
+    return result;
+  }
+  let low = 0;
+  let high = result.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (compareRevisionAsOfIndexEntries(result[middle]!, entry) <= 0) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  result.splice(low, 0, entry);
+  return result;
+}
+
+export function revisionCatalogEntryFromEnvelope(
+  envelope: Readonly<Envelope>,
+): Readonly<RevisionCatalogEntry> {
+  let totalBytes = 0;
+  for (const entry of envelope.manifest.entries) totalBytes += entry.size;
+  return Object.freeze({
+    revision: Object.freeze({
+      ...envelope.revision,
+      committedBy: Object.freeze({ ...envelope.revision.committedBy }),
+    }),
+    fileCount: envelope.manifest.entries.length,
+    totalBytes,
+  });
+}
+
+export function cloneRevisionCatalogEntry(
+  entry: Readonly<RevisionCatalogEntry>,
+): Readonly<RevisionCatalogEntry> {
+  return Object.freeze({
+    ...entry,
+    revision: Object.freeze({
+      ...entry.revision,
+      committedBy: Object.freeze({ ...entry.revision.committedBy }),
+    }),
+  });
+}
+
+export function canonicalKeysForEnvelope(
+  spaceId: SpaceId,
+  envelope: Readonly<Envelope>,
+): readonly string[] {
+  return [
+    `${spaceId}\u0000manifest\u0000${envelope.revision.manifestHash}`,
+    ...envelope.manifest.entries.map(
+      (entry) => `${spaceId}\u0000${entry.kind}\u0000${entry.sha256}`,
+    ),
+  ];
+}
+
+export function spaceRevisionProjectionsPresent(
+  state: Readonly<SpaceState>,
+): boolean {
+  return state.revisionCatalog instanceof Map &&
+    state.revisionIdsByNumber instanceof Map &&
+    Array.isArray(state.revisionAsOfIndex) &&
+    state.canonicalKeys instanceof Set &&
+    state.revisionCatalog.size === state.revisions.size &&
+    state.revisionIdsByNumber.size === state.revisions.size &&
+    state.revisionAsOfIndex.length === state.revisions.size &&
+    (state.revisions.size === 0 || state.canonicalKeys.size > 0);
+}
+
+/** Build the compact metadata/canonical-key projections once for a legacy state. */
+export function rebuildSpaceRevisionProjections(
+  spaceId: SpaceId,
+  state: SpaceState,
+): void {
+  const revisionCatalog = new Map<RevisionId, Readonly<RevisionCatalogEntry>>();
+  const revisionIdsByNumber = new Map<number, RevisionId>();
+  const revisionAsOfIndex: RevisionAsOfIndexEntry[] = [];
+  const canonicalKeys = new Set<string>();
+  for (const envelope of state.revisions.values()) {
+    const revision = envelope.revision;
+    revisionCatalog.set(
+      revision.revisionId,
+      revisionCatalogEntryFromEnvelope(envelope),
+    );
+    revisionIdsByNumber.set(revision.revisionNumber, revision.revisionId);
+    revisionAsOfIndex.push({
+      committedAt: normalizedUtcInstant(revision.committedAt),
+      revisionNumber: revision.revisionNumber,
+      revisionId: revision.revisionId,
+    });
+    for (const key of canonicalKeysForEnvelope(spaceId, envelope)) {
+      canonicalKeys.add(key);
+    }
+  }
+  revisionAsOfIndex.sort(compareRevisionAsOfIndexEntries);
+  state.revisionCatalog = revisionCatalog;
+  state.revisionIdsByNumber = revisionIdsByNumber;
+  state.revisionAsOfIndex = Object.freeze(revisionAsOfIndex);
+  state.canonicalKeys = canonicalKeys;
+}
+
+export function ensureSpaceRevisionProjections(
+  spaceId: SpaceId,
+  state: SpaceState,
+): void {
+  if (!spaceRevisionProjectionsPresent(state)) {
+    rebuildSpaceRevisionProjections(spaceId, state);
+  }
+}
+
 export function cloneSpaces(source: ReadonlyMap<SpaceId, SpaceState>): Map<SpaceId, SpaceState> {
   return new Map(
-    [...source].map(([spaceId, state]) => [
-      spaceId,
-      { head: state.head, revisions: new Map(state.revisions) },
-    ]),
+    [...source].map(([spaceId, state]) => {
+      const cloned: SpaceState = {
+        head: state.head,
+        revisions: new Map(state.revisions),
+      };
+      if (state.revisionCatalog !== undefined) {
+        cloned.revisionCatalog = new Map(
+          [...state.revisionCatalog].map(([revisionId, entry]) => [
+            revisionId,
+            Object.freeze({
+              ...entry,
+              revision: Object.freeze({
+                ...entry.revision,
+                committedBy: Object.freeze({ ...entry.revision.committedBy }),
+              }),
+            }),
+          ]),
+        );
+      }
+      if (state.revisionIdsByNumber !== undefined) {
+        cloned.revisionIdsByNumber = new Map(state.revisionIdsByNumber);
+      }
+      if (state.revisionAsOfIndex !== undefined) {
+        cloned.revisionAsOfIndex = Object.freeze(
+          state.revisionAsOfIndex.map((entry) => Object.freeze({ ...entry })),
+        );
+      }
+      if (state.canonicalKeys !== undefined) {
+        cloned.canonicalKeys = new Set(state.canonicalKeys);
+      }
+      return [spaceId, cloned] as const;
+    }),
   );
 }
 

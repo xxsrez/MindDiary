@@ -75,6 +75,7 @@ import {
   cloneCredentialWriteTargetOwners,
   cloneLegacyCredentialWriteTargetUpgrades,
   clonePrincipalMindUsageOwners,
+  ensureSpaceRevisionProjections,
   migrateLegacyCredentialTargetsToPrincipalUsage,
   migrateLegacyMindBindingOwners,
   migrateLegacyPrincipalMindUsageOwners,
@@ -187,6 +188,9 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         restored._queuedNotes.set(id, Object.freeze(structuredClone(note)));
       }
       restored._spaces = new Map(snapshot.spaces as Map<SpaceId, SpaceState>);
+      for (const [spaceId, state] of restored._spaces) {
+        ensureSpaceRevisionProjections(spaceId, state);
+      }
       restored._revisionsById = new Map(snapshot.revisionsById as Map<RevisionId, Envelope>);
       const persistedReachability = snapshot.objectReachabilityCounts;
       restored._reachabilityCounts =
