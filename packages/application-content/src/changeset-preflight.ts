@@ -6,6 +6,14 @@ import type {
   BundleFileStagingStore,
   PrincipalMindUsageWritePin,
   StagedBundleFileRecord,
+  ProducerValidationCertificate,
+  ProducerValidationDependency,
+  ProducerValidationFileSummary,
+  ProducerValidationReverseDependency,
+} from "@mind-diary/application-ports";
+import {
+  PRODUCER_VALIDATION_CERTIFICATE_SCHEMA,
+  readProducerValidationCertificate,
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
@@ -13,6 +21,9 @@ import {
   bundleFileMediaType,
   canonicalMarkdownPath,
   canonicalBundleFilePath,
+  REVISION_MANIFEST_FORMAT_V4,
+  createRevisionManifest,
+  serializeRevisionManifest,
   sha256Digest,
   type RevisionId,
   type RevisionMode,
@@ -28,6 +39,8 @@ import {
   parseOkfFile,
   validateOkfBundle,
   validateOkfProducerBundle,
+  OKF_AUDITED_SPEC_REVISION,
+  OKF_AUDITED_SPEC_SHA256,
   type OkfBundleValidation,
   type OkfDiagnostic,
 } from "@mind-diary/okf-codec";
@@ -36,7 +49,9 @@ import { analyzeBundleFileReferences } from "./bundle-file-references.js";
 import { classifyBundleFileMediaType } from "./bundle-files.js";
 import {
   analyzeMarkdownConsistency,
-  collectMarkdownLocalTargets,
+  collectMarkdownDependencySummaries,
+  MARKDOWN_CONSISTENCY_RULES_VERSION,
+  type MarkdownDependencySummary,
 } from "./markdown-consistency.js";
 import { materializeLogEntry } from "./reserved-content.js";
 import { IncrementalSha256 } from "./incremental-sha256.js";
@@ -237,6 +252,8 @@ export type ChangesetPreflightResult =
       readonly candidateFiles: readonly Readonly<ChangesetCandidateRevisionFile>[];
       readonly stagedBundleFileRecords: readonly Readonly<StagedBundleFileRecord>[];
       readonly validation: OkfBundleValidation;
+      /** Candidate proof draft; commit binds it to the generated revision ID. */
+      readonly producerCertificate?: Readonly<Omit<ProducerValidationCertificate, "revisionId">>;
       readonly committedAt: UtcInstant;
     }
   | {
@@ -877,30 +894,376 @@ function digestText(text: string): Sha256Digest {
   return digest.digest() as Sha256Digest;
 }
 
-function producerValidationProofKey(
+const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
+const PRODUCER_PROFILE_VERSION = "strict_producer_2026-09-18" as const;
+const PRODUCER_RULES_VERSION = [
+  "okf-0.2",
+  OKF_AUDITED_SPEC_REVISION,
+  OKF_AUDITED_SPEC_SHA256,
+  `markdown-consistency-${MARKDOWN_CONSISTENCY_RULES_VERSION}`,
+].join("+");
+
+type ProducerCertificateDraft = Omit<ProducerValidationCertificate, "revisionId">;
+
+function digestJson(value: unknown): Sha256Digest {
+  return digestText(`${JSON.stringify(value)}\n`);
+}
+
+function actualCandidateDigest(file: Readonly<ChangesetCandidateRevisionFile>): Sha256Digest {
+  return file.kind === "markdown" && file.text !== undefined
+    ? digestText(file.text)
+    : file.sha256!;
+}
+
+function candidateManifestFingerprint(
+  files: readonly Readonly<ChangesetCandidateRevisionFile>[],
+): Sha256Digest {
+  const entries = files.map((file) => file.kind === "opaque"
+    ? Object.freeze({
+        kind: "opaque" as const,
+        path: file.path,
+        sha256: actualCandidateDigest(file),
+        mediaType: file.mediaType,
+        size: file.size,
+      })
+    : Object.freeze({
+        kind: "markdown" as const,
+        path: file.path,
+        sha256: actualCandidateDigest(file),
+        mediaType: file.mediaType,
+        size: file.size,
+      }));
+  const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V4);
+  return digestText(serializeRevisionManifest(manifest));
+}
+
+function canonicalDependencyReference(
+  reference: Readonly<ProducerValidationDependency>,
+): object {
+  return {
+    path: reference.path,
+    ...(reference.fragment === undefined ? {} : { fragment: reference.fragment }),
+    source_kind: reference.sourceKind,
+  };
+}
+
+function canonicalSummaryForFingerprint(
+  file: Readonly<ProducerValidationFileSummary>,
+): object {
+  return {
+    path: file.path,
+    kind: file.kind,
+    media_type: file.mediaType,
+    sha256: file.sha256,
+    size: file.size,
+    anchors: [...file.anchors],
+    outgoing_links: file.outgoingLinks.map(canonicalDependencyReference),
+    reverse_dependencies: file.reverseDependencies.map((reference) => ({
+      ...canonicalDependencyReference(reference),
+      source_path: reference.sourcePath,
+    })),
+    root_reachable: file.rootReachable,
+  };
+}
+
+function dependencyFingerprint(
+  files: readonly Readonly<ProducerValidationFileSummary>[],
+): Sha256Digest {
+  return digestJson({
+    schema: "mind-diary-producer-dependency-graph/v1",
+    files: [...files]
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .map(canonicalSummaryForFingerprint),
+  });
+}
+
+function freezeDependency(
+  reference: Readonly<ProducerValidationDependency>,
+): Readonly<ProducerValidationDependency> {
+  return Object.freeze({
+    path: reference.path,
+    ...(reference.fragment === undefined ? {} : { fragment: reference.fragment }),
+    sourceKind: reference.sourceKind,
+  });
+}
+
+function freezeReverseDependency(
+  reference: Readonly<ProducerValidationReverseDependency>,
+): Readonly<ProducerValidationReverseDependency> {
+  return Object.freeze({
+    ...freezeDependency(reference),
+    sourcePath: reference.sourcePath,
+  });
+}
+
+function freezeCertificateFile(
+  file: Readonly<ProducerValidationFileSummary>,
+): Readonly<ProducerValidationFileSummary> {
+  return Object.freeze({
+    path: file.path,
+    kind: file.kind,
+    mediaType: file.mediaType,
+    sha256: file.sha256,
+    size: file.size,
+    anchors: Object.freeze([...file.anchors]),
+    outgoingLinks: Object.freeze(file.outgoingLinks.map(freezeDependency)),
+    reverseDependencies: Object.freeze(file.reverseDependencies.map(freezeReverseDependency)),
+    rootReachable: file.rootReachable,
+  });
+}
+
+function toCertificateSummary(
+  file: Readonly<ChangesetCandidateRevisionFile>,
+  summary: Readonly<MarkdownDependencySummary> | null,
+): Readonly<ProducerValidationFileSummary> {
+  const outgoingLinks = summary?.outgoing.map((reference) => freezeDependency({
+    path: reference.path,
+    ...(reference.fragment === undefined ? {} : { fragment: reference.fragment }),
+    sourceKind: reference.sourceKind,
+  })) ?? [];
+  const reverseDependencies = summary?.incoming.map((reference) => freezeReverseDependency({
+    path: reference.path,
+    ...(reference.fragment === undefined ? {} : { fragment: reference.fragment }),
+    sourceKind: reference.sourceKind,
+    sourcePath: reference.sourcePath,
+  })) ?? [];
+  return freezeCertificateFile({
+    path: file.path,
+    kind: file.kind,
+    mediaType: file.mediaType,
+    sha256: actualCandidateDigest(file),
+    size: file.size,
+    anchors: summary?.anchors ?? [],
+    outgoingLinks,
+    reverseDependencies,
+    rootReachable: summary?.rootReachable ?? false,
+  });
+}
+
+function rebuildCertificateGraph(
+  files: readonly Readonly<ProducerValidationFileSummary>[],
+): readonly Readonly<ProducerValidationFileSummary>[] {
+  const byPath = new Map(files.map((file) => [file.path, file] as const));
+  const incoming = new Map<string, ProducerValidationReverseDependency[]>();
+  const edges = new Map<string, Set<string>>();
+  for (const file of files) {
+    edges.set(file.path, new Set());
+    for (const reference of file.outgoingLinks) {
+      if (byPath.has(reference.path)) edges.get(file.path)!.add(reference.path);
+      const dependencies = incoming.get(reference.path) ?? [];
+      dependencies.push({
+        path: reference.path,
+        ...(reference.fragment === undefined ? {} : { fragment: reference.fragment }),
+        sourceKind: reference.sourceKind,
+        sourcePath: file.path,
+      });
+      incoming.set(reference.path, dependencies);
+    }
+  }
+  const reachable = new Set<string>();
+  const pending = byPath.has("index.md") ? ["index.md"] : [];
+  while (pending.length > 0) {
+    const path = pending.pop()!;
+    if (reachable.has(path)) continue;
+    reachable.add(path);
+    for (const target of edges.get(path) ?? []) pending.push(target);
+  }
+  return Object.freeze([...files]
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .map((file) => freezeCertificateFile({
+      ...file,
+      outgoingLinks: [...file.outgoingLinks].sort((left, right) =>
+        left.path.localeCompare(right.path) ||
+        (left.fragment ?? "").localeCompare(right.fragment ?? "") ||
+        left.sourceKind.localeCompare(right.sourceKind)),
+      reverseDependencies: [...(incoming.get(file.path) ?? [])].sort((left, right) =>
+        left.sourcePath.localeCompare(right.sourcePath) ||
+        left.path.localeCompare(right.path) ||
+        (left.fragment ?? "").localeCompare(right.fragment ?? "") ||
+        left.sourceKind.localeCompare(right.sourceKind)),
+      rootReachable: reachable.has(file.path),
+    })));
+}
+
+function buildProducerCertificateDraft(
   spaceId: SpaceId,
-  files: readonly Readonly<{
+  files: readonly Readonly<ChangesetCandidateRevisionFile>[],
+  summaries: readonly Readonly<MarkdownDependencySummary>[],
+): Readonly<ProducerCertificateDraft> {
+  const summaryByPath = new Map(summaries.map((summary) => [summary.path, summary] as const));
+  const initial = files.map((file) => toCertificateSummary(file, summaryByPath.get(file.path) ?? null));
+  const projected = rebuildCertificateGraph(initial);
+  const certificateFiles = Object.freeze(projected);
+  return Object.freeze({
+    schema: PRODUCER_VALIDATION_CERTIFICATE_SCHEMA,
+    spaceId,
+    manifestFingerprint: candidateManifestFingerprint(files),
+    rulesVersion: PRODUCER_RULES_VERSION,
+    profileVersion: PRODUCER_PROFILE_VERSION,
+    dependencyFingerprint: dependencyFingerprint(certificateFiles),
+    files: certificateFiles,
+  });
+}
+
+function validCertificateReference(
+  value: unknown,
+  allowSourcePath = false,
+): boolean {
+  if (!isRecord(value) || typeof value.path !== "string" ||
+      (value.fragment !== undefined && typeof value.fragment !== "string") ||
+      (value.sourceKind !== "link" && value.sourceKind !== "source")) return false;
+  return Object.keys(value).every((key) =>
+    key === "path" || key === "fragment" || key === "sourceKind" ||
+    (allowSourcePath && key === "sourcePath"));
+}
+
+function validCertificateFile(
+  value: unknown,
+): value is Readonly<ProducerValidationFileSummary> {
+  if (!isRecord(value) ||
+      typeof value.path !== "string" ||
+      (value.kind !== "markdown" && value.kind !== "opaque") ||
+      typeof value.mediaType !== "string" ||
+      typeof value.sha256 !== "string" || !SHA256_PATTERN.test(value.sha256) ||
+      typeof value.size !== "number" || !Number.isSafeInteger(value.size) || value.size < 0 ||
+      !Array.isArray(value.anchors) || value.anchors.some((anchor) => typeof anchor !== "string") ||
+      !Array.isArray(value.outgoingLinks) || value.outgoingLinks.some((reference) => !validCertificateReference(reference)) ||
+      !Array.isArray(value.reverseDependencies) || value.reverseDependencies.some((reference) =>
+        !isRecord(reference) || !validCertificateReference(reference, true) ||
+        typeof reference.sourcePath !== "string") ||
+      typeof value.rootReachable !== "boolean") return false;
+  return Object.keys(value).every((key) => [
+    "path", "kind", "mediaType", "sha256", "size", "anchors", "outgoingLinks",
+    "reverseDependencies", "rootReachable",
+  ].includes(key));
+}
+
+function validProducerCertificateForEnvelope(
+  certificate: unknown,
+  spaceId: SpaceId,
+  revisionId: RevisionId,
+  manifestEntries: readonly Readonly<{
     readonly kind: "markdown" | "opaque";
     readonly path: string;
     readonly mediaType: string;
-    readonly sha256: Sha256Digest | null;
+    readonly sha256: Sha256Digest;
     readonly size: number;
-    readonly text?: string;
   }>[],
-): Sha256Digest {
-  const digest = new IncrementalSha256();
-  digest.update(ENCODER.encode(`mind-diary-producer-validation-proof-v1\n${spaceId}\n`));
-  for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
-    const sha256 = file.text === undefined ? file.sha256! : digestText(file.text);
-    digest.update(ENCODER.encode(`${JSON.stringify([
-      file.kind,
-      file.path,
-      file.mediaType,
-      sha256,
-      file.size,
-    ])}\n`));
+  manifestHash: Sha256Digest,
+): Readonly<ProducerValidationCertificate> | null {
+  if (!isRecord(certificate) ||
+      certificate.schema !== PRODUCER_VALIDATION_CERTIFICATE_SCHEMA ||
+      certificate.spaceId !== spaceId || certificate.revisionId !== revisionId ||
+      certificate.manifestFingerprint !== manifestHash ||
+      certificate.rulesVersion !== PRODUCER_RULES_VERSION ||
+      certificate.profileVersion !== PRODUCER_PROFILE_VERSION ||
+      typeof certificate.dependencyFingerprint !== "string" ||
+      !SHA256_PATTERN.test(certificate.dependencyFingerprint) ||
+      !Array.isArray(certificate.files) ||
+      Object.keys(certificate).some((key) => ![
+        "schema", "spaceId", "revisionId", "manifestFingerprint", "rulesVersion",
+        "profileVersion", "dependencyFingerprint", "files",
+      ].includes(key))) return null;
+  const files = certificate.files;
+  if (files.length !== manifestEntries.length || files.some((file) => !validCertificateFile(file))) {
+    return null;
   }
-  return digest.digest() as Sha256Digest;
+  const summaries = files as readonly Readonly<ProducerValidationFileSummary>[];
+  const manifestByPath = new Map(manifestEntries.map((entry) => [entry.path, entry] as const));
+  if (summaries.some((file) => {
+    const entry = manifestByPath.get(file.path);
+    return entry === undefined || entry.kind !== file.kind || entry.mediaType !== file.mediaType ||
+      entry.sha256 !== file.sha256 || entry.size !== file.size;
+  })) return null;
+  const projected = rebuildCertificateGraph(summaries);
+  if (JSON.stringify(projected) !== JSON.stringify(summaries) ||
+      dependencyFingerprint(summaries) !== certificate.dependencyFingerprint) return null;
+  const typed = certificate as unknown as ProducerValidationCertificate;
+  return Object.freeze({
+    schema: typed.schema,
+    spaceId: typed.spaceId,
+    revisionId: typed.revisionId,
+    manifestFingerprint: typed.manifestFingerprint,
+    rulesVersion: typed.rulesVersion,
+    profileVersion: typed.profileVersion,
+    dependencyFingerprint: typed.dependencyFingerprint,
+    files: Object.freeze(summaries.map(freezeCertificateFile)),
+  });
+}
+
+function markdownSummaryFromCertificate(
+  file: Readonly<ProducerValidationFileSummary>,
+): Readonly<MarkdownDependencySummary> {
+  return Object.freeze({
+    path: file.path,
+    anchors: Object.freeze([...file.anchors]),
+    outgoing: Object.freeze(file.outgoingLinks.map((reference) => Object.freeze({
+      path: reference.path,
+      ...(reference.fragment === undefined ? {} : { fragment: reference.fragment }),
+      sourceKind: reference.sourceKind,
+    }))),
+    incoming: Object.freeze(file.reverseDependencies.map((reference) => Object.freeze({
+      path: reference.path,
+      ...(reference.fragment === undefined ? {} : { fragment: reference.fragment }),
+      sourceKind: reference.sourceKind,
+      sourcePath: reference.sourcePath,
+    }))),
+    duplicateAnchors: Object.freeze([]),
+    unresolvedReferences: Object.freeze([]),
+    rootReachable: file.rootReachable,
+  });
+}
+
+function certificateGraphDiagnostics(
+  files: readonly Readonly<ProducerValidationFileSummary>[],
+): readonly OkfDiagnostic[] {
+  const byPath = new Map(files.map((file) => [file.path, file] as const));
+  const diagnostics: OkfDiagnostic[] = [];
+  for (const source of files) {
+    if (source.kind !== "markdown") continue;
+    for (const reference of source.outgoingLinks) {
+      const target = byPath.get(reference.path);
+      if (target === undefined) {
+        diagnostics.push(Object.freeze({
+          severity: "error",
+          category: "mind-diary-envelope",
+          source: "mind-diary-mvp",
+          code: reference.sourceKind === "source" ? "local_source_missing" : "markdown_file_missing",
+          path: source.path,
+          message: reference.sourceKind === "source"
+            ? "A local source is absent from this exact revision."
+            : "A linked file is absent from this exact revision.",
+        }));
+        continue;
+      }
+      if (reference.fragment !== undefined && target.kind === "markdown" &&
+          !target.anchors.includes(reference.fragment.toLocaleLowerCase("en-US"))) {
+        diagnostics.push(Object.freeze({
+          severity: "error",
+          category: "mind-diary-envelope",
+          source: "mind-diary-mvp",
+          code: "markdown_section_missing",
+          path: source.path,
+          message: "A linked Markdown section is absent from the target file.",
+        }));
+      }
+    }
+  }
+  return Object.freeze(diagnostics);
+}
+
+function mergeDiagnostics(
+  diagnostics: readonly OkfDiagnostic[],
+): readonly OkfDiagnostic[] {
+  const seen = new Set<string>();
+  const unique: OkfDiagnostic[] = [];
+  for (const diagnostic of diagnostics) {
+    const key = `${diagnostic.code}\u0000${diagnostic.path}\u0000${diagnostic.field ?? ""}\u0000${diagnostic.line ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(diagnostic);
+  }
+  return Object.freeze(unique);
 }
 
 function isDeltaRevisionReader(reader: HeadRevisionReader): reader is DeltaRevisionReader {
@@ -918,7 +1281,6 @@ export class ChangesetPreflightService {
   readonly #clock: Clock;
   readonly #limits: Readonly<ChangesetPreflightLimits>;
   readonly #stagedBundleFiles: Pick<BundleFileStagingStore, "readStagedBundleFile"> | null;
-  readonly #producerValidationProofs = new Map<Sha256Digest, true>();
 
   constructor(dependencies: ChangesetPreflightDependencies) {
     this.#authorizer = dependencies.authorizer;
@@ -975,29 +1337,25 @@ export class ChangesetPreflightService {
       });
     }
 
-    const parentProducerValidationProof = headEnvelope === null
+    const parentProducerCertificate = headEnvelope === null || currentRevisionId === null
       ? null
-      : producerValidationProofKey(request.spaceId, headEnvelope.manifest.entries);
-
-    const hasCreatedMarkdown = operationSet.operations.some(
-      (operation) => operation.type === "create_file",
-    );
+      : validProducerCertificateForEnvelope(
+          readProducerValidationCertificate(headEnvelope.revision),
+          request.spaceId,
+          currentRevisionId,
+          headEnvelope.manifest.entries,
+          headEnvelope.revision.manifestHash,
+        );
     let incrementalProducerValidation =
       request.producerProfile === true &&
       deltaReader !== null &&
       currentRevisionId !== null &&
-      parentProducerValidationProof !== null &&
-      this.#producerValidationProofs.has(parentProducerValidationProof) &&
-      operationSet.operations.every((operation) =>
-        operation.type === "create_file" ||
-        operation.type === "replace_index" ||
-        operation.type === "add_log_entry"
-      ) &&
-      (!hasCreatedMarkdown || operationSet.operations.some(
-        (operation) => operation.type === "replace_index",
-      )) &&
+      parentProducerCertificate !== null &&
       !operationSet.operations.some((operation) =>
-        operation.type === "add_log_entry" && /\]\s*(?:\(|\[)/u.test(operation.message)
+        operation.type === "create_bundle_file" ||
+        operation.type === "replace_bundle_file" ||
+        operation.type === "delete_bundle_file" ||
+        operation.type === "reclassify_bundle_file"
       );
 
     // One request-scoped immutable session avoids reloading the same manifest
@@ -1056,7 +1414,9 @@ export class ChangesetPreflightService {
     const committedAt = this.#clock.now();
     const stagedRecords = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
     let stagedBytes = 0;
-    let previousIndexText: string | undefined;
+    const previousIndexSummary = parentProducerCertificate?.files.find(
+      (file) => file.path === "index.md",
+    ) ?? null;
 
     for (let index = 0; index < operationSet.operations.length; index += 1) {
       const operation = operationSet.operations[index]!;
@@ -1103,9 +1463,6 @@ export class ChangesetPreflightService {
                 path: operation.path,
               });
             }
-            previousIndexText = loaded.text;
-          } else {
-            previousIndexText = current.text;
           }
         }
         working.set(
@@ -1347,33 +1704,23 @@ export class ChangesetPreflightService {
       operation.type === "delete_bundle_file" ||
       operation.type === "reclassify_bundle_file"
     );
-    if (incrementalProducerValidation && previousIndexText !== undefined) {
+    if (incrementalProducerValidation && previousIndexSummary !== null) {
       const nextIndex = operationSet.operations.find(
         (operation): operation is ReplaceIndexOperation => operation.type === "replace_index",
       );
-      const previousTargets = collectMarkdownLocalTargets({
-        path: nextIndex!.path,
-        text: previousIndexText,
-      });
-      const nextTargets = collectMarkdownLocalTargets({
-        path: nextIndex!.path,
-        text: nextIndex!.text,
-      });
-      const nextPaths = new Set(nextTargets.map((target) => target.path));
-      if (previousTargets.some((target) => !nextPaths.has(target.path))) {
-        incrementalProducerValidation = false;
-      }
-    }
-    if (incrementalProducerValidation) {
-      const changedPaths = new Set(operationSet.operations.map((operation) => operation.path));
-      for (const operation of operationSet.operations) {
-        if (
-          operation.type !== "create_file" && operation.type !== "replace_index"
-        ) continue;
-        if (collectMarkdownLocalTargets({ path: operation.path, text: operation.text })
-          .some((target) => target.fragment !== undefined && !changedPaths.has(target.path))) {
+      if (nextIndex !== undefined) {
+        const parsed = collectMarkdownDependencySummaries({
+          markdown: Object.freeze([{ path: nextIndex.path, text: nextIndex.text }]),
+          availablePaths: Object.freeze([...working.keys()]),
+          currentSpaceId: request.spaceId,
+          ...(currentRevisionId === null ? {} : { currentRevisionId }),
+        })[0];
+        const previousTargets = new Set(previousIndexSummary.outgoingLinks.map((target) =>
+          `${target.path}\u0000${target.fragment ?? ""}`));
+        const nextTargets = new Set((parsed?.outgoing ?? []).map((target) =>
+          `${target.path}\u0000${target.fragment ?? ""}`));
+        if ([...previousTargets].some((target) => !nextTargets.has(target))) {
           incrementalProducerValidation = false;
-          break;
         }
       }
     }
@@ -1430,6 +1777,56 @@ export class ChangesetPreflightService {
     const markdownCandidates = candidateFiles.filter(
       (file): file is ChangesetCandidateFile => file.kind === "markdown",
     );
+    let producerCertificate: Readonly<ProducerCertificateDraft> | undefined;
+    let producerGraphDiagnostics: readonly OkfDiagnostic[] = Object.freeze([]);
+    if (request.producerProfile === true && incrementalProducerValidation && parentProducerCertificate !== null) {
+      const changedMarkdown = markdownCandidates
+        .filter((file) => file.text !== undefined)
+        .map((file) => Object.freeze({ path: file.path, text: file.text! }));
+      const changedSummaries = collectMarkdownDependencySummaries({
+        markdown: changedMarkdown,
+        availablePaths: candidateFiles.map((file) => file.path),
+        currentSpaceId: request.spaceId,
+        ...(currentRevisionId === null ? {} : { currentRevisionId }),
+      });
+      const changedByPath = new Map(changedSummaries.map((summary) => [summary.path, summary] as const));
+      const candidateSummaryFiles = candidateFiles.map((file) => {
+        const changed = file.kind === "markdown" ? changedByPath.get(file.path) : undefined;
+        const parent = parentProducerCertificate.files.find((entry) => entry.path === file.path);
+        return changed !== undefined
+          ? toCertificateSummary(file, changed)
+          : parent !== undefined
+            ? freezeCertificateFile(parent)
+            : toCertificateSummary(file, null);
+      });
+      const projected = rebuildCertificateGraph(candidateSummaryFiles);
+      producerGraphDiagnostics = certificateGraphDiagnostics(projected);
+      const changedConsistency = analyzeMarkdownConsistency({
+        markdown: changedMarkdown,
+        availablePaths: candidateFiles.map((file) => file.path),
+        currentSpaceId: request.spaceId,
+        ...(currentRevisionId === null ? {} : { currentRevisionId }),
+      });
+      const changedConsistencyDiagnostics = changedConsistency.consistencyErrors.map((diagnostic) => Object.freeze({
+        severity: "error" as const,
+        category: "mind-diary-envelope" as const,
+        source: "mind-diary-mvp" as const,
+        code: diagnostic.code,
+        path: diagnostic.path,
+        ...(diagnostic.line === undefined ? {} : { line: diagnostic.line }),
+        ...(diagnostic.field === undefined ? {} : { field: diagnostic.field }),
+        message: diagnostic.message,
+      }));
+      producerGraphDiagnostics = mergeDiagnostics([
+        ...producerGraphDiagnostics,
+        ...changedConsistencyDiagnostics,
+      ]);
+      producerCertificate = buildProducerCertificateDraft(
+        request.spaceId,
+        candidateFiles,
+        projected.filter((file) => file.kind === "markdown").map(markdownSummaryFromCertificate),
+      );
+    }
     const fullBundleValidation =
       deltaReader === null ||
       (request.producerProfile === true && !incrementalProducerValidation);
@@ -1506,16 +1903,19 @@ export class ChangesetPreflightService {
       ...(currentRevisionId === null ? {} : { currentRevisionId }),
     });
     const consistencyErrors: readonly OkfDiagnostic[] = request.producerProfile === true
-      ? Object.freeze(markdownConsistency.consistencyErrors.map((diagnostic) => Object.freeze({
-        severity: "error" as const,
-        category: "mind-diary-envelope" as const,
-        source: "mind-diary-mvp" as const,
-        code: diagnostic.code,
-        path: diagnostic.path,
-        ...(diagnostic.line === undefined ? {} : { line: diagnostic.line }),
-        ...(diagnostic.field === undefined ? {} : { field: diagnostic.field }),
-        message: diagnostic.message,
-      })))
+      ? mergeDiagnostics([
+          ...producerGraphDiagnostics,
+          ...markdownConsistency.consistencyErrors.map((diagnostic) => Object.freeze({
+            severity: "error" as const,
+            category: "mind-diary-envelope" as const,
+            source: "mind-diary-mvp" as const,
+            code: diagnostic.code,
+            path: diagnostic.path,
+            ...(diagnostic.line === undefined ? {} : { line: diagnostic.line }),
+            ...(diagnostic.field === undefined ? {} : { field: diagnostic.field }),
+            message: diagnostic.message,
+          })),
+        ])
       : Object.freeze([]);
     const validation: Readonly<OkfBundleValidation> = Object.freeze({
       ...okfValidation,
@@ -1559,14 +1959,21 @@ export class ChangesetPreflightService {
       );
     }
 
-    if (request.producerProfile === true) {
-      const proof = producerValidationProofKey(request.spaceId, candidateFiles);
-      this.#producerValidationProofs.delete(proof);
-      this.#producerValidationProofs.set(proof, true);
-      if (this.#producerValidationProofs.size > 256) {
-        const oldest = this.#producerValidationProofs.keys().next().value;
-        if (oldest !== undefined) this.#producerValidationProofs.delete(oldest);
-      }
+    if (request.producerProfile === true && producerCertificate === undefined) {
+      const completeSummaries = collectMarkdownDependencySummaries({
+        markdown: markdownCandidates.map((file) => Object.freeze({
+          path: file.path,
+          text: file.text!,
+        })),
+        availablePaths: candidateFiles.map((file) => file.path),
+        currentSpaceId: request.spaceId,
+        ...(currentRevisionId === null ? {} : { currentRevisionId }),
+      });
+      producerCertificate = buildProducerCertificateDraft(
+        request.spaceId,
+        candidateFiles,
+        completeSummaries,
+      );
     }
 
     return Object.freeze({
@@ -1577,6 +1984,7 @@ export class ChangesetPreflightService {
       candidateFiles: Object.freeze(candidateFiles),
       stagedBundleFileRecords: Object.freeze([...stagedRecords.values()]),
       validation,
+      ...(producerCertificate === undefined ? {} : { producerCertificate }),
       committedAt,
     });
   }

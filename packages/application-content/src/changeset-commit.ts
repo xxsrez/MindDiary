@@ -1074,7 +1074,7 @@ export class ChangesetCommitService {
         revisionNumber = parent.revision.revisionNumber + 1;
       }
 
-      const envelope = createCanonicalRevisionEnvelope({
+      const baseEnvelope = createCanonicalRevisionEnvelope({
         revisionId,
         spaceId: request.spaceId,
         revisionNumber,
@@ -1089,6 +1089,27 @@ export class ChangesetCommitService {
         manifestSize: manifestPut.object.size,
         summary: request.summary,
       });
+      const envelope = preflight.producerCertificate === undefined
+        ? baseEnvelope
+        : (() => {
+            if (preflight.producerCertificate.manifestFingerprint !== manifestHash) {
+              throw new ChangesetCommitFailure(
+                "invalid_revision_chain",
+                "producer validation certificate does not match the committed manifest",
+              );
+            }
+            const producerCertificate = Object.freeze({
+              ...preflight.producerCertificate,
+              revisionId,
+            });
+            return Object.freeze({
+              ...baseEnvelope,
+              revision: Object.freeze({
+                ...baseEnvelope.revision,
+                producerCertificate,
+              }),
+            });
+          })();
       const committed = await transaction.commitRevision({
         expectedHeadRevisionId: preflight.baseRevisionId,
         envelope,

@@ -49,6 +49,70 @@ import {
   type PrincipalMindUsageReader,
 } from "./principal-mind-usage.js";
 
+export const PRODUCER_VALIDATION_CERTIFICATE_SCHEMA =
+  "mind-diary/producer-validation-certificate/v1" as const;
+
+export interface ProducerValidationDependency {
+  readonly path: string;
+  readonly fragment?: string;
+  readonly sourceKind: "link" | "source";
+}
+
+export interface ProducerValidationReverseDependency
+  extends ProducerValidationDependency {
+  /** Path of the Markdown file that points at this summary's path. */
+  readonly sourcePath: string;
+}
+
+export interface ProducerValidationFileSummary {
+  readonly path: string;
+  readonly kind: "markdown" | "opaque";
+  readonly mediaType: string;
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly anchors: readonly string[];
+  readonly outgoingLinks: readonly Readonly<ProducerValidationDependency>[];
+  readonly reverseDependencies: readonly Readonly<ProducerValidationReverseDependency>[];
+  readonly rootReachable: boolean;
+}
+
+/**
+ * Immutable producer proof attached to one committed revision's metadata.
+ * It is an integrity fact only; authorization and HEAD CAS are always
+ * rechecked by the caller that considers reusing it.
+ */
+export interface ProducerValidationCertificate {
+  readonly schema: typeof PRODUCER_VALIDATION_CERTIFICATE_SCHEMA;
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly manifestFingerprint: Sha256Digest;
+  readonly rulesVersion: string;
+  readonly profileVersion: string;
+  readonly dependencyFingerprint: Sha256Digest;
+  readonly files: readonly Readonly<ProducerValidationFileSummary>[];
+}
+
+export type RevisionWithProducerValidationCertificate =
+  CanonicalRevisionEnvelope["revision"] & {
+    readonly producerCertificate?: Readonly<ProducerValidationCertificate>;
+  };
+
+export type CanonicalRevisionEnvelopeWithProducerValidationCertificate = Omit<
+  CanonicalRevisionEnvelope,
+  "revision"
+> & {
+  readonly revision: Readonly<RevisionWithProducerValidationCertificate>;
+};
+
+/** Reads the optional durable proof without treating its presence as valid. */
+export function readProducerValidationCertificate(
+  revision: Readonly<CanonicalRevisionEnvelope["revision"]>,
+): Readonly<ProducerValidationCertificate> | null {
+  const candidate = (revision as Readonly<RevisionWithProducerValidationCertificate>)
+    .producerCertificate;
+  return candidate === undefined ? null : candidate;
+}
+
 export type RevisionCommitResult =
   | {
       readonly kind: "committed";

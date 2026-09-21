@@ -1,3 +1,5 @@
+import { parseOkfFile } from "@mind-diary/okf-codec";
+
 export const MARKDOWN_CONSISTENCY_RULES_VERSION = "2026-09-18" as const;
 
 export interface MarkdownConsistencyDocument {
@@ -122,6 +124,27 @@ function headingSlug(value: string): string {
     .toLocaleLowerCase("en-US")
     .replace(/[^\p{L}\p{N}\p{M}\s_-]/gu, "")
     .replace(/\s+/gu, "-");
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sourceReferencesForDocument(
+  document: Readonly<MarkdownConsistencyDocument>,
+): readonly string[] {
+  if (document.sourceReferences !== undefined) {
+    return Object.freeze([...document.sourceReferences]);
+  }
+  const parsed = parseOkfFile({ path: document.path, text: document.text }).file;
+  if (parsed?.kind !== "concept" || !Array.isArray(parsed.frontmatter.sources)) {
+    return Object.freeze([]);
+  }
+  return Object.freeze(parsed.frontmatter.sources.flatMap((source) => {
+    if (typeof source === "string") return [source];
+    if (isRecord(source) && typeof source.resource === "string") return [source.resource];
+    return [];
+  }));
 }
 
 function parseDestination(value: string, start: number): Readonly<{
@@ -264,7 +287,7 @@ function parseDocument(document: Readonly<MarkdownConsistencyDocument>): ParsedD
     links: Object.freeze(links),
     duplicateHeadings: Object.freeze(duplicateHeadings),
     unresolvedReferences: Object.freeze(unresolvedReferences),
-    sourceReferences: Object.freeze([...(document.sourceReferences ?? [])]),
+    sourceReferences: sourceReferencesForDocument(document),
   });
 }
 
@@ -277,6 +300,27 @@ type ResolvedTarget =
 export interface MarkdownLocalTarget {
   readonly path: string;
   readonly fragment?: string;
+}
+
+/**
+ * Durable producer certificates store the parser's local dependency view.
+ * Keep the source kind so a later exact graph check can preserve the
+ * user-facing distinction between a Markdown link and a `sources` entry.
+ */
+export interface MarkdownDependencyReference {
+  readonly path: string;
+  readonly fragment?: string;
+  readonly sourceKind: "link" | "source";
+}
+
+export interface MarkdownDependencySummary {
+  readonly path: string;
+  readonly anchors: readonly string[];
+  readonly outgoing: readonly Readonly<MarkdownDependencyReference>[];
+  readonly incoming: readonly Readonly<MarkdownDependencyReference & { readonly sourcePath: string }>[];
+  readonly duplicateAnchors: readonly string[];
+  readonly unresolvedReferences: readonly string[];
+  readonly rootReachable: boolean;
 }
 
 function decodedFragment(value: string): string | null {
@@ -357,6 +401,108 @@ export function collectMarkdownLocalTargets(
     left.path.localeCompare(right.path) ||
     (left.fragment ?? "").localeCompare(right.fragment ?? "")
   ));
+}
+
+/**
+ * Returns the complete deterministic dependency projection for the supplied
+ * Markdown files. It deliberately uses the same parser as
+ * `analyzeMarkdownConsistency`; callers can combine summaries from an
+ * immutable certificate with newly parsed changed files without rereading
+ * unchanged Markdown bodies.
+ */
+export function collectMarkdownDependencySummaries(input: Readonly<{
+  readonly markdown: readonly Readonly<MarkdownConsistencyDocument>[];
+  readonly availablePaths?: readonly string[];
+  readonly currentSpaceId?: string;
+  readonly currentRevisionId?: string;
+}>): readonly Readonly<MarkdownDependencySummary>[] {
+  const documents = new Map(
+    [...input.markdown]
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .map((document) => {
+        const parsed = parseDocument(document);
+        return [parsed.path, parsed] as const;
+      }),
+  );
+  const outgoingByPath = new Map<string, Readonly<MarkdownDependencyReference>[]>();
+  const incomingByPath = new Map<
+    string,
+    (MarkdownDependencyReference & { readonly sourcePath: string })[]
+  >();
+  const edges = new Map<string, Set<string>>();
+
+  for (const source of documents.values()) {
+    const references = [
+      ...source.links.map((reference) => ({
+        destination: reference.destination,
+        sourceKind: "link" as const,
+      })),
+      ...source.sourceReferences.map((destination) => ({
+        destination,
+        sourceKind: "source" as const,
+      })),
+    ];
+    const outgoing: MarkdownDependencyReference[] = [];
+    const seen = new Set<string>();
+    edges.set(source.path, new Set());
+    for (const reference of references) {
+      const resolved = reference.sourceKind === "source"
+        ? resolveSource(
+            source.path,
+            reference.destination,
+            input.currentSpaceId,
+            input.currentRevisionId,
+          )
+        : resolveRelative(source.path, reference.destination);
+      if (resolved.kind !== "local") continue;
+      const key = `${resolved.path}\u0000${resolved.fragment ?? ""}\u0000${reference.sourceKind}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const normalized: MarkdownDependencyReference = Object.freeze({
+        path: resolved.path,
+        ...(resolved.fragment === undefined ? {} : { fragment: resolved.fragment }),
+        sourceKind: reference.sourceKind,
+      });
+      outgoing.push(normalized);
+      if (documents.has(resolved.path)) edges.get(source.path)!.add(resolved.path);
+      const incoming = incomingByPath.get(resolved.path) ?? [];
+      incoming.push(Object.freeze({ ...normalized, sourcePath: source.path }));
+      incomingByPath.set(resolved.path, incoming);
+    }
+    outgoing.sort((left, right) =>
+      left.path.localeCompare(right.path) ||
+      (left.fragment ?? "").localeCompare(right.fragment ?? "") ||
+      left.sourceKind.localeCompare(right.sourceKind));
+    outgoingByPath.set(source.path, outgoing);
+  }
+
+  const reachable = new Set<string>();
+  const pending = documents.has("index.md") ? ["index.md"] : [];
+  while (pending.length > 0) {
+    const path = pending.pop()!;
+    if (reachable.has(path)) continue;
+    reachable.add(path);
+    for (const target of edges.get(path) ?? []) pending.push(target);
+  }
+
+  const summaries = [...documents.values()].map((document) => {
+    const incoming = [...(incomingByPath.get(document.path) ?? [])].sort((left, right) =>
+      left.sourcePath.localeCompare(right.sourcePath) ||
+      left.path.localeCompare(right.path) ||
+      (left.fragment ?? "").localeCompare(right.fragment ?? "") ||
+      left.sourceKind.localeCompare(right.sourceKind));
+    return Object.freeze({
+      path: document.path,
+      anchors: Object.freeze([...document.headings].sort()),
+      outgoing: Object.freeze([...(outgoingByPath.get(document.path) ?? [])]),
+      incoming: Object.freeze(incoming),
+      duplicateAnchors: Object.freeze(document.duplicateHeadings.map((entry) => entry.anchor).sort()),
+      unresolvedReferences: Object.freeze(document.unresolvedReferences.map((entry) => entry.label).sort()),
+      rootReachable: reachable.has(document.path),
+    });
+  });
+  summaries.sort((left, right) => left.path.localeCompare(right.path));
+  return Object.freeze(summaries);
 }
 
 function resolveSource(

@@ -278,6 +278,19 @@ test("producer additive validation reads only changed files and the retained roo
     }],
   });
   assert.equal(proof.kind, "committed");
+  assert.equal(
+    proof.envelope.revision.producerCertificate.spaceId,
+    MINDS.ordinary.spaceId,
+  );
+  assert.equal(
+    proof.envelope.revision.producerCertificate.revisionId,
+    proof.envelope.revision.revisionId,
+  );
+  assert.equal(
+    proof.envelope.revision.producerCertificate.manifestFingerprint,
+    proof.envelope.revision.manifestHash,
+  );
+  assert.ok(proof.envelope.revision.producerCertificate.files.length > fileCount);
   assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
 
   counted.reset();
@@ -314,6 +327,141 @@ test("producer additive validation reads only changed files and the retained roo
     }],
   });
   assert.equal(invalidating.kind, "ready");
+  assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
+
+  const restartedMetadata = principalMountedMetadata(
+    InMemoryRevisionMetadataStore.fromDurableSnapshot(metadata.exportDurableSnapshot()),
+  );
+  const restartedCoordinator = new CanonicalRevisionCoordinator({
+    objects: counted.store,
+    revisions: restartedMetadata,
+  });
+  const restartedPreflight = new ChangesetPreflightService({
+    authorizer: new CapabilityAuthorizer(restartedMetadata),
+    revisions: restartedCoordinator,
+    clock: { now: () => "2026-08-22T18:14:00.000Z" },
+  });
+  counted.reset();
+  const afterRestart = await restartedPreflight.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionMode: "head",
+    expectedRevisionId: proof.envelope.revision.revisionId,
+    producerProfile: true,
+    operations: [{
+      type: "create_file",
+      path: "concepts/after-restart.md",
+      text: concept(fileCount + 1, "incremental after restart"),
+    }, {
+      type: "replace_index",
+      path: "index.md",
+      text: `${currentIndex.trimEnd()}\n- [After restart](concepts/after-restart.md)\n`,
+      expected_sha256: proof.envelope.manifest.entries.find((entry) => entry.path === "index.md").sha256,
+    }],
+  });
+  assert.equal(afterRestart.kind, "ready");
+  assert.equal(counted.metrics.markdownReadBytes, indexObject.size);
+
+  counted.reset();
+  const inboundDelete = await restartedPreflight.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionMode: "head",
+    expectedRevisionId: proof.envelope.revision.revisionId,
+    producerProfile: true,
+    operations: [{
+      type: "delete_file",
+      path: "concepts/concept-0001.md",
+    }],
+  });
+  assert.equal(inboundDelete.kind, "invalid");
+  assert.ok(inboundDelete.error.diagnostics.some(
+    (diagnostic) => diagnostic.code === "markdown_file_missing",
+  ));
+  assert.equal(counted.metrics.markdownReadBytes, 0);
+
+  counted.reset();
+  const missingAnchor = await restartedPreflight.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionMode: "head",
+    expectedRevisionId: proof.envelope.revision.revisionId,
+    producerProfile: true,
+    operations: [{
+      type: "replace_file",
+      path: "concepts/concept-0003.md",
+      text: `${concept(3, "anchor check")}\n[Missing section](concept-0004.md#absent)\n`,
+    }],
+  });
+  assert.equal(missingAnchor.kind, "invalid");
+  assert.ok(missingAnchor.error.diagnostics.some(
+    (diagnostic) => diagnostic.code === "markdown_section_missing",
+  ));
+  assert.equal(counted.metrics.markdownReadBytes, 0);
+
+  counted.reset();
+  const mixedCycle = await restartedPreflight.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionMode: "head",
+    expectedRevisionId: proof.envelope.revision.revisionId,
+    producerProfile: true,
+    operations: [{
+      type: "create_file",
+      path: "concepts/mixed-a.md",
+      text: `${concept("mixed-a", "cycle A")}\n[Cycle B](mixed-b.md)\n`,
+    }, {
+      type: "create_file",
+      path: "concepts/mixed-b.md",
+      text: `${concept("mixed-b", "cycle B")}\n[Cycle A](mixed-a.md)\n`,
+    }, {
+      type: "replace_file",
+      path: "concepts/concept-0003.md",
+      text: `${concept(3, "bridge to cycle")}\n[Cycle A](mixed-a.md)\n`,
+    }],
+  });
+  assert.equal(mixedCycle.kind, "ready");
+  assert.equal(mixedCycle.validation.valid, true);
+  assert.equal(counted.metrics.markdownReadBytes, 0);
+
+  const parentEnvelope = await restartedCoordinator.readHeadRevisionEnvelope(
+    MINDS.ordinary.spaceId,
+  );
+  assert.ok(parentEnvelope?.revision.producerCertificate);
+  const corruptCertificate = Object.freeze({
+    ...parentEnvelope.revision.producerCertificate,
+    dependencyFingerprint: `sha256:${"0".repeat(64)}`,
+  });
+  const corruptEnvelope = Object.freeze({
+    ...parentEnvelope,
+    revision: Object.freeze({
+      ...parentEnvelope.revision,
+      producerCertificate: corruptCertificate,
+    }),
+  });
+  const corruptReader = {
+    readHeadRevisionEnvelope: async () => corruptEnvelope,
+    readRevisionFile: restartedCoordinator.readRevisionFile.bind(restartedCoordinator),
+  };
+  const corruptPreflight = new ChangesetPreflightService({
+    authorizer: new CapabilityAuthorizer(restartedMetadata),
+    revisions: corruptReader,
+    clock: { now: () => "2026-08-22T18:14:00.000Z" },
+  });
+  counted.reset();
+  const staleCertificate = await corruptPreflight.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    revisionMode: "head",
+    expectedRevisionId: proof.envelope.revision.revisionId,
+    producerProfile: true,
+    operations: [{
+      type: "create_file",
+      path: "concepts/after-corruption.md",
+      text: concept(fileCount + 2, "full fallback after certificate mismatch"),
+    }],
+  });
+  assert.equal(staleCertificate.kind, "ready");
   assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
 });
 
@@ -571,6 +719,7 @@ test("failed v3 HEAD transition leaves only collectable orphans and manifest tam
     expectedRevisionId: INITIAL_REVISION,
     idempotencyKey: "delta-failed",
     summary: "Must not publish",
+    producerProfile: true,
     operations: [{
       type: "replace_file",
       path: "concepts/concept-0000.md",
