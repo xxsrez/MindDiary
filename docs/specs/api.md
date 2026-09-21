@@ -2895,12 +2895,15 @@ The tool resolves one explicit effective `read_write` Mind and requires
 memory and runs the same strict producer profile, consistency doctor,
 BundleFile limits and source-reference authorization used by
 `commit_changeset`. The first producer preflight for an unproved exact bundle
-materializes the complete result. A later additive preflight may reuse only a
-bounded process-local proof keyed by the exact Space and every resulting
-path/media type/size/content digest; cold start, eviction or any content change
-falls back to the full scan. A partial changed-file check by itself is never a
-producer-validity proof. Links and blocking warnings from unchanged Markdown
-therefore participate in the result; a multi-file repair is evaluated
+materializes the complete result and persists a durable exact-revision
+validation certificate. A later preflight may reuse that certificate only when
+its Space, revision, validation-rules, manifest and dependency/reference
+fingerprints still match. The operation-specific dependency closure covers
+create, ordinary replace, delete, `replace_index`, `add_log_entry` and mixed
+changesets; any missing, stale, corrupt or insufficient certificate falls back
+to the full exact scan. A process-local cache may accelerate certificate lookup
+but is never validity evidence. Links and blocking warnings from unchanged
+Markdown therefore participate in the result; a multi-file repair is evaluated
 atomically.
 
 Ready success returns the exact base, a deterministic SHA-256 identity of the

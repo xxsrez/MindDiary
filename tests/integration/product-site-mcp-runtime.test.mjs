@@ -2154,6 +2154,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "recovery_index_gaps",
     "recovery_index_dispatch",
     "recovery_invitation_expiry_dispatch",
+    "recovery_export_expiry_dispatch",
     "recovery_export_dispatch",
     "recovery_staging_cleanup",
     "recovery_import_cleanup",

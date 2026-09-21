@@ -594,6 +594,32 @@ test("claim fencing rejects stale completion and a transient failure is durably 
   assert.equal((await env.metadata.readExportJob(started.job.jobId)).attempts, 3);
 });
 
+test("expired export enumeration is bounded and keeps unfinished cleanup recoverable", async () => {
+  const env = await harness({
+    jobIds: ["export_expiry_a"],
+    retentionMs: 5_000,
+  });
+  const first = await env.application().start(startRequest(env.actor, "expiry-list-first"));
+  assert.equal(first.kind, "started");
+
+  assert.deepEqual(await env.metadata.listExpiredExportJobs(at(4_999), 10), []);
+  const due = await env.metadata.listExpiredExportJobs(at(5_000), 1);
+  assert.equal(due.length, 1);
+  assert.equal(due[0].jobId, first.job.jobId);
+
+  const expiry = new ExportJobExpiryHandler({
+    jobs: env.metadata,
+    archives: env.objects,
+    clock: env.clock,
+  });
+  env.clock.set(at(5_000));
+  assert.deepEqual(
+    await expiry.handle({ actor: workerActor(at(5_000)), jobId: first.job.jobId }),
+    { kind: "completed" },
+  );
+  assert.deepEqual(await env.metadata.listExpiredExportJobs(at(5_000), 10), []);
+});
+
 test("expiry and cleanup are durable, observable and idempotent", async () => {
   const env = await harness({ retentionMs: 5_000 });
   const started = await env.application().start(startRequest(env.actor));

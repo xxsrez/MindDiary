@@ -303,6 +303,9 @@ state before retry.
 expiry. Повтор exact selector/profile тем же principal восстанавливает этот job
 даже после утраты первоначального client key: новый namespace завершается тем же
 job result, а background work планируется повторно без второй reservation.
+Полный recovery отдельно перечисляет истёкшие export jobs bounded страницей,
+переводит их reservation в cleanup и после удаления archive освобождает lane;
+холодный restart не требует сохранённого process-local expiry dispatch.
 Несовпадающий export и любая другая heavy operation продолжают получать обычный
 `capacity_fairness_limit`.
 

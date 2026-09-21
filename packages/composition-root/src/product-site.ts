@@ -2043,6 +2043,7 @@ export async function createProductSiteRuntime(
         | "recovery_index_gaps"
         | "recovery_index_dispatch"
         | "recovery_invitation_expiry_dispatch"
+        | "recovery_export_expiry_dispatch"
         | "recovery_export_dispatch"
         | "recovery_staging_cleanup"
         | "recovery_import_cleanup"
@@ -2186,6 +2187,24 @@ export async function createProductSiteRuntime(
           return settled;
         },
       );
+      const exportExpiryResults = requestTick
+        ? []
+        : await stage("recovery_export_expiry_dispatch", async () => {
+            const due = await metadata.listExpiredExportJobs(clock.now(), limit);
+            const settled: PromiseSettledResult<unknown>[] = [];
+            for (const job of due) {
+              ensureActive();
+              try {
+                settled.push({
+                  status: "fulfilled",
+                  value: await dispatchBackground({ kind: "export_expiry", jobId: job.jobId }),
+                });
+              } catch (reason) {
+                settled.push({ status: "rejected", reason });
+              }
+            }
+            return settled;
+          });
       const exportResults = requestTick
         ? []
         : await stage("recovery_export_dispatch", async () => {
@@ -2252,7 +2271,7 @@ export async function createProductSiteRuntime(
         backfilled: reconciliation.backfilled,
         repaired: reconciliation.repaired,
         dispatched:
-          results.length + invitationResults.length + exportResults.length,
+          results.length + invitationResults.length + exportExpiryResults.length + exportResults.length,
         failed:
           results.filter((entry) =>
             entry.status === "rejected" ||
@@ -2260,6 +2279,11 @@ export async function createProductSiteRuntime(
               "kind" in entry.value && entry.value.kind === "failed")
           ).length +
           invitationResults.filter((entry) =>
+            entry.status === "rejected" ||
+            (typeof entry.value === "object" && entry.value !== null &&
+              "kind" in entry.value && entry.value.kind === "failed")
+          ).length +
+          exportExpiryResults.filter((entry) =>
             entry.status === "rejected" ||
             (typeof entry.value === "object" && entry.value !== null &&
               "kind" in entry.value && entry.value.kind === "failed")

@@ -254,6 +254,10 @@ export interface ExportJobStore extends MetadataStore, AuthorizationStateReader 
     now: UtcInstant,
     limit: number,
   ): Promise<readonly Readonly<ExportJob>[]>;
+  listExpiredExportJobs(
+    now: UtcInstant,
+    limit: number,
+  ): Promise<readonly Readonly<ExportJob>[]>;
   claimExportJob(
     jobId: JobId,
     now: UtcInstant,

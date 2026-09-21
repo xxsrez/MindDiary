@@ -880,6 +880,29 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
       );
     }
 
+  async listExpiredExportJobs(
+      now: ExportJob["updatedAt"],
+      limit: number,
+    ): Promise<readonly Readonly<ExportJob>[]> {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) return Object.freeze([]);
+      const nowMs = Date.parse(now);
+      if (!Number.isFinite(nowMs)) return Object.freeze([]);
+      return Object.freeze(
+        [...this._exportJobs.values()]
+          .filter((job) =>
+            Date.parse(job.expiresAt) <= nowMs &&
+            !(job.state === "expired" && job.archiveCleanedAt !== null))
+          .sort((left, right) => {
+            const expiry = left.expiresAt.localeCompare(right.expiresAt);
+            return expiry === 0
+              ? String(left.jobId).localeCompare(String(right.jobId), "en")
+              : expiry;
+          })
+          .slice(0, limit)
+          .map(cloneExportJob),
+      );
+    }
+
   async claimExportJob(
       jobId: JobId,
       now: ExportJob["updatedAt"],
