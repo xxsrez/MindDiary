@@ -30,11 +30,15 @@ async function reset(request, scenario) {
 
 test.beforeAll(async ({ request }) => {
   fixtureFiles = await mkdtemp(join(tmpdir(), "mind-diary-markdown-import-ui-"));
-  for (const name of ["valid", "one", "bad-path", "bad-utf8", "changed", "changed-again"]) {
+  for (const name of ["valid", "many", "one", "bad-path", "bad-utf8", "changed", "changed-again"]) {
     await mkdir(directory(name));
   }
   await writeFile(join(directory("valid"), "index.md"), "# Index\n");
   await writeFile(join(directory("valid"), "notes.md"), "# Notes\n");
+  await Promise.all(Array.from({ length: 41 }, (_, index) => writeFile(
+    join(directory("many"), index === 0 ? "index.md" : `note-${String(index).padStart(2, "0")}.md`),
+    `# Note ${String(index).padStart(2, "0")}\n`,
+  )));
   await writeFile(join(directory("one"), "index.md"), "# Index\n");
   await writeFile(join(directory("bad-path"), "notes.txt"), "not markdown");
   await writeFile(join(directory("bad-utf8"), "broken.md"), Buffer.from([0xff, 0xfe]));
@@ -93,19 +97,10 @@ test("many small files use request-budgeted batches before one commit", async ({
   await page.goto(`${origin}/research-notes`);
   if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
 
-  await page.locator("[data-import-files]").evaluate((input) => {
-    const transfer = new DataTransfer();
-    for (let index = 0; index < 41; index += 1) {
-      transfer.items.add(new File(
-        [`# Note ${String(index).padStart(2, "0")}\n`],
-        index === 0 ? "index.md" : `note-${String(index).padStart(2, "0")}.md`,
-        { type: "text/markdown" },
-      ));
-    }
-    input.files = transfer.files;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await page.locator("[data-import-files]").setInputFiles(directory("many"));
   await page.locator("[data-plan-markdown-import]").click();
+  await expect(page.locator("[data-import-capacity-check]")).toHaveAttribute("data-check-state", "passed");
+  await expect(page.locator("[data-import-progress-text]")).toHaveText("41 files reviewed");
   await page.locator("[data-import-confirm]").check();
   await expect(page.locator("[data-start-markdown-import]")).toBeEnabled();
   await page.locator("[data-start-markdown-import]").click();
