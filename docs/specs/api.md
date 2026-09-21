@@ -2518,17 +2518,25 @@ Output:
 {
   "mind": {},
   "resolved_revision": {},
-  "valid": false,
+  "revision_mode": "head",
+  "read_only": true,
+  "valid": true,
+  "commit_ready": true,
   "conformance_errors": [],
+  "consistency_errors": [],
   "quality_warnings": [],
-  "validated_okf_version": "0.2",
-  "validation_complete": true,
-  "progress": {
-    "phase": "complete",
-    "processed_entries": 4,
-    "total_entries": 4
+  "advisories": [],
+  "issue_counts": {
+    "conformance_errors": 0,
+    "consistency_errors": 0,
+    "quality_warnings": 0,
+    "advisories": 0
   },
-  "next_cursor": null
+  "issues_truncated": false,
+  "next_cursor": null,
+  "validation_complete": true,
+  "validation_rules_version": "2026-09-18",
+  "validated_okf_version": "0.2"
 }
 ```
 
