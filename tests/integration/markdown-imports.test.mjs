@@ -605,6 +605,25 @@ test("invalid UTF-8 is rejected before checkpoint publication and leaves HEAD un
 
 test("Brain-scale synthetic Markdown snapshot crosses bounded batches and publishes one revision", async () => {
   const objects = new InMemoryObjectStore();
+  const objectConcurrency = {
+    getStagedBundleFile: { active: 0, peak: 0 },
+    putSpaceCanonicalObject: { active: 0, peak: 0 },
+    putStagedBundleFile: { active: 0, peak: 0 },
+  };
+  for (const method of Object.keys(objectConcurrency)) {
+    const original = objects[method].bind(objects);
+    objects[method] = async (...args) => {
+      const state = objectConcurrency[method];
+      state.active += 1;
+      state.peak = Math.max(state.peak, state.active);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return await original(...args);
+      } finally {
+        state.active -= 1;
+      }
+    };
+  }
   let metadata = new InMemoryRevisionMetadataStore();
   let revisions = await seed(objects, metadata);
   authorize(metadata);
@@ -665,7 +684,7 @@ test("Brain-scale synthetic Markdown snapshot crosses bounded batches and publis
     expectedVersion: session.version,
   });
   assert.equal(validation.kind, "validation_progress");
-  assert.equal(validation.session.validationCheckpoint, 100);
+  assert.equal(validation.session.validationCheckpoint, 20);
   metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(metadata.exportDurableSnapshot());
   revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   imports = service({
@@ -691,7 +710,7 @@ test("Brain-scale synthetic Markdown snapshot crosses bounded batches and publis
     expectedVersion: validation.session.version,
   });
   assert.equal(finalization.kind, "commit_progress");
-  assert.equal(finalization.session.promotionCheckpoint, 100);
+  assert.equal(finalization.session.promotionCheckpoint, 20);
   metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(metadata.exportDurableSnapshot());
   revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   imports = service({
@@ -716,6 +735,10 @@ test("Brain-scale synthetic Markdown snapshot crosses bounded batches and publis
   );
   assert.equal(materialized.files.length, 1_025);
   assert.equal((await metadata.listRevisions(MINDS.ordinary.spaceId)).length, 2);
+  for (const state of Object.values(objectConcurrency)) {
+    assert.ok(state.peak > 1, "import object I/O should overlap");
+    assert.ok(state.peak <= 8, "import object I/O must remain bounded");
+  }
 });
 
 test("bounded validation persists sanitized failures and schedules cleanup without changing HEAD", async () => {

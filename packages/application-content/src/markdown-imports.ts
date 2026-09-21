@@ -55,9 +55,9 @@ export const MARKDOWN_IMPORT_LIMITS = Object.freeze({
   maxFileBytes: 1_048_576,
   maxBatchFiles: 256,
   maxBatchBytes: 4_194_304,
-  maxValidationFiles: 100,
+  maxValidationFiles: 20,
   maxValidationBytes: 4_194_304,
-  maxPromotionFiles: 100,
+  maxPromotionFiles: 20,
   maxPromotionBytes: 4_194_304,
   maxPathBytes: 1_024,
   maxSegmentBytes: 255,
@@ -68,6 +68,40 @@ export const MARKDOWN_IMPORT_LIMITS = Object.freeze({
   cleanupMaxBytes: 268_435_456,
   cleanupMaxDurationMs: 20_000,
 } as const);
+
+const MAX_MARKDOWN_IMPORT_OBJECT_CONCURRENCY = 8;
+
+async function mapBounded<Input, Output>(
+  values: readonly Input[],
+  concurrency: number,
+  operation: (value: Input, index: number) => Promise<Output>,
+): Promise<readonly Output[]> {
+  const results = new Array<Output>(values.length);
+  let next = 0;
+  let failed = false;
+  let firstError: unknown;
+  const workers = Array.from(
+    { length: Math.min(concurrency, values.length) },
+    async () => {
+      for (;;) {
+        const index = next;
+        next += 1;
+        if (index >= values.length) return;
+        try {
+          results[index] = await operation(values[index]!, index);
+        } catch (error) {
+          if (!failed) {
+            failed = true;
+            firstError = error;
+          }
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  if (failed) throw firstError;
+  return Object.freeze(results);
+}
 
 export type MarkdownImportErrorCode =
   | "invalid_import_request"
@@ -647,28 +681,47 @@ export class MarkdownImportService {
     const createdAt = this.#clock.now();
     const stored: MarkdownImportStagedFile[] = [];
     try {
-      for (const file of validated) {
-        const stagedFileId = this.#ids.nextStagedFileId();
-        const put = await this.#objects.putStagedBundleFile({
-          stagedFileId,
-          bindingOwnerId: opaqueId<"mind-binding-owner">(
-            `import-owner_${session.importId}`,
-          ) as MindBindingOwnerId,
-          spaceId: session.spaceId,
-          bytes: file.bytes,
-          createdAt,
-        });
-        if (put.size !== file.size) throw new Error("staged import object size mismatch");
-        stored.push(Object.freeze({
-          stagedFileId,
-          importId: session.importId,
-          checkpoint,
-          path: file.path,
-          sha256: file.sha256,
-          size: file.size,
-          createdAt,
-        }));
+      const writes = validated.map((file) => Object.freeze({
+        file,
+        stagedFileId: this.#ids.nextStagedFileId(),
+      }));
+      const outcomes = await mapBounded(
+        writes,
+        MAX_MARKDOWN_IMPORT_OBJECT_CONCURRENCY,
+        async ({ file, stagedFileId }) => {
+          try {
+            const put = await this.#objects.putStagedBundleFile({
+              stagedFileId,
+              bindingOwnerId: opaqueId<"mind-binding-owner">(
+                `import-owner_${session.importId}`,
+              ) as MindBindingOwnerId,
+              spaceId: session.spaceId,
+              bytes: file.bytes,
+              createdAt,
+            });
+            if (put.size !== file.size) throw new Error("staged import object size mismatch");
+            return Object.freeze({
+              kind: "stored" as const,
+              file: Object.freeze({
+                stagedFileId,
+                importId: session.importId,
+                checkpoint,
+                path: file.path,
+                sha256: file.sha256,
+                size: file.size,
+                createdAt,
+              }),
+            });
+          } catch (error) {
+            return Object.freeze({ kind: "failed" as const, error });
+          }
+        },
+      );
+      for (const outcome of outcomes) {
+        if (outcome.kind === "stored") stored.push(outcome.file);
       }
+      const failed = outcomes.find((outcome) => outcome.kind === "failed");
+      if (failed?.kind === "failed") throw failed.error;
       const initial = await this.#authorizer.authorize({
         actor,
         spaceId: session.spaceId,
@@ -758,39 +811,50 @@ export class MarkdownImportService {
     let validationCheckpoint = session.validationCheckpoint;
     let validatedBytes = session.validatedBytes;
     let validationBytes = 0;
-    let examined = 0;
+    const validationPage: MarkdownImportStagedFile[] = [];
     for (const file of staged.slice(validationCheckpoint)) {
       if (
-        examined >= MARKDOWN_IMPORT_LIMITS.maxValidationFiles ||
-        (examined > 0 && validationBytes + file.size > MARKDOWN_IMPORT_LIMITS.maxValidationBytes)
+        validationPage.length >= MARKDOWN_IMPORT_LIMITS.maxValidationFiles ||
+        (validationPage.length > 0 && validationBytes + file.size > MARKDOWN_IMPORT_LIMITS.maxValidationBytes)
       ) break;
-      const object = await this.#objects.getStagedBundleFile(file.stagedFileId);
-      if (
-        object === null || object.spaceId !== session.spaceId || object.size !== file.size ||
-        object.bytes.byteLength !== file.size ||
-        await this.#objects.calculateSha256(object.bytes) !== file.sha256
-      ) {
-        failures.push(sessionFailure(file.path, "staged_object_integrity_failure"));
-      } else {
-        const text = DECODER.decode(object.bytes);
-        const parsed = parseOkfFile({ path: file.path, text });
-        for (const diagnostic of parsed.diagnostics) {
-          if (diagnostic.severity === "error") failures.push(sessionFailure(file.path, diagnostic.code));
-        }
-        const references = analyzeBundleFileReferences({
-          markdown: Object.freeze([Object.freeze({ path: file.path, text })]),
-          bundleFiles,
-        });
-        for (const diagnostic of references.diagnostics) {
-          if (diagnostic.severity === "error") failures.push(sessionFailure(file.path, diagnostic.code));
-        }
-      }
-      examined += 1;
-      validationCheckpoint += 1;
+      validationPage.push(file);
       validationBytes += file.size;
-      validatedBytes += file.size;
+    }
+    const validationResults = await mapBounded(
+      validationPage,
+      MAX_MARKDOWN_IMPORT_OBJECT_CONCURRENCY,
+      async (file) => {
+        const fileFailures: MarkdownImportSessionFailure[] = [];
+        const object = await this.#objects.getStagedBundleFile(file.stagedFileId);
+        if (
+          object === null || object.spaceId !== session.spaceId || object.size !== file.size ||
+          object.bytes.byteLength !== file.size ||
+          await this.#objects.calculateSha256(object.bytes) !== file.sha256
+        ) {
+          fileFailures.push(sessionFailure(file.path, "staged_object_integrity_failure"));
+        } else {
+          const text = DECODER.decode(object.bytes);
+          const parsed = parseOkfFile({ path: file.path, text });
+          for (const diagnostic of parsed.diagnostics) {
+            if (diagnostic.severity === "error") fileFailures.push(sessionFailure(file.path, diagnostic.code));
+          }
+          const references = analyzeBundleFileReferences({
+            markdown: Object.freeze([Object.freeze({ path: file.path, text })]),
+            bundleFiles,
+          });
+          for (const diagnostic of references.diagnostics) {
+            if (diagnostic.severity === "error") fileFailures.push(sessionFailure(file.path, diagnostic.code));
+          }
+        }
+        return Object.freeze(fileFailures);
+      },
+    );
+    for (const fileFailures of validationResults) {
+      failures.push(...fileFailures);
       if (failures.length >= MARKDOWN_IMPORT_LIMITS.maxFailures) break;
     }
+    validationCheckpoint += validationPage.length;
+    validatedBytes += validationBytes;
     const complete = validationCheckpoint === plan.files.length;
     const targetState = failures.length > 0
       ? "validation_failed" as const
@@ -904,31 +968,39 @@ export class MarkdownImportService {
     let promotedBytes = session.promotedBytes;
     let promotionBytes = 0;
     let promotedFiles = 0;
+    const promotionPage: MarkdownImportStagedFile[] = [];
     for (const file of staged.slice(promotionCheckpoint)) {
       if (
-        promotedFiles >= MARKDOWN_IMPORT_LIMITS.maxPromotionFiles ||
-        (promotedFiles > 0 && promotionBytes + file.size > MARKDOWN_IMPORT_LIMITS.maxPromotionBytes)
+        promotionPage.length >= MARKDOWN_IMPORT_LIMITS.maxPromotionFiles ||
+        (promotionPage.length > 0 && promotionBytes + file.size > MARKDOWN_IMPORT_LIMITS.maxPromotionBytes)
       ) break;
-      const object = await this.#objects.getStagedBundleFile(file.stagedFileId);
-      if (
-        object === null || object.spaceId !== session.spaceId || object.size !== file.size ||
-        await this.#objects.calculateSha256(object.bytes) !== file.sha256
-      ) throw new MarkdownImportError("import_validation_failed", "staged import object changed");
-      const put = await this.#objects.putSpaceCanonicalObject({
-        kind: "markdown",
-        spaceId: session.spaceId,
-        bytes: object.bytes,
-        mediaType: MARKDOWN_MEDIA_TYPE,
-        createdAt: committedAt,
-      });
-      if (put.object.sha256 !== file.sha256 || put.object.size !== file.size) {
-        throw new MarkdownImportError("import_validation_failed", "promoted import object changed");
-      }
-      promotedFiles += 1;
-      promotionCheckpoint += 1;
+      promotionPage.push(file);
       promotionBytes += file.size;
-      promotedBytes += file.size;
     }
+    await mapBounded(
+      promotionPage,
+      MAX_MARKDOWN_IMPORT_OBJECT_CONCURRENCY,
+      async (file) => {
+        const object = await this.#objects.getStagedBundleFile(file.stagedFileId);
+        if (
+          object === null || object.spaceId !== session.spaceId || object.size !== file.size ||
+          await this.#objects.calculateSha256(object.bytes) !== file.sha256
+        ) throw new MarkdownImportError("import_validation_failed", "staged import object changed");
+        const put = await this.#objects.putSpaceCanonicalObject({
+          kind: "markdown",
+          spaceId: session.spaceId,
+          bytes: object.bytes,
+          mediaType: MARKDOWN_MEDIA_TYPE,
+          createdAt: committedAt,
+        });
+        if (put.object.sha256 !== file.sha256 || put.object.size !== file.size) {
+          throw new MarkdownImportError("import_validation_failed", "promoted import object changed");
+        }
+      },
+    );
+    promotedFiles = promotionPage.length;
+    promotionCheckpoint += promotedFiles;
+    promotedBytes += promotionBytes;
     if (promotionCheckpoint < staged.length) {
       const progress = await this.#metadata.runMarkdownImportTransaction(async (transaction) => {
         const current = await this.#authorizer.reauthorizeInTransaction({

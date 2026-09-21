@@ -911,7 +911,7 @@ Markdown import wire contract в local candidate:
   ссылается на один binary part. Path checkpoint начинается с `1`, строго
   возрастает и exact replay не создаёт дубли;
 - `validate` принимает `{expected_version}` и за один call продвигает не более
-  100 files / 4 MiB. Response может вернуть `validation_progress`; client
+  20 files / 4 MiB с bounded object-I/O concurrency. Response может вернуть `validation_progress`; client
   повторяет command по новым `version`/`validation_checkpoint` до `validated`;
 - `commit` принимает `{expected_version, summary?}` и аналогично продвигает
   bounded canonical promotion. `commit_progress` не меняет HEAD; только
@@ -3231,9 +3231,10 @@ session TTL is 24 hours. A plan cannot be rebound or adopted by another
 principal or Mind.
 
 Batch request is `multipart/form-data`, at most 256 files / 4 MiB total. The
-hosted browser producer limits itself to 20 files / 4 MiB per request because
-the adapter persists every file separately and the Sites request budget is
-lower than the protocol ceiling for many-small-file batches. One
+hosted browser producer limits itself to 20 files / 4 MiB per request. The
+service performs bounded object I/O with concurrency `8`; validation and
+promotion advance at most 20 files per call so every phase stays inside the
+Sites request budget. One
 JSON `manifest` part contains only:
 
 ```json
@@ -3261,7 +3262,7 @@ sealed plan: the response is `import_validation_failed`, the session closes as
 is scheduled and HEAD remains unchanged.
 
 Validate uses `expected_version`, seals staging and advances restartable
-whole-corpus OKF validation by at most 100 files / 4 MiB per call. Status states
+whole-corpus OKF validation by at most 20 files / 4 MiB per call. Status states
 are:
 
 ```text
@@ -3282,7 +3283,7 @@ digests or content in browser storage, and clears the fragment at every
 terminal outcome.
 
 Commit uses `expected_version` and advances verified canonical promotion by at
-most 100 files / 4 MiB per call. It reauthorizes, verifies the sealed plan,
+most 20 files / 4 MiB per call. It reauthorizes, verifies the sealed plan,
 reservation and exact HEAD on every page. The terminal call creates exactly
 one v4 revision, moves HEAD, consumes the reservation, schedules index/audit
 work and marks the session committed in one D1 transaction. Earlier promotion
