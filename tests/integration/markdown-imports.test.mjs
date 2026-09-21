@@ -710,7 +710,7 @@ test("Brain-scale synthetic Markdown snapshot crosses bounded batches and publis
     expectedVersion: validation.session.version,
   });
   assert.equal(finalization.kind, "commit_progress");
-  assert.equal(finalization.session.promotionCheckpoint, 20);
+  assert.equal(finalization.session.promotionCheckpoint, 8);
   metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(metadata.exportDurableSnapshot());
   revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   imports = service({

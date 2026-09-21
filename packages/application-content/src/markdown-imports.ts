@@ -57,7 +57,7 @@ export const MARKDOWN_IMPORT_LIMITS = Object.freeze({
   maxBatchBytes: 4_194_304,
   maxValidationFiles: 20,
   maxValidationBytes: 4_194_304,
-  maxPromotionFiles: 20,
+  maxPromotionFiles: 8,
   maxPromotionBytes: 4_194_304,
   maxPathBytes: 1_024,
   maxSegmentBytes: 255,

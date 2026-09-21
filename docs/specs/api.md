@@ -913,8 +913,9 @@ Markdown import wire contract в local candidate:
 - `validate` принимает `{expected_version}` и за один call продвигает не более
   20 files / 4 MiB с bounded object-I/O concurrency. Response может вернуть `validation_progress`; client
   повторяет command по новым `version`/`validation_checkpoint` до `validated`;
-- `commit` принимает `{expected_version, summary?}` и аналогично продвигает
-  bounded canonical promotion. `commit_progress` не меняет HEAD; только
+- `commit` принимает `{expected_version, summary?}` и продвигает bounded
+  canonical promotion не более чем по 8 files / 4 MiB за call.
+  `commit_progress` не меняет HEAD; только
   terminal `committed` возвращает `revision_id` после одного exact CAS;
 - `GET` возвращает session state, stage/validation/promotion checkpoints,
   bounded counts/bytes и sanitized `{path, code}` failures только создавшему
@@ -3232,9 +3233,10 @@ principal or Mind.
 
 Batch request is `multipart/form-data`, at most 256 files / 4 MiB total. The
 hosted browser producer limits itself to 20 files / 4 MiB per request. The
-service performs bounded object I/O with concurrency `8`; validation and
-promotion advance at most 20 files per call so every phase stays inside the
-Sites request budget. One
+service performs bounded object I/O with concurrency `8`; validation advances
+at most 20 files per call, while the two-operation canonical promotion
+advances at most 8 files per call so every phase stays inside the Sites request
+budget. One
 JSON `manifest` part contains only:
 
 ```json
@@ -3283,7 +3285,7 @@ digests or content in browser storage, and clears the fragment at every
 terminal outcome.
 
 Commit uses `expected_version` and advances verified canonical promotion by at
-most 20 files / 4 MiB per call. It reauthorizes, verifies the sealed plan,
+most 8 files / 4 MiB per call. It reauthorizes, verifies the sealed plan,
 reservation and exact HEAD on every page. The terminal call creates exactly
 one v4 revision, moves HEAD, consumes the reservation, schedules index/audit
 work and marks the session committed in one D1 transaction. Earlier promotion

@@ -423,8 +423,9 @@ Markdown-only и корректность UTF-8 выбранного снимк�
 After reservation, client uploads ordered batches within the server ceiling of
 256 files / 4 MiB. The hosted browser client uses a stricter 20-file / 4 MiB
 bound. Stage, validation and promotion use bounded object I/O with concurrency
-`8`, and validation/promotion advance at most 20 files per call so
-many-small-file corpora stay below the Sites request-duration budget.
+`8`; validation advances at most 20 files per call and the two-operation
+canonical promotion advances at most 8 files per call so many-small-file
+corpora stay below the Sites request-duration budget.
 Each batch has session ID, monotonic checkpoint, file digests and a
 session-scoped idempotency key. Exact replay returns the same checkpoint;
 changed bytes/metadata return `idempotency_conflict`. Server verifies streaming
@@ -456,7 +457,7 @@ against the retained opaque entries of the exact base revision; terminal
 sanitized failures schedule cleanup.
 
 Commit/finalize promotes verified objects into the Space-scoped canonical
-namespace in durable pages of at most 20 files / 4 MiB, then writes one v5
+namespace in durable pages of at most 8 files / 4 MiB, then writes one v5
 manifest and uses the normal D1 HEAD transaction. Exactly one new immutable
 revision becomes visible or nothing does. Search index job is queued after
 commit; canonical browse/fetch works immediately. Finalize records the
