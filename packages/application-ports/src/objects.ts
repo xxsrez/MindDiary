@@ -76,6 +76,7 @@ export type ObjectStoreFailureCode =
   | "invalid_range"
   | "digest_collision"
   | "object_tampered"
+  | "range_unavailable"
   | "object_read_timeout";
 
 /** Stable port-level failure used without coupling application code to an adapter. */
@@ -133,11 +134,98 @@ export interface SpaceCanonicalObject extends SpaceCanonicalObjectMetadata {
 /** Streaming canonical read used when a bounded prefix does not require the tail. */
 export interface OpenedSpaceCanonicalObject extends SpaceCanonicalObjectMetadata {
   readonly body: ReadableStream<Uint8Array>;
+  /**
+   * Range authentication returned by current object providers. Legacy
+   * objects deliberately omit it so the application can take the verified
+   * full-read fallback.
+   */
+  readonly integrityProof?: Readonly<ObjectIntegrityRangeProof>;
+  /** The byte span actually carried by `body` (chunk aligned for ranges). */
+  readonly range?: Readonly<ObjectByteRange>;
 }
 
 export interface ObjectByteRange {
   readonly offset: number;
   readonly length: number;
+}
+
+export const OBJECT_INTEGRITY_PROOF_SCHEMA = "md-object-integrity-v1" as const;
+export const OBJECT_INTEGRITY_CHUNK_SIZE = 64 * 1024;
+
+export type ObjectIntegrityKind = SpaceCanonicalObjectKind | "bundle_file";
+
+export interface ObjectIntegrityChunkProof {
+  readonly index: number;
+  readonly offset: number;
+  readonly length: number;
+  readonly sha256: Sha256Digest;
+  /** Merkle siblings, from the leaf level towards the trusted root. */
+  readonly siblings: readonly Sha256Digest[];
+}
+
+/** A bounded proof for the requested range. */
+export interface ObjectIntegrityRangeProof {
+  readonly schema: typeof OBJECT_INTEGRITY_PROOF_SCHEMA;
+  readonly spaceId: SpaceId;
+  readonly kind: ObjectIntegrityKind;
+  readonly size: number;
+  readonly sha256: Sha256Digest;
+  readonly chunkSize: number;
+  readonly chunkCount: number;
+  readonly root: Sha256Digest;
+  readonly chunks: readonly ObjectIntegrityChunkProof[];
+}
+
+/** Full proof persisted by an object adapter before canonical visibility. */
+export interface ObjectIntegrityManifest {
+  readonly schema: typeof OBJECT_INTEGRITY_PROOF_SCHEMA;
+  readonly spaceId: SpaceId;
+  readonly kind: ObjectIntegrityKind;
+  readonly size: number;
+  readonly sha256: Sha256Digest;
+  readonly chunkSize: number;
+  readonly chunkCount: number;
+  readonly root: Sha256Digest;
+  readonly chunkDigests: readonly Sha256Digest[];
+}
+
+export function objectIntegrityLeafInput(
+  proof: Pick<ObjectIntegrityManifest, "schema" | "spaceId" | "kind" | "size" | "sha256" | "chunkSize">,
+  index: number,
+  offset: number,
+  length: number,
+  sha256: Sha256Digest,
+): string {
+  return [
+    proof.schema,
+    proof.spaceId,
+    proof.kind,
+    String(proof.size),
+    proof.sha256,
+    String(proof.chunkSize),
+    String(index),
+    String(offset),
+    String(length),
+    sha256,
+  ].join("\n") + "\n";
+}
+
+export function objectIntegrityNodeInput(left: Sha256Digest, right: Sha256Digest): string {
+  return `${OBJECT_INTEGRITY_PROOF_SCHEMA}\nnode\n${left}\n${right}\n`;
+}
+
+export function serializeObjectIntegrityManifest(proof: Readonly<ObjectIntegrityManifest>): string {
+  return JSON.stringify({
+    schema: proof.schema,
+    spaceId: proof.spaceId,
+    kind: proof.kind,
+    size: proof.size,
+    sha256: proof.sha256,
+    chunkSize: proof.chunkSize,
+    chunkCount: proof.chunkCount,
+    root: proof.root,
+    chunkDigests: proof.chunkDigests,
+  });
 }
 
 export interface SpaceCanonicalObjectPutResult {
@@ -269,6 +357,8 @@ export interface BundleFileObject extends BundleFileObjectMetadata {
 /** Bounded canonical read. The caller owns and must consume or cancel `body`. */
 export interface OpenedBundleFileObject extends BundleFileObjectMetadata {
   readonly body: ReadableStream<Uint8Array>;
+  readonly integrityProof?: Readonly<ObjectIntegrityRangeProof>;
+  readonly range?: Readonly<ObjectByteRange>;
 }
 
 export interface BundleFileObjectPutResult {

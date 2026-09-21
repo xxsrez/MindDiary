@@ -16,6 +16,11 @@ import {
   type SpaceCanonicalObject,
   type OpenedSpaceCanonicalObject,
   type ObjectByteRange,
+  OBJECT_INTEGRITY_CHUNK_SIZE,
+  OBJECT_INTEGRITY_PROOF_SCHEMA,
+  objectIntegrityLeafInput,
+  objectIntegrityNodeInput,
+  serializeObjectIntegrityManifest,
   type SpaceCanonicalObjectMetadata,
   type SpaceCanonicalObjectPutResult,
   type SpaceCanonicalObjectWriteRequest,
@@ -23,6 +28,9 @@ import {
   type SpaceCanonicalObjectDeleteRequest,
   type BundleFileObject,
   type OpenedBundleFileObject,
+  type ObjectIntegrityManifest,
+  type ObjectIntegrityRangeProof,
+  type ObjectIntegrityKind,
   type BundleFileObjectMetadata,
   type BundleFileObjectPutResult,
   type BundleFileObjectStore,
@@ -116,6 +124,7 @@ const MAX_R2_CAS_ATTEMPTS = 16;
 const R2_READ_TIMEOUT_MS = 5_000;
 const EXPORT_STREAM_PART_BYTES = 4_194_304;
 const SAFE_MEDIA_TYPE = /^[!#$%&'*+.^_`|~0-9a-z-]+\/[!#$%&'*+.^_`|~0-9a-z-]+$/u;
+const integrityEncoder = new TextEncoder();
 const CLEANUP_NAMESPACES = new Set<ObjectCleanupNamespace>([
   "immutable",
   "bundle_file",
@@ -123,29 +132,45 @@ const CLEANUP_NAMESPACES = new Set<ObjectCleanupNamespace>([
   "staged_bundle",
   "export",
 ]);
-
+function integritySidecarKey(objectKey: string, spaceId: string): string {
+  return `${SPACE_CANONICAL_PREFIX}${encodeURIComponent(spaceId)}/integrity/${encodeURIComponent(objectKey)}`;
+}
+function integritySidecarMetadata(
+  objectKey: string,
+  manifest: Readonly<ObjectIntegrityManifest>,
+  manifestDigest: Digest,
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    schema: "md-r2-object-integrity-v1",
+    objectKey,
+    spaceId: manifest.spaceId,
+    kind: manifest.kind,
+    size: String(manifest.size),
+    sha256: manifest.sha256,
+    chunkSize: String(manifest.chunkSize),
+    chunkCount: String(manifest.chunkCount),
+    root: manifest.root,
+    manifestDigest,
+  });
+}
 function validCleanupNamespace(value: unknown): value is ObjectCleanupNamespace {
   return typeof value === "string" && CLEANUP_NAMESPACES.has(value as ObjectCleanupNamespace);
 }
-
 function assertDigest(value: string): asserts value is Digest {
   if (!SHA256.test(value)) {
     throw new ObjectStoreFailure("invalid_digest", "object digest is invalid");
   }
 }
-
 function assertUtc(value: string): asserts value is Utc {
   if (!UTC.test(value) || !Number.isFinite(Date.parse(value))) {
     throw new ObjectStoreFailure("invalid_timestamp", "object timestamp is invalid");
   }
 }
-
 function compareUtc(left: string, right: string): number {
   const leftMs = Date.parse(left);
   const rightMs = Date.parse(right);
   return leftMs < rightMs ? -1 : leftMs > rightMs ? 1 : 0;
 }
-
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   if (left.byteLength !== right.byteLength) return false;
   for (let index = 0; index < left.byteLength; index += 1) {
@@ -153,7 +178,6 @@ function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   }
   return true;
 }
-
 function assertMarkdown(bytes: Uint8Array, mediaType: string): void {
   if (mediaType !== MARKDOWN) {
     throw new ObjectStoreFailure(
@@ -167,17 +191,14 @@ function assertMarkdown(bytes: Uint8Array, mediaType: string): void {
     throw new ObjectStoreFailure("invalid_utf8", "canonical object is not UTF-8");
   }
 }
-
 function assertBundleMediaType(mediaType: string): void {
   if (mediaType.length > 127 || !SAFE_MEDIA_TYPE.test(mediaType)) {
     throw new ObjectStoreFailure("invalid_media_type", "BundleFile media type is not allowed");
   }
 }
-
 function canonicalKey(digest: Digest): string {
   return `${CANONICAL_PREFIX}${digest.slice("sha256:".length)}`;
 }
-
 function spaceCanonicalKey(
   kind: SpaceCanonicalObjectMetadata["kind"],
   spaceId: SpaceCanonicalObjectMetadata["spaceId"],
@@ -186,7 +207,6 @@ function spaceCanonicalKey(
   const namespace = kind === "markdown" ? "objects" : "manifests";
   return `${SPACE_CANONICAL_PREFIX}${encodeURIComponent(spaceId)}/${namespace}/sha256/${digest.slice(7)}`;
 }
-
 function isSpaceCanonicalKey(key: string): boolean {
   return /\/(?:objects|manifests)\/sha256\/[0-9a-f]{64}$/u.test(key);
 }
@@ -195,6 +215,8 @@ function spaceCanonicalMetadataSource(
   metadata: Readonly<SpaceCanonicalObjectMetadata>,
   state = ACTIVE_STATE,
   deleteBoundary = "",
+  integrityManifest?: Readonly<ObjectIntegrityManifest>,
+  integrityDigest?: Digest,
 ): Readonly<Record<string, string>> {
   return Object.freeze({
     schema: "md-r2-space-canonical-v1",
@@ -207,6 +229,10 @@ function spaceCanonicalMetadataSource(
     createdAt: metadata.createdAt,
     protectedAt: metadata.protectedAt,
     deleteBoundary,
+    ...(integrityManifest === undefined ? {} : {
+      integrityProofDigest: integrityDigest ?? "",
+      integrityProofRoot: integrityManifest.root,
+    }),
   });
 }
 
@@ -226,7 +252,7 @@ function spaceCanonicalMetadataFromR2(
     custom.schema !== "md-r2-space-canonical-v1" ||
     (kind !== "markdown" && kind !== "revision_manifest") ||
     typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
-    Number(custom.size) !== object.size ||
+    !Number.isSafeInteger(Number(custom.size)) || Number(custom.size) < 0 ||
     (kind === "markdown" ? mediaType !== MARKDOWN : mediaType !== REVISION_MANIFEST_MEDIA_TYPE)
   ) throw new ObjectStoreFailure("object_tampered", "Space canonical metadata is invalid");
   return Object.freeze({
@@ -234,7 +260,7 @@ function spaceCanonicalMetadataFromR2(
     spaceId: custom.spaceId as SpaceCanonicalObjectMetadata["spaceId"],
     sha256: digest,
     mediaType: kind === "markdown" ? MARKDOWN : REVISION_MANIFEST_MEDIA_TYPE,
-    size: object.size,
+    size: Number(custom.size),
     createdAt,
     protectedAt,
   });
@@ -377,6 +403,234 @@ async function verifyBodyStream(
   }
 }
 
+async function merkleRoot(
+  calculate: (bytes: Uint8Array) => Promise<Digest>,
+  proof: Pick<ObjectIntegrityManifest, "schema" | "spaceId" | "kind" | "size" | "sha256" | "chunkSize">,
+  chunkDigests: readonly Digest[],
+): Promise<Digest> {
+  if (chunkDigests.length === 0) {
+    return calculate(integrityEncoder.encode([
+      OBJECT_INTEGRITY_PROOF_SCHEMA,
+      "empty",
+      proof.spaceId,
+      proof.kind,
+      String(proof.size),
+      proof.sha256,
+      String(proof.chunkSize),
+    ].join("\n") + "\n"));
+  }
+  let level = await Promise.all(chunkDigests.map((digest, index) => calculate(
+    integrityEncoder.encode(objectIntegrityLeafInput(
+      proof,
+      index,
+      index * proof.chunkSize,
+      Math.min(proof.chunkSize, proof.size - index * proof.chunkSize),
+      digest,
+    )),
+  )));
+  while (level.length > 1) {
+    const next: Digest[] = [];
+    for (let index = 0; index < level.length; index += 2) {
+      const left = level[index]!;
+      const right = level[index + 1] ?? left;
+      next.push(await calculate(integrityEncoder.encode(objectIntegrityNodeInput(left, right))));
+    }
+    level = next;
+  }
+  return level[0]!;
+}
+
+async function buildIntegrityManifest(
+  calculate: (bytes: Uint8Array) => Promise<Digest>,
+  spaceId: string,
+  kind: ObjectIntegrityKind,
+  bytes: Uint8Array,
+  sha256: Digest,
+): Promise<Readonly<ObjectIntegrityManifest>> {
+  const chunkDigests: Digest[] = [];
+  for (let offset = 0; offset < bytes.byteLength; offset += OBJECT_INTEGRITY_CHUNK_SIZE) {
+    chunkDigests.push(await calculate(bytes.slice(offset, offset + OBJECT_INTEGRITY_CHUNK_SIZE)));
+  }
+  const base = {
+    schema: OBJECT_INTEGRITY_PROOF_SCHEMA,
+    spaceId: spaceId as ObjectIntegrityManifest["spaceId"],
+    kind,
+    size: bytes.byteLength,
+    sha256,
+    chunkSize: OBJECT_INTEGRITY_CHUNK_SIZE,
+    chunkCount: chunkDigests.length,
+  } as const;
+  return Object.freeze({
+    ...base,
+    root: await merkleRoot(calculate, base, chunkDigests),
+    chunkDigests: Object.freeze(chunkDigests),
+  });
+}
+
+async function readBodyBytes(
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number,
+): Promise<Uint8Array> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (!(next.value instanceof Uint8Array) || size + next.value.byteLength > expectedSize) {
+        await reader.cancel().catch(() => undefined);
+        throw new ObjectStoreFailure("object_tampered", "R2 range body length is invalid");
+      }
+      const copy = new Uint8Array(next.value);
+      chunks.push(copy);
+      size += copy.byteLength;
+    }
+    if (size !== expectedSize) throw new ObjectStoreFailure("object_tampered", "R2 range body length is invalid");
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function buildIntegrityManifestFromStream(
+  calculate: (bytes: Uint8Array) => Promise<Digest>,
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number,
+  spaceId: string,
+  kind: ObjectIntegrityKind,
+  expectedSha256: Digest,
+): Promise<Readonly<ObjectIntegrityManifest>> {
+  const reader = body.getReader();
+  const overall = new IncrementalSha256();
+  const chunkDigests: Digest[] = [];
+  let chunk = new Uint8Array(OBJECT_INTEGRITY_CHUNK_SIZE);
+  let chunkSize = 0;
+  let size = 0;
+  const flush = async (): Promise<void> => {
+    if (chunkSize === 0) return;
+    chunkDigests.push(await calculate(chunk.slice(0, chunkSize)));
+    chunk = new Uint8Array(OBJECT_INTEGRITY_CHUNK_SIZE);
+    chunkSize = 0;
+  };
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (!(next.value instanceof Uint8Array) || size + next.value.byteLength > expectedSize) {
+        throw new ObjectStoreFailure("object_tampered", "staged BundleFile size is invalid");
+      }
+      const bytes = new Uint8Array(next.value);
+      overall.update(bytes);
+      size += bytes.byteLength;
+      let offset = 0;
+      while (offset < bytes.byteLength) {
+        const copied = Math.min(OBJECT_INTEGRITY_CHUNK_SIZE - chunkSize, bytes.byteLength - offset);
+        chunk.set(bytes.subarray(offset, offset + copied), chunkSize);
+        chunkSize += copied;
+        offset += copied;
+        if (chunkSize === OBJECT_INTEGRITY_CHUNK_SIZE) await flush();
+      }
+    }
+    await flush();
+    if (size !== expectedSize || overall.digest() !== expectedSha256) {
+      throw new ObjectStoreFailure("object_tampered", "staged BundleFile digest verification failed");
+    }
+    const base = {
+      schema: OBJECT_INTEGRITY_PROOF_SCHEMA,
+      spaceId: spaceId as ObjectIntegrityManifest["spaceId"],
+      kind,
+      size,
+      sha256: expectedSha256,
+      chunkSize: OBJECT_INTEGRITY_CHUNK_SIZE,
+      chunkCount: chunkDigests.length,
+    } as const;
+    return Object.freeze({
+      ...base,
+      root: await merkleRoot(calculate, base, chunkDigests),
+      chunkDigests: Object.freeze(chunkDigests),
+    });
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function alignedRange(
+  manifest: Readonly<ObjectIntegrityManifest>,
+  requested: Readonly<ObjectByteRange>,
+): Readonly<ObjectByteRange> {
+  const offset = Math.floor(requested.offset / manifest.chunkSize) * manifest.chunkSize;
+  const end = Math.min(
+    manifest.size,
+    Math.ceil((requested.offset + requested.length) / manifest.chunkSize) * manifest.chunkSize,
+  );
+  return Object.freeze({ offset, length: end - offset });
+}
+
+async function rangeProof(
+  calculate: (bytes: Uint8Array) => Promise<Digest>,
+  manifest: Readonly<ObjectIntegrityManifest>,
+  requested: Readonly<ObjectByteRange>,
+): Promise<Readonly<ObjectIntegrityRangeProof>> {
+  const first = Math.floor(requested.offset / manifest.chunkSize);
+  const last = Math.floor((requested.offset + requested.length - 1) / manifest.chunkSize);
+  let level = await Promise.all(manifest.chunkDigests.map((digest, index) => calculate(
+    integrityEncoder.encode(objectIntegrityLeafInput(
+      manifest,
+      index,
+      index * manifest.chunkSize,
+      Math.min(manifest.chunkSize, manifest.size - index * manifest.chunkSize),
+      digest,
+    )),
+  )));
+  const levels: Digest[][] = [level];
+  while (level.length > 1) {
+    const next: Digest[] = [];
+    for (let index = 0; index < level.length; index += 2) {
+      const left = level[index]!;
+      const right = level[index + 1] ?? left;
+      next.push(await calculate(integrityEncoder.encode(objectIntegrityNodeInput(left, right))));
+    }
+    levels.push(next);
+    level = next;
+  }
+  const paths = new Map<number, Digest[]>();
+  for (let index = first; index <= last; index += 1) {
+    const siblings: Digest[] = [];
+    let position = index;
+    for (let levelIndex = 0; levelIndex < levels.length - 1; levelIndex += 1) {
+      const current = levels[levelIndex]!;
+      const sibling = position % 2 === 0 ? position + 1 : position - 1;
+      siblings.push(current[sibling] ?? current[position]!);
+      position = Math.floor(position / 2);
+    }
+    paths.set(index, siblings);
+  }
+  return Object.freeze({
+    schema: manifest.schema,
+    spaceId: manifest.spaceId,
+    kind: manifest.kind,
+    size: manifest.size,
+    sha256: manifest.sha256,
+    chunkSize: manifest.chunkSize,
+    chunkCount: manifest.chunkCount,
+    root: manifest.root,
+    chunks: Object.freeze(Array.from(paths, ([index, siblings]) => Object.freeze({
+      index,
+      offset: index * manifest.chunkSize,
+      length: Math.min(manifest.chunkSize, manifest.size - index * manifest.chunkSize),
+      sha256: manifest.chunkDigests[index]!,
+      siblings: Object.freeze(siblings),
+    }))),
+  });
+}
+
 
 /** R2-backed canonical and export object namespaces with conditional GC lease claims. */
 export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveStore, BoundedObjectCleanupStore {
@@ -391,6 +645,188 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
 
   async ready(): Promise<this> {
     return this;
+  }
+
+  async #readIntegrityManifest(
+    object: R2ObjectBodyLike,
+    objectKey: string,
+    expected: Readonly<{ spaceId: string; kind: ObjectIntegrityKind; sha256: Digest; size: number }>,
+  ): Promise<Readonly<ObjectIntegrityManifest> | null> {
+    const custom = object.customMetadata ?? {};
+    const hasIntegrityFields =
+      custom.integrityProof !== undefined ||
+      custom.integrityProofDigest !== undefined ||
+      custom.integrityProofRoot !== undefined;
+    if (custom.integrityProof === undefined && custom.integrityProofDigest === undefined && custom.integrityProofRoot === undefined) {
+      return null;
+    }
+    if (custom.integrityProof !== undefined || typeof custom.integrityProofDigest !== "string" ||
+      typeof custom.integrityProofRoot !== "string" || !SHA256.test(custom.integrityProofDigest) ||
+      !SHA256.test(custom.integrityProofRoot)) {
+      throw new ObjectStoreFailure("object_tampered", "object integrity proof metadata is invalid");
+    }
+    if (hasIntegrityFields && custom.integrityProof !== undefined) {
+      throw new ObjectStoreFailure("object_tampered", "object integrity proof must use a sidecar");
+    }
+    const sidecar = await this.#get(integritySidecarKey(objectKey, expected.spaceId));
+    if (sidecar === null) {
+      throw new ObjectStoreFailure("object_tampered", "object integrity sidecar is missing");
+    }
+    const sidecarMetadata = sidecar.customMetadata ?? {};
+    if (
+      sidecarMetadata.schema !== "md-r2-object-integrity-v1" ||
+      sidecarMetadata.objectKey !== objectKey ||
+      sidecarMetadata.spaceId !== expected.spaceId ||
+      sidecarMetadata.kind !== expected.kind ||
+      sidecarMetadata.size !== String(expected.size) ||
+      sidecarMetadata.sha256 !== expected.sha256 ||
+      sidecarMetadata.chunkSize !== String(OBJECT_INTEGRITY_CHUNK_SIZE) ||
+      sidecarMetadata.chunkCount !== String(Math.ceil(expected.size / OBJECT_INTEGRITY_CHUNK_SIZE)) ||
+      sidecarMetadata.root !== custom.integrityProofRoot ||
+      sidecarMetadata.manifestDigest !== custom.integrityProofDigest
+    ) throw new ObjectStoreFailure("object_tampered", "object integrity sidecar metadata is invalid");
+    const rawBytes = await readBodyBytes(sidecar.body, sidecar.size);
+    if (await this.calculateSha256(rawBytes) !== custom.integrityProofDigest) {
+      throw new ObjectStoreFailure("object_tampered", "object integrity sidecar digest is invalid");
+    }
+    let raw: string;
+    try {
+      raw = new TextDecoder("utf-8", { fatal: true }).decode(rawBytes);
+    } catch {
+      throw new ObjectStoreFailure("object_tampered", "object integrity sidecar is not UTF-8");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new ObjectStoreFailure("object_tampered", "object integrity sidecar JSON is invalid");
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new ObjectStoreFailure("object_tampered", "object integrity sidecar is invalid");
+    }
+    const candidate = parsed as Record<string, unknown>;
+    const chunkCount = candidate.chunkCount;
+    if (
+      candidate.schema !== OBJECT_INTEGRITY_PROOF_SCHEMA ||
+      candidate.spaceId !== expected.spaceId ||
+      candidate.kind !== expected.kind ||
+      candidate.size !== expected.size ||
+      candidate.sha256 !== expected.sha256 ||
+      candidate.chunkSize !== OBJECT_INTEGRITY_CHUNK_SIZE ||
+      !Number.isSafeInteger(chunkCount) ||
+      !Array.isArray(candidate.chunkDigests) ||
+      chunkCount !== candidate.chunkDigests.length ||
+      chunkCount !== Math.ceil(expected.size / OBJECT_INTEGRITY_CHUNK_SIZE) ||
+      typeof candidate.root !== "string" || !SHA256.test(candidate.root) ||
+      custom.integrityProofRoot !== candidate.root
+    ) throw new ObjectStoreFailure("object_tampered", "object integrity sidecar metadata is invalid");
+    const chunkDigests = candidate.chunkDigests;
+    if (!chunkDigests.every((digest): digest is Digest => typeof digest === "string" && SHA256.test(digest))) {
+      throw new ObjectStoreFailure("object_tampered", "object integrity chunk digest is invalid");
+    }
+    const manifest = {
+      schema: OBJECT_INTEGRITY_PROOF_SCHEMA,
+      spaceId: expected.spaceId as ObjectIntegrityManifest["spaceId"],
+      kind: expected.kind,
+      size: expected.size,
+      sha256: expected.sha256,
+      chunkSize: OBJECT_INTEGRITY_CHUNK_SIZE,
+      chunkCount,
+      root: candidate.root as Digest,
+      chunkDigests: Object.freeze(chunkDigests),
+    } satisfies ObjectIntegrityManifest;
+    const root = await merkleRoot((bytes) => this.calculateSha256(bytes), manifest, manifest.chunkDigests);
+    if (root !== manifest.root) {
+      throw new ObjectStoreFailure("object_tampered", "object integrity proof root is invalid");
+    }
+    return Object.freeze(manifest);
+  }
+
+  async #writeIntegrityManifest(
+    objectKey: string,
+    manifest: Readonly<ObjectIntegrityManifest>,
+    manifestDigest: Digest,
+  ): Promise<void> {
+    const key = integritySidecarKey(objectKey, manifest.spaceId);
+    const bytes = integrityEncoder.encode(serializeObjectIntegrityManifest(manifest));
+    const existing = await this.#get(key);
+    if (existing !== null) {
+      const metadata = existing.customMetadata ?? {};
+      const actual = await this.calculateSha256(await readBodyBytes(existing.body, existing.size));
+      if (
+        actual !== manifestDigest ||
+        metadata.schema !== "md-r2-object-integrity-v1" ||
+        metadata.objectKey !== objectKey ||
+        metadata.manifestDigest !== manifestDigest ||
+        metadata.root !== manifest.root
+      ) throw new ObjectStoreFailure("object_tampered", "object integrity sidecar collision");
+      return;
+    }
+    const stored = await this.#bucket.put(key, bytes, {
+      customMetadata: integritySidecarMetadata(objectKey, manifest, manifestDigest),
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    if (stored !== null) return;
+    const winner = await this.#get(key);
+    if (winner === null) throw new ObjectStoreFailure("object_tampered", "object integrity sidecar publication failed");
+    const metadata = winner.customMetadata ?? {};
+    const actual = await this.calculateSha256(await readBodyBytes(winner.body, winner.size));
+    if (actual !== manifestDigest || metadata.objectKey !== objectKey ||
+      metadata.manifestDigest !== manifestDigest || metadata.root !== manifest.root) {
+      throw new ObjectStoreFailure("object_tampered", "object integrity sidecar collision");
+    }
+  }
+
+  async #readVerifiedChunkRange(
+    key: string,
+    metadata: Readonly<{ spaceId: string; kind: ObjectIntegrityKind; sha256: Digest; size: number }>,
+    manifest: Readonly<ObjectIntegrityManifest>,
+    requested: Readonly<ObjectByteRange>,
+  ): Promise<Readonly<{ bytes: Uint8Array; range: Readonly<ObjectByteRange>; proof: Readonly<ObjectIntegrityRangeProof> }>> {
+    const aligned = alignedRange(manifest, requested);
+    const first = Math.floor(aligned.offset / manifest.chunkSize);
+    const last = Math.floor((aligned.offset + aligned.length - 1) / manifest.chunkSize);
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (let index = first; index <= last; index += 1) {
+      const offset = index * manifest.chunkSize;
+      const length = Math.min(manifest.chunkSize, manifest.size - offset);
+      const object = await this.#get(key, { offset, length });
+      if (object === null) throw new ObjectStoreFailure("object_tampered", "R2 integrity chunk is missing");
+      const actualMetadata = metadata.kind === "bundle_file"
+        ? this.#bundleMetadata(object)
+        : spaceCanonicalMetadataFromR2(object);
+      if (
+        actualMetadata.spaceId !== metadata.spaceId ||
+        (metadata.kind !== "bundle_file" &&
+          !("kind" in actualMetadata && actualMetadata.kind === metadata.kind)) ||
+        actualMetadata.sha256 !== metadata.sha256 || actualMetadata.size !== metadata.size
+      ) throw new ObjectStoreFailure("object_tampered", "R2 integrity chunk metadata is foreign");
+      if (object.range === undefined) {
+        throw new ObjectStoreFailure("range_unavailable", "R2 provider did not return an authenticated range echo");
+      }
+      if (object.range.offset !== offset || object.range.length !== length) {
+        throw new ObjectStoreFailure("object_tampered", "R2 integrity chunk range echo is invalid");
+      }
+      const bytes = await readBodyBytes(object.body, length);
+      if (await this.calculateSha256(bytes) !== manifest.chunkDigests[index]) {
+        throw new ObjectStoreFailure("object_tampered", "R2 integrity chunk digest is invalid");
+      }
+      chunks.push(bytes);
+      total += bytes.byteLength;
+    }
+    const bytes = new Uint8Array(total);
+    let cursor = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, cursor);
+      cursor += chunk.byteLength;
+    }
+    const proof = await rangeProof(
+      (candidate) => this.calculateSha256(candidate),
+      manifest,
+      requested,
+    );
+    return Object.freeze({ bytes, range: aligned, proof });
   }
 
   async #get(
@@ -516,6 +952,16 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       }
     }
     const digest = await this.calculateSha256(bytes);
+    const integrityManifest = await buildIntegrityManifest(
+      (candidate) => this.calculateSha256(candidate),
+      request.spaceId,
+      request.kind,
+      bytes,
+      digest,
+    );
+    const integrityDigest = await this.calculateSha256(
+      integrityEncoder.encode(serializeObjectIntegrityManifest(integrityManifest)),
+    );
     const key = spaceCanonicalKey(request.kind, request.spaceId, digest);
     const mediaType = request.mediaType;
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
@@ -530,9 +976,16 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           createdAt: request.createdAt,
           protectedAt: request.createdAt,
         });
+        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest);
         const stored = await this.#bucket.put(key, bytes, {
           httpMetadata: { contentType: mediaType },
-          customMetadata: spaceCanonicalMetadataSource(metadata),
+          customMetadata: spaceCanonicalMetadataSource(
+            metadata,
+            ACTIVE_STATE,
+            "",
+            integrityManifest,
+            integrityDigest,
+          ),
           onlyIf: { etagDoesNotMatch: "*" },
         });
         if (!stored) continue;
@@ -549,6 +1002,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         actual === digest ? "digest_collision" : "object_tampered",
         "Space canonical object does not match its digest",
       );
+      await this.#readIntegrityManifest(existing, key, {
+        spaceId: request.spaceId,
+        kind: request.kind,
+        sha256: digest,
+        size: bytes.byteLength,
+      });
       if ((existing.customMetadata?.state ?? ACTIVE_STATE) === DELETE_STATE) continue;
       const protectedAt = compareUtc(request.createdAt, metadata.protectedAt) > 0
         ? request.createdAt
@@ -556,7 +1015,13 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       if (protectedAt !== metadata.protectedAt) {
         const updated = await this.#bucket.put(key, existingBytes, {
           httpMetadata: { contentType: mediaType },
-          customMetadata: spaceCanonicalMetadataSource({ ...metadata, protectedAt }),
+          customMetadata: spaceCanonicalMetadataSource(
+            { ...metadata, protectedAt },
+            ACTIVE_STATE,
+            "",
+            integrityManifest,
+            integrityDigest,
+          ),
           onlyIf: { etagMatches: existing.etag },
         });
         if (!updated) continue;
@@ -584,6 +1049,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       metadata.kind !== kind || metadata.spaceId !== spaceId || metadata.sha256 !== digest ||
       bytes.byteLength !== metadata.size || (await this.calculateSha256(bytes)) !== digest
     ) throw new ObjectStoreFailure("object_tampered", "Space canonical bytes are invalid");
+    await this.#readIntegrityManifest(object, spaceCanonicalKey(kind, spaceId, digest), {
+      spaceId,
+      kind,
+      sha256: digest,
+      size: metadata.size,
+    });
     if (kind === "markdown") assertMarkdown(bytes, metadata.mediaType);
     return Object.freeze({ ...metadata, bytes });
   }
@@ -601,6 +1072,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       metadata.kind !== kind || metadata.spaceId !== spaceId ||
       metadata.sha256 !== digest
     ) throw new ObjectStoreFailure("object_tampered", "Space canonical metadata is invalid");
+    await this.#readIntegrityManifest(object, spaceCanonicalKey(kind, spaceId, digest), {
+      spaceId,
+      kind,
+      sha256: digest,
+      size: metadata.size,
+    });
     return Object.freeze({ ...metadata, body: bodyStream(object) });
   }
 
@@ -615,14 +1092,40 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       !Number.isSafeInteger(range.offset) || range.offset < 0 ||
       !Number.isSafeInteger(range.length) || range.length < 1
     ) throw new ObjectStoreFailure("invalid_range", "Object byte range is invalid");
-    const object = await this.#get(spaceCanonicalKey(kind, spaceId, digest), range);
+    const key = spaceCanonicalKey(kind, spaceId, digest);
+    const object = await this.#get(key);
     if (!object) return null;
     const metadata = spaceCanonicalMetadataFromR2(object);
     if (
       metadata.kind !== kind || metadata.spaceId !== spaceId ||
       metadata.sha256 !== digest || range.offset + range.length > metadata.size
     ) throw new ObjectStoreFailure("object_tampered", "Space canonical metadata is invalid");
-    return Object.freeze({ ...metadata, body: bodyStream(object) });
+    const manifest = await this.#readIntegrityManifest(object, key, {
+      spaceId,
+      kind,
+      sha256: digest,
+      size: metadata.size,
+    });
+    if (manifest === null) {
+      throw new ObjectStoreFailure("range_unavailable", "R2 object has no authenticated range proof");
+    }
+    const verified = await this.#readVerifiedChunkRange(
+      key,
+      { spaceId, kind, sha256: digest, size: metadata.size },
+      manifest,
+      range,
+    );
+    return Object.freeze({
+      ...metadata,
+      integrityProof: verified.proof,
+      range: verified.range,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(verified.bytes);
+          controller.close();
+        },
+      }),
+    });
   }
 
   async listSpaceCanonicalObjects(
@@ -698,20 +1201,32 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         // before selecting this candidate.
         if (compareUtc(deleteBoundary, request.createdBefore) > 0) return false;
         await this.#bucket.delete(key);
+        await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
         return true;
       }
       const bytes = await bodyBytes(current);
+      const integrityManifest = await this.#readIntegrityManifest(current, key, {
+        spaceId: request.spaceId,
+        kind: request.kind,
+        sha256: request.sha256,
+        size: metadata.size,
+      });
       const claimed = await this.#bucket.put(key, bytes, {
         httpMetadata: { contentType: metadata.mediaType },
         customMetadata: spaceCanonicalMetadataSource(
           metadata,
           DELETE_STATE,
           request.createdBefore,
+          integrityManifest ?? undefined,
+          integrityManifest === null
+            ? undefined
+            : current.customMetadata?.integrityProofDigest as Digest | undefined,
         ),
         onlyIf: { etagMatches: current.etag },
       });
       if (!claimed) continue;
       await this.#bucket.delete(key);
+      await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
       return true;
     }
     throw new Error("R2 Space canonical delete CAS retry budget exhausted");
@@ -724,20 +1239,37 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     assertBundleMediaType(request.mediaType);
     const bytes = new Uint8Array(request.bytes);
     const digest = await this.calculateSha256(bytes);
+    const integrityManifest = await buildIntegrityManifest(
+      (candidate) => this.calculateSha256(candidate),
+      request.spaceId,
+      "bundle_file",
+      bytes,
+      digest,
+    );
+    const integrityDigest = await this.calculateSha256(
+      integrityEncoder.encode(serializeObjectIntegrityManifest(integrityManifest)),
+    );
     const key = `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/sha256/${digest.slice(7)}`;
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
       const existing = await this.#get(key);
       if (!existing) {
+        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest);
         const stored = await this.#bucket.put(key, bytes, {
           httpMetadata: { contentType: request.mediaType },
-          customMetadata: this.#bundleCustomMetadata({
-            spaceId: request.spaceId,
-            sha256: digest,
-            mediaType: request.mediaType,
-            size: bytes.byteLength,
-            createdAt: request.createdAt,
-            protectedAt: request.createdAt,
-          }),
+          customMetadata: this.#bundleCustomMetadata(
+            {
+              spaceId: request.spaceId,
+              sha256: digest,
+              mediaType: request.mediaType,
+              size: bytes.byteLength,
+              createdAt: request.createdAt,
+              protectedAt: request.createdAt,
+            },
+            ACTIVE_STATE,
+            "",
+            integrityManifest,
+            integrityDigest,
+          ),
           onlyIf: { etagDoesNotMatch: "*" },
         });
         if (!stored) continue;
@@ -749,6 +1281,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         metadata.sha256 !== digest ||
         !bytesEqual(existingBytes, bytes)
       ) throw new ObjectStoreFailure("digest_collision", "BundleFile object collision");
+      await this.#readIntegrityManifest(existing, key, {
+        spaceId: request.spaceId,
+        kind: "bundle_file",
+        sha256: digest,
+        size: bytes.byteLength,
+      });
       if ((existing.customMetadata?.state ?? ACTIVE_STATE) === DELETE_STATE) continue;
       const protectedAt = compareUtc(request.createdAt, metadata.protectedAt) > 0
         ? request.createdAt
@@ -756,7 +1294,13 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       if (protectedAt !== metadata.protectedAt) {
         const updated = await this.#bucket.put(key, existingBytes, {
           httpMetadata: { contentType: metadata.mediaType },
-          customMetadata: this.#bundleCustomMetadata({ ...metadata, protectedAt }),
+          customMetadata: this.#bundleCustomMetadata(
+            { ...metadata, protectedAt },
+            ACTIVE_STATE,
+            "",
+            integrityManifest,
+            integrityDigest,
+          ),
           onlyIf: { etagMatches: existing.etag },
         });
         if (!updated) continue;
@@ -786,6 +1330,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       bytes.byteLength !== metadata.size ||
       (await this.calculateSha256(bytes)) !== digest
     ) throw new ObjectStoreFailure("object_tampered", "BundleFile bytes are invalid");
+    await this.#readIntegrityManifest(object, key, {
+      spaceId,
+      kind: "bundle_file",
+      sha256: digest,
+      size: metadata.size,
+    });
     return Object.freeze({ ...metadata, bytes });
   }
 
@@ -801,6 +1351,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     if (metadata.spaceId !== spaceId || metadata.sha256 !== digest) {
       throw new ObjectStoreFailure("object_tampered", "BundleFile metadata is invalid");
     }
+    await this.#readIntegrityManifest(object, key, {
+      spaceId,
+      kind: "bundle_file",
+      sha256: digest,
+      size: metadata.size,
+    });
     return Object.freeze({ ...metadata, body: bodyStream(object) });
   }
 
@@ -815,14 +1371,39 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       !Number.isSafeInteger(range.length) || range.length < 1
     ) throw new ObjectStoreFailure("invalid_range", "Object byte range is invalid");
     const key = `${BUNDLE_PREFIX}${encodeURIComponent(spaceId)}/sha256/${digest.slice(7)}`;
-    const object = await this.#get(key, range);
+    const object = await this.#get(key);
     if (!object) return null;
     const metadata = this.#bundleMetadata(object);
     if (
       metadata.spaceId !== spaceId || metadata.sha256 !== digest ||
       range.offset + range.length > metadata.size
     ) throw new ObjectStoreFailure("object_tampered", "BundleFile metadata is invalid");
-    return Object.freeze({ ...metadata, body: bodyStream(object) });
+    const manifest = await this.#readIntegrityManifest(object, key, {
+      spaceId,
+      kind: "bundle_file",
+      sha256: digest,
+      size: metadata.size,
+    });
+    if (manifest === null) {
+      throw new ObjectStoreFailure("range_unavailable", "R2 object has no authenticated range proof");
+    }
+    const verified = await this.#readVerifiedChunkRange(
+      key,
+      { spaceId, kind: "bundle_file", sha256: digest, size: metadata.size },
+      manifest,
+      range,
+    );
+    return Object.freeze({
+      ...metadata,
+      integrityProof: verified.proof,
+      range: verified.range,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(verified.bytes);
+          controller.close();
+        },
+      }),
+    });
   }
 
   async listBundleFileObjects(
@@ -875,20 +1456,32 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       if (state === DELETE_STATE) {
         if (current.customMetadata?.deleteBoundary !== request.createdBefore) return false;
         await this.#bucket.delete(key);
+        await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
         return true;
       }
       const bytes = await bodyBytes(current);
+      const integrityManifest = await this.#readIntegrityManifest(current, key, {
+        spaceId: request.spaceId,
+        kind: "bundle_file",
+        sha256: request.sha256,
+        size: metadata.size,
+      });
       const claimed = await this.#bucket.put(key, bytes, {
         httpMetadata: { contentType: metadata.mediaType },
         customMetadata: this.#bundleCustomMetadata(
           metadata,
           DELETE_STATE,
           request.createdBefore,
+          integrityManifest ?? undefined,
+          integrityManifest === null
+            ? undefined
+            : current.customMetadata?.integrityProofDigest as Digest | undefined,
         ),
         onlyIf: { etagMatches: current.etag },
       });
       if (!claimed) continue;
       await this.#bucket.delete(key);
+      await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
       return true;
     }
     throw new Error("R2 BundleFile delete CAS retry budget exhausted");
@@ -1138,6 +1731,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           metadata.spaceId !== request.spaceId || metadata.sha256 !== request.sha256 ||
           metadata.size !== request.size
         ) throw new ObjectStoreFailure("digest_collision", "BundleFile object collision");
+        const existingManifest = await this.#readIntegrityManifest(existing, canonicalKey, {
+          spaceId: request.spaceId,
+          kind: "bundle_file",
+          sha256: request.sha256,
+          size: request.size,
+        });
         if (compareUtc(request.createdAt, metadata.protectedAt) <= 0) {
           return Object.freeze({ object: metadata, status: "already_exists" });
         }
@@ -1146,13 +1745,28 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           customMetadata: this.#bundleCustomMetadata({
             ...metadata,
             protectedAt: request.createdAt,
-          }),
+          }, ACTIVE_STATE, "", existingManifest ?? undefined, existing.customMetadata?.integrityProofDigest as Digest | undefined),
           onlyIf: { etagMatches: existing.etag },
         });
         if (updated === null) continue;
         return Object.freeze({ object: this.#bundleMetadata(updated), status: "already_exists" });
       }
-      const stored = await this.#bucket.put(canonicalKey, bodyStream(staged), {
+      const integrityManifest = await buildIntegrityManifestFromStream(
+        (candidate) => this.calculateSha256(candidate),
+        staged.body,
+        request.size,
+        request.spaceId,
+        "bundle_file",
+        request.sha256,
+      );
+      const integrityDigest = await this.calculateSha256(
+        integrityEncoder.encode(serializeObjectIntegrityManifest(integrityManifest)),
+      );
+      const stagedForPut = await this.#get(stagedKey);
+      if (stagedForPut === null) throw new ObjectStoreFailure("object_tampered", "staged BundleFile disappeared");
+      await this.#writeIntegrityManifest(canonicalKey, integrityManifest, integrityDigest);
+      const [bodyForPut, bodyForVerify] = stagedForPut.body.tee();
+      const storedPromise = this.#bucket.put(canonicalKey, bodyForPut, {
         httpMetadata: { contentType: request.mediaType },
         customMetadata: this.#bundleCustomMetadata({
           spaceId: request.spaceId,
@@ -1161,9 +1775,26 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           size: request.size,
           createdAt: request.createdAt,
           protectedAt: request.createdAt,
-        }),
+        }, ACTIVE_STATE, "", integrityManifest, integrityDigest),
         onlyIf: { etagDoesNotMatch: "*" },
       });
+      const verifyPromise = buildIntegrityManifestFromStream(
+        (candidate) => this.calculateSha256(candidate),
+        bodyForVerify,
+        request.size,
+        request.spaceId,
+        "bundle_file",
+        request.sha256,
+      );
+      const [stored, reverified] = await Promise.all([storedPromise, verifyPromise]);
+      if (
+        reverified.root !== integrityManifest.root ||
+        reverified.chunkCount !== integrityManifest.chunkCount ||
+        reverified.chunkDigests.some((item, index) => item !== integrityManifest.chunkDigests[index])
+      ) {
+        if (stored !== null) await this.#bucket.delete(canonicalKey).catch(() => undefined);
+        throw new ObjectStoreFailure("object_tampered", "promoted BundleFile failed integrity verification");
+      }
       if (stored === null) continue;
       const metadata = this.#bundleMetadata(stored);
       if (metadata.size !== request.size) {
@@ -1742,13 +2373,13 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       custom.schema !== "md-r2-bundle-file-v1" ||
       ![ACTIVE_STATE, DELETE_STATE].includes(custom.state ?? ACTIVE_STATE) ||
       typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
-      Number(custom.size) !== object.size
+      !Number.isSafeInteger(Number(custom.size)) || Number(custom.size) < 0
     ) throw new ObjectStoreFailure("object_tampered", "R2 BundleFile metadata is invalid");
     return Object.freeze({
       spaceId: custom.spaceId as BundleFileObjectMetadata["spaceId"],
       sha256: digest,
       mediaType: mediaType as BundleFileObjectMetadata["mediaType"],
-      size: object.size,
+      size: Number(custom.size),
       createdAt,
       protectedAt,
     });
@@ -1758,6 +2389,8 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     metadata: Readonly<BundleFileObjectMetadata>,
     state = ACTIVE_STATE,
     deleteBoundary = "",
+    integrityManifest?: Readonly<ObjectIntegrityManifest>,
+    integrityDigest?: Digest,
   ): Readonly<Record<string, string>> {
     return Object.freeze({
       schema: "md-r2-bundle-file-v1",
@@ -1769,6 +2402,10 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       createdAt: metadata.createdAt,
       protectedAt: metadata.protectedAt,
       deleteBoundary,
+      ...(integrityManifest === undefined ? {} : {
+        integrityProofDigest: integrityDigest ?? "",
+        integrityProofRoot: integrityManifest.root,
+      }),
     });
   }
 

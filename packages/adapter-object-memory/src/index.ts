@@ -11,6 +11,10 @@ import {
   REVISION_MANIFEST_MEDIA_TYPE,
   type SpaceCanonicalObject,
   type OpenedSpaceCanonicalObject,
+  OBJECT_INTEGRITY_CHUNK_SIZE,
+  OBJECT_INTEGRITY_PROOF_SCHEMA,
+  objectIntegrityLeafInput,
+  objectIntegrityNodeInput,
   type SpaceCanonicalObjectMetadata,
   type SpaceCanonicalObjectPutResult,
   type SpaceCanonicalObjectWriteRequest,
@@ -18,6 +22,9 @@ import {
   type SpaceCanonicalObjectDeleteRequest,
   type BundleFileObject,
   type OpenedBundleFileObject,
+  type ObjectIntegrityManifest,
+  type ObjectIntegrityRangeProof,
+  type ObjectIntegrityKind,
   type BundleFileObjectMetadata,
   type BundleFileObjectPutResult,
   type BundleFileObjectStore,
@@ -72,11 +79,13 @@ interface StoredArchive {
 interface StoredBundleFile extends BundleFileObjectMetadata {
   protectedAt: Utc;
   bytes: Uint8Array;
+  integrityManifest: Readonly<ObjectIntegrityManifest>;
 }
 
 interface StoredSpaceCanonicalObject extends SpaceCanonicalObjectMetadata {
   protectedAt: Utc;
   bytes: Uint8Array;
+  integrityManifest: Readonly<ObjectIntegrityManifest>;
 }
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
@@ -185,6 +194,142 @@ async function webCryptoSha256(bytes: Uint8Array): Promise<string> {
   return `sha256:${[...new Uint8Array(result)]
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("")}`;
+}
+
+const integrityEncoder = new TextEncoder();
+
+async function merkleRoot(
+  calculate: (bytes: Uint8Array) => Promise<Digest>,
+  proof: Pick<ObjectIntegrityManifest, "schema" | "spaceId" | "kind" | "size" | "sha256" | "chunkSize">,
+  chunkDigests: readonly Digest[],
+): Promise<Digest> {
+  if (chunkDigests.length === 0) {
+    return calculate(integrityEncoder.encode([
+      OBJECT_INTEGRITY_PROOF_SCHEMA,
+      "empty",
+      proof.spaceId,
+      proof.kind,
+      String(proof.size),
+      proof.sha256,
+      String(proof.chunkSize),
+    ].join("\n") + "\n"));
+  }
+  let level = await Promise.all(chunkDigests.map((digest, index) => calculate(
+    integrityEncoder.encode(objectIntegrityLeafInput(
+      proof,
+      index,
+      index * proof.chunkSize,
+      Math.min(proof.chunkSize, proof.size - index * proof.chunkSize),
+      digest,
+    )),
+  )));
+  while (level.length > 1) {
+    const next: Digest[] = [];
+    for (let index = 0; index < level.length; index += 2) {
+      const left = level[index]!;
+      const right = level[index + 1] ?? left;
+      next.push(await calculate(integrityEncoder.encode(objectIntegrityNodeInput(left, right))));
+    }
+    level = next;
+  }
+  return level[0]!;
+}
+
+async function buildIntegrityManifest(
+  calculate: (bytes: Uint8Array) => Promise<Digest>,
+  spaceId: string,
+  kind: ObjectIntegrityKind,
+  bytes: Uint8Array,
+  sha256: Digest,
+): Promise<Readonly<ObjectIntegrityManifest>> {
+  const chunkDigests: Digest[] = [];
+  for (let offset = 0; offset < bytes.byteLength; offset += OBJECT_INTEGRITY_CHUNK_SIZE) {
+    chunkDigests.push(await calculate(bytes.slice(offset, offset + OBJECT_INTEGRITY_CHUNK_SIZE)));
+  }
+  const base = {
+    schema: OBJECT_INTEGRITY_PROOF_SCHEMA,
+    spaceId: spaceId as ObjectIntegrityManifest["spaceId"],
+    kind,
+    size: bytes.byteLength,
+    sha256,
+    chunkSize: OBJECT_INTEGRITY_CHUNK_SIZE,
+    chunkCount: chunkDigests.length,
+  } as const;
+  return Object.freeze({
+    ...base,
+    root: await merkleRoot(calculate, base, chunkDigests),
+    chunkDigests: Object.freeze(chunkDigests),
+  });
+}
+
+function alignedRange(
+  manifest: Readonly<ObjectIntegrityManifest>,
+  requested: Readonly<{ offset: number; length: number }>,
+): Readonly<{ offset: number; length: number }> {
+  const start = Math.floor(requested.offset / manifest.chunkSize) * manifest.chunkSize;
+  const end = Math.min(
+    manifest.size,
+    Math.ceil((requested.offset + requested.length) / manifest.chunkSize) * manifest.chunkSize,
+  );
+  return Object.freeze({ offset: start, length: end - start });
+}
+
+async function rangeProof(
+  calculate: (bytes: Uint8Array) => Promise<Digest>,
+  manifest: Readonly<ObjectIntegrityManifest>,
+  requested: Readonly<{ offset: number; length: number }>,
+): Promise<Readonly<ObjectIntegrityRangeProof>> {
+  const first = Math.floor(requested.offset / manifest.chunkSize);
+  const last = Math.floor((requested.offset + requested.length - 1) / manifest.chunkSize);
+  let level = await Promise.all(manifest.chunkDigests.map((digest, index) => calculate(
+    integrityEncoder.encode(objectIntegrityLeafInput(
+      manifest,
+      index,
+      index * manifest.chunkSize,
+      Math.min(manifest.chunkSize, manifest.size - index * manifest.chunkSize),
+      digest,
+    )),
+  )));
+  const levels: Digest[][] = [level];
+  while (level.length > 1) {
+    const next: Digest[] = [];
+    for (let index = 0; index < level.length; index += 2) {
+      const left = level[index]!;
+      const right = level[index + 1] ?? left;
+      next.push(await calculate(integrityEncoder.encode(objectIntegrityNodeInput(left, right))));
+    }
+    levels.push(next);
+    level = next;
+  }
+  const paths = new Map<number, Digest[]>();
+  for (let index = first; index <= last; index += 1) {
+    const siblings: Digest[] = [];
+    let position = index;
+    for (let levelIndex = 0; levelIndex < levels.length - 1; levelIndex += 1) {
+      const current = levels[levelIndex]!;
+      const sibling = position % 2 === 0 ? position + 1 : position - 1;
+      siblings.push(current[sibling] ?? current[position]!);
+      position = Math.floor(position / 2);
+    }
+    paths.set(index, siblings);
+  }
+  return Object.freeze({
+    schema: manifest.schema,
+    spaceId: manifest.spaceId,
+    kind: manifest.kind,
+    size: manifest.size,
+    sha256: manifest.sha256,
+    chunkSize: manifest.chunkSize,
+    chunkCount: manifest.chunkCount,
+    root: manifest.root,
+    chunks: Object.freeze(Array.from(paths, ([index, siblings]) => Object.freeze({
+      index,
+      offset: index * manifest.chunkSize,
+      length: Math.min(manifest.chunkSize, manifest.size - index * manifest.chunkSize),
+      sha256: manifest.chunkDigests[index]!,
+      siblings: Object.freeze(siblings),
+    }))),
+  });
 }
 
 export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchiveStore, BoundedObjectCleanupStore {
@@ -302,6 +447,13 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       createdAt: request.createdAt,
       protectedAt: request.createdAt,
       bytes,
+      integrityManifest: await buildIntegrityManifest(
+        (candidate) => this.calculateSha256(candidate),
+        request.spaceId,
+        request.kind,
+        bytes,
+        digest,
+      ),
     };
     this.#spaceCanonicalObjects.set(key, stored);
     return Object.freeze({ object: this.#spaceCanonicalMetadata(stored), status: "stored" });
@@ -351,14 +503,36 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       !Number.isSafeInteger(range.offset) || range.offset < 0 ||
       !Number.isSafeInteger(range.length) || range.length < 1
     ) throw new ObjectStoreIntegrityError("invalid_range", "canonical object range is invalid");
-    const object = await this.getSpaceCanonicalObject(kind, spaceId, digest);
-    if (object === null) return null;
-    if (range.offset + range.length > object.size) {
+    const stored = this.#spaceCanonicalObjects.get(`${kind}:${spaceId}:${digest}`);
+    if (stored === undefined) return null;
+    await this.#assertIntegrityManifest(stored.integrityManifest, {
+      spaceId: stored.spaceId,
+      kind: stored.kind,
+      sha256: stored.sha256,
+      size: stored.size,
+    });
+    if (range.offset + range.length > stored.size) {
       throw new ObjectStoreIntegrityError("invalid_range", "canonical object range is invalid");
     }
-    const bytes = object.bytes.slice(range.offset, range.offset + range.length);
+    const aligned = alignedRange(stored.integrityManifest, range);
+    const proof = await rangeProof(
+      (candidate) => this.calculateSha256(candidate),
+      stored.integrityManifest,
+      range,
+    );
+    for (const chunk of proof.chunks) {
+      const actual = await this.calculateSha256(
+        stored.bytes.slice(chunk.offset, chunk.offset + chunk.length),
+      );
+      if (actual !== chunk.sha256) {
+        throw new ObjectStoreIntegrityError("object_tampered", "canonical object chunk is invalid");
+      }
+    }
+    const bytes = stored.bytes.slice(aligned.offset, aligned.offset + aligned.length);
     return Object.freeze({
-      ...this.#spaceCanonicalMetadata(object as StoredSpaceCanonicalObject),
+      ...this.#spaceCanonicalMetadata(stored),
+      integrityProof: proof,
+      range: aligned,
       body: new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(bytes);
@@ -419,6 +593,7 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     const key = `${request.spaceId}:${digest}`;
     const existing = this.#bundleFiles.get(key);
     if (existing) {
+      await this.#assertBundleFileIntegrity(existing);
       if (!bytesEqual(existing.bytes, bytes)) {
         throw new ObjectStoreIntegrityError(
           "digest_collision",
@@ -441,6 +616,13 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       createdAt: request.createdAt,
       protectedAt: request.createdAt,
       bytes,
+      integrityManifest: await buildIntegrityManifest(
+        (candidate) => this.calculateSha256(candidate),
+        request.spaceId,
+        "bundle_file",
+        bytes,
+        digest,
+      ),
     };
     this.#bundleFiles.set(key, stored);
     return Object.freeze({ object: this.#bundleMetadata(stored), status: "stored" });
@@ -453,6 +635,7 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     assertDigest(digest);
     const stored = this.#bundleFiles.get(`${spaceId}:${digest}`);
     if (!stored) return null;
+    await this.#assertBundleFileIntegrity(stored);
     const actual = await this.calculateSha256(stored.bytes);
     if (actual !== digest || stored.size !== stored.bytes.byteLength) {
       throw new ObjectStoreIntegrityError("object_tampered", "BundleFile bytes are invalid");
@@ -490,14 +673,36 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       !Number.isSafeInteger(range.offset) || range.offset < 0 ||
       !Number.isSafeInteger(range.length) || range.length < 1
     ) throw new ObjectStoreIntegrityError("invalid_range", "BundleFile range is invalid");
-    const object = await this.getBundleFile(spaceId, digest);
-    if (object === null) return null;
-    if (range.offset + range.length > object.size) {
+    const stored = this.#bundleFiles.get(`${spaceId}:${digest}`);
+    if (stored === undefined) return null;
+    await this.#assertIntegrityManifest(stored.integrityManifest, {
+      spaceId: stored.spaceId,
+      kind: "bundle_file",
+      sha256: stored.sha256,
+      size: stored.size,
+    });
+    if (range.offset + range.length > stored.size) {
       throw new ObjectStoreIntegrityError("invalid_range", "BundleFile range is invalid");
     }
-    const bytes = object.bytes.slice(range.offset, range.offset + range.length);
+    const aligned = alignedRange(stored.integrityManifest, range);
+    const proof = await rangeProof(
+      (candidate) => this.calculateSha256(candidate),
+      stored.integrityManifest,
+      range,
+    );
+    for (const chunk of proof.chunks) {
+      const actual = await this.calculateSha256(
+        stored.bytes.slice(chunk.offset, chunk.offset + chunk.length),
+      );
+      if (actual !== chunk.sha256) {
+        throw new ObjectStoreIntegrityError("object_tampered", "BundleFile chunk is invalid");
+      }
+    }
+    const bytes = stored.bytes.slice(aligned.offset, aligned.offset + aligned.length);
     return Object.freeze({
-      ...this.#bundleMetadata(object as StoredBundleFile),
+      ...this.#bundleMetadata(stored),
+      integrityProof: proof,
+      range: aligned,
       body: new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(bytes);
@@ -1093,6 +1298,55 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     const actual = await this.calculateSha256(stored.bytes);
     if (actual !== stored.sha256 || stored.bytes.byteLength !== stored.size) {
       throw new ObjectStoreIntegrityError("object_tampered", "Space canonical bytes are invalid");
+    }
+    await this.#assertIntegrityManifest(stored.integrityManifest, {
+      spaceId: stored.spaceId,
+      kind: stored.kind,
+      sha256: stored.sha256,
+      size: stored.size,
+    });
+  }
+
+  async #assertBundleFileIntegrity(stored: StoredBundleFile): Promise<void> {
+    const actual = await this.calculateSha256(stored.bytes);
+    if (actual !== stored.sha256 || stored.bytes.byteLength !== stored.size) {
+      throw new ObjectStoreIntegrityError("object_tampered", "BundleFile bytes are invalid");
+    }
+    await this.#assertIntegrityManifest(stored.integrityManifest, {
+      spaceId: stored.spaceId,
+      kind: "bundle_file",
+      sha256: stored.sha256,
+      size: stored.size,
+    });
+  }
+
+  async #assertIntegrityManifest(
+    manifest: Readonly<ObjectIntegrityManifest>,
+    expected: Readonly<{ spaceId: string; kind: ObjectIntegrityKind; sha256: Digest; size: number }>,
+  ): Promise<void> {
+    if (
+      manifest.schema !== OBJECT_INTEGRITY_PROOF_SCHEMA ||
+      manifest.spaceId !== expected.spaceId ||
+      manifest.kind !== expected.kind ||
+      manifest.sha256 !== expected.sha256 ||
+      manifest.size !== expected.size ||
+      manifest.chunkSize !== OBJECT_INTEGRITY_CHUNK_SIZE ||
+      manifest.chunkCount !== manifest.chunkDigests.length ||
+      manifest.chunkCount !== Math.ceil(manifest.size / manifest.chunkSize)
+    ) throw new ObjectStoreIntegrityError("object_tampered", "object integrity proof metadata is invalid");
+    try {
+      assertDigest(manifest.root);
+      for (const digest of manifest.chunkDigests) assertDigest(digest);
+    } catch {
+      throw new ObjectStoreIntegrityError("object_tampered", "object integrity proof digest is invalid");
+    }
+    const root = await merkleRoot(
+      (candidate) => this.calculateSha256(candidate),
+      manifest,
+      manifest.chunkDigests,
+    );
+    if (root !== manifest.root) {
+      throw new ObjectStoreIntegrityError("object_tampered", "object integrity proof root is invalid");
     }
   }
 

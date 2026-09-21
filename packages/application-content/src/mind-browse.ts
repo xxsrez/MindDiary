@@ -55,6 +55,7 @@ import {
   normalizeReadFilesRequest,
   loadTextFileHead,
   loadTextFileRange,
+  loadTextFileTail,
   regexEscape,
   scalarAfter,
   scalarBefore,
@@ -1458,6 +1459,18 @@ export class MindBrowseService {
             deadlineAt,
             () => this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry),
           )
+        : selection.mode === "tail"
+        ? await loadTextFileTail(
+            this.#objects,
+            envelope.revision.spaceId,
+            envelope.manifest.format,
+            entry,
+            selection.count,
+            signal,
+            deadlineAt,
+            () => this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry),
+            request.maxOutputBytes - returnedBytes,
+          )
         : await this.#loadTextFile(envelope.revision.spaceId, envelope.manifest.format, entry);
       if (loaded.kind === "error") {
         items.push(Object.freeze({ kind: "error", path: selection.path, error: loaded.error }));
@@ -1467,6 +1480,7 @@ export class MindBrowseService {
       const total = entry.size;
       let start = 0;
       let end = total;
+      let byteOffset = 0;
       let requestedLineRange: ReadFileResultItem["lineRange"] = null;
       if (selection.mode === "head") {
         const count = Math.min(selection.count, lines.length);
@@ -1477,10 +1491,23 @@ export class MindBrowseService {
           total: "complete" in loaded && loaded.complete ? lines.length : null,
         });
       } else if (selection.mode === "tail") {
+        if (!("byteStart" in loaded) || !("lineStart" in loaded) || !("totalLines" in loaded)) {
+          throw new MindBrowseFailure("revision_integrity_failure", "The exact revision tail read failed integrity verification.");
+        }
+        const tail = loaded as Readonly<{
+          readonly byteStart: number;
+          readonly lineStart: number;
+          readonly totalLines: number | null;
+        }>;
         const count = Math.min(selection.count, lines.length);
-        const first = lines.length - count;
-        start = count === 0 ? 0 : lines[first]!.startByte;
-        requestedLineRange = Object.freeze({ start: count === 0 ? 0 : first + 1, end: lines.length, total: lines.length });
+        byteOffset = tail.byteStart;
+        start = continuationByte > byteOffset ? Math.min(loaded.file.bytes.byteLength, continuationByte - byteOffset) : 0;
+        end = loaded.file.bytes.byteLength;
+        requestedLineRange = Object.freeze({
+          start: count === 0 ? 0 : tail.lineStart,
+          end: count === 0 ? 0 : tail.lineStart + count - 1,
+          total: tail.totalLines,
+        });
       } else if (selection.mode === "lines") {
         if (selection.startLine > lines.length || selection.endLine > lines.length) {
           items.push(Object.freeze({
@@ -1498,7 +1525,7 @@ export class MindBrowseService {
           total: "complete" in loaded && loaded.complete ? lines.length : null,
         });
       }
-      if (continuationByte > 0) start = Math.max(start, continuationByte);
+      if (selection.mode !== "tail" && continuationByte > 0) start = Math.max(start, continuationByte);
       const remaining = request.maxOutputBytes - returnedBytes;
       if (remaining < MIN_FETCH_BYTE_BUDGET && start < end) {
         incomplete = true;
@@ -1517,14 +1544,16 @@ export class MindBrowseService {
           sha256: entry.sha256,
           revisionId: envelope.revision.revisionId,
           text,
-          byteRange: Object.freeze({ start, end: pageEnd, total }),
+          byteRange: Object.freeze({ start: byteOffset + start, end: byteOffset + pageEnd, total }),
           lineRange: requestedLineRange,
           truncated: pageEnd < end,
-          nextRange: pageEnd < end ? Object.freeze({ startByte: pageEnd, endByte: end }) : null,
+          nextRange: pageEnd < end
+            ? Object.freeze({ startByte: byteOffset + pageEnd, endByte: byteOffset + end })
+            : null,
         }),
       }));
       if (pageEnd < end) {
-        continuationByte = pageEnd;
+        continuationByte = byteOffset + pageEnd;
         incomplete = true;
         incompleteReason = "response_budget";
         break;

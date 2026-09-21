@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createSitesObjectStore } from "@mind-diary/adapter-object-sites";
+import { OBJECT_INTEGRITY_CHUNK_SIZE } from "@mind-diary/application-ports";
+import { MARKDOWN_MEDIA_TYPE } from "@mind-diary/domain";
 
 const PNG = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -15,6 +17,7 @@ class Body {
     this.size = record.bytes.byteLength;
     this.etag = record.etag;
     this.customMetadata = { ...record.customMetadata };
+    this.range = record.range;
     this.#bytes = new Uint8Array(record.bytes);
     this.#record = record;
     this.body = new ReadableStream({
@@ -38,9 +41,16 @@ class StreamingBucket {
   records = new Map();
   #version = 0;
 
-  async get(key) {
+  async get(key, options = {}) {
     const record = this.records.get(key);
-    return record === undefined ? null : new Body(record);
+    if (record === undefined) return null;
+    if (options.range === undefined) return new Body(record);
+    const { offset, length } = options.range;
+    return new Body({
+      ...record,
+      bytes: record.bytes.slice(offset, offset + length),
+      range: { offset, length },
+    });
   }
 
   async put(key, value, options = {}) {
@@ -163,6 +173,73 @@ test("Sites staged generated writer sends a ReadableStream and publishes only on
   assert.deepEqual(
     (await objects.getStagedBundleFile("staged_stream_test")).bytes,
     PNG,
+  );
+});
+
+test("Sites canonical ranges use compact metadata plus a bound sidecar and reject tampering", async () => {
+  const bucket = new StreamingBucket();
+  const objects = await createSitesObjectStore(bucket);
+  const spaceId = "space_sites_integrity";
+  const bytes = new TextEncoder().encode(
+    `${"a".repeat(OBJECT_INTEGRITY_CHUNK_SIZE - 7)}\r\n${"b".repeat(OBJECT_INTEGRITY_CHUNK_SIZE + 23)}\nend🙂\rfinal`,
+  );
+  const stored = await objects.putSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId,
+    bytes,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: CREATED_AT,
+  });
+  const canonicalKey = [...bucket.records.keys()].find((key) =>
+    key.endsWith(`/objects/sha256/${stored.object.sha256.slice(7)}`));
+  assert.ok(canonicalKey);
+  const canonical = bucket.records.get(canonicalKey);
+  assert.ok(canonical);
+  assert.equal(canonical.customMetadata.chunkDigests, undefined);
+  assert.match(canonical.customMetadata.integrityProofDigest, /^sha256:[0-9a-f]{64}$/u);
+  assert.match(canonical.customMetadata.integrityProofRoot, /^sha256:[0-9a-f]{64}$/u);
+  const sidecars = [...bucket.records.keys()].filter((key) => key.includes("/integrity/"));
+  assert.equal(sidecars.length, 1);
+  assert.ok(sidecars[0].startsWith(`spaces/${encodeURIComponent(spaceId)}/integrity/`));
+
+  const opened = await objects.openSpaceCanonicalObjectRange(
+    "markdown",
+    spaceId,
+    stored.object.sha256,
+    { offset: OBJECT_INTEGRITY_CHUNK_SIZE - 3, length: 11 },
+  );
+  assert.ok(opened);
+  assert.deepEqual(
+    new Uint8Array(await new Response(opened.body).arrayBuffer()),
+    bytes.slice(0, OBJECT_INTEGRITY_CHUNK_SIZE * 2),
+  );
+  assert.deepEqual(opened.range, {
+    offset: 0,
+    length: OBJECT_INTEGRITY_CHUNK_SIZE * 2,
+  });
+  assert.ok(opened.integrityProof);
+
+  const trustedRoot = canonical.customMetadata.integrityProofRoot;
+  canonical.customMetadata.integrityProofRoot = `sha256:${"0".repeat(64)}`;
+  await assert.rejects(
+    objects.openSpaceCanonicalObjectRange(
+      "markdown",
+      spaceId,
+      stored.object.sha256,
+      { offset: 0, length: 5 },
+    ),
+    (error) => error?.code === "object_tampered",
+  );
+  canonical.customMetadata.integrityProofRoot = trustedRoot;
+  canonical.bytes[OBJECT_INTEGRITY_CHUNK_SIZE + 1] ^= 0xff;
+  await assert.rejects(
+    objects.openSpaceCanonicalObjectRange(
+      "markdown",
+      spaceId,
+      stored.object.sha256,
+      { offset: OBJECT_INTEGRITY_CHUNK_SIZE, length: 5 },
+    ),
+    (error) => error?.code === "object_tampered",
   );
 });
 

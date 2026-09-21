@@ -2,8 +2,13 @@ import { RE2JS } from "re2js";
 
 import {
   ObjectStoreFailure,
+  OBJECT_INTEGRITY_CHUNK_SIZE,
+  OBJECT_INTEGRITY_PROOF_SCHEMA,
+  objectIntegrityLeafInput,
+  objectIntegrityNodeInput,
   type BundleFileObjectStore,
   type ObjectStore,
+  type ObjectIntegrityRangeProof,
   type OpenedBundleFileObject,
   type OpenedSpaceCanonicalObject,
   type SpaceCanonicalObjectStore,
@@ -651,7 +656,145 @@ async function readExactStreamBytes(
   }
 }
 
-export async function loadTextFileRange(
+const OBJECT_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
+
+function revisionIntegrityFailure(): MindBrowseFailure {
+  return new MindBrowseFailure(
+    "revision_integrity_failure",
+    "The exact revision file failed integrity verification.",
+  );
+}
+
+function integrityProofKind(entry: Readonly<RevisionManifestEntry>): "markdown" | "bundle_file" {
+  return entry.kind === "markdown" ? "markdown" : "bundle_file";
+}
+
+async function verifyObjectIntegrityRange(
+  objects: ObjectStore,
+  proof: Readonly<ObjectIntegrityRangeProof>,
+  body: Uint8Array,
+  openedRange: Readonly<{ readonly offset: number; readonly length: number }> | undefined,
+  spaceId: SpaceId,
+  entry: Readonly<RevisionManifestEntry>,
+  requested: Readonly<{ readonly offset: number; readonly length: number }>,
+): Promise<void> {
+  const fail = (): never => { throw revisionIntegrityFailure(); };
+  if (
+    proof.schema !== OBJECT_INTEGRITY_PROOF_SCHEMA ||
+    proof.spaceId !== spaceId ||
+    proof.kind !== integrityProofKind(entry) ||
+    proof.size !== entry.size ||
+    proof.sha256 !== entry.sha256 ||
+    proof.chunkSize !== OBJECT_INTEGRITY_CHUNK_SIZE ||
+    !Number.isSafeInteger(proof.chunkCount) ||
+    proof.chunkCount !== Math.ceil(entry.size / OBJECT_INTEGRITY_CHUNK_SIZE) ||
+    !OBJECT_DIGEST_PATTERN.test(proof.root) ||
+    proof.chunks.length === 0
+  ) fail();
+  if (
+    openedRange === undefined ||
+    !Number.isSafeInteger(openedRange.offset) ||
+    !Number.isSafeInteger(openedRange.length) ||
+    openedRange.offset < 0 ||
+    openedRange.length < 1 ||
+    openedRange.offset % proof.chunkSize !== 0 ||
+    openedRange.offset > requested.offset ||
+    openedRange.offset + openedRange.length < requested.offset + requested.length ||
+    openedRange.offset + openedRange.length > proof.size ||
+    openedRange.length !== body.byteLength
+  ) fail();
+  const range = openedRange!;
+  const expectedRangeOffset = Math.floor(requested.offset / proof.chunkSize) * proof.chunkSize;
+  const expectedRangeEnd = Math.min(
+    proof.size,
+    Math.ceil((requested.offset + requested.length) / proof.chunkSize) * proof.chunkSize,
+  );
+  if (range.offset !== expectedRangeOffset || range.length !== expectedRangeEnd - expectedRangeOffset) fail();
+  const first = Math.floor(requested.offset / proof.chunkSize);
+  const last = Math.floor((requested.offset + requested.length - 1) / proof.chunkSize);
+  const expectedChunkCount = last - first + 1;
+  if (proof.chunks.length !== expectedChunkCount) fail();
+  const encoder = new TextEncoder();
+  const proofBase = {
+    schema: proof.schema,
+    spaceId: proof.spaceId,
+    kind: proof.kind,
+    size: proof.size,
+    sha256: proof.sha256,
+    chunkSize: proof.chunkSize,
+  } as const;
+  for (let ordinal = 0; ordinal < proof.chunks.length; ordinal += 1) {
+    const chunk = proof.chunks[ordinal]!;
+    const index = first + ordinal;
+    const offset = index * proof.chunkSize;
+    const length = Math.min(proof.chunkSize, proof.size - offset);
+    if (
+      chunk.index !== index ||
+      chunk.offset !== offset ||
+      chunk.length !== length ||
+      !OBJECT_DIGEST_PATTERN.test(chunk.sha256) ||
+      chunk.offset < range.offset ||
+      chunk.offset + chunk.length > range.offset + range.length
+    ) fail();
+    const chunkBytes = body.slice(chunk.offset - range.offset, chunk.offset - range.offset + chunk.length);
+    if (chunkBytes.byteLength !== chunk.length || await objects.calculateSha256(chunkBytes) !== chunk.sha256) fail();
+    let derived = await objects.calculateSha256(encoder.encode(objectIntegrityLeafInput(
+      proofBase,
+      chunk.index,
+      chunk.offset,
+      chunk.length,
+      chunk.sha256,
+    )));
+    let position = chunk.index;
+    let levelCount = proof.chunkCount;
+    let siblingOffset = 0;
+    while (levelCount > 1) {
+      const sibling = chunk.siblings[siblingOffset];
+      if (sibling === undefined || !OBJECT_DIGEST_PATTERN.test(sibling)) fail();
+      const siblingDigest = sibling as Sha256Digest;
+      derived = await objects.calculateSha256(encoder.encode(
+        position % 2 === 0
+          ? objectIntegrityNodeInput(derived, siblingDigest)
+          : objectIntegrityNodeInput(siblingDigest, derived),
+      ));
+      position = Math.floor(position / 2);
+      levelCount = Math.ceil(levelCount / 2);
+      siblingOffset += 1;
+    }
+    if (siblingOffset !== chunk.siblings.length || derived !== proof.root) fail();
+  }
+}
+
+type LoadedTextFile = Readonly<
+  | { readonly kind: "file"; readonly file: Readonly<ExactTextFile> }
+  | { readonly kind: "error"; readonly error: FileOperationItemError }
+>;
+
+type LoadedRange = Readonly<LoadedTextFile & { readonly legacy: boolean }>;
+
+async function verifyFullTextFile(
+  objects: ObjectStore,
+  entry: Readonly<RevisionManifestEntry>,
+  loaded: LoadedTextFile,
+): Promise<LoadedTextFile> {
+  if (loaded.kind === "error") return loaded;
+  const bytes = loaded.file.bytes;
+  if (bytes.byteLength !== entry.size || await objects.calculateSha256(bytes) !== entry.sha256) {
+    throw revisionIntegrityFailure();
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw revisionIntegrityFailure();
+  }
+  return Object.freeze({
+    kind: "file",
+    file: Object.freeze({ entry, bytes: new Uint8Array(bytes), text }),
+  });
+}
+
+async function loadTextFileRangeInternal(
   objects: ObjectStore,
   spaceId: SpaceId,
   manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
@@ -660,23 +803,17 @@ export async function loadTextFileRange(
   end: number,
   signal: AbortSignal | undefined,
   deadlineAt: number,
-  loadFull: () => Promise<Readonly<
-    | { readonly kind: "file"; readonly file: Readonly<ExactTextFile> }
-    | { readonly kind: "error"; readonly error: FileOperationItemError }
-  >>,
-): Promise<Readonly<
-  | { readonly kind: "file"; readonly file: Readonly<ExactTextFile> }
-  | { readonly kind: "error"; readonly error: FileOperationItemError }
->> {
+  loadFull: () => Promise<LoadedTextFile>,
+): Promise<LoadedRange> {
   if (
     !Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
     start < 0 || end <= start || end > entry.size
   ) throw new TypeError("text file range is invalid");
   if (entry.kind === "opaque" && !isTextMediaType(entry.mediaType)) {
-    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_not_text", retryable: false }) });
+    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_not_text", retryable: false }), legacy: false });
   }
   if (entry.kind === "opaque" && entry.size > MAX_TEXT_BUNDLE_FILE_BYTES) {
-    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_scan_limit_exceeded", retryable: false }) });
+    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_scan_limit_exceeded", retryable: false }), legacy: false });
   }
   const length = end - start;
   let opened: Readonly<OpenedBundleFileObject | OpenedSpaceCanonicalObject> | null = null;
@@ -700,42 +837,41 @@ export async function loadTextFileRange(
       );
     }
   } catch (error) {
-    if (error instanceof ObjectStoreFailure) {
-      throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+    if (error instanceof ObjectStoreFailure && error.code === "range_unavailable") {
+      opened = null;
+    } else if (error instanceof ObjectStoreFailure) {
+      throw revisionIntegrityFailure();
+    } else {
+      throw error;
     }
-    throw error;
   }
-  if (opened === null) {
-    const loaded = await loadFull();
-    if (loaded.kind === "error") return loaded;
+  if (opened === null || opened.integrityProof === undefined) {
+    if (opened !== null) await opened.body.cancel("legacy full-read fallback").catch(() => undefined);
+    const loaded = await verifyFullTextFile(objects, entry, await loadFull());
+    if (loaded.kind === "error") return Object.freeze({ ...loaded, legacy: true });
     const bytes = loaded.file.bytes.slice(start, end);
     return Object.freeze({
       kind: "file",
-      file: Object.freeze({
-        entry,
-        bytes,
-        text: new TextDecoder("utf-8").decode(bytes),
-      }),
+      file: Object.freeze({ entry, bytes, text: new TextDecoder("utf-8").decode(bytes) }),
+      legacy: true,
     });
   }
   if (
     opened.sha256 !== entry.sha256 || opened.size !== entry.size ||
-    opened.mediaType !== entry.mediaType
+    opened.mediaType !== entry.mediaType || opened.range === undefined
   ) {
     await opened.body.cancel("metadata mismatch").catch(() => undefined);
-    throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+    throw revisionIntegrityFailure();
   }
   try {
-    const bytes = await readExactStreamBytes(opened.body, length, signal, deadlineAt);
-    if (start === 0 && end === entry.size &&
-      (await objects.calculateSha256(bytes)) !== entry.sha256) throw new Error("digest mismatch");
+    const bodyLength = opened.range.length;
+    const body = await readExactStreamBytes(opened.body, bodyLength, signal, deadlineAt);
+    await verifyObjectIntegrityRange(objects, opened.integrityProof, body, opened.range, spaceId, entry, { offset: start, length });
+    const bytes = body.slice(start - opened.range.offset, start - opened.range.offset + length);
     return Object.freeze({
       kind: "file",
-      file: Object.freeze({
-        entry,
-        bytes,
-        text: new TextDecoder("utf-8").decode(bytes),
-      }),
+      file: Object.freeze({ entry, bytes, text: new TextDecoder("utf-8").decode(bytes) }),
+      legacy: false,
     });
   } catch (error) {
     if (error instanceof FileOperationBudgetExceeded) {
@@ -745,8 +881,33 @@ export async function loadTextFileRange(
         true,
       );
     }
-    throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+    if (error instanceof MindBrowseFailure) throw error;
+    throw revisionIntegrityFailure();
   }
+}
+
+export async function loadTextFileRange(
+  objects: ObjectStore,
+  spaceId: SpaceId,
+  manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
+  entry: Readonly<RevisionManifestEntry>,
+  start: number,
+  end: number,
+  signal: AbortSignal | undefined,
+  deadlineAt: number,
+  loadFull: () => Promise<Readonly<
+    | { readonly kind: "file"; readonly file: Readonly<ExactTextFile> }
+    | { readonly kind: "error"; readonly error: FileOperationItemError }
+  >>,
+): Promise<Readonly<
+  | { readonly kind: "file"; readonly file: Readonly<ExactTextFile> }
+  | { readonly kind: "error"; readonly error: FileOperationItemError }
+>> {
+  const loaded = await loadTextFileRangeInternal(
+    objects, spaceId, manifestFormat, entry, start, end, signal, deadlineAt, loadFull,
+  );
+  if (loaded.kind === "error") return Object.freeze({ kind: "error", error: loaded.error });
+  return Object.freeze({ kind: "file", file: loaded.file });
 }
 
 export async function loadTextFileHead(
@@ -824,6 +985,133 @@ export async function loadTextFileHead(
     }
     throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
   }
+}
+
+export async function loadTextFileTail(
+  objects: ObjectStore,
+  spaceId: SpaceId,
+  manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
+  entry: Readonly<RevisionManifestEntry>,
+  lineCount: number,
+  signal: AbortSignal | undefined,
+  deadlineAt: number,
+  loadFull: () => Promise<LoadedTextFile>,
+  maxBytes = MAX_FILE_OUTPUT_BYTE_BUDGET,
+): Promise<Readonly<
+  | {
+      readonly kind: "file";
+      readonly file: Readonly<ExactTextFile>;
+      readonly complete: boolean;
+      readonly lineStart: number;
+      readonly totalLines: number | null;
+      readonly byteStart: number;
+    }
+  | { readonly kind: "error"; readonly error: FileOperationItemError }
+>> {
+  if (entry.kind === "opaque" && !isTextMediaType(entry.mediaType)) {
+    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_not_text", retryable: false }) });
+  }
+  if (entry.size > MAX_TEXT_BUNDLE_FILE_BYTES) {
+    return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_scan_limit_exceeded", retryable: false }) });
+  }
+  let full: LoadedTextFile | undefined;
+  const loadFullOnce = async (): Promise<LoadedTextFile> => {
+    full ??= await verifyFullTextFile(objects, entry, await loadFull());
+    return full;
+  };
+  const selectFromFull = (loaded: LoadedTextFile): Readonly<
+    | {
+        readonly kind: "file";
+        readonly file: Readonly<ExactTextFile>;
+        readonly complete: true;
+        readonly lineStart: number;
+        readonly totalLines: number;
+        readonly byteStart: number;
+      }
+    | { readonly kind: "error"; readonly error: FileOperationItemError }
+  > => {
+    if (loaded.kind === "error") return loaded;
+    const lines = splitTextLines(loaded.file.text);
+    const count = Math.min(lineCount, lines.length);
+    const first = Math.max(0, lines.length - count);
+    const start = count === 0 ? 0 : lines[first]!.startByte;
+    const bytes = loaded.file.bytes.slice(start);
+    return Object.freeze({
+      kind: "file",
+      file: Object.freeze({
+        entry,
+        bytes,
+        text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      }),
+      complete: true,
+      lineStart: count === 0 ? 0 : first + 1,
+      totalLines: lines.length,
+      byteStart: start,
+    });
+  };
+  if (entry.size === 0) return selectFromFull(await loadFullOnce());
+
+  const chunks: Uint8Array[] = [];
+  let startOffset = entry.size;
+  let selectedLines: readonly Readonly<TextLine>[] | null = null;
+  while (startOffset > 0) {
+    const windowStart = Math.max(0, startOffset - OBJECT_INTEGRITY_CHUNK_SIZE);
+    const ranged = await loadTextFileRangeInternal(
+      objects,
+      spaceId,
+      manifestFormat,
+      entry,
+      windowStart,
+      startOffset,
+      signal,
+      deadlineAt,
+      loadFullOnce,
+    );
+    if (ranged.kind === "error") return Object.freeze({ kind: "error", error: ranged.error });
+    if (ranged.legacy) {
+      const loaded = full ?? await loadFullOnce();
+      return selectFromFull(loaded);
+    }
+    chunks.unshift(ranged.file.bytes);
+    startOffset = windowStart;
+    const bytes = joinedBytes(chunks, chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      if (startOffset === 0) throw revisionIntegrityFailure();
+      continue;
+    }
+    // A suffix may begin with the second byte of a CRLF pair when the
+    // backward window starts exactly at the LF chunk boundary. Fetch the
+    // preceding chunk once so line counting never turns that terminator into
+    // a spurious empty line.
+    if (startOffset > 0 && bytes[0] === 0x0a) continue;
+    const lines = splitTextLines(text);
+    if (startOffset === 0 || lines.length > lineCount || bytes.byteLength >= Math.max(1, maxBytes)) {
+      selectedLines = lines;
+      break;
+    }
+  }
+  if (selectedLines === null) throw revisionIntegrityFailure();
+  const count = Math.min(lineCount, selectedLines.length);
+  const first = Math.max(0, selectedLines.length - count);
+  const selectedStart = count === 0 ? 0 : selectedLines[first]!.startByte;
+  const allBytes = joinedBytes(chunks, chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
+  const bytes = allBytes.slice(selectedStart);
+  const complete = startOffset === 0;
+  return Object.freeze({
+    kind: "file",
+    file: Object.freeze({
+      entry,
+      bytes,
+      text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    }),
+    complete,
+    lineStart: complete ? (count === 0 ? 0 : first + 1) : 1,
+    totalLines: complete ? selectedLines.length : null,
+    byteStart: startOffset + selectedStart,
+  });
 }
 
 export function jsonValue(value: unknown, depth = 0): unknown {
