@@ -3,6 +3,7 @@ import {
   AuthorizedHandleReader,
   type BackgroundWorkStore,
   CapabilityAuthorizer,
+  RevisionProjectionIntegrityFailure,
   type CredentialContentAccessAuthorizer,
   type AuthorizationDecision,
   type AuthorizationGrant,
@@ -72,6 +73,7 @@ export type MindDiscoveryFailureCode =
   | "invalid_revision_selector"
   | "mind_not_found"
   | "revision_not_found"
+  | "revision_integrity_failure"
   | "credential_access_upgrade_required"
   | "binding_owner_revoked"
   | "binding_state_unavailable"
@@ -1419,7 +1421,18 @@ export class MindDiscoveryService {
       return this.#readRevision(spaceId, selector.revisionId);
     }
     if (this.#store.resolveRevisionAsOf !== undefined) {
-      const selected = await this.#store.resolveRevisionAsOf(spaceId, selector.asOf);
+      let selected;
+      try {
+        selected = await this.#store.resolveRevisionAsOf(spaceId, selector.asOf);
+      } catch (error) {
+        if (error instanceof RevisionProjectionIntegrityFailure) {
+          throw new MindDiscoveryFailure(
+            "revision_integrity_failure",
+            "Revision metadata failed integrity verification.",
+          );
+        }
+        throw error;
+      }
       return selected === null
         ? null
         : this.#readRevision(spaceId, selected.revision.revisionId);

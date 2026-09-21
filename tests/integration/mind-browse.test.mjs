@@ -1217,6 +1217,7 @@ test("differential file operations compose over one exact mixed-file revision wi
   let streamCanceled = false;
   const streamingObjects = {
     ...env.observedObjects,
+    openBundleFileRange: undefined,
     openBundleFile: async (spaceId, sha256) => {
       const object = await env.objects.getBundleFile(spaceId, sha256);
       if (object === null) return null;
@@ -1250,8 +1251,8 @@ test("differential file operations compose over one exact mixed-file revision wi
     requests: [{ path: "notes/plain.txt", mode: "head", count: 1 }],
   });
   assert.equal(streamedHead.items[0].file.text, "first line\n");
-  assert.equal(streamCanceled, true);
-  assert.ok(streamedBytes < opaqueFiles.find(({ path }) => path === "notes/plain.txt").bytes.byteLength);
+  assert.equal(streamCanceled, false);
+  assert.equal(streamedBytes, opaqueFiles.find(({ path }) => path === "notes/plain.txt").bytes.byteLength);
   assert.equal(streamedHead.items[0].file.lineRange.total, null);
 
   streamedBytes = 0;
@@ -1262,8 +1263,8 @@ test("differential file operations compose over one exact mixed-file revision wi
     requests: [{ path: "notes/plain.txt", mode: "lines", startLine: 2, endLine: 2 }],
   });
   assert.equal(streamedLines.items[0].file.text, "needle café 🧠\n");
-  assert.equal(streamCanceled, true);
-  assert.ok(streamedBytes < opaqueFiles.find(({ path }) => path === "notes/plain.txt").bytes.byteLength);
+  assert.equal(streamCanceled, false);
+  assert.equal(streamedBytes, opaqueFiles.find(({ path }) => path === "notes/plain.txt").bytes.byteLength);
   assert.equal(streamedLines.items[0].file.lineRange.total, null);
 
   const firstRead = await env.browse.readFiles(actor(owner.principalId), {
@@ -1479,6 +1480,7 @@ test("file-operation budgets always advance or fail explicitly and abort a stall
   let streamCanceled = false;
   const stalledObjects = {
     ...env.observedObjects,
+    openBundleFileRange: undefined,
     openBundleFile: async (spaceId, sha256) => {
       const object = await env.objects.getBundleFile(spaceId, sha256);
       if (object === null) return null;

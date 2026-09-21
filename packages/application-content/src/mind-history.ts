@@ -1,6 +1,7 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
 import {
   CapabilityAuthorizer,
+  RevisionProjectionIntegrityFailure,
   type AuthorizationDecision,
   type Authorizer,
   type CredentialContentAccessAuthorizer,
@@ -430,21 +431,37 @@ export class MindHistoryService {
     if (selector.kind === "revision") {
       revisionId = selector.revisionId;
     } else {
-      const selected = this.#store.resolveRevisionAsOf === undefined
-        ? await (async () => {
-            const revisions = await this.#store.listRevisions(anchor.mind.mindId);
-            let match: Readonly<CanonicalRevisionEnvelope> | null = null;
-            for (const envelope of revisions) {
-              if (
-                envelope.revision.spaceId === anchor.mind.mindId &&
-                atOrBefore(envelope.revision.committedAt, selector.asOf) &&
-                (match === null ||
-                  envelope.revision.revisionNumber > match.revision.revisionNumber)
-              ) match = envelope;
-            }
-            return match === null ? null : Object.freeze({ revision: match.revision });
-          })()
-        : await this.#store.resolveRevisionAsOf(anchor.mind.mindId, selector.asOf);
+      let selected;
+      try {
+        selected = this.#store.resolveRevisionAsOf === undefined
+          ? await (async () => {
+              const revisions = await this.#store.listRevisions(anchor.mind.mindId);
+              let match: Readonly<CanonicalRevisionEnvelope> | null = null;
+              for (const envelope of revisions) {
+                if (
+                  envelope.revision.spaceId === anchor.mind.mindId &&
+                  atOrBefore(envelope.revision.committedAt, selector.asOf) &&
+                  (match === null ||
+                    envelope.revision.revisionNumber > match.revision.revisionNumber)
+                ) match = envelope;
+              }
+              return match === null ? null : Object.freeze({ revision: match.revision });
+            })()
+          : await this.#store.resolveRevisionAsOf(anchor.mind.mindId, selector.asOf);
+      } catch (error) {
+        await this.#requireSameHistoryAuthorization(
+          actor,
+          anchor.mind.mindId,
+          initialAuthorization,
+        );
+        if (error instanceof RevisionProjectionIntegrityFailure) {
+          throw new MindHistoryFailure(
+            "revision_integrity_failure",
+            "Revision metadata failed integrity verification.",
+          );
+        }
+        throw error;
+      }
       if (selected === null) {
         await this.#requireSameHistoryAuthorization(
           actor,
@@ -494,12 +511,28 @@ export class MindHistoryService {
         spaceId,
         false,
       );
-      const catalog = this.#store.listRevisionCatalog === undefined
-        ? null
-        : await this.#store.listRevisionCatalog(spaceId, {
-            beforeRevisionId: query.before,
-            limit: query.limit,
-          });
+      let catalog;
+      try {
+        catalog = this.#store.listRevisionCatalog === undefined
+          ? null
+          : await this.#store.listRevisionCatalog(spaceId, {
+              beforeRevisionId: query.before,
+              limit: query.limit,
+            });
+      } catch (error) {
+        await this.#requireSameHistoryAuthorization(
+          actor,
+          spaceId,
+          initialAuthorization,
+        );
+        if (error instanceof RevisionProjectionIntegrityFailure) {
+          throw new MindHistoryFailure(
+            "revision_integrity_failure",
+            "Revision metadata failed integrity verification.",
+          );
+        }
+        throw error;
+      }
       const envelopes = catalog === null
         ? await this.#store.listRevisions(spaceId)
         : null;

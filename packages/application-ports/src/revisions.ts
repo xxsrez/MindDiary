@@ -388,6 +388,14 @@ export interface RevisionMetadataStore
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
 }
 
+/** Fail-closed signal for a compact revision projection that disagrees with canonical metadata. */
+export class RevisionProjectionIntegrityFailure extends Error {
+  constructor(message = "Revision projection failed integrity verification.") {
+    super(message);
+    this.name = "RevisionProjectionIntegrityFailure";
+  }
+}
+
 export interface RevisionCatalogEntry {
   readonly revision: Readonly<CanonicalRevisionEnvelope["revision"]>;
   readonly fileCount: number;

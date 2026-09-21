@@ -770,7 +770,10 @@ type LoadedTextFile = Readonly<
   | { readonly kind: "error"; readonly error: FileOperationItemError }
 >;
 
-type LoadedRange = Readonly<LoadedTextFile & { readonly legacy: boolean }>;
+type LoadedRange = Readonly<LoadedTextFile & {
+  readonly legacy: boolean;
+  readonly verifiedFull?: LoadedTextFile;
+}>;
 
 async function verifyFullTextFile(
   objects: ObjectStore,
@@ -848,12 +851,13 @@ async function loadTextFileRangeInternal(
   if (opened === null || opened.integrityProof === undefined) {
     if (opened !== null) await opened.body.cancel("legacy full-read fallback").catch(() => undefined);
     const loaded = await verifyFullTextFile(objects, entry, await loadFull());
-    if (loaded.kind === "error") return Object.freeze({ ...loaded, legacy: true });
+    if (loaded.kind === "error") return Object.freeze({ ...loaded, legacy: true, verifiedFull: loaded });
     const bytes = loaded.file.bytes.slice(start, end);
     return Object.freeze({
       kind: "file",
       file: Object.freeze({ entry, bytes, text: new TextDecoder("utf-8").decode(bytes) }),
       legacy: true,
+      verifiedFull: loaded,
     });
   }
   if (
@@ -932,59 +936,146 @@ export async function loadTextFileHead(
   if (entry.size > MAX_TEXT_BUNDLE_FILE_BYTES) {
     return Object.freeze({ kind: "error", error: Object.freeze({ code: "file_scan_limit_exceeded", retryable: false }) });
   }
-  let opened: Readonly<OpenedBundleFileObject | OpenedSpaceCanonicalObject> | null = null;
-  try {
-    if (entry.kind === "markdown" &&
-      (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
-      "openSpaceCanonicalObject" in objects &&
-      typeof (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject === "function") {
-      opened = await (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject!("markdown", spaceId, entry.sha256);
-    } else if (entry.kind === "opaque" && "openBundleFile" in objects) {
-      opened = await (objects as BundleFileObjectStore).openBundleFile(spaceId, entry.sha256);
-    }
-  } catch (error) {
-    if (error instanceof ObjectStoreFailure) {
-      throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
-    }
-    throw error;
-  }
-  if (opened === null) {
-    const loaded = await loadFull();
-    if (loaded.kind === "error") return loaded;
-    const end = headEndByte(loaded.file.bytes, lineCount, true)!;
-    const bytes = loaded.file.bytes.slice(0, end);
+  const selectedHead = (verifiedBytes: Uint8Array, end: number) => {
+    const bytes = end === verifiedBytes.byteLength
+      ? verifiedBytes
+      : verifiedBytes.slice(0, end);
     return Object.freeze({
-      kind: "file",
-      file: Object.freeze({ entry, bytes, text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) }),
+      kind: "file" as const,
+      file: Object.freeze({
+        entry,
+        bytes,
+        text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      }),
       complete: end === entry.size,
     });
-  }
-  if (
-    opened.sha256 !== entry.sha256 ||
-    (entry.kind === "markdown" && opened.mediaType !== entry.mediaType) ||
-    opened.size !== entry.size
-  ) {
-    await opened.body.cancel("metadata mismatch").catch(() => undefined);
-    throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
-  }
-  try {
-    const partial = await readHeadBytes(opened.body, entry.size, lineCount, signal, deadlineAt);
-    if (partial.complete && (await objects.calculateSha256(partial.bytes)) !== entry.sha256) throw new Error("digest mismatch");
-    return Object.freeze({
-      kind: "file",
-      file: Object.freeze({ entry, bytes: partial.bytes, text: new TextDecoder("utf-8", { fatal: true }).decode(partial.bytes) }),
-      complete: partial.complete,
-    });
-  } catch (error) {
-    if (error instanceof FileOperationBudgetExceeded) {
-      throw new MindBrowseFailure(
-        "file_operation_budget_exhausted",
-        error.reason === "aborted" ? "File operation was aborted." : "File operation deadline was reached.",
-        true,
-      );
+  };
+  const selectVerifiedHead = (loaded: LoadedTextFile) => {
+    if (loaded.kind === "error") return loaded;
+    const end = headEndByte(loaded.file.bytes, lineCount, true)!;
+    return selectedHead(loaded.file.bytes, end);
+  };
+  const loadVerifiedFull = async (): Promise<LoadedTextFile> => {
+    let opened: Readonly<OpenedBundleFileObject | OpenedSpaceCanonicalObject> | null = null;
+    try {
+      if (
+        entry.kind === "markdown" &&
+        (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
+        "openSpaceCanonicalObject" in objects &&
+        typeof (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject === "function"
+      ) {
+        opened = await (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObject!(
+          "markdown", spaceId, entry.sha256,
+        );
+      } else if (
+        entry.kind === "opaque" &&
+        "openBundleFile" in objects &&
+        typeof (objects as BundleFileObjectStore).openBundleFile === "function"
+      ) {
+        opened = await (objects as BundleFileObjectStore).openBundleFile(spaceId, entry.sha256);
+      }
+    } catch (error) {
+      if (error instanceof ObjectStoreFailure) throw revisionIntegrityFailure();
+      throw error;
     }
-    throw new MindBrowseFailure("revision_integrity_failure", "The exact revision file failed integrity verification.");
+    if (opened === null) {
+      return verifyFullTextFile(objects, entry, await loadFull());
+    }
+    if (
+      opened.sha256 !== entry.sha256 || opened.mediaType !== entry.mediaType ||
+      opened.size !== entry.size
+    ) {
+      await opened.body.cancel("metadata mismatch").catch(() => undefined);
+      throw revisionIntegrityFailure();
+    }
+    try {
+      const bytes = await readExactStreamBytes(opened.body, entry.size, signal, deadlineAt);
+      return verifyFullTextFile(objects, entry, Object.freeze({
+        kind: "file",
+        file: Object.freeze({ entry, bytes, text: "" }),
+      }));
+    } catch (error) {
+      if (error instanceof FileOperationBudgetExceeded) {
+        throw new MindBrowseFailure(
+          "file_operation_budget_exhausted",
+          error.reason === "aborted" ? "File operation was aborted." : "File operation deadline was reached.",
+          true,
+        );
+      }
+      if (error instanceof MindBrowseFailure) throw error;
+      throw revisionIntegrityFailure();
+    }
+  };
+  if (entry.size === 0) {
+    return selectVerifiedHead(await loadVerifiedFull());
   }
+
+  const hasAuthenticatedRange = entry.kind === "markdown"
+    ? (manifestFormat === REVISION_MANIFEST_FORMAT_V3 || manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
+      "openSpaceCanonicalObjectRange" in objects &&
+      typeof (objects as unknown as SpaceCanonicalObjectStore).openSpaceCanonicalObjectRange === "function"
+    : "openBundleFileRange" in objects &&
+      typeof (objects as BundleFileObjectStore).openBundleFileRange === "function";
+  if (!hasAuthenticatedRange) return selectVerifiedHead(await loadVerifiedFull());
+
+  // A bounded head must authenticate every byte it returns. Read forward in
+  // proof-sized ranges instead of trusting a prefix of the full-object stream;
+  // a legacy store falls back to one full digest verification.
+  const chunks: Uint8Array[] = [];
+  let accumulated = 0;
+  let lines = 0;
+  let previousWasCarriageReturn = false;
+  let pendingCarriageReturnEnd: number | null = null;
+  for (let start = 0; start < entry.size; start += OBJECT_INTEGRITY_CHUNK_SIZE) {
+    const end = Math.min(entry.size, start + OBJECT_INTEGRITY_CHUNK_SIZE);
+    const loaded = await loadTextFileRangeInternal(
+      objects, spaceId, manifestFormat, entry, start, end, signal, deadlineAt, loadVerifiedFull,
+    );
+    if (loaded.kind === "error") return Object.freeze({ kind: "error", error: loaded.error });
+    if (loaded.legacy) {
+      return selectVerifiedHead(loaded.verifiedFull ?? await loadVerifiedFull());
+    }
+    const bytes = loaded.file.bytes;
+    if (bytes.byteLength !== end - start) throw revisionIntegrityFailure();
+    chunks.push(bytes);
+    accumulated += bytes.byteLength;
+
+    if (pendingCarriageReturnEnd !== null) {
+      const selectedEnd = pendingCarriageReturnEnd + (bytes[0] === 0x0a ? 1 : 0);
+      return selectedHead(joinedBytes(chunks, accumulated), selectedEnd);
+    }
+
+    for (let index = 0; index < bytes.byteLength; index += 1) {
+      const byte = bytes[index]!;
+      if (byte === 0x0a) {
+        if (!previousWasCarriageReturn && ++lines === lineCount) {
+          const selectedEnd = start + index + 1;
+          return selectedHead(joinedBytes(chunks, accumulated), selectedEnd);
+        }
+        previousWasCarriageReturn = false;
+        continue;
+      }
+      if (byte === 0x0d) {
+        lines += 1;
+        previousWasCarriageReturn = true;
+        if (lines === lineCount) {
+          if (index + 1 < bytes.byteLength) {
+            const selectedEnd = start + index + (bytes[index + 1] === 0x0a ? 2 : 1);
+            return selectedHead(joinedBytes(chunks, accumulated), selectedEnd);
+          }
+          if (end === entry.size) {
+            return selectedHead(joinedBytes(chunks, accumulated), accumulated);
+          }
+          pendingCarriageReturnEnd = start + index + 1;
+          break;
+        }
+        continue;
+      }
+      previousWasCarriageReturn = false;
+    }
+  }
+  const bytes = joinedBytes(chunks, accumulated);
+  return selectedHead(bytes, bytes.byteLength);
 }
 
 export async function loadTextFileTail(

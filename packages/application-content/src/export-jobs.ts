@@ -1,4 +1,5 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
+import { RevisionProjectionIntegrityFailure } from "@mind-diary/application-ports";
 import type {
   Authorizer,
   AuthorizationDecision,
@@ -439,7 +440,18 @@ export class ExportJobApplicationService {
         });
       }
 
-      const envelope = await this.#resolveRevision(transaction, request.spaceId, parsed.selector);
+      let envelope;
+      try {
+        envelope = await this.#resolveRevision(transaction, request.spaceId, parsed.selector);
+      } catch (error) {
+        if (error instanceof RevisionProjectionIntegrityFailure) {
+          return invalid(
+            "revision_integrity_failure",
+            "revision metadata failed integrity verification",
+          );
+        }
+        throw error;
+      }
       if (envelope === null) return Object.freeze({ kind: "revision_not_found" });
       if (
         parsed.profile === OKF_EXPORT_CONFIG.archiveFormat &&

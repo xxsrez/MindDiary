@@ -460,6 +460,71 @@ test("revision catalog and UTC projections stay bounded, deterministic, and dura
   assert.ok(restoredLegacy.inspectProjectionVisitsForTest().revisionAsOf <= 9);
 });
 
+test("equal-size corrupted revision-number and catalog projections fail history reads closed", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 22, "Projection Integrity Owner");
+  const mind = await createMind(env, owner, "projection-integrity-history");
+  for (let index = 0; index < 4; index += 1) {
+    await commitFiles(
+      env,
+      owner,
+      mind,
+      [{ path: "index.md", text: indexFile() }],
+      `Integrity commit ${index}`,
+      `2026-08-07T20:02:0${index}.000Z`,
+    );
+  }
+
+  const originalSnapshot = env.metadata.exportDurableSnapshot();
+  const numberSnapshot = structuredClone(originalSnapshot);
+  const state = numberSnapshot.spaces.get(mind.mindId);
+  assert.ok(state?.head);
+  const head = state.revisions.get(state.head);
+  assert.ok(head);
+  const corruptedNumber = head.revision.revisionNumber - 1;
+  assert.ok(corruptedNumber > 0);
+  const originalProjectionSize = state.revisionIdsByNumber.size;
+  state.revisionIdsByNumber.set(corruptedNumber, state.head);
+  assert.equal(state.revisionIdsByNumber.size, originalProjectionSize);
+
+  const restoredNumberProjection = InMemoryRevisionMetadataStore.fromDurableSnapshot(numberSnapshot);
+  const numberProjectionHistory = new MindHistoryService({
+    store: revisionHeadStore(restoredNumberProjection),
+    host: HOST,
+  });
+  await assert.rejects(
+    numberProjectionHistory.listRevisions(actor(owner.principalId), {
+      mind: mind.handle,
+      limit: 3,
+    }),
+    expectHistoryFailure("revision_integrity_failure"),
+  );
+
+  const catalogSnapshot = structuredClone(originalSnapshot);
+  const catalogState = catalogSnapshot.spaces.get(mind.mindId);
+  const missingRevisionId = catalogState.revisionIdsByNumber.get(corruptedNumber);
+  const replacement = catalogState.revisionCatalog.get(catalogState.head);
+  assert.ok(missingRevisionId);
+  assert.ok(replacement);
+  const originalCatalogSize = catalogState.revisionCatalog.size;
+  catalogState.revisionCatalog.delete(missingRevisionId);
+  catalogState.revisionCatalog.set("revision_projection_decoy", replacement);
+  assert.equal(catalogState.revisionCatalog.size, originalCatalogSize);
+
+  const restoredCatalogProjection = InMemoryRevisionMetadataStore.fromDurableSnapshot(catalogSnapshot);
+  const catalogProjectionHistory = new MindHistoryService({
+    store: revisionHeadStore(restoredCatalogProjection),
+    host: HOST,
+  });
+  await assert.rejects(
+    catalogProjectionHistory.listRevisions(actor(owner.principalId), {
+      mind: mind.handle,
+      limit: 3,
+    }),
+    expectHistoryFailure("revision_integrity_failure"),
+  );
+});
+
 test("a file deleted from HEAD remains fetchable from its authorized exact revision", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Fetch Owner");

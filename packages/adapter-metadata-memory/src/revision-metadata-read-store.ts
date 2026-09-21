@@ -77,6 +77,7 @@ import type {
   UtcInstant,
   WriteMindBinding,
 } from "@mind-diary/application-ports";
+import { RevisionProjectionIntegrityFailure } from "@mind-diary/application-ports";
 import {
   reserveHandleAgainst,
   resolveHandleAgainst,
@@ -145,6 +146,8 @@ import {
   validMindBindingMutationBase,
   validCredentialWriteTargetMutation,
   replayPrincipalMindUsageMutation,
+  revisionCatalogEntryFromEnvelope,
+  compareRevisionAsOfIndexEntries,
 } from "./metadata-store-internals.js";
 import {
   bindingVersion,
@@ -163,6 +166,28 @@ import {
 } from "@mind-diary/application-ports";
 import { RevisionMetadataSnapshotStore } from "./revision-metadata-snapshot-store.js";
 import { cloneCopyOnWriteValue, copyOnWriteMap } from "./copy-on-write.js";
+
+function revisionCatalogEntryMatchesEnvelope(
+  entry: Readonly<RevisionCatalogEntry>,
+  envelope: Readonly<Envelope>,
+): boolean {
+  const expected = revisionCatalogEntryFromEnvelope(envelope);
+  return entry.fileCount === expected.fileCount &&
+    entry.totalBytes === expected.totalBytes &&
+    entry.revision.spaceId === expected.revision.spaceId &&
+    entry.revision.revisionId === expected.revision.revisionId &&
+    entry.revision.revisionNumber === expected.revision.revisionNumber &&
+    entry.revision.parentRevisionId === expected.revision.parentRevisionId &&
+    entry.revision.committedAt === expected.revision.committedAt &&
+    entry.revision.summary === expected.revision.summary &&
+    entry.revision.manifestHash === expected.revision.manifestHash &&
+    JSON.stringify(entry.revision.committedBy) ===
+      JSON.stringify(expected.revision.committedBy);
+}
+
+function revisionProjectionIntegrityFailure(): never {
+  throw new RevisionProjectionIntegrityFailure();
+}
 
 export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshotStore {
   async decommissionLegacyMindBindingsForMigration(): Promise<void> {
@@ -1768,15 +1793,45 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       if (state !== undefined) ensureSpaceRevisionProjections(spaceId, state);
       const catalog = state?.revisionCatalog;
       const revisionIdsByNumber = state?.revisionIdsByNumber;
+      if (state !== undefined) {
+        if (state.revisions.size === 0) {
+          if (state.head !== null) revisionProjectionIntegrityFailure();
+        } else {
+          if (state.head === null || catalog === undefined || revisionIdsByNumber === undefined) {
+            revisionProjectionIntegrityFailure();
+          }
+          const headEnvelope = state.revisions.get(state.head);
+          const headEntry = catalog.get(state.head);
+          if (
+            headEnvelope === undefined || headEntry === undefined ||
+            headEntry.revision.revisionNumber !== state.revisions.size ||
+            revisionIdsByNumber.get(headEntry.revision.revisionNumber) !== state.head ||
+            !revisionCatalogEntryMatchesEnvelope(headEntry, headEnvelope)
+          ) revisionProjectionIntegrityFailure();
+        }
+      }
       let startNumber: number;
+      let previousNewer: Readonly<RevisionCatalogEntry>["revision"] | null = null;
       if (query.beforeRevisionId !== null) {
         const boundary = catalog?.get(query.beforeRevisionId);
-        if (boundary === undefined) return Object.freeze({
-          entries: Object.freeze([]),
-          hasMore: false,
-          boundaryFound: false,
-        });
+        if (boundary === undefined) {
+          if (state?.revisions.has(query.beforeRevisionId) === true) {
+            revisionProjectionIntegrityFailure();
+          }
+          return Object.freeze({
+            entries: Object.freeze([]),
+            hasMore: false,
+            boundaryFound: false,
+          });
+        }
+        const boundaryEnvelope = state?.revisions.get(query.beforeRevisionId);
+        if (
+          boundaryEnvelope === undefined ||
+          revisionIdsByNumber?.get(boundary.revision.revisionNumber) !== query.beforeRevisionId ||
+          !revisionCatalogEntryMatchesEnvelope(boundary, boundaryEnvelope)
+        ) revisionProjectionIntegrityFailure();
         startNumber = boundary.revision.revisionNumber - 1;
+        previousNewer = boundary.revision;
       } else {
         const head = state?.head === null || state?.head === undefined
           ? undefined
@@ -1792,11 +1847,19 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         revisionNumber -= 1
       ) {
         const revisionId = revisionIdsByNumber?.get(revisionNumber);
-        if (revisionId === undefined) break;
+        if (revisionId === undefined) revisionProjectionIntegrityFailure();
         const entry = catalog?.get(revisionId);
-        if (entry === undefined) break;
+        const envelope = state?.revisions.get(revisionId);
+        if (
+          entry === undefined || envelope === undefined ||
+          entry.revision.revisionNumber !== revisionNumber ||
+          !revisionCatalogEntryMatchesEnvelope(entry, envelope) ||
+          (previousNewer !== null && previousNewer.parentRevisionId !== revisionId) ||
+          (revisionNumber === 1 && entry.revision.parentRevisionId !== null)
+        ) revisionProjectionIntegrityFailure();
         this._revisionCatalogVisits += 1;
         page.push(entry);
+        previousNewer = entry.revision;
       }
       const hasMore = page.length > query.limit;
       const selectedPage = page.slice(0, query.limit);
@@ -1813,6 +1876,30 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       if (state !== undefined) ensureSpaceRevisionProjections(spaceId, state);
       const index = state?.revisionAsOfIndex ?? [];
       const catalog = state?.revisionCatalog;
+      const verifyIndexEntry = (position: number): void => {
+        const indexed = index[position];
+        if (indexed === undefined || state === undefined || catalog === undefined) {
+          revisionProjectionIntegrityFailure();
+        }
+        const envelope = state.revisions.get(indexed.revisionId);
+        const catalogEntry = catalog.get(indexed.revisionId);
+        if (
+          envelope === undefined || catalogEntry === undefined ||
+          indexed.committedAt !== normalizedUtcInstant(envelope.revision.committedAt) ||
+          indexed.revisionNumber !== envelope.revision.revisionNumber ||
+          state.revisionIdsByNumber?.get(indexed.revisionNumber) !== indexed.revisionId ||
+          !revisionCatalogEntryMatchesEnvelope(catalogEntry, envelope) ||
+          (position > 0 && compareRevisionAsOfIndexEntries(index[position - 1]!, indexed) > 0) ||
+          (position + 1 < index.length && compareRevisionAsOfIndexEntries(indexed, index[position + 1]!) > 0)
+        ) revisionProjectionIntegrityFailure();
+      };
+      if (state !== undefined) {
+        if (
+          index.length !== state.revisions.size ||
+          (state.revisions.size === 0 && state.head !== null) ||
+          (state.revisions.size > 0 && state.head === null)
+        ) revisionProjectionIntegrityFailure();
+      }
       let low = 0;
       let high = index.length;
       // Upper-bound search selects the last row at or before the instant. The
@@ -1820,13 +1907,16 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       // number, then revision ID.
       while (low < high) {
         const middle = low + Math.floor((high - low) / 2);
+        verifyIndexEntry(middle);
         this._revisionAsOfVisits += 1;
         if (index[middle]!.committedAt <= normalizedAsOf) low = middle + 1;
         else high = middle;
       }
       if (low === 0) return null;
+      verifyIndexEntry(low - 1);
       const selected = catalog?.get(index[low - 1]!.revisionId);
-      return selected === undefined ? null : cloneRevisionCatalogEntry(selected);
+      if (selected === undefined) revisionProjectionIntegrityFailure();
+      return cloneRevisionCatalogEntry(selected);
     }
 
   async readAccount(

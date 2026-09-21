@@ -3,7 +3,11 @@ import test from "node:test";
 
 import { createSitesObjectStore } from "@mind-diary/adapter-object-sites";
 import { OBJECT_INTEGRITY_CHUNK_SIZE } from "@mind-diary/application-ports";
-import { MARKDOWN_MEDIA_TYPE } from "@mind-diary/domain";
+import { loadTextFileHead } from "@mind-diary/application-content";
+import {
+  MARKDOWN_MEDIA_TYPE,
+  REVISION_MANIFEST_FORMAT_V4,
+} from "@mind-diary/domain";
 
 const PNG = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -240,6 +244,62 @@ test("Sites canonical ranges use compact metadata plus a bound sidecar and rejec
       { offset: OBJECT_INTEGRITY_CHUNK_SIZE, length: 5 },
     ),
     (error) => error?.code === "object_tampered",
+  );
+});
+
+test("bounded head reads authenticate returned Sites bytes before stopping at a newline", async () => {
+  const bucket = new StreamingBucket();
+  const objects = await createSitesObjectStore(bucket);
+  const spaceId = "space_sites_head_integrity";
+  const bytes = new TextEncoder().encode(`trusted\n${"body".repeat(20_000)}\n`);
+  const stored = await objects.putSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId,
+    bytes,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: CREATED_AT,
+  });
+  const entry = Object.freeze({
+    path: "index.md",
+    kind: "markdown",
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    sha256: stored.object.sha256,
+    size: bytes.byteLength,
+  });
+  const loadFull = async () => {
+    throw new Error("authenticated range support must not fall back to a full object read");
+  };
+
+  const clean = await loadTextFileHead(
+    objects,
+    spaceId,
+    REVISION_MANIFEST_FORMAT_V4,
+    entry,
+    1,
+    undefined,
+    Date.now() + 1_000,
+    loadFull,
+  );
+  assert.equal(clean.kind, "file");
+  assert.equal(clean.file.text, "trusted\n");
+  assert.equal(clean.complete, false);
+
+  const canonicalKey = [...bucket.records.keys()].find((key) =>
+    key.endsWith(`/objects/sha256/${stored.object.sha256.slice(7)}`));
+  assert.ok(canonicalKey);
+  bucket.records.get(canonicalKey).bytes[0] ^= 0xff;
+  await assert.rejects(
+    loadTextFileHead(
+      objects,
+      spaceId,
+      REVISION_MANIFEST_FORMAT_V4,
+      entry,
+      1,
+      undefined,
+      Date.now() + 1_000,
+      loadFull,
+    ),
+    (error) => error?.code === "revision_integrity_failure",
   );
 });
 
