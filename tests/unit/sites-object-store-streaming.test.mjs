@@ -247,6 +247,99 @@ test("Sites canonical ranges use compact metadata plus a bound sidecar and rejec
   );
 });
 
+test("Sites exact re-put repairs a missing integrity sidecar before publishing proof metadata", async () => {
+  const bucket = new StreamingBucket();
+  const objects = await createSitesObjectStore(bucket);
+  const spaceId = "space_sites_integrity_repair";
+  const bytes = new TextEncoder().encode(`legacy fallback\n${"body".repeat(20_000)}\n`);
+  const stored = await objects.putSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId,
+    bytes,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: CREATED_AT,
+  });
+  const canonicalKey = [...bucket.records.keys()].find((key) =>
+    key.endsWith(`/objects/sha256/${stored.object.sha256.slice(7)}`));
+  assert.ok(canonicalKey);
+  const sidecarKey = [...bucket.records.entries()].find(([, record]) =>
+    record.customMetadata.objectKey === canonicalKey)?.[0];
+  assert.ok(sidecarKey);
+  bucket.records.delete(sidecarKey);
+
+  const verifiedFull = await objects.getSpaceCanonicalObject(
+    "markdown",
+    spaceId,
+    stored.object.sha256,
+  );
+  assert.ok(verifiedFull);
+  assert.deepEqual(verifiedFull.bytes, bytes);
+  await assert.rejects(
+    objects.openSpaceCanonicalObjectRange(
+      "markdown",
+      spaceId,
+      stored.object.sha256,
+      { offset: 0, length: 7 },
+    ),
+    (error) => error?.code === "range_unavailable",
+  );
+
+  const repaired = await objects.putSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId,
+    bytes,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: "2026-08-24T00:00:00.000Z",
+  });
+  assert.equal(repaired.status, "already_exists");
+  assert.equal(bucket.records.has(sidecarKey), true);
+  const ranged = await objects.openSpaceCanonicalObjectRange(
+    "markdown",
+    spaceId,
+    stored.object.sha256,
+    { offset: 0, length: 7 },
+  );
+  assert.ok(ranged?.integrityProof);
+});
+
+test("Sites BundleFile re-put repairs a missing integrity sidecar", async () => {
+  const bucket = new StreamingBucket();
+  const objects = await createSitesObjectStore(bucket);
+  const spaceId = "space_sites_bundle_integrity_repair";
+  const stored = await objects.putBundleFile({
+    spaceId,
+    bytes: PNG,
+    mediaType: "image/png",
+    createdAt: CREATED_AT,
+  });
+  const bundleKey = [...bucket.records.keys()].find((key) =>
+    key.endsWith(`/sha256/${stored.object.sha256.slice(7)}`) &&
+    key.includes("bundle-files/"));
+  assert.ok(bundleKey);
+  const sidecarKey = [...bucket.records.entries()].find(([, record]) =>
+    record.customMetadata.objectKey === bundleKey)?.[0];
+  assert.ok(sidecarKey);
+  bucket.records.delete(sidecarKey);
+
+  const verifiedFull = await objects.getBundleFile(spaceId, stored.object.sha256);
+  assert.ok(verifiedFull);
+  assert.deepEqual(verifiedFull.bytes, PNG);
+  const repaired = await objects.putBundleFile({
+    spaceId,
+    bytes: PNG,
+    mediaType: "image/png",
+    createdAt: "2026-08-24T00:00:00.000Z",
+  });
+  assert.equal(repaired.status, "already_exists");
+  assert.equal(bucket.records.has(sidecarKey), true);
+  const ranged = await objects.openBundleFileRange(
+    spaceId,
+    stored.object.sha256,
+    { offset: 0, length: 4 },
+  );
+  assert.ok(ranged?.integrityProof);
+});
+
 test("bounded head reads authenticate returned Sites bytes before stopping at a newline", async () => {
   const bucket = new StreamingBucket();
   const objects = await createSitesObjectStore(bucket);

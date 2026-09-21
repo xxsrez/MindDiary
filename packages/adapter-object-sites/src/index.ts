@@ -670,7 +670,8 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     }
     const sidecar = await this.#get(integritySidecarKey(objectKey, expected.spaceId));
     if (sidecar === null) {
-      throw new ObjectStoreFailure("object_tampered", "object integrity sidecar is missing");
+      // Canonical digest verification makes a missing sidecar a safe legacy fallback.
+      return null;
     }
     const sidecarMetadata = sidecar.customMetadata ?? {};
     if (
@@ -1013,6 +1014,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         ? request.createdAt
         : metadata.protectedAt;
       if (protectedAt !== metadata.protectedAt) {
+        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest);
         const updated = await this.#bucket.put(key, existingBytes, {
           httpMetadata: { contentType: mediaType },
           customMetadata: spaceCanonicalMetadataSource(
@@ -1292,6 +1294,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         ? request.createdAt
         : metadata.protectedAt;
       if (protectedAt !== metadata.protectedAt) {
+        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest);
         const updated = await this.#bucket.put(key, existingBytes, {
           httpMetadata: { contentType: metadata.mediaType },
           customMetadata: this.#bundleCustomMetadata(
