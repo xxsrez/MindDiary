@@ -3545,7 +3545,11 @@ test("Sites Space-canonical cleanup resumes after crash between delete mark and 
     }),
     /synthetic R2 delete failure/u,
   );
-  assert.equal([...bucket.records.values()][0].customMetadata.state, "deleting");
+  const canonicalKey = [
+    `spaces/${encodeURIComponent("space_cleanup_resume")}/objects/sha256/`,
+    put.object.sha256.slice(7),
+  ].join("");
+  assert.equal(bucket.records.get(canonicalKey)?.customMetadata.state, "deleting");
   await bucket.put(
     "spaces/space_cleanup_resume/indexes/revision/schema/page",
     new TextEncoder().encode("derived"),
