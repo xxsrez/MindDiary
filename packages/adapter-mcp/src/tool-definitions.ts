@@ -1762,6 +1762,7 @@ const COMMIT_CHANGESET_INPUT_SCHEMA = Object.freeze({
     operations: Object.freeze({
       type: "array",
       minItems: 1,
+      maxItems: 100,
       items: CHANGESET_OPERATION_SCHEMA,
     }),
     source_references: Object.freeze({
@@ -1792,6 +1793,7 @@ const PREFLIGHT_CHANGESET_INPUT_SCHEMA = Object.freeze({
     operations: Object.freeze({
       type: "array",
       minItems: 1,
+      maxItems: 100,
       items: CHANGESET_OPERATION_SCHEMA,
     }),
     source_references: COMMIT_CHANGESET_INPUT_SCHEMA.properties.source_references,

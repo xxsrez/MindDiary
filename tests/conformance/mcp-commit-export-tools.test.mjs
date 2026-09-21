@@ -227,6 +227,7 @@ test("publishes strict commit schemas and truthful annotations", () => {
   ]);
   assert.equal(Object.hasOwn(preflight.inputSchema.properties, "idempotency_key"), false);
   assert.equal(Object.hasOwn(preflight.inputSchema.properties, "summary"), false);
+  assert.equal(preflight.inputSchema.properties.operations.maxItems, 100);
   assert.deepEqual(preflight.annotations, {
     readOnlyHint: true,
     destructiveHint: false,
@@ -241,6 +242,7 @@ test("publishes strict commit schemas and truthful annotations", () => {
   const commit = definitions.get("commit_changeset");
   assert.equal(commit.inputSchema.$schema, "https://json-schema.org/draft/2020-12/schema");
   assert.equal(commit.inputSchema.additionalProperties, false);
+  assert.equal(commit.inputSchema.properties.operations.maxItems, 100);
   assert.deepEqual(commit.inputSchema.required, [
     "mind",
     "expected_revision",
