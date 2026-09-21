@@ -288,6 +288,56 @@ async function verifiedStagedStream(
   }
 }
 
+const MAX_COMMIT_OBJECT_CONCURRENCY = 8;
+
+/**
+ * Materialize independent candidate objects with a fixed worker count while
+ * retaining the input order in the returned values.  Workers record failures
+ * and finish the current batch before the first failure is rethrown; this
+ * keeps the object phase bounded and leaves the commit transaction unreachable
+ * until every candidate has completed successfully.
+ */
+async function mapBounded<Input, Output>(
+  values: readonly Input[],
+  operation: (value: Input, index: number) => Promise<Output>,
+): Promise<readonly Output[]> {
+  const results: Array<PromiseSettledResult<Output> | undefined> =
+    new Array(values.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(MAX_COMMIT_OBJECT_CONCURRENCY, values.length) },
+    async () => {
+      for (;;) {
+        const index = next;
+        next += 1;
+        if (index >= values.length) return;
+        try {
+          results[index] = {
+            status: "fulfilled",
+            value: await operation(values[index]!, index),
+          };
+        } catch (reason) {
+          results[index] = { status: "rejected", reason };
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  const rejected = results.find(
+    (result): result is PromiseRejectedResult => result?.status === "rejected",
+  );
+  if (rejected !== undefined) throw rejected.reason;
+  return Object.freeze(results.map((result) => {
+    if (result?.status !== "fulfilled") {
+      throw new ChangesetCommitFailure(
+        "invalid_revision_chain",
+        "candidate object materialization did not complete",
+      );
+    }
+    return result.value;
+  }));
+}
+
 function invalid(code: ChangesetValidationCode, message: string): InvalidResult {
   return Object.freeze({
     kind: "invalid",
@@ -801,101 +851,127 @@ export class ChangesetCommitService {
       return invalid(code, `capacity admission rejected: ${admission.reason}`);
     }
     try {
-    let actualPhysicalGrowth = 0;
-    const entries = [];
-    for (const file of preflight.candidateFiles) {
-      if (file.kind === "markdown") {
-        if (!file.writeRequired) {
-          if (file.sha256 === null) {
-            throw new ChangesetCommitFailure(
-              "invalid_revision_chain",
-              "unchanged Markdown entry has no immutable digest",
-            );
+    const materialized = await mapBounded(
+      preflight.candidateFiles,
+      async (file) => {
+        if (file.kind === "markdown") {
+          if (!file.writeRequired) {
+            if (file.sha256 === null) {
+              throw new ChangesetCommitFailure(
+                "invalid_revision_chain",
+                "unchanged Markdown entry has no immutable digest",
+              );
+            }
+            return Object.freeze({
+              entry: Object.freeze({
+                kind: "markdown" as const,
+                path: file.path,
+                sha256: file.sha256,
+                mediaType: MARKDOWN_MEDIA_TYPE,
+                size: file.size,
+              }),
+              physicalGrowth: 0,
+            });
           }
-          entries.push({
-            kind: "markdown" as const,
-            path: file.path,
-            sha256: file.sha256,
+          const bytes = ENCODER.encode(file.text!);
+          const digest = await this.#objects.calculateSha256(bytes);
+          if (file.sha256 !== null && digest === file.sha256 && bytes.byteLength === file.size) {
+            return Object.freeze({
+              entry: Object.freeze({
+                kind: "markdown" as const,
+                path: file.path,
+                sha256: digest,
+                mediaType: MARKDOWN_MEDIA_TYPE,
+                size: bytes.byteLength,
+              }),
+              physicalGrowth: 0,
+            });
+          }
+          const put = await this.#objects.putSpaceCanonicalObject({
+            kind: "markdown",
+            spaceId: request.spaceId,
+            bytes,
             mediaType: MARKDOWN_MEDIA_TYPE,
-            size: file.size,
+            createdAt: committedAt,
           });
-          continue;
-        }
-        const bytes = ENCODER.encode(file.text!);
-        const digest = await this.#objects.calculateSha256(bytes);
-        if (file.sha256 !== null && digest === file.sha256 && bytes.byteLength === file.size) {
-          entries.push({
-            kind: "markdown" as const,
-            path: file.path,
-            sha256: digest,
-            mediaType: MARKDOWN_MEDIA_TYPE,
-            size: bytes.byteLength,
+          return Object.freeze({
+            entry: Object.freeze({
+              kind: "markdown" as const,
+              path: file.path,
+              sha256: put.object.sha256,
+              mediaType: MARKDOWN_MEDIA_TYPE,
+              size: put.object.size,
+            }),
+            physicalGrowth: put.status === "stored" ? put.object.size : 0,
           });
-          continue;
         }
-        const put = await this.#objects.putSpaceCanonicalObject({
-          kind: "markdown",
+        if (file.stagedFileId === null) {
+          return Object.freeze({
+            entry: Object.freeze({
+              kind: "opaque" as const,
+              path: file.path,
+              sha256: file.sha256,
+              mediaType: file.mediaType,
+              size: file.size,
+            }),
+            physicalGrowth: 0,
+          });
+        }
+        const staged = await this.#objects.openStagedBundleFile(file.stagedFileId);
+        if (
+          staged === null || staged.spaceId !== request.spaceId ||
+          staged.size !== file.size ||
+          !(await verifiedStagedStream(staged.body, file.size, file.sha256))
+        ) return invalid(
+          "staged_bundle_file_not_verified",
+          "staged BundleFile bytes failed integrity verification",
+        );
+        const put = await this.#objects.promoteStagedBundleFile({
+          stagedFileId: file.stagedFileId,
+          bindingOwnerId: staged.bindingOwnerId,
           spaceId: request.spaceId,
-          bytes,
-          mediaType: MARKDOWN_MEDIA_TYPE,
+          sha256: file.sha256,
+          size: file.size,
+          mediaType: file.mediaType,
           createdAt: committedAt,
         });
-        if (put.status === "stored") actualPhysicalGrowth += put.object.size;
-        entries.push({
-          kind: "markdown" as const,
-          path: file.path,
-          sha256: put.object.sha256,
-          mediaType: MARKDOWN_MEDIA_TYPE,
-          size: put.object.size,
+        const promoted = await this.#objects.openBundleFile(request.spaceId, file.sha256);
+        if (
+          promoted === null || promoted.sha256 !== file.sha256 ||
+          promoted.size !== file.size ||
+          !(await verifiedStagedStream(promoted.body, file.size, file.sha256))
+        ) return invalid(
+          "staged_bundle_file_not_verified",
+          "promoted BundleFile bytes failed integrity verification",
+        );
+        return Object.freeze({
+          entry: Object.freeze({
+            kind: "opaque" as const,
+            path: file.path,
+            sha256: file.sha256,
+            mediaType: file.mediaType,
+            size: file.size,
+          }),
+          physicalGrowth: put.status === "stored" ? put.object.size : 0,
         });
-        continue;
+      },
+    );
+    const materializationFailure = materialized.find(
+      (result): result is InvalidResult =>
+        "kind" in result && result.kind === "invalid",
+    );
+    if (materializationFailure !== undefined) return materializationFailure;
+    let actualPhysicalGrowth = 0;
+    const entries = materialized.map((result) => {
+      if ("kind" in result) {
+        throw new ChangesetCommitFailure(
+          "invalid_revision_chain",
+          "candidate object materialization returned an invalid result",
+        );
       }
-      if (file.stagedFileId === null) {
-        entries.push({
-          kind: "opaque" as const,
-          path: file.path,
-          sha256: file.sha256,
-          mediaType: file.mediaType,
-          size: file.size,
-        });
-        continue;
-      }
-      const staged = await this.#objects.openStagedBundleFile(file.stagedFileId);
-      if (
-        staged === null || staged.spaceId !== request.spaceId ||
-        staged.size !== file.size ||
-        !(await verifiedStagedStream(staged.body, file.size, file.sha256))
-      ) return invalid(
-        "staged_bundle_file_not_verified",
-        "staged BundleFile bytes failed integrity verification",
-      );
-      const put = await this.#objects.promoteStagedBundleFile({
-        stagedFileId: file.stagedFileId,
-        bindingOwnerId: staged.bindingOwnerId,
-        spaceId: request.spaceId,
-        sha256: file.sha256,
-        size: file.size,
-        mediaType: file.mediaType,
-        createdAt: committedAt,
-      });
-      const promoted = await this.#objects.openBundleFile(request.spaceId, file.sha256);
-      if (
-        promoted === null || promoted.sha256 !== file.sha256 ||
-        promoted.size !== file.size ||
-        !(await verifiedStagedStream(promoted.body, file.size, file.sha256))
-      ) return invalid(
-        "staged_bundle_file_not_verified",
-        "promoted BundleFile bytes failed integrity verification",
-      );
-      if (put.status === "stored") actualPhysicalGrowth += put.object.size;
-      entries.push({
-        kind: "opaque" as const,
-        path: file.path,
-        sha256: file.sha256,
-        mediaType: file.mediaType,
-        size: file.size,
-      });
-    }
+      actualPhysicalGrowth += result.physicalGrowth;
+      return result.entry;
+    });
     const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V4);
     const manifestBytes = ENCODER.encode(serializeRevisionManifest(manifest));
     const manifestPut = await this.#objects.putSpaceCanonicalObject({

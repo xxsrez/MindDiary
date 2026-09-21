@@ -163,6 +163,44 @@ function objectStoreWithFirstPutHook(objects, hook) {
   };
 }
 
+function instrumentedCanonicalObjectStore(
+  objects,
+  { delayMs = 0, failAtPut = null } = {},
+) {
+  let calls = 0;
+  let active = 0;
+  let maximum = 0;
+  const store = new Proxy(objects, {
+    get(target, property) {
+      if (property === "putSpaceCanonicalObject") {
+        return async (request) => {
+          calls += 1;
+          active += 1;
+          maximum = Math.max(maximum, active);
+          try {
+            if (failAtPut !== null && calls === failAtPut) {
+              throw new Error("injected canonical object failure");
+            }
+            if (delayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+            }
+            return target.putSpaceCanonicalObject(request);
+          } finally {
+            active -= 1;
+          }
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return Object.freeze({
+    store,
+    calls: () => calls,
+    maximum: () => maximum,
+  });
+}
+
 function twoPartyBarrier() {
   let arrivals = 0;
   let release;
@@ -551,6 +589,97 @@ test("success writes immutable candidate objects and performs one revision/HEAD 
   );
   assert.equal(
     historical.files.some((file) => file.path === "concepts/atomic.md"),
+    false,
+  );
+});
+
+test("large changesets materialize Markdown objects with bounded deterministic concurrency", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_bounded_commit",
+    "request_bounded_commit",
+  );
+  const instrumented = instrumentedCanonicalObjectStore(env.objects, { delayMs: 2 });
+  const service = env.service({
+    currentActor: editor,
+    nextRevisionId: "revision_bounded_commit",
+    objectStore: instrumented.store,
+  });
+  const operations = Array.from({ length: 80 }, (_, index) =>
+    newConcept(
+      `concepts/bounded-${String(index).padStart(3, "0")}.md`,
+      `Bounded ${index}`,
+    )
+  );
+
+  const result = await service.commit({
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit-bounded-large",
+    summary: "Bounded large changeset",
+    operations,
+  });
+
+  assert.equal(result.kind, "committed");
+  assert.ok(instrumented.maximum() > 1);
+  assert.ok(instrumented.maximum() <= 8);
+  assert.ok(instrumented.calls() >= operations.length);
+  const paths = result.envelope.manifest.entries.map((entry) => entry.path);
+  assert.deepEqual(paths, [...paths].sort());
+  const after = await env.snapshot();
+  assert.equal(after.head, "revision_bounded_commit");
+  assert.equal(after.revisions.length, 2);
+});
+
+test("object materialization failure leaves large changesets without revision, HEAD, or idempotency completion", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_bounded_commit_failure",
+    "request_bounded_commit_failure",
+  );
+  const instrumented = instrumentedCanonicalObjectStore(env.objects, {
+    delayMs: 1,
+    failAtPut: 17,
+  });
+  const service = env.service({
+    currentActor: editor,
+    nextRevisionId: "revision_bounded_commit_failure",
+    objectStore: instrumented.store,
+  });
+  const operations = Array.from({ length: 80 }, (_, index) =>
+    newConcept(
+      `concepts/failure-${String(index).padStart(3, "0")}.md`,
+      `Failure ${index}`,
+    )
+  );
+  const before = await env.snapshot();
+
+  await assert.rejects(
+    service.commit({
+      actor: editor,
+      spaceId: MINDS.ordinary.spaceId,
+      expectedRevisionId: REVISIONS.initial.revisionId,
+      idempotencyKey: "commit-bounded-large-failure",
+      summary: "Bounded large changeset failure",
+      operations,
+    }),
+    /injected canonical object failure/u,
+  );
+
+  const after = await env.snapshot();
+  assert.equal(after.head, before.head);
+  assert.deepEqual(after.revisions, before.revisions);
+  assert.equal(
+    (await env.metadata.listIdempotencyRecordsForTest()).length,
+    0,
+  );
+  assert.equal(
+    (await env.metadata.listAuditEventsForTest()).some(
+      ({ eventType }) => eventType === "content.changeset_committed",
+    ),
     false,
   );
 });

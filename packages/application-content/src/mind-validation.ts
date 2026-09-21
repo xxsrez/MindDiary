@@ -75,6 +75,61 @@ async function verifyOpaqueBody(
   }
 }
 
+const MAX_VALIDATION_OBJECT_CONCURRENCY = 8;
+
+type MaterializedValidationEntry =
+  | {
+      readonly kind: "markdown";
+      readonly source: Readonly<{ path: string; bytes: Uint8Array }>;
+      readonly referenceMarkdown: Readonly<{ path: string; text: string }> | null;
+    }
+  | {
+      readonly kind: "opaque";
+      readonly bundleFile: Readonly<{ path: string; mediaType: BundleFileMediaType }>;
+    };
+
+/** Load one exact revision in stable manifest order with a fixed worker cap. */
+async function mapBounded<Input, Output>(
+  values: readonly Input[],
+  operation: (value: Input, index: number) => Promise<Output>,
+): Promise<readonly Output[]> {
+  const results: Array<PromiseSettledResult<Output> | undefined> =
+    new Array(values.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(MAX_VALIDATION_OBJECT_CONCURRENCY, values.length) },
+    async () => {
+      for (;;) {
+        const index = next;
+        next += 1;
+        if (index >= values.length) return;
+        try {
+          results[index] = {
+            status: "fulfilled",
+            value: await operation(values[index]!, index),
+          };
+        } catch (reason) {
+          results[index] = { status: "rejected", reason };
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  const rejected = results.find(
+    (result): result is PromiseRejectedResult => result?.status === "rejected",
+  );
+  if (rejected !== undefined) throw rejected.reason;
+  return Object.freeze(results.map((result) => {
+    if (result?.status !== "fulfilled") {
+      throw new MindValidationFailure(
+        "revision_integrity_failure",
+        "The exact revision failed integrity verification.",
+      );
+    }
+    return result.value;
+  }));
+}
+
 type AllowedAuthorization = Extract<
   AuthorizationDecision,
   { readonly kind: "allowed" }
@@ -488,95 +543,125 @@ export class MindValidationService {
       );
     }
 
-    const sources: { readonly path: string; readonly bytes: Uint8Array }[] = [];
-    const referenceMarkdown: { readonly path: string; readonly text: string }[] = [];
-    const bundleFiles: { readonly path: string; readonly mediaType: BundleFileMediaType }[] = [];
-    for (const entry of manifest.entries) {
-      await this.#requireSameValidationAuthorization(
-        actor,
-        spaceId,
-        info.revisionMode,
-        initialAuthorization,
+    const materializedEntries: MaterializedValidationEntry[] = [];
+    for (let offset = 0; offset < manifest.entries.length; offset += MAX_VALIDATION_OBJECT_CONCURRENCY) {
+      const batch = manifest.entries.slice(
+        offset,
+        offset + MAX_VALIDATION_OBJECT_CONCURRENCY,
       );
-      if (entry.kind === "opaque") {
-        let opened;
-        try {
-          opened = "openBundleFile" in this.#objects
-            ? await (this.#objects as BundleFileObjectStore).openBundleFile(
-                spaceId,
-                entry.sha256,
-              )
-            : null;
-        } catch (error) {
-          if (error instanceof ObjectStoreFailure) {
+      const materializedBatch = await mapBounded(
+        batch,
+        async (entry): Promise<MaterializedValidationEntry> => {
+          if (entry.kind === "opaque") {
+            let opened;
+            try {
+              opened = "openBundleFile" in this.#objects
+                ? await (this.#objects as BundleFileObjectStore).openBundleFile(
+                    spaceId,
+                    entry.sha256,
+                  )
+                : null;
+              if (
+                opened === null || opened.sha256 !== entry.sha256 ||
+                opened.size !== entry.size ||
+                !(await verifyOpaqueBody(opened.body, entry.size, entry.sha256))
+              ) throw new MindValidationFailure(
+                "revision_integrity_failure",
+                "The exact revision failed integrity verification.",
+              );
+            } catch (error) {
+              if (error instanceof MindValidationFailure) throw error;
+              if (error instanceof ObjectStoreFailure) {
+                throw new MindValidationFailure(
+                  "revision_integrity_failure",
+                  "The exact revision failed integrity verification.",
+                );
+              }
+              throw error;
+            }
+            return Object.freeze({
+              kind: "opaque" as const,
+              bundleFile: Object.freeze({
+                path: entry.path,
+                mediaType: entry.mediaType,
+              }),
+            });
+          }
+          let object;
+          try {
+            object = (manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+                manifest.format === REVISION_MANIFEST_FORMAT_V4) &&
+                "getSpaceCanonicalObject" in this.#objects
+              ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
+                  "markdown",
+                  spaceId,
+                  entry.sha256,
+                ) ?? await this.#objects.getImmutable(entry.sha256)
+              : await this.#objects.getImmutable(entry.sha256);
+          } catch (error) {
+            if (error instanceof ObjectStoreFailure) {
+              throw new MindValidationFailure(
+                "revision_integrity_failure",
+                "The exact revision failed integrity verification.",
+              );
+            }
+            throw error;
+          }
+          if (
+            object === null ||
+            object.sha256 !== entry.sha256 ||
+            object.mediaType !== entry.mediaType ||
+            object.size !== entry.size ||
+            object.bytes.byteLength !== entry.size
+          ) {
             throw new MindValidationFailure(
               "revision_integrity_failure",
               "The exact revision failed integrity verification.",
             );
           }
-          throw error;
-        }
-        if (
-          opened === null || opened.sha256 !== entry.sha256 ||
-          opened.size !== entry.size ||
-          !(await verifyOpaqueBody(opened.body, entry.size, entry.sha256))
-        ) throw new MindValidationFailure(
-          "revision_integrity_failure",
-          "The exact revision failed integrity verification.",
+          let bytes: Uint8Array;
+          try {
+            bytes = new Uint8Array(object.bytes);
+            if ((await this.#objects.calculateSha256(bytes)) !== entry.sha256) {
+              throw new MindValidationFailure(
+                "revision_integrity_failure",
+                "The exact revision failed integrity verification.",
+              );
+            }
+          } catch (error) {
+            if (error instanceof MindValidationFailure) throw error;
+            if (error instanceof ObjectStoreFailure) {
+              throw new MindValidationFailure(
+                "revision_integrity_failure",
+                "The exact revision failed integrity verification.",
+              );
+            }
+            throw error;
+          }
+          let referenceMarkdown: Readonly<{ path: string; text: string }> | null = null;
+          try {
+            referenceMarkdown = Object.freeze({
+              path: entry.path,
+              text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+            });
+          } catch {
+            // The OKF validator reports invalid UTF-8 through its normal envelope.
+          }
+          return Object.freeze({
+            kind: "markdown" as const,
+            source: Object.freeze({ path: entry.path, bytes }),
+            referenceMarkdown,
+          });
+        },
+      );
+      materializedEntries.push(...materializedBatch);
+      if (offset + batch.length < manifest.entries.length) {
+        await this.#requireSameValidationAuthorization(
+          actor,
+          spaceId,
+          info.revisionMode,
+          initialAuthorization,
         );
-        bundleFiles.push(Object.freeze({
-          path: entry.path,
-          mediaType: entry.mediaType,
-        }));
-        continue;
-      }
-      let object;
-      try {
-        object = (manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
-            manifest.format === REVISION_MANIFEST_FORMAT_V4) &&
-            "getSpaceCanonicalObject" in this.#objects
-          ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
-              "markdown",
-              spaceId,
-              entry.sha256,
-            ) ?? await this.#objects.getImmutable(entry.sha256)
-          : await this.#objects.getImmutable(entry.sha256);
-      } catch (error) {
-        if (error instanceof ObjectStoreFailure) {
-          throw new MindValidationFailure(
-            "revision_integrity_failure",
-            "The exact revision failed integrity verification.",
-          );
-        }
-        throw error;
-      }
-      if (
-        object === null ||
-        object.sha256 !== entry.sha256 ||
-        object.mediaType !== entry.mediaType ||
-        object.size !== entry.size ||
-        object.bytes.byteLength !== entry.size
-      ) {
-        throw new MindValidationFailure(
-          "revision_integrity_failure",
-          "The exact revision failed integrity verification.",
-        );
-      }
-      const bytes = new Uint8Array(object.bytes);
-      if ((await this.#objects.calculateSha256(bytes)) !== entry.sha256) {
-        throw new MindValidationFailure(
-          "revision_integrity_failure",
-          "The exact revision failed integrity verification.",
-        );
-      }
-      sources.push(Object.freeze({ path: entry.path, bytes }));
-      try {
-        referenceMarkdown.push(Object.freeze({
-          path: entry.path,
-          text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-        }));
-      } catch {
-        // The OKF validator reports invalid UTF-8 through its normal envelope.
       }
     }
     await this.#requireSameValidationAuthorization(
@@ -585,6 +670,20 @@ export class MindValidationService {
       info.revisionMode,
       initialAuthorization,
     );
+
+    const sources: { readonly path: string; readonly bytes: Uint8Array }[] = [];
+    const referenceMarkdown: { readonly path: string; readonly text: string }[] = [];
+    const bundleFiles: { readonly path: string; readonly mediaType: BundleFileMediaType }[] = [];
+    for (const materialized of materializedEntries) {
+      if (materialized.kind === "opaque") {
+        bundleFiles.push(materialized.bundleFile);
+      } else {
+        sources.push(materialized.source);
+        if (materialized.referenceMarkdown !== null) {
+          referenceMarkdown.push(materialized.referenceMarkdown);
+        }
+      }
+    }
 
     const okfValidation = validateOkfBundle(sources);
     const referenceAnalysis = analyzeBundleFileReferences({

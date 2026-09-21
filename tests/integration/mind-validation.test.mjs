@@ -15,6 +15,7 @@ import {
   OrdinaryMindControlService,
   VisibilityControlService,
 } from "@mind-diary/application-control";
+import { ObjectStoreFailure } from "@mind-diary/application-ports";
 import {
   CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
@@ -110,6 +111,10 @@ function revisionHeadStore(metadata) {
 
 function observedObjects(delegate) {
   let reads = 0;
+  let active = 0;
+  let maximum = 0;
+  let delayMs = 0;
+  let failAtRead = null;
   let afterNextRead = null;
   return {
     kind: "object-store",
@@ -117,17 +122,38 @@ function observedObjects(delegate) {
     putImmutable: (request) => delegate.putImmutable(request),
     getImmutable: async (sha256) => {
       reads += 1;
-      const value = await delegate.getImmutable(sha256);
-      const callback = afterNextRead;
-      afterNextRead = null;
-      if (callback !== null) await callback();
-      return value;
+      active += 1;
+      maximum = Math.max(maximum, active);
+      try {
+        if (failAtRead !== null && reads === failAtRead) {
+          throw new ObjectStoreFailure(
+            "object_read_timeout",
+            "injected validation object read failure",
+          );
+        }
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        const value = await delegate.getImmutable(sha256);
+        const callback = afterNextRead;
+        afterNextRead = null;
+        if (callback !== null) await callback();
+        return value;
+      } finally {
+        active -= 1;
+      }
     },
     listImmutableObjects: (request) => delegate.listImmutableObjects(request),
     deleteImmutableObject: (request) => delegate.deleteImmutableObject(request),
     reads: () => reads,
+    maximum: () => maximum,
     resetReads: () => {
       reads = 0;
+      maximum = 0;
+    },
+    configure: (options = {}) => {
+      delayMs = options.delayMs ?? 0;
+      failAtRead = options.failAtRead ?? null;
     },
     afterNextRead: (callback) => {
       afterNextRead = callback;
@@ -215,6 +241,16 @@ async function commitFiles(env, owner, mind, files, summary) {
 
 function rootIndex(body = "") {
   return `---\nokf_version: "0.2"\n---\n\n# Validation fixture\n\n${body}`;
+}
+
+function largeValidationFixtureFiles() {
+  return [
+    { path: "index.md", text: rootIndex() },
+    ...Array.from({ length: 163 }, (_, index) => ({
+      path: `concepts/bounded-${String(index).padStart(3, "0")}.md`,
+      text: `---\ntype: Reference\n---\n\n# Bounded ${index}\n`,
+    })),
+  ];
 }
 
 function expectValidationFailure(code) {
@@ -377,6 +413,93 @@ test("validation response is bounded and issue messages do not echo untrusted li
     }),
     expectValidationFailure("invalid_request"),
   );
+});
+
+test("large exact revisions materialize Markdown objects with bounded concurrency and stable validation", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Large Validation Owner");
+  const mind = await createMind(env, owner, "large-bounded-validation");
+  await commitFiles(
+    env,
+    owner,
+    mind,
+    largeValidationFixtureFiles(),
+    "Commit large bounded validation fixture",
+  );
+  env.observed.configure({ delayMs: 2 });
+
+  const result = await env.validation.validateMind(actor(owner.principalId), {
+    mind: mind.handle,
+  });
+
+  assert.equal(result.valid, true);
+  assert.equal(result.validationComplete, true);
+  assert.equal(result.conformanceErrors.length, 0);
+  assert.equal(result.consistencyErrors.length, 0);
+  assert.ok(env.observed.maximum() > 1);
+  assert.ok(env.observed.maximum() <= 8);
+  assert.equal(env.observed.reads(), largeValidationFixtureFiles().length);
+});
+
+test("large exact revision object failure is reported as integrity failure without a partial validation result", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Failure Validation Owner");
+  const mind = await createMind(env, owner, "large-failure-validation");
+  await commitFiles(
+    env,
+    owner,
+    mind,
+    largeValidationFixtureFiles(),
+    "Commit large validation failure fixture",
+  );
+  env.observed.configure({ delayMs: 1, failAtRead: 37 });
+
+  await assert.rejects(
+    env.validation.validateMind(actor(owner.principalId), { mind: mind.handle }),
+    expectValidationFailure("revision_integrity_failure"),
+  );
+  assert.ok(env.observed.maximum() > 1);
+  assert.ok(env.observed.maximum() <= 8);
+});
+
+test("validation rechecks current access between bounded materialization batches", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Batch Revoke Owner");
+  const outsider = await createAccount(env, 2, "Batch Revoke Reader");
+  const mind = await createMind(env, owner, "batch-revoke-validation");
+  await commitFiles(
+    env,
+    owner,
+    mind,
+    largeValidationFixtureFiles(),
+    "Commit batch revoke fixture",
+  );
+  const before = await env.metadata.inspectOrdinaryMindStateForTest(mind.mindId);
+  assert.ok(before);
+  await env.visibility.changeVisibility(actor(owner.principalId), {
+    mindId: mind.mindId,
+    visibility: "public",
+    acknowledgeLiveHeadAndHistoryExposure: true,
+    expectedMetadataVersion: before.space.metadataVersion,
+    idempotencyKey: "open-batch-revoke-validation",
+  });
+  env.observed.configure({ delayMs: 2 });
+  env.observed.afterNextRead(async () => {
+    const opened = await env.metadata.inspectOrdinaryMindStateForTest(mind.mindId);
+    assert.ok(opened);
+    await env.visibility.changeVisibility(actor(owner.principalId), {
+      mindId: mind.mindId,
+      visibility: "private",
+      expectedMetadataVersion: opened.space.metadataVersion,
+      idempotencyKey: "close-batch-revoke-validation",
+    });
+  });
+
+  await assert.rejects(
+    env.validation.validateMind(actor(outsider.principalId), { mind: mind.handle }),
+    expectValidationFailure("mind_not_found"),
+  );
+  assert.ok(env.observed.reads() >= 8);
 });
 
 test("access revoked during materialization fails closed without returning a partial result", async () => {
