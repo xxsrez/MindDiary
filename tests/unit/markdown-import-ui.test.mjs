@@ -37,3 +37,13 @@ test("Markdown import exposes bounded progress, cancel, replan, receipt and safe
   assert.match(client, /No operation details were shown/u);
   assert.doesNotMatch(client, /signed[_ -]?url|private[_ -]?path|storage[_ -]?key/iu);
 });
+
+test("Markdown import distinguishes capacity outcomes without exposing reservation internals", () => {
+  assert.match(client, /Another heavy operation is active; retry same plan\/job after it finishes\./u);
+  assert.match(client, /Storage headroom is low; clean up completed imports or exports, then retry the same plan\/job\./u);
+  assert.match(client, /This snapshot exceeds the supported size or capacity; reduce it and create a new plan\./u);
+  assert.match(client, /Storage accounting is being reconciled; retry same plan\/job after reconciliation finishes\./u);
+  assert.match(client, /planAttemptKey \?\?= key\("import-plan"\)/u);
+  assert.match(client, /sessionAttemptKey \?\?= key\("import-session"\)/u);
+  assert.doesNotMatch(client, /reservation[_ -]?id|private[_ -]?job|object[_ -]?key/iu);
+});

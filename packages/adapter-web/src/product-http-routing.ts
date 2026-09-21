@@ -255,15 +255,14 @@ export function applicationErrorStatus(code: string): number {
   if (code === "binding_state_unavailable") return 503;
   if (code === "mind_usage_unavailable") return 503;
   if (code === "capacity_accounting_untrusted") return 503;
+  if (code === "capacity_fairness_limit" || code === "capacity_soft_limit") return 429;
+  if (code === "capacity_hard_limit") return 413;
   if (
     code === "okf_validation_failed" ||
     code === "export_profile_required" ||
     code === "import_validation_failed" ||
     code === "import_file_limit_exceeded" ||
     code === "import_byte_limit_exceeded" ||
-    code === "capacity_soft_limit" ||
-    code === "capacity_hard_limit" ||
-    code === "capacity_fairness_limit" ||
     code === "ownership_target_capacity_exceeded"
   ) return 422;
   if (
@@ -285,6 +284,15 @@ export function applicationErrorStatus(code: string): number {
   if (code.includes("not_found") || code.endsWith("_unavailable")) return 404;
   if (code.startsWith("invalid_")) return 400;
   return 403;
+}
+
+export function applicationErrorRetryable(code: string): boolean {
+  return code === "metadata_queue_timeout" ||
+    code === "metadata_d1_timeout" ||
+    code === "recovery_deadline_exceeded" ||
+    code === "capacity_fairness_limit" ||
+    code === "capacity_soft_limit" ||
+    code === "capacity_accounting_untrusted";
 }
 
 /** Authenticated web/control handler. It deliberately never reads Bearer auth. */

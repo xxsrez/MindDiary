@@ -42,6 +42,10 @@
   const say = (message) => { if (status) status.textContent = message; };
   const sayDownload = (message) => { if (downloadStatus) downloadStatus.textContent = message; };
   const failureMessage = (code) => ({
+    capacity_fairness_limit: "Another heavy operation is active; retry same plan/job after it finishes.",
+    capacity_soft_limit: "Storage headroom is low; clean up completed imports or exports, then retry the same plan/job.",
+    capacity_hard_limit: "This archive exceeds the supported size or capacity; reduce it and create a new job.",
+    capacity_accounting_untrusted: "Storage accounting is being reconciled; retry same plan/job after reconciliation finishes.",
     revision_not_found: "The exact revision no longer exists. Start another export from a revision you can still read.",
     revision_integrity_failure: "The exact revision failed integrity verification. No archive was published.",
     okf_validation_failed: "The exact revision failed OKF validation. No archive was published.",
@@ -376,7 +380,7 @@
         profileInput?.focus();
         say("This revision contains attachments. Use the full bundle profile; nothing was silently omitted.");
       } else if (typeof error?.code === "string" && error.code.startsWith("capacity_")) {
-        say("A heavy operation is still active for this Mind. Wait, then submit this exact start again; do not start another export.");
+        say(failureMessage(error.code));
       } else {
         say("The start result could not be confirmed. Submit again to reuse the same idempotent request; do not choose Start another.");
       }

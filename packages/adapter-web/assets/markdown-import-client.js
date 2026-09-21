@@ -53,6 +53,16 @@
   );
   const number = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 
+  const capacityMessage = (code) => ({
+    capacity_fairness_limit: "Another heavy operation is active; retry same plan/job after it finishes.",
+    capacity_soft_limit: "Storage headroom is low; clean up completed imports or exports, then retry the same plan/job.",
+    capacity_hard_limit: "This snapshot exceeds the supported size or capacity; reduce it and create a new plan.",
+    capacity_accounting_untrusted: "Storage accounting is being reconciled; retry same plan/job after reconciliation finishes.",
+  })[code] ?? "This snapshot cannot fit within the current import or storage capacity.";
+  const projectedCapacityCode = (value) => value?.projected_utilization === "hard_limit"
+    ? "capacity_hard_limit"
+    : "capacity_soft_limit";
+
   const setCheck = (node, state, message) => {
     if (!node) return;
     node.dataset.checkState = state;
@@ -77,9 +87,8 @@
     if (error?.code === "import_file_conflict") {
       return "The selected snapshot no longer matches the reviewed plan. Review the exact files again.";
     }
-    if (error?.code?.includes("limit") || error?.code?.startsWith("capacity_")) {
-      return "This snapshot cannot fit within the current import or storage capacity.";
-    }
+    if (error?.code?.startsWith("capacity_")) return capacityMessage(error.code);
+    if (error?.code?.includes("limit")) return "This snapshot cannot fit within the current import or storage capacity.";
     if (error?.code?.includes("expired")) {
       return "The staged import expired. Review a fresh snapshot.";
     }
@@ -139,7 +148,7 @@
       setCheck(capacityCheck, "warning", "Capacity: accepted, but projected usage is nearing the limit.");
       return true;
     }
-    setCheck(capacityCheck, "failed", "Capacity conflict: reduce the snapshot before starting.");
+    setCheck(capacityCheck, "failed", capacityMessage(projectedCapacityCode(value)));
     return false;
   };
 
@@ -364,7 +373,9 @@
       } catch {
         // Recovery reads the actor-owned checkpoint before any retry.
       }
-      if (!response.ok || payload?.ok !== true) throw taggedError(payload?.error?.code ?? "operation_failed");
+      if (!response.ok || payload?.ok !== true) {
+        throw taggedError(payload?.error?.code ?? "operation_failed", response.status);
+      }
       session = payload.data.session;
       save();
       progressForSession(session, sessionPlan);
@@ -500,7 +511,7 @@
         if (current.session.state !== "active") throw taggedError("import_state_conflict");
         if (current.plan.descriptor_hash !== descriptorHash) throw taggedError("import_file_conflict");
         setStats(current.plan);
-        if (!setPlanChecks(current.plan)) throw taggedError("capacity_soft_limit");
+        if (!setPlanChecks(current.plan)) throw taggedError(projectedCapacityCode(current.plan));
         say("The recovered snapshot matches its plan. Confirm exact replacement to resume upload.");
       } else {
         planAttemptKey ??= key("import-plan");
@@ -513,7 +524,7 @@
         if (data.plan.descriptor_hash !== descriptorHash) throw taggedError("import_file_conflict");
         plan = data.plan;
         setStats(plan);
-        if (!setPlanChecks(plan)) throw taggedError("capacity_soft_limit");
+        if (!setPlanChecks(plan)) throw taggedError(projectedCapacityCode(plan));
         setProgress("Plan ready", 15, `${files.length} files reviewed`);
         say("Review the add, replace and delete counts, then confirm snapshot replacement.");
       }
@@ -539,7 +550,9 @@
         headConflict();
       } else if (error?.code === "import_file_conflict") {
         setCheck(pathCheck, "failed", "Path conflict: the server rejected a selected path or the selection changed.");
-      } else if (error?.code?.includes("limit") || error?.code?.startsWith("capacity_")) {
+      } else if (error?.code?.startsWith("capacity_")) {
+        setCheck(capacityCheck, "failed", capacityMessage(error.code));
+      } else if (error?.code?.includes("limit")) {
         setCheck(capacityCheck, "failed", "Capacity conflict: reduce the snapshot before starting.");
       }
       if (error?.statusRead !== true && error?.code !== "import_head_conflict") say(failMessage(error));

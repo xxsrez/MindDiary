@@ -59,3 +59,13 @@ test("browser workflow persists no receipt secret and verifies exact bytes befor
   assert.match(client, /saved = \{ \.\.\.saved, jobId: null \}/);
   assert.match(client, /Submit Start export to retry this exact job/);
 });
+
+test("export workflow distinguishes capacity outcomes while retaining the exact job tuple", () => {
+  assert.match(client, /Another heavy operation is active; retry same plan\/job after it finishes\./u);
+  assert.match(client, /Storage headroom is low; clean up completed imports or exports, then retry the same plan\/job\./u);
+  assert.match(client, /This archive exceeds the supported size or capacity; reduce it and create a new job\./u);
+  assert.match(client, /Storage accounting is being reconciled; retry same plan\/job after reconciliation finishes\./u);
+  assert.match(client, /idempotencyKey: "export-ui:" \+ crypto\.randomUUID\(\)/u);
+  assert.match(client, /saved = \{ \.\.\.saved, jobId: null \}/u);
+  assert.doesNotMatch(client, /reservation[_ -]?id|private[_ -]?job|object[_ -]?key/iu);
+});

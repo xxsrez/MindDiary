@@ -67,6 +67,7 @@ import {
   apiOperation,
   failureCode,
   applicationErrorStatus,
+  applicationErrorRetryable,
 } from "./product-http-routing.js";
 
 export function createProductWebHttpHandler(
@@ -524,8 +525,12 @@ export function createProductWebHttpHandler(
       );
     } catch (error) {
       const code = failureCode(error);
-      return errorResponse(applicationErrorStatus(code), code, requestId,
-        code === "metadata_queue_timeout" || code === "metadata_d1_timeout" || code === "recovery_deadline_exceeded");
+      return errorResponse(
+        applicationErrorStatus(code),
+        code,
+        requestId,
+        applicationErrorRetryable(code),
+      );
     }
   };
 }
