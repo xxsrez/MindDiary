@@ -107,6 +107,7 @@ test("many small files use request-budgeted batches before one commit", async ({
   });
   await page.locator("[data-plan-markdown-import]").click();
   await page.locator("[data-import-confirm]").check();
+  await expect(page.locator("[data-start-markdown-import]")).toBeEnabled();
   await page.locator("[data-start-markdown-import]").click();
 
   await expect(page.locator("[data-import-receipt-revision]")).toHaveText("revision_import_fixture");
