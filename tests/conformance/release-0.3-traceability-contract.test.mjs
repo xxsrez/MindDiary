@@ -103,7 +103,7 @@ test("export cutover source evidence is hashed and bound to the authority assert
       assertionId: "r03.transfer.web-authority",
       role: "site-export-authority-conformance",
       path: "tests/conformance/import-export-authority-delta.test.mjs",
-      gitBlob: "1b0170b8f216bc4c73676eb32519005fb2ae0950",
+      gitBlob: "3b1d0fa7d6c2c049407692fada0d2d0011667e33",
     },
     {
       assertionId: "r03.transfer.web-authority",
