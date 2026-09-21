@@ -6,10 +6,12 @@ import { createSitesMetadataStore } from "@mind-diary/adapter-metadata-sites";
 import { createSitesObjectStore } from "@mind-diary/adapter-object-sites";
 import { REVISION_MANIFEST_MEDIA_TYPE } from "@mind-diary/application-ports";
 import {
+  MARKDOWN_MEDIA_TYPE,
   REVISION_MANIFEST_FORMAT_V4,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
   serializeRevisionManifest,
+  verifiedSpaceHost,
 } from "@mind-diary/domain";
 import {
   MCP_ENDPOINT,
@@ -930,6 +932,68 @@ async function seedMixedExactRevision({
   return { metadata, envelope };
 }
 
+async function seedMarkdownValidationRevision({
+  database,
+  bucket,
+  handle,
+  revisionId,
+  committedAt,
+  text,
+}) {
+  const metadata = await createSitesMetadataStore(database);
+  const resolved = await metadata.resolveHandle({
+    host: verifiedSpaceHost(new URL(ORIGIN).host),
+    handle,
+  });
+  assert.equal(resolved.kind, "resolved");
+  const parentRevisionId = await metadata.readHead(resolved.spaceId);
+  assert.ok(parentRevisionId);
+  const parent = await metadata.readRevision(resolved.spaceId, parentRevisionId);
+  assert.ok(parent);
+  const objects = await createSitesObjectStore(bucket);
+  const markdownBytes = new TextEncoder().encode(text);
+  const markdownObject = await objects.putSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId: resolved.spaceId,
+    bytes: markdownBytes,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: committedAt,
+  });
+  const manifest = createRevisionManifest([{
+    kind: "markdown",
+    path: "index.md",
+    sha256: markdownObject.object.sha256,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    size: markdownObject.object.size,
+  }], REVISION_MANIFEST_FORMAT_V4);
+  const manifestBytes = new TextEncoder().encode(serializeRevisionManifest(manifest));
+  const manifestObject = await objects.putSpaceCanonicalObject({
+    kind: "revision_manifest",
+    spaceId: resolved.spaceId,
+    bytes: manifestBytes,
+    mediaType: REVISION_MANIFEST_MEDIA_TYPE,
+    createdAt: committedAt,
+  });
+  const envelope = createCanonicalRevisionEnvelope({
+    revisionId,
+    spaceId: resolved.spaceId,
+    revisionNumber: parent.revision.revisionNumber + 1,
+    parentRevisionId,
+    committedAt,
+    committedBy: parent.revision.committedBy,
+    manifest,
+    manifestHash: manifestObject.object.sha256,
+    manifestSize: manifestObject.object.size,
+    summary: "Synthetic validation pagination fixture",
+  });
+  const committed = await metadata.commitRevision({
+    expectedHeadRevisionId: parentRevisionId,
+    envelope,
+  });
+  assert.equal(committed.kind, "committed");
+  return envelope;
+}
+
 const PERFORMANCE_CORRELATION_KEY = key(201);
 
 function performanceCorrelationSignature(id) {
@@ -1056,6 +1120,186 @@ async function mutateMindUsage(
     },
   ));
 }
+
+test("public MCP validation pagination survives Sites restart and HEAD change, and rejects tamper or revoke", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const runtimeOptions = {
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    schedule() {},
+    observabilityWriter: { write() {} },
+    identity: {
+      readVerifiedIdentity: () => ({
+        kind: "authenticated",
+        verifiedEmail: "validation.pagination@example.com",
+        verifiedFullName: "Validation Pagination Owner",
+      }),
+    },
+    tokenVerifierKey: key(8),
+    locatorKey: key(48),
+    exportDownloadVerifierKey: key(88),
+    csrfKey: key(128),
+  };
+  let runtime = await createProductSiteRuntime(runtimeOptions);
+  let csrf = csrfFromHtml(await (await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/`),
+  )).text());
+  const mutate = (path, body, idempotencyKey) => responseFrom(
+    runtime,
+    new Request(`${ORIGIN}${path}`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    }),
+  );
+  const bootstrap = await mutate(
+    "/api/v1/account",
+    { action: "create_isolated_account" },
+    "validation-pagination:bootstrap",
+  );
+  assert.equal(bootstrap.status, 200, await bootstrap.clone().text());
+  csrf = csrfFromHtml(await (await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/settings/developer/mcp`),
+  )).text());
+  const created = await mutate(
+    "/api/v1/minds",
+    { name: "Validation Pagination", handle: "validation-pagination" },
+    "validation-pagination:create",
+  );
+  assert.equal(created.status, 200, await created.clone().text());
+  const enabled = await mutateMindUsage(
+    runtime,
+    csrf,
+    "/validation-pagination",
+    "read",
+    0,
+    "validation-pagination:enable",
+  );
+  assert.equal(enabled.status, 200, await enabled.clone().text());
+  const enabledBody = await enabled.json();
+  assert.equal(enabledBody.data.projection.usage_version, 1);
+  const issued = await mutate(
+    "/api/v1/mcp-tokens",
+    { name: "Validation pagination", scopes: ["content:read"] },
+    "validation-pagination:token",
+  );
+  assert.equal(issued.status, 200, await issued.clone().text());
+  const secret = (await issued.json()).data.secret;
+
+  const missingLinks = Array.from(
+    { length: 105 },
+    (_, index) => `- [Missing ${index}](missing-${index}.md)`,
+  ).join("\n");
+  const invalid = await seedMarkdownValidationRevision({
+    database,
+    bucket,
+    handle: "validation-pagination",
+    revisionId: "revision_validation_pagination_invalid",
+    committedAt: "2026-09-21T18:00:00.000Z",
+    text: `---\nokf_version: "0.2"\n---\n\n# Validation pagination\n\n${missingLinks}\n`,
+  });
+  runtime = await createProductSiteRuntime(runtimeOptions);
+
+  const listed = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "validation-pagination:list",
+    method: "tools/list",
+    params: {},
+  });
+  assert.equal(listed.status, 200);
+  const validateDefinition = (await listed.json()).result.tools.find(
+    ({ name }) => name === "validate_mind",
+  );
+  assert.ok(validateDefinition);
+  assert.ok("cursor" in validateDefinition.inputSchema.properties);
+
+  const callValidation = async (id, args) => {
+    const response = await modernMcp(runtime, secret, {
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name: "validate_mind", arguments: args },
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()).result;
+  };
+  const first = await callValidation(
+    "validation-pagination:first",
+    { mind: "/validation-pagination" },
+  );
+  assert.equal(first.isError, false, JSON.stringify(first));
+  const firstData = first.structuredContent.data;
+  assert.equal(firstData.validation_complete, true);
+  assert.equal(firstData.resolved_revision.revision_id, invalid.revision.revisionId);
+  assert.equal(firstData.issue_counts.consistency_errors, 105);
+  assert.equal(firstData.consistency_errors.length, 100);
+  assert.equal(firstData.issues_truncated, true);
+  assert.match(firstData.next_cursor, /^mdl2_[A-Za-z0-9_-]{32}$/u);
+  assert.ok(database.locatorHandles.size > 0);
+  const cursor = firstData.next_cursor;
+  const targets = firstData.consistency_errors.map(({ target }) => target);
+
+  await seedMarkdownValidationRevision({
+    database,
+    bucket,
+    handle: "validation-pagination",
+    revisionId: "revision_validation_pagination_fresh",
+    committedAt: "2026-09-21T18:01:00.000Z",
+    text: "---\nokf_version: \"0.2\"\n---\n\n# Fresh HEAD\n",
+  });
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  const second = await callValidation(
+    "validation-pagination:second",
+    { mind: "/validation-pagination", cursor },
+  );
+  assert.equal(second.isError, false, JSON.stringify(second));
+  const secondData = second.structuredContent.data;
+  assert.equal(secondData.resolved_revision.revision_id, invalid.revision.revisionId);
+  assert.equal(secondData.consistency_errors.length, 5);
+  assert.equal(secondData.issues_truncated, false);
+  assert.equal(secondData.next_cursor, null);
+  targets.push(...secondData.consistency_errors.map(({ target }) => target));
+  assert.equal(new Set(targets).size, 105);
+  assert.deepEqual(
+    new Set(targets),
+    new Set(Array.from({ length: 105 }, (_, index) => `missing-${index}.md`)),
+  );
+
+  const tamperIndex = 10;
+  const tamperedCursor = `${cursor.slice(0, tamperIndex)}` +
+    `${cursor[tamperIndex] === "A" ? "B" : "A"}${cursor.slice(tamperIndex + 1)}`;
+  const tampered = await callValidation(
+    "validation-pagination:tampered",
+    { mind: "/validation-pagination", cursor: tamperedCursor },
+  );
+  assert.equal(tampered.isError, true);
+  assert.equal(tampered.structuredContent.error.code, "invalid_request");
+
+  const disabled = await mutateMindUsage(
+    runtime,
+    csrf,
+    "/validation-pagination",
+    "disabled",
+    enabledBody.data.projection.usage_version,
+    "validation-pagination:disable",
+  );
+  assert.equal(disabled.status, 200, await disabled.clone().text());
+  const revoked = await callValidation(
+    "validation-pagination:revoked",
+    { mind: "/validation-pagination", cursor },
+  );
+  assert.equal(revoked.isError, true);
+  assert.equal(revoked.structuredContent.error.code, "mind_not_found");
+});
 
 test("Product Worker recovers authenticated web and MCP reads around a late canonical append", async () => {
   const database = new FakeD1Database();

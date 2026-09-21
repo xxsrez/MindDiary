@@ -739,12 +739,16 @@ references, BundleFile envelopes и dependency checks; `valid=true` нельзя
 пакетами и перед итогом. Ошибка object read, digest/size mismatch, revoke,
 deadline или restart даёт fail-closed result без partial valid result.
 
-Если один request не может безопасно завершить full validation, допустима
-resumable форма с opaque validation id/cursor, exact revision + manifest/rules
-fingerprint, bounded progress and failure state. Каждое продолжение повторно
-проверяет access и exact revision; `validation_complete=false` — только
-прогресс, не доказательство validity/commit readiness. Изменение HEAD, rules,
-ACL или fingerprint инвалидирует continuation.
+Текущий Sites runtime завершает full validation в одном bounded request и всегда
+возвращает `validation_complete=true`. Его `next_cursor` относится только к
+страницам уже готового diagnostics report, pin-ится к exact revision и остаётся
+действительным после смены HEAD. Если позже появится resumable execution для
+незаконченной проверки, он должен использовать отдельный opaque validation
+id/continuation, а не report `next_cursor`, и связываться с exact revision плюс
+manifest/rules fingerprint. Каждое такое future продолжение повторно проверяет
+access; отдельная specification задаст его invalidation при смене HEAD, rules,
+ACL или fingerprint. `validation_complete=false` будет означать только
+progress, а не validity или commit readiness.
 
 `commit_changeset` поддерживает batch из 72 и более обычных operations (включая
 create/replace/delete, reserved index/log и mixed Markdown/BundleFile) при

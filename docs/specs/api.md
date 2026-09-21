@@ -2540,13 +2540,17 @@ findings return the completed `valid=false` diagnostics envelope. Digest/size
 mismatch, current-access revoke, deadline or object-read failure returns a
 fail-closed application error and never a partial `valid` result.
 
-Runtime может выполнить этот contract boundedным one-shot worker pool. Если
-request budget не позволяет этого, adapter может вернуть resumable progress с
-`validation_complete=false` и opaque validation continuation, bound to exact
-Space/revision/manifest/rules fingerprint. Each continuation rechecks current
-access and exact revision; changing HEAD, ACL, rules or fingerprint invalidates
-it. Progress is not validity or commit readiness, and a failed continuation
-does not publish a revision.
+Текущий runtime выполняет этот contract boundedным one-shot worker pool и всегда
+возвращает `validation_complete=true`; текущий `next_cursor` листает только уже
+готовый отчёт и поэтому продолжает читать pinned exact revision после смены
+HEAD. Resumable progress для ещё не законченной проверки остаётся отдельным
+зарезервированным contract: если он появится, то использует отдельный opaque
+validation continuation, а не report `next_cursor`, и связывается с exact
+Space/revision/manifest/rules fingerprint. Такой future continuation обязан
+повторно проверять current access; его правила invalidation, включая реакцию на
+смену HEAD, должны быть заданы отдельно. `validation_complete=false` означает
+только progress, а не validity или commit readiness; failed continuation не
+публикует revision.
 
 ### Release 0.5 bounded proof, reads and batch validation
 
