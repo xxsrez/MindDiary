@@ -19,6 +19,11 @@ export function serializeSafeExportProgress(event: unknown): string | null {
     (progress.completedEntries as number) > (progress.totalEntries as number) ||
     (progress.totalEntries as number) > 65_535
   ) return null;
+  const diagnostic = progress.stage === "failed" &&
+    ["type_error", "range_error", "object_error", "revision_error", "other_error"].includes(progress.failureKind as string) &&
+    typeof progress.failureCode === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(progress.failureCode)
+      ? { failureKind: progress.failureKind, failureCode: progress.failureCode }
+      : {};
   return JSON.stringify({
     event: "mind-diary-export-progress",
     jobId: progress.jobId,
@@ -26,5 +31,6 @@ export function serializeSafeExportProgress(event: unknown): string | null {
     stage: progress.stage,
     completedEntries: progress.completedEntries,
     totalEntries: progress.totalEntries,
+    ...diagnostic,
   });
 }

@@ -1297,6 +1297,8 @@ export type ExportJobProgressEvent = Readonly<{
   stage: ExportJobProgressStage;
   completedEntries: number;
   totalEntries: number;
+  failureKind?: "type_error" | "range_error" | "object_error" | "revision_error" | "other_error";
+  failureCode?: string;
 }>;
 
 const SAFE_EXPORT_FAILURE_CODES = new Set([
@@ -1324,6 +1326,24 @@ function safeExportFailureCode(error: unknown): string {
     return error.code;
   }
   return "export_build_failed";
+}
+
+function safeExportFailureDiagnostic(error: unknown): Pick<ExportJobProgressEvent, "failureKind" | "failureCode"> {
+  const failureKind = error instanceof TypeError ? "type_error" as const
+    : error instanceof RangeError ? "range_error" as const
+    : error instanceof Error && error.name === "ObjectStoreFailure" ? "object_error" as const
+    : error instanceof Error && (error.name === "CanonicalRevisionError" || error.name === "OkfExportError")
+      ? "revision_error" as const
+      : "other_error" as const;
+  const rawCode = typeof error === "object" && error !== null && "code" in error ? error.code : null;
+  const failureCode = typeof rawCode === "string" && [
+    "digest_collision", "object_read_timeout", "object_tampered", "range_unavailable",
+    "object_not_found", "object_integrity_failure", "manifest_integrity_failure",
+    "revision_integrity_failure", "okf_validation_failed", "archive_limit_exceeded",
+  ].includes(rawCode)
+    ? rawCode
+    : rawCode === null ? "uncoded" : "other_code";
+  return { failureKind, failureCode };
 }
 
 /** Lease-fenced durable complete_export handler. */
@@ -1382,7 +1402,12 @@ export class ExportJobHandler {
       return Object.freeze({ kind: claim.kind });
     }
     const job = claim.job;
-    const report = (stage: ExportJobProgressStage, completedEntries = 0, totalEntries = 0) => {
+    const report = (
+      stage: ExportJobProgressStage,
+      completedEntries = 0,
+      totalEntries = 0,
+      diagnostic?: Pick<ExportJobProgressEvent, "failureKind" | "failureCode">,
+    ) => {
       try {
         const observation = this.#onProgress?.(Object.freeze({
           jobId: job.jobId,
@@ -1390,6 +1415,7 @@ export class ExportJobHandler {
           stage,
           completedEntries,
           totalEntries,
+          ...diagnostic,
         }));
         if (observation !== undefined) void Promise.resolve(observation).catch(() => undefined);
       } catch { /* Diagnostics cannot affect a durable export. */ }
@@ -1515,7 +1541,7 @@ export class ExportJobHandler {
     } catch (error) {
       if (upload !== null) await upload.abort().catch(() => undefined);
       if (objectKey !== null) await this.#archives.deleteExportArchive(objectKey);
-      report("failed");
+      report("failed", 0, 0, safeExportFailureDiagnostic(error));
       return this.#failClaim(
         job.jobId,
         job.version,

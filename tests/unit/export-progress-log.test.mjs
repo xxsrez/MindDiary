@@ -29,4 +29,27 @@ test("export progress log contains only an exact server job ID and bounded count
     { ...valid, stage: "content" },
   ]) assert.equal(serializeSafeExportProgress(invalid), null);
   assert.doesNotMatch(serializeSafeExportProgress({ ...valid, content: "private body" }), /private body/u);
+  assert.deepEqual(JSON.parse(serializeSafeExportProgress({
+    ...valid,
+    stage: "failed",
+    completedEntries: 0,
+    totalEntries: 0,
+    failureKind: "object_error",
+    failureCode: "object_read_timeout",
+    content: "private body",
+  })), {
+    event: "mind-diary-export-progress",
+    ...valid,
+    stage: "failed",
+    completedEntries: 0,
+    totalEntries: 0,
+    failureKind: "object_error",
+    failureCode: "object_read_timeout",
+  });
+  assert.doesNotMatch(serializeSafeExportProgress({
+    ...valid,
+    stage: "failed",
+    failureKind: "private body",
+    failureCode: "private body",
+  }), /private body/u);
 });

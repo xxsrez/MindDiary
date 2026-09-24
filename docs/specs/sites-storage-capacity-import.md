@@ -489,7 +489,9 @@ reopens it. It never rebases or partially imports automatically.
   parts до штатной cleanup. Размер долговременного job state не меняется.
 - Фоновая сборка export публикует best-effort progress только с закрытой фазой,
   числом обработанных файлов и общим числом файлов, opaque job ID и номером
-  fenced claim. В лог не попадают пути, content, archive bytes, access tokens и
+  fenced claim. Для failed phase допускаются только закрытый тип ошибки и
+  разрешённый технический код; текст и stack ошибки отбрасываются. В лог не
+  попадают пути, content, archive bytes, access tokens и
   download URLs; сбой telemetry не меняет исход job. Progress не считается
   квитанцией об успешном архиве.
 - После claim фоновый export заново проверяет текущий доступ. Timeout чтения
