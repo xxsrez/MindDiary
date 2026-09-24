@@ -1555,14 +1555,16 @@ export class ExportJobHandler {
     version: Version,
     failureCode: string,
   ): Promise<BackgroundHandleResult> {
-    const failedAt = this.#clock.now();
-    const fail = () => this.#jobs.failExportJob(
-      jobId,
-      version,
-      failureCode,
-      failedAt,
-      retryAt(failedAt, this.#retryDelayMs),
-    );
+    const fail = () => {
+      const failedAt = this.#clock.now();
+      return this.#jobs.failExportJob(
+        jobId,
+        version,
+        failureCode,
+        failedAt,
+        retryAt(failedAt, this.#retryDelayMs),
+      );
+    };
     let failed: boolean;
     try {
       failed = await fail();

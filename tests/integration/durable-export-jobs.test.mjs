@@ -444,6 +444,7 @@ test("repeated D1 authorization timeouts fail the fenced claim and same job can 
   const started = await env.application().start(startRequest(env.actor));
   let checks = 0;
   let failWrites = 0;
+  let recordedFailure;
   const worker = new ExportJobHandler({
     jobs: {
       claimExportJob: (...args) => env.metadata.claimExportJob(...args),
@@ -451,8 +452,10 @@ test("repeated D1 authorization timeouts fail the fenced claim and same job can 
       async failExportJob(...args) {
         failWrites += 1;
         if (failWrites === 1) {
+          env.clock.set(at(2_500));
           throw Object.assign(new Error("D1 write timed out"), { code: "metadata_queue_timeout" });
         }
+        recordedFailure = { failedAt: args[3], retryAt: args[4] };
         return env.metadata.failExportJob(...args);
       },
     },
@@ -474,12 +477,13 @@ test("repeated D1 authorization timeouts fail the fenced claim and same job can 
   });
   assert.equal(checks, 2);
   assert.equal(failWrites, 2);
+  assert.deepEqual(recordedFailure, { failedAt: at(2_500), retryAt: at(3_500) });
   assert.equal((await env.metadata.readExportJob(started.job.jobId)).state, "failed");
   assert.equal((await env.objects.listExportArchivesForTest()).length, 0);
 
-  env.clock.set(at(1_000));
+  env.clock.set(at(3_500));
   assert.deepEqual(await env.worker().handle({
-    actor: workerActor(at(1_000)), jobId: started.job.jobId,
+    actor: workerActor(at(3_500)), jobId: started.job.jobId,
   }), { kind: "completed" });
   assert.equal((await env.metadata.readExportJob(started.job.jobId)).attempts, 2);
   assert.equal((await env.objects.listExportArchivesForTest()).length, 1);
