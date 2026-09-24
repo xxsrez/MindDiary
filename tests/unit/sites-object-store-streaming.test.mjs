@@ -654,6 +654,81 @@ test("Sites export retry verifies a persisted part across conditional R2 races",
   assert.deepEqual(new Uint8Array(await new Response(opened.body).arrayBuffer()), bytes);
 });
 
+test("Sites export retry verifies the winner when a conditional R2 put returns null", async () => {
+  class NullConditionalBucket extends StreamingBucket {
+    hideExistingPartOnce = false;
+    rejectedExistingPuts = 0;
+
+    async get(key, options = {}) {
+      if (this.hideExistingPartOnce && key.includes("/stream/parts/") && this.records.has(key)) {
+        this.hideExistingPartOnce = false;
+        return null;
+      }
+      return super.get(key, options);
+    }
+
+    async put(key, value, options = {}) {
+      if (key.includes("/stream/parts/") && options.onlyIf?.etagDoesNotMatch === "*" && this.records.has(key)) {
+        this.rejectedExistingPuts += 1;
+      }
+      return super.put(key, value, options);
+    }
+  }
+
+  const bucket = new NullConditionalBucket();
+  const objects = await createSitesObjectStore(bucket);
+  const bytes = Uint8Array.from({ length: 4_194_304 }, (_value, index) => index % 251);
+  const sha256 = await objects.calculateSha256(bytes);
+  const request = {
+    jobId: "export_sites_null_conditional_part",
+    spaceId: "space_sites_null_conditional_part",
+    claimVersion: 1,
+    archiveFormat: "MD-BUNDLE-ZIP-1",
+    filename: "mind-diary-bundle.zip",
+    contentDisposition: 'attachment; filename="mind-diary-bundle.zip"',
+    createdAt: CREATED_AT,
+  };
+
+  const interrupted = await objects.beginExportArchiveUpload(request);
+  await interrupted.write(bytes);
+  await interrupted.abort();
+  bucket.hideExistingPartOnce = true;
+  const resumed = await objects.beginExportArchiveUpload(request);
+  await resumed.write(bytes);
+  const completed = await resumed.complete({ sha256, size: bytes.byteLength });
+  assert.equal(completed.kind, "stored");
+  assert.equal(bucket.rejectedExistingPuts, 1);
+  const opened = await objects.openExportArchive(completed.archive.objectKey);
+  assert.ok(opened);
+  assert.deepEqual(new Uint8Array(await new Response(opened.body).arrayBuffer()), bytes);
+});
+
+test("Sites export retry does not publish a manifest when a rejected part has no winner", async () => {
+  class NullWithoutWinnerBucket extends StreamingBucket {
+    async put(key, value, options = {}) {
+      if (key.includes("/stream/parts/") && options.onlyIf?.etagDoesNotMatch === "*") return null;
+      return super.put(key, value, options);
+    }
+  }
+
+  const bucket = new NullWithoutWinnerBucket();
+  const objects = await createSitesObjectStore(bucket);
+  const upload = await objects.beginExportArchiveUpload({
+    jobId: "export_sites_null_without_winner",
+    spaceId: "space_sites_null_without_winner",
+    claimVersion: 1,
+    archiveFormat: "MD-BUNDLE-ZIP-1",
+    filename: "mind-diary-bundle.zip",
+    contentDisposition: 'attachment; filename="mind-diary-bundle.zip"',
+    createdAt: CREATED_AT,
+  });
+  await assert.rejects(
+    upload.write(new Uint8Array(4_194_304)),
+    (error) => error?.code === "digest_collision",
+  );
+  assert.equal([...bucket.records.keys()].some((key) => key.endsWith("-manifest")), false);
+});
+
 test("Sites staged generated writer aborts partial streams without publication", async () => {
   const bucket = new StreamingBucket();
   const objects = await createSitesObjectStore(bucket);
