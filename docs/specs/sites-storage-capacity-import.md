@@ -487,6 +487,11 @@ reopens it. It never rebases or partially imports automatically.
   одного export attempt без изменения exact bytes, проверки целостности или
   размера долговременного job state. Opaque objects читаются по одному и не
   пересекаются с параллельной Markdown batch.
+- Фоновая сборка export публикует best-effort progress только с закрытой фазой,
+  числом обработанных файлов и общим числом файлов, opaque job ID и номером
+  fenced claim. В лог не попадают пути, content, archive bytes, access tokens и
+  download URLs; сбой telemetry не меняет исход job. Progress не считается
+  квитанцией об успешном архиве.
 - Download URLs are short-lived response-only bearer material, reauthorized
   before bytes and never durable/logged.
 - GC is mark/refcount assisted but treats committed manifests, active staging,

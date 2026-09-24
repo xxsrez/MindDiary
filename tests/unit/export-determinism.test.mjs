@@ -311,9 +311,10 @@ test("streamed export reads at most eight Markdown files concurrently in both pa
   const service = new DeterministicOkfExportService({ materializer, digest });
   const expected = await service.exportExactRevision({ spaceId: SPACE_ID, revisionId: REVISION_ID });
   const chunks = [];
+  const progress = [];
   const actual = await service.writeExactRevision({ spaceId: SPACE_ID, revisionId: REVISION_ID }, {
     async write(chunk) { chunks.push(new Uint8Array(chunk)); },
-  });
+  }, (event) => progress.push(event));
   const bytes = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
   let offset = 0;
   for (const chunk of chunks) {
@@ -324,6 +325,14 @@ test("streamed export reads at most eight Markdown files concurrently in both pa
   assert.equal(actual.sha256, expected.sha256);
   assert.equal(readCalls, 34);
   assert.equal(peakReads, 8);
+  assert.deepEqual(progress, [
+    { phase: "inspect", completedEntries: 0, totalEntries: 17 },
+    { phase: "inspect", completedEntries: 16, totalEntries: 17 },
+    { phase: "inspect", completedEntries: 17, totalEntries: 17 },
+    { phase: "write", completedEntries: 0, totalEntries: 17 },
+    { phase: "write", completedEntries: 16, totalEntries: 17 },
+    { phase: "write", completedEntries: 17, totalEntries: 17 },
+  ]);
 });
 
 test("a failed export batch drains its other object reads before rejecting", async () => {
@@ -579,6 +588,23 @@ test("opaque inspection is sequential and stops before later files on failure", 
   assert.equal(failed.peak, 1);
   assert.equal(failed.active, 0);
   assert.deepEqual(failed.opened, ["assets/source-0.bin"]);
+});
+
+test("export progress observer failures cannot alter the archive", async () => {
+  const { service } = await streamedOpaqueFixture(new Uint8Array(64).fill(0x5a));
+  const request = { spaceId: SPACE_ID, revisionId: REVISION_ID, profile: "MD-BUNDLE-ZIP-1" };
+  const expected = await service.exportExactRevision(request);
+  const chunks = [];
+  let reports = 0;
+  const actual = await service.writeExactRevision(request, {
+    async write(chunk) { chunks.push(new Uint8Array(chunk)); },
+  }, () => { reports += 1; throw new Error("telemetry unavailable"); });
+  const bytes = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  assert.ok(reports > 0);
+  assert.deepEqual(bytes, expected.bytes);
+  assert.equal(actual.sha256, expected.sha256);
 });
 
 test("opaque metadata mismatch cancels the opened body", async () => {

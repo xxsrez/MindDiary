@@ -188,6 +188,12 @@ const EXPORT_OBJECT_IO_CONCURRENCY = 8;
 /** Canonical Markdown is already limited to 1 MiB; each export batch retains at most eight files. */
 const MAX_EXPORT_MARKDOWN_FILE_BYTES = 1_048_576;
 
+export type DeterministicExportProgress = Readonly<{
+  phase: "inspect" | "write";
+  completedEntries: number;
+  totalEntries: number;
+}>;
+
 async function settleExportBatch<Value>(pending: readonly (Promise<Value> | Value)[]): Promise<Value[]> {
   const settled = await Promise.allSettled(pending);
   const failed = settled.find((result) => result.status === "rejected");
@@ -723,6 +729,7 @@ export class DeterministicOkfExportService {
   async writeExactRevision(
     request: unknown,
     sink: DeterministicExportChunkSink,
+    onProgress?: (progress: DeterministicExportProgress) => void,
   ): Promise<StreamedDeterministicOkfExport> {
     if (typeof sink?.write !== "function") {
       throw new OkfExportError("invalid_request", "export chunk sink is required");
@@ -853,8 +860,14 @@ export class DeterministicOkfExportService {
       }
       return { entry, canonicalPath, nameBytes };
     });
+    const reportProgress = (phase: DeterministicExportProgress["phase"], completedEntries: number, totalEntries: number) => {
+      try { onProgress?.(Object.freeze({ phase, completedEntries, totalEntries })); }
+      catch { /* Best-effort diagnostics never affect exact export bytes. */ }
+    };
+    reportProgress("inspect", 0, namedEntries.length);
     const streamedEntries: StreamedZipEntry[] = [];
     const conformanceErrors: OkfDiagnostic[] = [];
+    let lastInspectedReport = 0;
     for (let offset = 0; offset < namedEntries.length;) {
       // Opaque files may be 256 MiB and must never share an inspection batch.
       // Only contract-bounded Markdown (and generated metadata) can overlap.
@@ -902,6 +915,14 @@ export class DeterministicOkfExportService {
         });
       }
       offset = end;
+      if (
+        end === namedEntries.length ||
+        batch[0]!.entry.kind === "opaque" ||
+        end - lastInspectedReport >= 16
+      ) {
+        reportProgress("inspect", end, namedEntries.length);
+        lastInspectedReport = end;
+      }
     }
     if (conformanceErrors.length > 0) {
       throw new OkfExportError(
@@ -939,8 +960,12 @@ export class DeterministicOkfExportService {
       written = checkedZipTotal(written, chunk.byteLength);
       await sink.write(new Uint8Array(chunk));
     };
+    reportProgress("write", 0, streamedEntries.length);
+    let lastWrittenReport = 0;
     for (let offset = 0; offset < streamedEntries.length; offset += EXPORT_OBJECT_IO_CONCURRENCY) {
       const batch = streamedEntries.slice(offset, offset + EXPORT_OBJECT_IO_CONCURRENCY);
+      const includesOpaque = batch.some((entry) => entry.kind === "opaque");
+      if (includesOpaque) reportProgress("write", offset, streamedEntries.length);
       const markdownFiles = await settleExportBatch(batch.map((entry) => entry.kind === "markdown"
         ? this.#inspectBoundedMarkdownFile(parsed.spaceId, parsed.revisionId, entry, session)
         : null));
@@ -965,6 +990,11 @@ export class DeterministicOkfExportService {
         } else {
           await this.#emitStreamedFile(parsed.spaceId, parsed.revisionId, entry, emit, session);
         }
+      }
+      const completed = offset + batch.length;
+      if (includesOpaque || completed === streamedEntries.length || completed - lastWrittenReport >= 16) {
+        reportProgress("write", completed, streamedEntries.length);
+        lastWrittenReport = completed;
       }
     }
     for (const entry of streamedEntries) await emit(streamedCentralHeader(entry));

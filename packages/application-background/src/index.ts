@@ -1269,7 +1269,11 @@ export interface DeterministicExportBuilder {
     readonly profile?: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
   }, sink: Readonly<{
     write(chunk: Uint8Array): Promise<void>;
-  }>): Promise<{
+  }>, onProgress?: (progress: Readonly<{
+    phase: "inspect" | "write";
+    completedEntries: number;
+    totalEntries: number;
+  }>) => void): Promise<{
     readonly revisionId: RevisionId;
     readonly archiveFormat: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
     readonly mediaType: "application/zip";
@@ -1281,6 +1285,19 @@ export interface DeterministicExportBuilder {
     readonly size: number;
   }>;
 }
+
+export type ExportJobProgressStage =
+  | "claimed" | "authorized" | "upload_opened"
+  | "inspect" | "write" | "archive_built"
+  | "archive_stored" | "completed" | "failed";
+
+export type ExportJobProgressEvent = Readonly<{
+  jobId: JobId;
+  claimVersion: Version;
+  stage: ExportJobProgressStage;
+  completedEntries: number;
+  totalEntries: number;
+}>;
 
 const SAFE_EXPORT_FAILURE_CODES = new Set([
   "revision_not_found",
@@ -1312,6 +1329,7 @@ export class ExportJobHandler {
   readonly #clock: Clock;
   readonly #retryDelayMs: number;
   readonly #claimLeaseMs: number;
+  readonly #onProgress: ((event: ExportJobProgressEvent) => void) | null;
 
   constructor(dependencies: {
     readonly jobs: ExportJobStore;
@@ -1321,12 +1339,14 @@ export class ExportJobHandler {
     readonly clock: Clock;
     readonly retryDelayMs?: number;
     readonly claimLeaseMs?: number;
+    readonly onProgress?: (event: ExportJobProgressEvent) => void;
   }) {
     this.#jobs = dependencies.jobs;
     this.#backgroundAuthorizer = dependencies.backgroundAuthorizer;
     this.#builder = dependencies.builder;
     this.#archives = dependencies.archives;
     this.#clock = dependencies.clock;
+    this.#onProgress = dependencies.onProgress ?? null;
     this.#retryDelayMs = boundedDuration(
       dependencies.retryDelayMs ?? 1_000,
       "export retry delay",
@@ -1356,10 +1376,24 @@ export class ExportJobHandler {
       return Object.freeze({ kind: claim.kind });
     }
     const job = claim.job;
+    const report = (stage: ExportJobProgressStage, completedEntries = 0, totalEntries = 0) => {
+      try {
+        this.#onProgress?.(Object.freeze({
+          jobId: job.jobId,
+          claimVersion: job.version,
+          stage,
+          completedEntries,
+          totalEntries,
+        }));
+      } catch { /* Diagnostics cannot affect a durable export. */ }
+    };
+    report("claimed");
     const authorized = await this.#authorizeCurrent(request.actor, job);
     if (!authorized) {
+      report("failed");
       return this.#failClaim(job.jobId, job.version, "export_access_denied");
     }
+    report("authorized");
 
     let objectKey: string | null = null;
     let upload: { abort(): Promise<void> } | null = null;
@@ -1386,9 +1420,11 @@ export class ExportJobHandler {
           createdAt: this.#clock.now(),
         });
         upload = streamingUpload;
+        report("upload_opened");
         built = await this.#builder.writeExactRevision(exportRequest, {
           write: (chunk) => streamingUpload.write(chunk),
-        });
+        }, (progress) => report(progress.phase, progress.completedEntries, progress.totalEntries));
+        report("archive_built");
         put = await streamingUpload.complete({
           sha256: built.sha256,
           size: built.size,
@@ -1402,6 +1438,7 @@ export class ExportJobHandler {
           });
         }
         built = buffered;
+        report("archive_built");
         put = await this.#archives.putExportArchive({
           jobId: job.jobId,
           spaceId: job.spaceId,
@@ -1433,11 +1470,13 @@ export class ExportJobHandler {
       }
       const storedObjectKey = put.archive.objectKey;
       objectKey = storedObjectKey;
+      report("archive_stored");
 
       // Current access is rebuilt again after the potentially long build.
       if (!(await this.#authorizeCurrent(request.actor, job))) {
         await this.#archives.deleteExportArchive(storedObjectKey);
         objectKey = null;
+        report("failed");
         return this.#failClaim(job.jobId, job.version, "export_access_denied");
       }
       const completed = await this.#jobs.completeExportJob(
@@ -1458,10 +1497,12 @@ export class ExportJobHandler {
         await this.#archives.deleteExportArchive(storedObjectKey);
         return Object.freeze({ kind: "not_available" });
       }
+      report("completed");
       return Object.freeze({ kind: "completed" });
     } catch (error) {
       if (upload !== null) await upload.abort().catch(() => undefined);
       if (objectKey !== null) await this.#archives.deleteExportArchive(objectKey);
+      report("failed");
       return this.#failClaim(
         job.jobId,
         job.version,

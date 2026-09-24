@@ -155,7 +155,7 @@ async function harness(options = {}) {
     materializer: revisions,
     digest: objects,
   });
-  const worker = (customBuilder = builder) => new ExportJobHandler({
+  const worker = (customBuilder = builder, onProgress) => new ExportJobHandler({
     jobs: metadata,
     backgroundAuthorizer,
     builder: customBuilder,
@@ -163,6 +163,7 @@ async function harness(options = {}) {
     clock,
     retryDelayMs: 1_000,
     claimLeaseMs: 10_000,
+    ...(onProgress === undefined ? {} : { onProgress }),
   });
   return {
     actor,
@@ -367,11 +368,18 @@ test("reconstructed worker builds the exact archive into object storage and stat
   const started = await env.application().start(startRequest(env.actor));
   assert.equal(started.kind, "started");
 
-  const handled = await env.worker().handle({
+  const progress = [];
+  const handled = await env.worker(env.builder, (event) => progress.push(event)).handle({
     actor: workerActor(),
     jobId: started.job.jobId,
   });
   assert.deepEqual(handled, { kind: "completed" });
+  assert.equal(progress[0].stage, "claimed");
+  assert.equal(progress.at(-1).stage, "completed");
+  assert.ok(progress.some((event) => event.stage === "inspect"));
+  assert.ok(progress.some((event) => event.stage === "write"));
+  assert.ok(progress.every((event) => event.jobId === started.job.jobId));
+  assert.ok(progress.every((event) => event.claimVersion === progress[0].claimVersion));
 
   const status = await env.application().getStatus({
     actor: env.actor,
