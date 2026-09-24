@@ -7,6 +7,7 @@ import { createSitesObjectStore } from "@mind-diary/adapter-object-sites";
 import { REVISION_MANIFEST_MEDIA_TYPE } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
+  REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
@@ -1035,7 +1036,242 @@ async function seedMarkdownValidationRevision({
   return envelope;
 }
 
+async function seedLegacyColdChangesetRevision({ database, bucket, handle }) {
+  const metadata = await createSitesMetadataStore(database);
+  const resolved = await metadata.resolveHandle({
+    host: verifiedSpaceHost(new URL(ORIGIN).host),
+    handle,
+  });
+  assert.equal(resolved.kind, "resolved");
+  const parentRevisionId = await metadata.readHead(resolved.spaceId);
+  assert.ok(parentRevisionId);
+  const parent = await metadata.readRevision(resolved.spaceId, parentRevisionId);
+  assert.ok(parent);
+  const objects = await createSitesObjectStore(bucket);
+  const committedAt = "2026-09-21T18:00:00.000Z";
+  const entries = [];
+  const concept = (index, suffix = "baseline") =>
+    `---\ntype: Reference\ntitle: Concept ${index}\n---\n\n# Concept ${index}\n\n${suffix}\n`;
+  const putMarkdown = async (path, text) => {
+    const put = await objects.putSpaceCanonicalObject({
+      kind: "markdown",
+      spaceId: resolved.spaceId,
+      bytes: new TextEncoder().encode(text),
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: committedAt,
+    });
+    entries.push({
+      kind: "markdown", path, sha256: put.object.sha256,
+      mediaType: MARKDOWN_MEDIA_TYPE, size: put.object.size,
+    });
+  };
+  for (let index = 0; index < 160; index += 1) {
+    await putMarkdown(`concepts/concept-${String(index).padStart(4, "0")}.md`, concept(index));
+  }
+  await putMarkdown("index.md", `---\nokf_version: "0.2"\n---\n\n# Legacy Mind\n\n${
+    Array.from({ length: 160 }, (_, index) =>
+      `- [Concept ${index}](concepts/concept-${String(index).padStart(4, "0")}.md)`)
+      .join("\n")
+  }\n`);
+  await putMarkdown("log.md", "# Log\n\n## 2026-09-21\n\n- **Create**: Initial entry.\n");
+  for (let index = 0; index < 2; index += 1) {
+    const put = await objects.putBundleFile({
+      spaceId: resolved.spaceId,
+      bytes: new TextEncoder().encode(`ZIP fixture ${index}`),
+      mediaType: "application/zip",
+      createdAt: committedAt,
+    });
+    entries.push({
+      kind: "opaque", path: `assets/archive-${index}.zip`,
+      sha256: put.object.sha256, mediaType: "application/zip", size: put.object.size,
+    });
+  }
+  const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V3);
+  const manifestObject = await objects.putSpaceCanonicalObject({
+    kind: "revision_manifest",
+    spaceId: resolved.spaceId,
+    bytes: new TextEncoder().encode(serializeRevisionManifest(manifest)),
+    mediaType: REVISION_MANIFEST_MEDIA_TYPE,
+    createdAt: committedAt,
+  });
+  const envelope = createCanonicalRevisionEnvelope({
+    revisionId: "revision_cold_mcp_legacy",
+    spaceId: resolved.spaceId,
+    revisionNumber: parent.revision.revisionNumber + 1,
+    parentRevisionId,
+    committedAt,
+    committedBy: parent.revision.committedBy,
+    manifest,
+    manifestHash: manifestObject.object.sha256,
+    manifestSize: manifestObject.object.size,
+    summary: "Legacy cold MCP changeset fixture",
+  });
+  assert.equal((await metadata.commitRevision({
+    expectedHeadRevisionId: parentRevisionId,
+    envelope,
+  })).kind, "committed");
+  return { envelope, concept };
+}
+
 const PERFORMANCE_CORRELATION_KEY = key(201);
+
+test("cold legacy replace and log preflight uses the real MCP application and survives restart", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const runtimeOptions = {
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    now: () => new Date("2026-09-24T20:00:00.000Z"),
+    schedule() {},
+    observabilityWriter: { write() {} },
+    identity: {
+      readVerifiedIdentity: () => ({
+        kind: "authenticated",
+        verifiedEmail: "cold.changeset@example.com",
+        verifiedFullName: "Cold Changeset Owner",
+      }),
+    },
+    tokenVerifierKey: key(9),
+    locatorKey: key(49),
+    exportDownloadVerifierKey: key(89),
+    csrfKey: key(129),
+  };
+  let runtime = await createProductSiteRuntime(runtimeOptions);
+  let csrf = csrfFromHtml(await (await responseFrom(
+    runtime, new Request(`${ORIGIN}/`),
+  )).text());
+  const mutate = (path, body, idempotencyKey) => responseFrom(
+    runtime,
+    new Request(`${ORIGIN}${path}`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    }),
+  );
+  assert.equal((await mutate(
+    "/api/v1/account", { action: "create_isolated_account" }, "cold:bootstrap",
+  )).status, 200);
+  csrf = csrfFromHtml(await (await responseFrom(
+    runtime, new Request(`${ORIGIN}/settings/developer/mcp`),
+  )).text());
+  assert.equal((await mutate(
+    "/api/v1/minds", { name: "Cold Legacy", handle: "cold-legacy" }, "cold:create",
+  )).status, 200);
+  assert.equal((await mutateMindUsage(
+    runtime, csrf, "/cold-legacy", "read_write", 0, "cold:enable",
+  )).status, 200);
+  const issued = await mutate(
+    "/api/v1/mcp-tokens",
+    { name: "Cold legacy test", scopes: ["content:write"] },
+    "cold:token",
+  );
+  assert.equal(issued.status, 200);
+  const secret = (await issued.json()).data.secret;
+  const { envelope, concept } = await seedLegacyColdChangesetRevision({
+    database, bucket, handle: "cold-legacy",
+  });
+  assert.equal(database.preflightProofs.size, 0);
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  const originalGet = bucket.get.bind(bucket);
+  let markdownReads = 0;
+  bucket.get = async (keyValue) => {
+    if (keyValue.includes("/objects/sha256/") && !keyValue.includes("/integrity/")) {
+      markdownReads += 1;
+    }
+    return originalGet(keyValue);
+  };
+  const changedText = concept(0, "cold MCP preflight");
+  const operations = [{
+    type: "replace_file",
+    path: "concepts/concept-0000.md",
+    text: changedText,
+    expected_sha256: envelope.manifest.entries.find((entry) =>
+      entry.path === "concepts/concept-0000.md").sha256,
+  }, {
+    type: "add_log_entry",
+    path: "log.md",
+    category: "Update",
+    message: "Updated concept 0.",
+  }];
+  const input = {
+    mind: "/cold-legacy",
+    expected_revision: envelope.revision.revisionId,
+    operations,
+  };
+  const first = await modernTool(
+    runtime, secret, "cold:first", "preflight_changeset", input,
+  );
+  assert.equal(first.decision, "ready");
+  assert.ok(markdownReads >= 160, `cold fallback read ${markdownReads} Markdown objects`);
+  assert.equal(database.preflightProofs.size, 1);
+
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  markdownReads = 0;
+  const replay = await modernTool(
+    runtime, secret, "cold:restart", "preflight_changeset", input,
+  );
+  assert.equal(replay.changeset_identity, first.changeset_identity);
+  assert.ok(markdownReads <= 1, `restart reread ${markdownReads} Markdown objects`);
+  markdownReads = 0;
+  const commitInput = {
+    ...input,
+    idempotency_key: "cold:commit",
+    summary: "Update one concept and log",
+  };
+  const committed = await modernTool(
+    runtime, secret, "cold:commit", "commit_changeset", commitInput,
+  );
+  assert.equal(committed.previous_revision_id, envelope.revision.revisionId);
+  assert.ok(markdownReads <= 4, `commit reread ${markdownReads} Markdown objects`);
+  const replayedCommit = await modernTool(
+    runtime, secret, "cold:commit:replay", "commit_changeset", commitInput,
+  );
+  assert.equal(replayedCommit.revision.revision_id, committed.revision.revision_id);
+  assert.equal(replayedCommit.replayed, true);
+  const revisionId = committed.revision.revision_id;
+  const exact = await modernTool(runtime, secret, "cold:read", "read_files", {
+    mind: "/cold-legacy",
+    revision_selector: { kind: "revision", revision_id: revisionId },
+    requests: [
+      { mode: "whole", path: "concepts/concept-0000.md" },
+      { mode: "whole", path: "log.md" },
+    ],
+  });
+  assert.equal(exact.items[0].file.text, changedText);
+  assert.match(exact.items[1].file.text, /Updated concept 0/u);
+  const metadata = await createSitesMetadataStore(database);
+  const exactRevision = await metadata.readRevision(envelope.revision.spaceId, revisionId);
+  assert.ok(exactRevision);
+  for (const oldEntry of envelope.manifest.entries.filter((entry) => entry.kind === "opaque")) {
+    assert.deepEqual(
+      exactRevision.manifest.entries.find((entry) => entry.path === oldEntry.path),
+      oldEntry,
+    );
+  }
+
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  markdownReads = 0;
+  const next = await modernTool(
+    runtime, secret, "cold:after-commit", "preflight_changeset", {
+      mind: "/cold-legacy",
+      expected_revision: revisionId,
+      operations: [{
+        type: "replace_file",
+        path: "concepts/concept-0000.md",
+        text: concept(0, "after certified commit"),
+        expected_sha256: `sha256:${createHash("sha256").update(changedText).digest("hex")}`,
+      }],
+    },
+  );
+  assert.equal(next.decision, "ready");
+  assert.ok(markdownReads <= 2, `certified revision reread ${markdownReads} Markdown objects`);
+});
 
 function performanceCorrelationSignature(id) {
   const hmac = createHmac("sha256", PERFORMANCE_CORRELATION_KEY);
