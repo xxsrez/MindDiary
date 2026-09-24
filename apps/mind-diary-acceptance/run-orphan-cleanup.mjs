@@ -76,7 +76,7 @@ export async function recoverRunOrphans(store, runId, input, environment, produc
     const primaryKey = value.objectKey;
     if (typeof primaryKey === "string" && value.schema === "md-r2-object-integrity-v1" &&
         value.spaceId === input.space_id && value.kind === "markdown" && object.etag &&
-        primaryKey.startsWith(`spaces/${encodeURIComponent(input.space_id)}/markdown/sha256/`) &&
+        primaryKey.startsWith(`spaces/${encodeURIComponent(input.space_id)}/objects/sha256/`) &&
         object.key === `spaces/${encodeURIComponent(input.space_id)}/integrity/${encodeURIComponent(primaryKey)}` &&
         await primaryAbsent(environment.MIND_DIARY_BUCKET, primaryKey)) {
       sidecars.push(object);

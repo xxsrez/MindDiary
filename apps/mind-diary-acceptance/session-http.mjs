@@ -108,6 +108,7 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     const status = code === "exchange_denied" ? 401 : code === "external_mcp_denied" ? 403 : code === "run_not_found" ? 404
       : ["run_capacity_reached", "idempotency_conflict"].includes(code) ? 409
       : ["invalid_run", "invalid_actor", "invalid_run_request", "invalid_idempotency_key", "invalid_request"].includes(code) ? 400 : 503;
-    return json({ error: status === 503 ? "acceptance_unavailable" : code }, status);
+    const controllerDiagnostic = pathname.endsWith("/orphan-cleanup") && code.startsWith("orphan_");
+    return json({ error: status === 503 && !controllerDiagnostic ? "acceptance_unavailable" : code }, status);
   }
 }
