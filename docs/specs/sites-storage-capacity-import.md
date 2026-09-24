@@ -312,6 +312,10 @@ state before retry.
 expiry. Повтор exact selector/profile тем же principal восстанавливает этот job
 даже после утраты первоначального client key: новый namespace завершается тем же
 job result, а background work планируется повторно без второй reservation.
+Если job остаётся `queued` или `running` после ограниченного опроса статуса,
+явный повтор `start_export` с исходным client key также планирует тот же job.
+Lease fencing не допускает параллельной сборки; новый job и reservation не
+создаются. UI предлагает этот шаг отдельно от чтения статуса.
 Полный recovery отдельно перечисляет истёкшие export jobs bounded страницей,
 переводит их reservation в cleanup и после удаления archive освобождает lane;
 холодный restart не требует сохранённого process-local expiry dispatch.

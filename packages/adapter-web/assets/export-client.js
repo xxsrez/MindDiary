@@ -223,7 +223,7 @@
           polling += 1;
           pollTimer = window.setTimeout(() => { pollTimer = null; void checkStatus(true); }, 750);
         } else if (automatic) {
-          say("Export is still running. Use Check status to continue; the page will not poll indefinitely.");
+          say("Export is still running. Use Check status, or submit Start export again to resume this exact job; the page will not poll indefinitely.");
         }
         return;
       }
@@ -270,8 +270,6 @@
       resetReceipt();
       saved = makePending(selector, profile);
       writeStored();
-    } else if (safeJobId(saved.jobId)) {
-      return true;
     }
     const bodySelector = selector.kind === "head"
       ? { kind: "head" }

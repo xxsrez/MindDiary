@@ -142,6 +142,9 @@ const server = createServer(async (request, response) => {
           },
         });
       }
+      if (mode === "stuck_until_replay" && startRequests < 2) {
+        return json(response, 200, { ok: true, data: { job: { ...job, status: "running" } } });
+      }
       const count = (polls.get(job.job_id) ?? 0) + 1;
       polls.set(job.job_id, count);
       if (count < 2) {

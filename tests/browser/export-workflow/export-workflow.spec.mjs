@@ -177,3 +177,17 @@ test("failed export distinguishes a safe integrity result from a generic transpo
     uniqueJobs: 1,
   });
 });
+
+test("a running export can reschedule its exact job after bounded polling", async ({ page }) => {
+  await reset("stuck_until_replay");
+  await page.goto(`${origin}/research-notes`);
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.locator("[data-export-status]")).toContainText("resume this exact job", { timeout: 10_000 });
+  await page.getByRole("button", { name: "Start export" }).click();
+  await ready(page);
+  const observed = await state();
+  expect(observed.startRequests).toBe(2);
+  expect(observed.uniqueStartKeys).toBe(1);
+  expect(observed.uniqueJobs).toBe(1);
+  expect(observed.startAttempts[0]).toEqual(observed.startAttempts[1]);
+});
