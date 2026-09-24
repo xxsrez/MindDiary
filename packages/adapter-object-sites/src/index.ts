@@ -50,6 +50,7 @@ import {
   type ObjectCleanupPage,
 } from "@mind-diary/application-ports";
 import { IncrementalSha256 } from "./incremental-sha256.js";
+import { assertMatchingExportPart, exportStreamPartMetadata } from "./export-stream-part.js";
 
 export const SITES_OBJECT_ADAPTER = "sites-r2-immutable-envelope" as const;
 
@@ -1942,30 +1943,30 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       const sha256 = await this.calculateSha256(bytes);
       const partIndex = parts.length;
       const key = `${base}parts/${String(partIndex).padStart(8, "0")}-${sha256.slice(7)}`;
-      const customMetadata = Object.freeze({
-        schema: "md-r2-export-stream-part-v1",
-        jobId: String(request.jobId),
-        spaceId: String(request.spaceId),
-        partIndex: String(partIndex),
-        sha256,
-        size: String(bytes.byteLength),
-        createdAt: request.createdAt,
-      });
-      const stored = await this.#bucket.put(key, bytes, {
-        httpMetadata: { contentType: "application/octet-stream" },
-        customMetadata,
-        onlyIf: { etagDoesNotMatch: "*" },
-      });
-      if (!stored) {
-        const existing = await this.#get(key);
-        if (
-          !existing || existing.size !== bytes.byteLength ||
-          existing.customMetadata?.sha256 !== sha256 ||
-          !bytesEqual(await bodyBytes(existing), bytes)
-        ) throw new ObjectStoreFailure(
-          "digest_collision",
-          "streamed export part key collision",
-        );
+      const customMetadata = exportStreamPartMetadata(request, partIndex, sha256, bytes.byteLength);
+      const matchesExisting = (existing: R2ObjectBodyLike | null) =>
+        assertMatchingExportPart(existing, bytes, sha256, bodyBytes);
+      // A fenced retry commonly reuses this deterministic part. Read it before
+      // a conditional put: some R2 bindings reject an existing-key condition
+      // with an exception instead of returning null.
+      const prior = await this.#get(key);
+      if (prior !== null) {
+        await matchesExisting(prior);
+      } else {
+        let stored;
+        try {
+          stored = await this.#bucket.put(key, bytes, {
+            httpMetadata: { contentType: "application/octet-stream" },
+            customMetadata,
+            onlyIf: { etagDoesNotMatch: "*" },
+          });
+        } catch (error) {
+          const raced = await this.#get(key);
+          if (raced === null) throw error;
+          await matchesExisting(raced);
+          stored = raced;
+        }
+        if (!stored) await matchesExisting(await this.#get(key));
       }
       parts.push(Object.freeze({ key, sha256, size: bytes.byteLength }));
       pendingLength = 0;

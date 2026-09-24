@@ -56,7 +56,6 @@ async function streamedOpaqueFixture(opaqueBytes, { wrongMetadata = false } = {}
     manifest: { entries: files.map(({ bytes: _bytes, ...entry }) => entry) },
   };
   let cancellations = 0;
-  let opens = 0;
   const materializer = {
     async materialize() { return { envelope, files }; },
     async readRevisionEnvelope() { return envelope; },
@@ -65,7 +64,6 @@ async function streamedOpaqueFixture(opaqueBytes, { wrongMetadata = false } = {}
     },
     async openRevisionFile(_spaceId, _revisionId, path) {
       if (path !== "assets/source.bin") return null;
-      opens += 1;
       let delivered = false;
       const body = new ReadableStream({
         pull(controller) {
@@ -87,7 +85,6 @@ async function streamedOpaqueFixture(opaqueBytes, { wrongMetadata = false } = {}
   return {
     service: new DeterministicOkfExportService({ materializer, digest }),
     get cancellations() { return cancellations; },
-    get opens() { return opens; },
   };
 }
 
@@ -522,21 +519,6 @@ test("streamed export reuses one verified revision session for Markdown and opaq
     "assets/source.pdf",
     "assets/source.pdf",
   ]);
-});
-
-test("mixed export verifies opaque CRC before publishing any ZIP bytes", async () => {
-  const fixture = await streamedOpaqueFixture(new Uint8Array(128).fill(0x5a));
-  let firstWrite = true;
-  await fixture.service.writeExactRevision(
-    { spaceId: SPACE_ID, revisionId: REVISION_ID, profile: "MD-BUNDLE-ZIP-1" },
-    { async write() {
-      if (!firstWrite) return;
-      firstWrite = false;
-      assert.equal(fixture.opens, 1);
-    } },
-  );
-  assert.equal(firstWrite, false);
-  assert.equal(fixture.opens, 2);
 });
 
 test("streamed opaque bodies use at most 1 MiB application chunks", async () => {

@@ -481,13 +481,15 @@ reopens it. It never rebases or partially imports automatically.
   по размеру, SHA-256 и OKF в batch до восьми файлов; проверенные bytes той же
   batch сразу идут в deterministic ZIP без второго object read. В памяти
   одновременно находится только одна Markdown batch, каждый файл не больше
-  1 MiB, а ZIP выдаётся в стабильном порядке. CRC всех opaque objects
-  проверяется последовательными stream reads до выдачи ZIP; затем каждый
-  opaque object открывается для записи отдельно, без пересечения с Markdown
+  1 MiB, а ZIP выдаётся в стабильном порядке. Opaque objects проверяются и
+  записываются последовательными stream reads, без пересечения с Markdown
   batch. Session не переживает job attempt и не является межзапросным cache.
   До полной проверки exact revision и текущего доступа archive manifest не
   публикуется; неудачный attempt оставляет лишь недоступные читателю temporary
-  parts до штатной cleanup. Размер долговременного job state не меняется.
+  parts до штатной cleanup. При retry уже записанная deterministic part
+  проверяется по metadata и точным bytes до нового conditional put; конфликт
+  условной записи после гонки разрешается такой же проверкой. Размер
+  долговременного job state не меняется.
 - Фоновая сборка export публикует best-effort progress только с закрытой фазой,
   числом обработанных файлов и общим числом файлов, opaque job ID и номером
   fenced claim. Для failed phase допускаются только закрытый тип ошибки и

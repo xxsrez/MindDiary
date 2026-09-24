@@ -598,6 +598,62 @@ test("Sites streamed export download preserves its exact HTTP length boundary", 
   }
 });
 
+test("Sites export retry verifies a persisted part across conditional R2 races", async () => {
+  class ThrowingConditionalBucket extends StreamingBucket {
+    rejectedExistingPuts = 0;
+    missExistingPartOnce = false;
+
+    async get(key, options = {}) {
+      if (this.missExistingPartOnce && key.includes("/stream/parts/") && this.records.has(key)) {
+        this.missExistingPartOnce = false;
+        return null;
+      }
+      return super.get(key, options);
+    }
+
+    async put(key, value, options = {}) {
+      if (key.includes("/stream/parts/") && options.onlyIf?.etagDoesNotMatch === "*" && this.records.has(key)) {
+        this.rejectedExistingPuts += 1;
+        throw new Error("conditional put rejected an existing part");
+      }
+      return super.put(key, value, options);
+    }
+  }
+
+  const bucket = new ThrowingConditionalBucket();
+  const objects = await createSitesObjectStore(bucket);
+  const bytes = Uint8Array.from({ length: 4_194_304 + 17 }, (_value, index) => index % 251);
+  const sha256 = await objects.calculateSha256(bytes);
+  const request = {
+    jobId: "export_sites_existing_part",
+    spaceId: "space_sites_existing_part",
+    claimVersion: 2,
+    archiveFormat: "MD-BUNDLE-ZIP-1",
+    filename: "mind-diary-bundle.zip",
+    contentDisposition: 'attachment; filename="mind-diary-bundle.zip"',
+    createdAt: CREATED_AT,
+  };
+
+  const interrupted = await objects.beginExportArchiveUpload(request);
+  await interrupted.write(bytes.subarray(0, 4_194_304));
+  await interrupted.abort();
+  bucket.missExistingPartOnce = true;
+  const resumed = await objects.beginExportArchiveUpload(request);
+  await resumed.write(bytes);
+  const completed = await resumed.complete({ sha256, size: bytes.byteLength });
+  assert.equal(completed.kind, "stored");
+  assert.equal(bucket.rejectedExistingPuts, 1);
+  const nextClaim = await objects.beginExportArchiveUpload({ ...request, claimVersion: 3 });
+  await nextClaim.write(bytes);
+  const replayed = await nextClaim.complete({ sha256, size: bytes.byteLength });
+  assert.equal(replayed.kind, "stored");
+  assert.equal(bucket.rejectedExistingPuts, 1);
+  assert.equal([...bucket.records.keys()].filter((key) => key.includes("/stream/parts/")).length, 2);
+  const opened = await objects.openExportArchive(completed.archive.objectKey);
+  assert.ok(opened);
+  assert.deepEqual(new Uint8Array(await new Response(opened.body).arrayBuffer()), bytes);
+});
+
 test("Sites staged generated writer aborts partial streams without publication", async () => {
   const bucket = new StreamingBucket();
   const objects = await createSitesObjectStore(bucket);
