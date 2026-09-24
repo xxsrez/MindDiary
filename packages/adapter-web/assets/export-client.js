@@ -219,9 +219,9 @@
         say(job.status === "queued" ? "Export queued. This page checks a bounded number of times." : "Building the exact revision archive…");
         shown(checkButton, true);
         shown(newButton, false);
-        if (automatic && polling < 8) {
+        if (automatic && polling < 3) {
           polling += 1;
-          pollTimer = window.setTimeout(() => { pollTimer = null; void checkStatus(true); }, 750);
+          pollTimer = window.setTimeout(() => { pollTimer = null; void checkStatus(true); }, 5000);
         } else if (automatic) {
           say("Export is still running. Use Check status, or submit Start export again to resume this exact job; the page will not poll indefinitely.");
         }
@@ -265,8 +265,8 @@
     const selector = selectorFromForm();
     const profile = profileInput?.value ?? "";
     if (!safeProfile(profile)) throw Object.assign(new Error("profile"), { code: "invalid_profile" });
+    clearPoll();
     if (saved === null || !sameSelector(saved.selector, selector) || saved.profile !== profile) {
-      clearPoll();
       resetReceipt();
       saved = makePending(selector, profile);
       writeStored();
@@ -386,7 +386,7 @@
     } finally {
       setBusy(false);
     }
-    if (shouldCheck) void checkStatus(true);
+    if (shouldCheck) pollTimer = window.setTimeout(() => { pollTimer = null; void checkStatus(true); }, 10_000);
   });
   checkButton?.addEventListener("click", () => { clearPoll(); polling = 0; void checkStatus(true); });
   newButton?.addEventListener("click", startAnother);
@@ -416,7 +416,7 @@
       showJob(saved.selector.kind === "revision" ? saved.selector.revisionId : headRevision, "Recovering status");
       say("Recovering the actor-owned export status without starting another job…");
       polling = 0;
-      void checkStatus(true);
+      pollTimer = window.setTimeout(() => { pollTimer = null; void checkStatus(true); }, 10_000);
     } else {
       say("A previous start result was not confirmed. Submit again to reuse the same idempotent request.");
     }

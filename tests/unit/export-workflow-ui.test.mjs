@@ -50,7 +50,6 @@ test("browser workflow persists no receipt secret and verifies exact bytes befor
   assert.match(client, /bytes\.byteLength !== expected\.size \|\| digest !== expected\.sha256/);
   assert.match(client, /redirect: "error"/);
   assert.match(client, /credentials: "same-origin"/);
-  assert.match(client, /polling < 8/);
   assert.match(client, /export_profile_required/);
   assert.match(client, /revision_integrity_failure/);
   assert.match(client, /No archive was published/);

@@ -32,7 +32,7 @@ async function state() {
 }
 
 async function ready(page) {
-  await expect(page.getByText("Archive ready. Verify its size and SHA-256 while downloading.")).toBeVisible();
+  await expect(page.getByText("Archive ready. Verify its size and SHA-256 while downloading.")).toBeVisible({ timeout: 25_000 });
   await expect(page.locator("[data-export-job-state]")).toHaveText("Ready");
 }
 
@@ -46,17 +46,27 @@ test.afterAll(async () => {
 });
 
 test.beforeEach(async ({ context }) => {
+  test.setTimeout(90_000);
   await context.clearCookies();
   await reset();
 });
 
 test("current revision recovers without duplicate and independently verifies saved bytes", async ({ page }) => {
+  const statusReadTimes = [];
+  page.on("request", (request) => {
+    if (request.method() === "GET" && request.url().includes("/api/v1/export-jobs/")) statusReadTimes.push(Date.now());
+  });
   await page.goto(`${origin}/research-notes`);
   await expect(page.locator("[data-export-target-name]")).toHaveText("Research Notes");
   await expect(page.locator("[data-export-target-route]")).toHaveText("/research-notes");
   await expect(page.getByLabel("Current HEAD")).toBeChecked();
   await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.locator("[data-export-status]")).toContainText("Export started");
+  const startConfirmedAt = Date.now();
+  await page.waitForTimeout(8_000);
+  expect(statusReadTimes).toHaveLength(0);
   await ready(page);
+  expect(statusReadTimes[0] - startConfirmedAt).toBeGreaterThanOrEqual(9_000);
 
   expect((await state()).uniqueJobs).toBe(1);
   await page.reload();
@@ -133,7 +143,7 @@ test("expired and access-tightened states fail closed; mobile keyboard flow stay
   await expect(page.getByLabel("Historical revision ID")).toBeFocused();
   await page.getByLabel("Historical revision ID").fill("revision_old");
   await page.getByRole("button", { name: "Start export" }).click();
-  await expect(page.locator("[data-export-job-state]")).toHaveText("Expired");
+  await expect(page.locator("[data-export-job-state]")).toHaveText("Expired", { timeout: 20_000 });
   await expect(page.getByRole("button", { name: "Start another export" })).toBeVisible();
   const widths = await page.evaluate(() => ({ viewport: document.documentElement.clientWidth, document: document.documentElement.scrollWidth, panel: document.querySelector("[data-export-workflow]").scrollWidth, panelClient: document.querySelector("[data-export-workflow]").clientWidth }));
   expect(widths.document).toBeLessThanOrEqual(widths.viewport + 1);
@@ -143,7 +153,7 @@ test("expired and access-tightened states fail closed; mobile keyboard flow stay
     await reset(deniedMode);
     await page.getByRole("button", { name: "Start another export" }).click();
     await page.getByRole("button", { name: "Start export" }).click();
-    await expect(page.locator("[data-export-status]")).toHaveText("This export is no longer available. Reload the Mind and start a fresh export if you still have access.");
+    await expect(page.locator("[data-export-status]")).toHaveText("This export is no longer available. Reload the Mind and start a fresh export if you still have access.", { timeout: 20_000 });
     await expect(page.locator("[data-export-receipt]")).toBeHidden();
   }
   await context.close();
@@ -165,7 +175,7 @@ test("failed export distinguishes a safe integrity result from a generic transpo
   await reset("failed_integrity");
   await page.goto(`${origin}/research-notes`);
   await page.getByRole("button", { name: "Start export" }).click();
-  await expect(page.locator("[data-export-job-state]")).toHaveText("Failed");
+  await expect(page.locator("[data-export-job-state]")).toHaveText("Failed", { timeout: 20_000 });
   await expect(page.locator("[data-export-status]")).toHaveText(
     "The exact revision failed integrity verification. No archive was published. Submit Start export to retry this exact job.",
   );
@@ -179,10 +189,19 @@ test("failed export distinguishes a safe integrity result from a generic transpo
 });
 
 test("a running export can reschedule its exact job after bounded polling", async ({ page }) => {
+  const statusReadTimes = [];
+  page.on("request", (request) => {
+    if (request.method() === "GET" && request.url().includes("/api/v1/export-jobs/")) statusReadTimes.push(Date.now());
+  });
   await reset("stuck_until_replay");
   await page.goto(`${origin}/research-notes`);
   await page.getByRole("button", { name: "Start export" }).click();
-  await expect(page.locator("[data-export-status]")).toContainText("resume this exact job", { timeout: 10_000 });
+  await expect.poll(() => state()).toMatchObject({ mode: "stuck_until_replay", startRequests: 1 });
+  await expect(page.locator("[data-export-status]")).toContainText("resume this exact job", { timeout: 30_000 });
+  expect(statusReadTimes).toHaveLength(4);
+  for (let index = 1; index < statusReadTimes.length; index += 1) {
+    expect(statusReadTimes[index] - statusReadTimes[index - 1]).toBeGreaterThanOrEqual(4_500);
+  }
   await page.getByRole("button", { name: "Start export" }).click();
   await ready(page);
   const observed = await state();

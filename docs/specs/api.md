@@ -3506,8 +3506,11 @@ tuple `mind_ref + revision_selector + profile + Idempotency-Key` и после
 object key, grant secret или download URL. Новый сознательный export очищает
 предыдущий terminal tuple и получает новый key.
 
-Browser делает один immediate status read и не больше восьми автоматических
-polls с bounded delay. После этого пользователь получает явное действие
+После подтверждённого `POST` или восстановления tab browser откладывает первое
+чтение статуса на 10 секунд: это даёт фоновой задаче время захватить job и
+проверить доступ при меньшей конкуренции за metadata. Затем browser делает не более
+трёх дополнительных автоматических чтений с интервалом 5 секунд. После этого
+пользователь получает явное действие
 `Check status`; background work не превращается в unbounded page loop. Status
 всегда повторяет target Mind и exact `revision_id`. Terminal ready receipt
 показывает `archive_format`, `filename`, exact `size`, SHA-256 и expiry нового
