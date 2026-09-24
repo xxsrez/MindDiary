@@ -868,6 +868,14 @@ export class DeterministicOkfExportService {
       catch { /* Best-effort diagnostics never affect exact export bytes. */ }
     };
     namedEntries.sort((left, right) => compareBytes(left.nameBytes, right.nameBytes));
+    // Inspect opaque streams before ZIP output. An opaque file cannot be held
+    // in the Markdown batch, and its CRC must precede its local ZIP header.
+    const opaqueCrcs = new Map<string, number>();
+    for (const { entry } of namedEntries) {
+      if (entry.kind !== "opaque") continue;
+      const inspected = await this.#inspectStreamedFile(parsed.spaceId, parsed.revisionId, entry, session);
+      opaqueCrcs.set(entry.path, inspected.crc32);
+    }
     let localSize = 0;
     for (const { entry, nameBytes } of namedEntries) {
       localSize = checkedZipTotal(
@@ -912,16 +920,19 @@ export class DeterministicOkfExportService {
         ) end += 1;
       }
       const batch = namedEntries.slice(offset, end);
-      const inspections = await settleExportBatch(batch.map(({ entry }) => entry.generatedBytes === null
-        ? entry.kind === "markdown"
+      const inspections = await settleExportBatch(batch.map(({ entry }) => entry.kind === "opaque"
+        ? Object.freeze({ crc32: opaqueCrcs.get(entry.path), markdownBytes: null })
+        : entry.generatedBytes === null
           ? this.#inspectBoundedMarkdownFile(parsed.spaceId, parsed.revisionId, entry, session)
-          : this.#inspectStreamedFile(parsed.spaceId, parsed.revisionId, entry, session)
-        : Object.freeze({
+          : Object.freeze({
             crc32: calculateCrc32(entry.generatedBytes),
             markdownBytes: entry.generatedBytes,
           })));
       const ready = batch.map(({ entry, canonicalPath, nameBytes }, index) => {
         const inspected = inspections[index]!;
+        if (inspected.crc32 === undefined) {
+          throw new OkfExportError("revision_integrity_failure", "opaque export inspection is missing");
+        }
         if (entry.kind === "markdown") {
           const result = parseOkfFile({ path: canonicalPath, bytes: inspected.markdownBytes! });
           conformanceErrors.push(...result.diagnostics.filter(
@@ -933,14 +944,14 @@ export class DeterministicOkfExportService {
             collectOkfCrossLinkWarnings([result.file], markdownPaths);
           }
         }
-        return { entry, canonicalPath, nameBytes, inspected };
+        return { entry, canonicalPath, nameBytes, inspected, crc32: inspected.crc32 };
       });
       if (end === namedEntries.length || batch[0]!.entry.kind === "opaque" || end - lastInspectedReport >= 16) {
         reportProgress("inspect", end, namedEntries.length);
         lastInspectedReport = end;
       }
       for (let index = 0; index < batch.length; index += 1) {
-        const { entry, canonicalPath, nameBytes, inspected } = ready[index]!;
+        const { entry, canonicalPath, nameBytes, inspected, crc32 } = ready[index]!;
         const zipEntry: StreamedZipEntry = {
           path: canonicalPath,
           nameBytes,
@@ -948,7 +959,7 @@ export class DeterministicOkfExportService {
           mediaType: entry.mediaType,
           sha256: entry.sha256,
           size: entry.size,
-          crc32: inspected.crc32,
+          crc32,
           generatedBytes: entry.generatedBytes,
           localOffset: written,
         };

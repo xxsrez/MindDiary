@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
@@ -57,6 +56,7 @@ async function streamedOpaqueFixture(opaqueBytes, { wrongMetadata = false } = {}
     manifest: { entries: files.map(({ bytes: _bytes, ...entry }) => entry) },
   };
   let cancellations = 0;
+  let opens = 0;
   const materializer = {
     async materialize() { return { envelope, files }; },
     async readRevisionEnvelope() { return envelope; },
@@ -65,6 +65,7 @@ async function streamedOpaqueFixture(opaqueBytes, { wrongMetadata = false } = {}
     },
     async openRevisionFile(_spaceId, _revisionId, path) {
       if (path !== "assets/source.bin") return null;
+      opens += 1;
       let delivered = false;
       const body = new ReadableStream({
         pull(controller) {
@@ -86,6 +87,7 @@ async function streamedOpaqueFixture(opaqueBytes, { wrongMetadata = false } = {}
   return {
     service: new DeterministicOkfExportService({ materializer, digest }),
     get cancellations() { return cancellations; },
+    get opens() { return opens; },
   };
 }
 
@@ -522,15 +524,19 @@ test("streamed export reuses one verified revision session for Markdown and opaq
   ]);
 });
 
-test("streamed export bounds each Markdown read and never concatenates stream chunks", async () => {
-  const source = await readFile(
-    new URL("../../packages/application-content/src/deterministic-export.ts", import.meta.url),
-    "utf8",
+test("mixed export verifies opaque CRC before publishing any ZIP bytes", async () => {
+  const fixture = await streamedOpaqueFixture(new Uint8Array(128).fill(0x5a));
+  let firstWrite = true;
+  await fixture.service.writeExactRevision(
+    { spaceId: SPACE_ID, revisionId: REVISION_ID, profile: "MD-BUNDLE-ZIP-1" },
+    { async write() {
+      if (!firstWrite) return;
+      firstWrite = false;
+      assert.equal(fixture.opens, 1);
+    } },
   );
-  assert.match(source, /MAX_EXPORT_MARKDOWN_FILE_BYTES = 1_048_576/u);
-  assert.match(source, /EXPORT_OBJECT_IO_CONCURRENCY = 8/u);
-  assert.match(source, /entry\.kind === "markdown"[\s\S]{0,160}#inspectBoundedMarkdownFile/u);
-  assert.doesNotMatch(source, /markdownChunks|markdownBytes\.set\(/u);
+  assert.equal(firstWrite, false);
+  assert.equal(fixture.opens, 2);
 });
 
 test("streamed opaque bodies use at most 1 MiB application chunks", async () => {

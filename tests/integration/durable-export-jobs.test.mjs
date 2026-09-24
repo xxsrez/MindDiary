@@ -489,6 +489,27 @@ test("repeated D1 authorization timeouts fail the fenced claim and same job can 
   assert.equal((await env.objects.listExportArchivesForTest()).length, 1);
 });
 
+test("an error with throwing diagnostic accessors still durably fails the export claim", async () => {
+  const env = await harness();
+  const started = await env.application().start(startRequest(env.actor));
+  const unsafeError = Object.defineProperty(new Error("private failure detail"), "name", {
+    get() { throw new Error("diagnostic getter failed"); },
+  });
+  const observed = [];
+  const worker = env.worker({
+    async writeExactRevision() { throw unsafeError; },
+  }, (event) => observed.push(event));
+  assert.deepEqual(await worker.handle({ actor: workerActor(), jobId: started.job.jobId }), {
+    kind: "failed",
+    failureCode: "export_build_failed",
+  });
+  const job = await env.metadata.readExportJob(started.job.jobId);
+  assert.equal(job.state, "failed");
+  assert.equal(job.lastFailureCode, "export_build_failed");
+  assert.deepEqual(observed.at(-1)?.failureKind, "other_error");
+  assert.deepEqual(observed.at(-1)?.failureCode, "uncoded");
+});
+
 test("explicit bundle export profile is durable and reaches the reconstructed worker", async () => {
   const env = await harness();
   const started = await env.application().start({

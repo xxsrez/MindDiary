@@ -481,8 +481,9 @@ reopens it. It never rebases or partially imports automatically.
   по размеру, SHA-256 и OKF в batch до восьми файлов; проверенные bytes той же
   batch сразу идут в deterministic ZIP без второго object read. В памяти
   одновременно находится только одна Markdown batch, каждый файл не больше
-  1 MiB, а ZIP выдаётся в стабильном порядке. Opaque objects проверяются и
-  записываются последовательными stream reads, без пересечения с Markdown
+  1 MiB, а ZIP выдаётся в стабильном порядке. CRC всех opaque objects
+  проверяется последовательными stream reads до выдачи ZIP; затем каждый
+  opaque object открывается для записи отдельно, без пересечения с Markdown
   batch. Session не переживает job attempt и не является межзапросным cache.
   До полной проверки exact revision и текущего доступа archive manifest не
   публикуется; неудачный attempt оставляет лишь недоступные читателю temporary

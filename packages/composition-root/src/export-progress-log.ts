@@ -1,4 +1,4 @@
-import type { ExportJobProgressEvent } from "@mind-diary/application-background";
+import { EXPORT_FAILURE_DIAGNOSTIC_CODES, type ExportJobProgressEvent } from "@mind-diary/application-background";
 
 /** Project only bounded operational fields from an untrusted runtime value. */
 export function serializeSafeExportProgress(event: unknown): string | null {
@@ -20,8 +20,8 @@ export function serializeSafeExportProgress(event: unknown): string | null {
     (progress.totalEntries as number) > 65_535
   ) return null;
   const diagnostic = progress.stage === "failed" &&
-    ["type_error", "range_error", "object_error", "revision_error", "other_error"].includes(progress.failureKind as string) &&
-    typeof progress.failureCode === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(progress.failureCode)
+    ["type_error", "range_error", "object_error", "revision_error", "runtime_error", "dom_error", "other_error"].includes(progress.failureKind as string) &&
+    typeof progress.failureCode === "string" && EXPORT_FAILURE_DIAGNOSTIC_CODES.includes(progress.failureCode)
       ? { failureKind: progress.failureKind, failureCode: progress.failureCode }
       : {};
   return JSON.stringify({

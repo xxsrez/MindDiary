@@ -52,4 +52,10 @@ test("export progress log contains only an exact server job ID and bounded count
     failureKind: "private body",
     failureCode: "private body",
   }), /private body/u);
+  assert.doesNotMatch(serializeSafeExportProgress({
+    ...valid,
+    stage: "failed",
+    failureKind: "runtime_error",
+    failureCode: "private_secret_value",
+  }), /private_secret_value/u);
 });

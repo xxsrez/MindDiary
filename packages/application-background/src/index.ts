@@ -1297,9 +1297,16 @@ export type ExportJobProgressEvent = Readonly<{
   stage: ExportJobProgressStage;
   completedEntries: number;
   totalEntries: number;
-  failureKind?: "type_error" | "range_error" | "object_error" | "revision_error" | "other_error";
+  failureKind?: "type_error" | "range_error" | "object_error" | "revision_error" | "runtime_error" | "dom_error" | "other_error";
   failureCode?: string;
 }>;
+
+export const EXPORT_FAILURE_DIAGNOSTIC_CODES = Object.freeze([
+  "digest_collision", "object_read_timeout", "object_tampered", "range_unavailable",
+  "object_not_found", "object_integrity_failure", "manifest_integrity_failure",
+  "revision_integrity_failure", "okf_validation_failed", "archive_limit_exceeded",
+  "uncoded", "other_code",
+]);
 
 const SAFE_EXPORT_FAILURE_CODES = new Set([
   "revision_not_found",
@@ -1310,39 +1317,47 @@ const SAFE_EXPORT_FAILURE_CODES = new Set([
 ]);
 
 function isMetadataTimeout(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error &&
-    (error.code === "metadata_queue_timeout" || error.code === "metadata_d1_timeout");
+  const code = safeErrorCode(error);
+  return code === "metadata_queue_timeout" || code === "metadata_d1_timeout";
+}
+
+function safeErrorCode(error: unknown): string | null {
+  try {
+    if (typeof error !== "object" || error === null || !("code" in error)) return null;
+    return typeof error.code === "string" ? error.code : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeErrorName(error: unknown): string | null {
+  try {
+    if (typeof error !== "object" || error === null || !("name" in error)) return null;
+    return typeof error.name === "string" ? error.name : null;
+  } catch {
+    return null;
+  }
 }
 
 function safeExportFailureCode(error: unknown): string {
   if (isMetadataTimeout(error)) return "transient_storage_failure";
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof error.code === "string" &&
-    SAFE_EXPORT_FAILURE_CODES.has(error.code)
-  ) {
-    return error.code;
-  }
+  const code = safeErrorCode(error);
+  if (code !== null && SAFE_EXPORT_FAILURE_CODES.has(code)) return code;
   return "export_build_failed";
 }
 
 function safeExportFailureDiagnostic(error: unknown): Pick<ExportJobProgressEvent, "failureKind" | "failureCode"> {
-  const failureKind = error instanceof TypeError ? "type_error" as const
-    : error instanceof RangeError ? "range_error" as const
-    : error instanceof Error && error.name === "ObjectStoreFailure" ? "object_error" as const
-    : error instanceof Error && (error.name === "CanonicalRevisionError" || error.name === "OkfExportError")
-      ? "revision_error" as const
-      : "other_error" as const;
-  const rawCode = typeof error === "object" && error !== null && "code" in error ? error.code : null;
-  const failureCode = typeof rawCode === "string" && [
-    "digest_collision", "object_read_timeout", "object_tampered", "range_unavailable",
-    "object_not_found", "object_integrity_failure", "manifest_integrity_failure",
-    "revision_integrity_failure", "okf_validation_failed", "archive_limit_exceeded",
-  ].includes(rawCode)
-    ? rawCode
-    : rawCode === null ? "uncoded" : "other_code";
+  const name = safeErrorName(error);
+  const failureKind = name === "TypeError" ? "type_error" as const
+    : name === "RangeError" ? "range_error" as const
+    : name === "ObjectStoreFailure" ? "object_error" as const
+    : name === "CanonicalRevisionError" || name === "OkfExportError" ? "revision_error" as const
+    : name === "Error" ? "runtime_error" as const
+    : name === "DOMException" || name === "AbortError" ? "dom_error" as const
+    : "other_error" as const;
+  const rawCode = safeErrorCode(error);
+  const failureCode = rawCode !== null && EXPORT_FAILURE_DIAGNOSTIC_CODES.includes(rawCode)
+    ? rawCode : rawCode === null ? "uncoded" : "other_code";
   return { failureKind, failureCode };
 }
 
