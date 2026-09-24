@@ -184,8 +184,16 @@ const ZIP_END_SIZE = 22;
 const ZIP_UINT16_MAX = 0xffff;
 const ZIP_UINT32_MAX = 0xffffffff;
 const EXPORT_STREAM_CHUNK_BYTES = 1_048_576;
-/** Canonical Markdown is already limited to 1 MiB; export retains at most one file for OKF parsing. */
+const EXPORT_OBJECT_IO_CONCURRENCY = 8;
+/** Canonical Markdown is already limited to 1 MiB; each export batch retains at most eight files. */
 const MAX_EXPORT_MARKDOWN_FILE_BYTES = 1_048_576;
+
+async function settleExportBatch<Value>(pending: readonly (Promise<Value> | Value)[]): Promise<Value[]> {
+  const settled = await Promise.allSettled(pending);
+  const failed = settled.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
+  return settled.map((result) => (result as PromiseFulfilledResult<Value>).value);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -808,11 +816,8 @@ export class DeterministicOkfExportService {
     const markdownPaths = envelope.manifest.entries
       .filter((entry) => entry.kind === "markdown")
       .map((entry) => entry.path);
-    const streamedEntries: StreamedZipEntry[] = [];
-    const conformanceErrors: OkfDiagnostic[] = [];
     const seen = new Set<string>();
-
-    for (const entry of projected) {
+    const namedEntries = projected.map((entry) => {
       let canonicalPath: string;
       try {
         canonicalPath = entry.kind === "producer_manifest"
@@ -846,47 +851,46 @@ export class DeterministicOkfExportService {
           "deterministic export does not use ZIP64 file sizes",
         );
       }
-      const inspected = entry.generatedBytes === null
+      return { entry, canonicalPath, nameBytes };
+    });
+    const streamedEntries: StreamedZipEntry[] = [];
+    const conformanceErrors: OkfDiagnostic[] = [];
+    for (let offset = 0; offset < namedEntries.length; offset += EXPORT_OBJECT_IO_CONCURRENCY) {
+      const batch = namedEntries.slice(offset, offset + EXPORT_OBJECT_IO_CONCURRENCY);
+      const inspections = await settleExportBatch(batch.map(({ entry }) => entry.generatedBytes === null
         ? entry.kind === "markdown"
-          ? await this.#inspectBoundedMarkdownFile(
-              parsed.spaceId,
-              parsed.revisionId,
-              entry,
-              session,
-            )
-          : await this.#inspectStreamedFile(
-              parsed.spaceId,
-              parsed.revisionId,
-              entry,
-              session,
-            )
+          ? this.#inspectBoundedMarkdownFile(parsed.spaceId, parsed.revisionId, entry, session)
+          : this.#inspectStreamedFile(parsed.spaceId, parsed.revisionId, entry, session)
         : Object.freeze({
             crc32: calculateCrc32(entry.generatedBytes),
             markdownBytes: entry.generatedBytes,
-          });
-      if (entry.kind === "markdown") {
-        const result = parseOkfFile({ path: canonicalPath, bytes: inspected.markdownBytes! });
-        conformanceErrors.push(...result.diagnostics.filter(
-          (diagnostic) => diagnostic.severity === "error",
-        ));
-        if (result.file !== null) {
-          // Cross-links are quality-only in OKF 0.2; evaluate them one file at
-          // a time against the complete manifest projection without retaining
-          // every Markdown body in memory.
-          collectOkfCrossLinkWarnings([result.file], markdownPaths);
+          })));
+      for (let index = 0; index < batch.length; index += 1) {
+        const { entry, canonicalPath, nameBytes } = batch[index]!;
+        const inspected = inspections[index]!;
+        if (entry.kind === "markdown") {
+          const result = parseOkfFile({ path: canonicalPath, bytes: inspected.markdownBytes! });
+          conformanceErrors.push(...result.diagnostics.filter(
+            (diagnostic) => diagnostic.severity === "error",
+          ));
+          if (result.file !== null) {
+            // Cross-links are quality-only in OKF 0.2; evaluate them against
+            // the complete manifest without retaining the whole corpus.
+            collectOkfCrossLinkWarnings([result.file], markdownPaths);
+          }
         }
+        streamedEntries.push({
+          path: canonicalPath,
+          nameBytes,
+          kind: entry.kind,
+          mediaType: entry.mediaType,
+          sha256: entry.sha256,
+          size: entry.size,
+          crc32: inspected.crc32,
+          generatedBytes: entry.generatedBytes,
+          localOffset: 0,
+        });
       }
-      streamedEntries.push({
-        path: canonicalPath,
-        nameBytes,
-        kind: entry.kind,
-        mediaType: entry.mediaType,
-        sha256: entry.sha256,
-        size: entry.size,
-        crc32: inspected.crc32,
-        generatedBytes: entry.generatedBytes,
-        localOffset: 0,
-      });
     }
     if (conformanceErrors.length > 0) {
       throw new OkfExportError(
@@ -924,20 +928,32 @@ export class DeterministicOkfExportService {
       written = checkedZipTotal(written, chunk.byteLength);
       await sink.write(new Uint8Array(chunk));
     };
-    for (const entry of streamedEntries) {
-      await emit(streamedLocalHeader(entry));
-      if (entry.generatedBytes !== null) {
-        for (let offset = 0; offset < entry.generatedBytes.byteLength; offset += EXPORT_STREAM_CHUNK_BYTES) {
-          await emit(entry.generatedBytes.subarray(offset, offset + EXPORT_STREAM_CHUNK_BYTES));
+    for (let offset = 0; offset < streamedEntries.length; offset += EXPORT_OBJECT_IO_CONCURRENCY) {
+      const batch = streamedEntries.slice(offset, offset + EXPORT_OBJECT_IO_CONCURRENCY);
+      const markdownFiles = await settleExportBatch(batch.map((entry) => entry.kind === "markdown"
+        ? this.#inspectBoundedMarkdownFile(parsed.spaceId, parsed.revisionId, entry, session)
+        : null));
+      for (let index = 0; index < batch.length; index += 1) {
+        const entry = batch[index]!;
+        await emit(streamedLocalHeader(entry));
+        const markdown = markdownFiles[index];
+        if (markdown !== null && markdown !== undefined) {
+          if (markdown.crc32 !== entry.crc32) {
+            throw new OkfExportError(
+              "revision_integrity_failure",
+              "exact revision object changed between export passes",
+            );
+          }
+          for (let byteOffset = 0; byteOffset < markdown.markdownBytes.byteLength; byteOffset += EXPORT_STREAM_CHUNK_BYTES) {
+            await emit(markdown.markdownBytes.subarray(byteOffset, byteOffset + EXPORT_STREAM_CHUNK_BYTES));
+          }
+        } else if (entry.generatedBytes !== null) {
+          for (let byteOffset = 0; byteOffset < entry.generatedBytes.byteLength; byteOffset += EXPORT_STREAM_CHUNK_BYTES) {
+            await emit(entry.generatedBytes.subarray(byteOffset, byteOffset + EXPORT_STREAM_CHUNK_BYTES));
+          }
+        } else {
+          await this.#emitStreamedFile(parsed.spaceId, parsed.revisionId, entry, emit, session);
         }
-      } else {
-        await this.#emitStreamedFile(
-          parsed.spaceId,
-          parsed.revisionId,
-          entry,
-          emit,
-          session,
-        );
       }
     }
     for (const entry of streamedEntries) await emit(streamedCentralHeader(entry));
@@ -994,6 +1010,9 @@ export class DeterministicOkfExportService {
       file.mediaType !== entry.mediaType || file.sha256 !== entry.sha256 ||
       file.size !== entry.size || !(file.body instanceof ReadableStream)
     ) {
+      if (file?.body instanceof ReadableStream) {
+        await file.body.cancel().catch(() => undefined);
+      }
       throw new OkfExportError(
         "revision_integrity_failure",
         "exact revision object differs from its immutable manifest",
@@ -1018,20 +1037,22 @@ export class DeterministicOkfExportService {
         const part = await reader.read();
         if (part.done) break;
         if (!(part.value instanceof Uint8Array) || size + part.value.byteLength > entry.size) {
-          await reader.cancel().catch(() => undefined);
           throw new OkfExportError("revision_integrity_failure", "streamed revision object size differs from its manifest");
         }
         size += part.value.byteLength;
         sha.update(part.value);
         crc.update(part.value);
       }
+      if (size !== entry.size || sha.digest() !== entry.sha256) {
+        throw new OkfExportError("revision_integrity_failure", "streamed revision object differs from its immutable manifest");
+      }
+      return Object.freeze({ crc32: crc.digest(), markdownBytes: null });
+    } catch (error) {
+      await reader.cancel().catch(() => undefined);
+      throw error;
     } finally {
       reader.releaseLock();
     }
-    if (size !== entry.size || sha.digest() !== entry.sha256) {
-      throw new OkfExportError("revision_integrity_failure", "streamed revision object differs from its immutable manifest");
-    }
-    return Object.freeze({ crc32: crc.digest(), markdownBytes: null });
   }
 
   async #inspectBoundedMarkdownFile(
@@ -1094,18 +1115,22 @@ export class DeterministicOkfExportService {
         const part = await reader.read();
         if (part.done) break;
         if (!(part.value instanceof Uint8Array) || size + part.value.byteLength > entry.size) {
-          await reader.cancel().catch(() => undefined);
           throw new OkfExportError("revision_integrity_failure", "streamed revision object size differs from its manifest");
         }
         size += part.value.byteLength;
         sha.update(part.value);
-        await emit(part.value);
+        for (let offset = 0; offset < part.value.byteLength; offset += EXPORT_STREAM_CHUNK_BYTES) {
+          await emit(part.value.subarray(offset, offset + EXPORT_STREAM_CHUNK_BYTES));
+        }
       }
+      if (size !== entry.size || sha.digest() !== entry.sha256) {
+        throw new OkfExportError("revision_integrity_failure", "streamed revision object differs from its immutable manifest");
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => undefined);
+      throw error;
     } finally {
       reader.releaseLock();
-    }
-    if (size !== entry.size || sha.digest() !== entry.sha256) {
-      throw new OkfExportError("revision_integrity_failure", "streamed revision object differs from its immutable manifest");
     }
   }
 }

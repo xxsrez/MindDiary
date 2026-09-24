@@ -38,6 +38,57 @@ function materialized(files) {
   };
 }
 
+async function streamedOpaqueFixture(opaqueBytes, { wrongMetadata = false } = {}) {
+  const digest = new InMemoryObjectStore();
+  const markdown = file("concepts/source.md", "---\ntype: Reference\n---\n\n# Source\n");
+  const files = [
+    { ...markdown, kind: "markdown", sha256: await digest.calculateSha256(markdown.bytes) },
+    {
+      kind: "opaque",
+      path: "assets/source.bin",
+      mediaType: "application/octet-stream",
+      sha256: await digest.calculateSha256(opaqueBytes),
+      size: opaqueBytes.byteLength,
+      bytes: opaqueBytes,
+    },
+  ];
+  const envelope = {
+    revision: { spaceId: SPACE_ID, revisionId: REVISION_ID },
+    manifest: { entries: files.map(({ bytes: _bytes, ...entry }) => entry) },
+  };
+  let cancellations = 0;
+  const materializer = {
+    async materialize() { return { envelope, files }; },
+    async readRevisionEnvelope() { return envelope; },
+    async readRevisionFile(_spaceId, _revisionId, path) {
+      return path === markdown.path ? { ...files[0], bytes: new Uint8Array(markdown.bytes) } : null;
+    },
+    async openRevisionFile(_spaceId, _revisionId, path) {
+      if (path !== "assets/source.bin") return null;
+      let delivered = false;
+      const body = new ReadableStream({
+        pull(controller) {
+          if (delivered) controller.close();
+          else {
+            controller.enqueue(new Uint8Array(opaqueBytes));
+            delivered = true;
+          }
+        },
+        cancel() { cancellations += 1; },
+      }, { highWaterMark: 0 });
+      return {
+        ...files[1],
+        sha256: wrongMetadata ? PLACEHOLDER_DIGEST : files[1].sha256,
+        body,
+      };
+    },
+  };
+  return {
+    service: new DeterministicOkfExportService({ materializer, digest }),
+    get cancellations() { return cancellations; },
+  };
+}
+
 function readLocalEntries(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const entries = [];
@@ -131,7 +182,7 @@ test("same exact revision and export config produce identical ZIP bytes and hash
   assert.equal(materializeCalls, 2);
 });
 
-test("streamed exact export is byte-identical while reading only one immutable file at a time", async () => {
+test("streamed exact export is byte-identical with bounded immutable reads", async () => {
   const digest = new InMemoryObjectStore();
   const source = [
     file("zeta.md", "---\ntype: Zeta\n---\n\n# Zeta\n"),
@@ -212,8 +263,106 @@ test("streamed exact export is byte-identical while reading only one immutable f
   assert.deepEqual(bytes, bounded.bytes);
   assert.equal(streamed.sha256, bounded.sha256);
   assert.equal(streamed.size, bounded.size);
-  assert.equal(peakReads, 1);
+  assert.ok(peakReads <= 8);
   assert.ok(maxChunk <= 1_048_576);
+});
+
+test("streamed export reads at most eight Markdown files concurrently in both passes", async () => {
+  const digest = new InMemoryObjectStore();
+  const files = await Promise.all(Array.from({ length: 17 }, async (_, index) => {
+    const entry = file(
+      `concepts/file-${String(index).padStart(2, "0")}.md`,
+      `---\ntype: Reference\n---\n\n# File ${index}\n`,
+    );
+    return { ...entry, kind: "markdown", sha256: await digest.calculateSha256(entry.bytes) };
+  }));
+  const envelope = {
+    revision: { spaceId: SPACE_ID, revisionId: REVISION_ID },
+    manifest: { entries: files.map(({ bytes: _bytes, ...entry }) => entry) },
+  };
+  let activeReads = 0;
+  let peakReads = 0;
+  let readCalls = 0;
+  const readRevisionFile = async (path) => {
+    activeReads += 1;
+    readCalls += 1;
+    peakReads = Math.max(peakReads, activeReads);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      const selected = files.find((entry) => entry.path === path);
+      return selected === undefined ? null : { ...selected, bytes: new Uint8Array(selected.bytes) };
+    } finally {
+      activeReads -= 1;
+    }
+  };
+  const materializer = {
+    async materialize() { return { envelope, files }; },
+    async readRevisionEnvelope() { return envelope; },
+    async readRevisionFile(_spaceId, _revisionId, path) { return readRevisionFile(path); },
+    async openRevisionFile() { throw new Error("Markdown should use bounded reads"); },
+    async openRevisionSession() {
+      return {
+        envelope,
+        readRevisionFile,
+        async openRevisionFile() { throw new Error("Markdown should use bounded reads"); },
+      };
+    },
+  };
+  const service = new DeterministicOkfExportService({ materializer, digest });
+  const expected = await service.exportExactRevision({ spaceId: SPACE_ID, revisionId: REVISION_ID });
+  const chunks = [];
+  const actual = await service.writeExactRevision({ spaceId: SPACE_ID, revisionId: REVISION_ID }, {
+    async write(chunk) { chunks.push(new Uint8Array(chunk)); },
+  });
+  const bytes = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  assert.deepEqual(bytes, expected.bytes);
+  assert.equal(actual.sha256, expected.sha256);
+  assert.equal(readCalls, 34);
+  assert.equal(peakReads, 8);
+});
+
+test("a failed export batch drains its other object reads before rejecting", async () => {
+  const digest = new InMemoryObjectStore();
+  const files = await Promise.all(Array.from({ length: 8 }, async (_, index) => {
+    const entry = file(`concepts/batch-${index}.md`, `---\ntype: Reference\n---\n\n# ${index}\n`);
+    return { ...entry, kind: "markdown", sha256: await digest.calculateSha256(entry.bytes) };
+  }));
+  const envelope = {
+    revision: { spaceId: SPACE_ID, revisionId: REVISION_ID },
+    manifest: { entries: files.map(({ bytes: _bytes, ...entry }) => entry) },
+  };
+  let activeReads = 0;
+  let readCalls = 0;
+  let writes = 0;
+  const materializer = {
+    async materialize() { return { envelope, files }; },
+    async readRevisionEnvelope() { return envelope; },
+    async readRevisionFile(_spaceId, _revisionId, path) {
+      readCalls += 1;
+      activeReads += 1;
+      try {
+        if (path === "concepts/batch-0.md") throw new Error("injected object failure");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        const selected = files.find((entry) => entry.path === path);
+        return { ...selected, bytes: new Uint8Array(selected.bytes) };
+      } finally {
+        activeReads -= 1;
+      }
+    },
+    async openRevisionFile() { throw new Error("Markdown should use bounded reads"); },
+  };
+  const service = new DeterministicOkfExportService({ materializer, digest });
+  await assert.rejects(service.writeExactRevision({ spaceId: SPACE_ID, revisionId: REVISION_ID }, {
+    async write() { writes += 1; },
+  }));
+  assert.equal(readCalls, 8);
+  assert.equal(activeReads, 0);
+  assert.equal(writes, 0);
 });
 
 test("streamed export reuses one verified revision session for every file pass", async () => {
@@ -321,22 +470,65 @@ test("streamed export reuses one verified revision session for every file pass",
   assert.equal(sessionCalls, 1);
   assert.equal(legacyEnvelopeCalls, 0);
   assert.equal(legacyFileCalls, 0);
-  assert.deepEqual(sessionReads, ["concepts/source.md"]);
+  assert.deepEqual(sessionReads, ["concepts/source.md", "concepts/source.md"]);
   assert.deepEqual(sessionOpens, [
     "assets/source.pdf",
     "assets/source.pdf",
-    "concepts/source.md",
   ]);
 });
 
-test("streamed export keeps one contract-bounded Markdown file and never concatenates stream chunks", async () => {
+test("streamed export bounds each Markdown read and never concatenates stream chunks", async () => {
   const source = await readFile(
     new URL("../../packages/application-content/src/deterministic-export.ts", import.meta.url),
     "utf8",
   );
   assert.match(source, /MAX_EXPORT_MARKDOWN_FILE_BYTES = 1_048_576/u);
+  assert.match(source, /EXPORT_OBJECT_IO_CONCURRENCY = 8/u);
   assert.match(source, /entry\.kind === "markdown"[\s\S]{0,160}#inspectBoundedMarkdownFile/u);
   assert.doesNotMatch(source, /markdownChunks|markdownBytes\.set\(/u);
+});
+
+test("streamed opaque bodies use at most 1 MiB application chunks", async () => {
+  const opaqueBytes = new Uint8Array(2_097_169).fill(0x5a);
+  const { service } = await streamedOpaqueFixture(opaqueBytes);
+  const request = { spaceId: SPACE_ID, revisionId: REVISION_ID, profile: "MD-BUNDLE-ZIP-1" };
+  const expected = await service.exportExactRevision(request);
+  const chunks = [];
+  const actual = await service.writeExactRevision(request, {
+    async write(chunk) { chunks.push(new Uint8Array(chunk)); },
+  });
+  const bytes = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  assert.deepEqual(bytes, expected.bytes);
+  assert.equal(actual.sha256, expected.sha256);
+  assert.ok(Math.max(...chunks.map((chunk) => chunk.byteLength)) <= 1_048_576);
+  assert.deepEqual(readLocalEntries(bytes).find(({ path }) => path === "assets/source.bin").body, opaqueBytes);
+});
+
+test("opaque metadata mismatch cancels the opened body", async () => {
+  const fixture = await streamedOpaqueFixture(new Uint8Array(64).fill(0x5a), { wrongMetadata: true });
+  await assert.rejects(fixture.service.writeExactRevision({
+    spaceId: SPACE_ID, revisionId: REVISION_ID, profile: "MD-BUNDLE-ZIP-1",
+  }, { async write() {} }), (error) => error instanceof OkfExportError && error.code === "revision_integrity_failure");
+  assert.equal(fixture.cancellations, 1);
+});
+
+test("opaque sink failure cancels the active body", async () => {
+  const fixture = await streamedOpaqueFixture(new Uint8Array(64).fill(0x5a));
+  await assert.rejects(fixture.service.writeExactRevision({
+    spaceId: SPACE_ID, revisionId: REVISION_ID, profile: "MD-BUNDLE-ZIP-1",
+  }, {
+    async write(chunk) {
+      if (chunk.byteLength === 64 && chunk.every((byte) => byte === 0x5a)) {
+        throw new Error("injected sink failure");
+      }
+    },
+  }), /injected sink failure/u);
+  assert.equal(fixture.cancellations, 1);
 });
 
 test("invalid request and full-bundle validation failures are stable and produce no digest", async () => {

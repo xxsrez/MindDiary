@@ -481,6 +481,11 @@ reopens it. It never rebases or partially imports automatically.
   прохода повторно открывают только указанные в нём content objects и каждый
   раз сверяют их metadata, размер и SHA-256. Session не переживает job attempt
   и не является межзапросным manifest cache.
+- Чтение Markdown для двух проходов допускает не более восьми одновременных
+  object reads. Каждый read ограничен 1 MiB; в памяти одновременно находится
+  только одна batch, а ZIP выдаётся в стабильном порядке. Это уменьшает время
+  одного export attempt без изменения exact bytes, проверки целостности или
+  размера долговременного job state.
 - Download URLs are short-lived response-only bearer material, reauthorized
   before bytes and never durable/logged.
 - GC is mark/refcount assisted but treats committed manifests, active staging,
