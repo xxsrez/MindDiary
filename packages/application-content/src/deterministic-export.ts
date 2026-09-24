@@ -867,13 +867,42 @@ export class DeterministicOkfExportService {
       }
       catch { /* Best-effort diagnostics never affect exact export bytes. */ }
     };
-    reportProgress("inspect", 0, namedEntries.length);
+    namedEntries.sort((left, right) => compareBytes(left.nameBytes, right.nameBytes));
+    let localSize = 0;
+    for (const { entry, nameBytes } of namedEntries) {
+      localSize = checkedZipTotal(
+        localSize,
+        ZIP_LOCAL_HEADER_SIZE + nameBytes.byteLength + entry.size,
+      );
+    }
+    let centralSize = 0;
+    for (const { nameBytes } of namedEntries) {
+      centralSize = checkedZipTotal(
+        centralSize,
+        ZIP_CENTRAL_HEADER_SIZE + nameBytes.byteLength,
+      );
+    }
+    const totalSize = checkedZipTotal(
+      checkedZipTotal(localSize, centralSize),
+      ZIP_END_SIZE,
+    );
+    const digest = new IncrementalSha256();
+    let written = 0;
+    const emit = async (chunk: Uint8Array) => {
+      if (chunk.byteLength === 0) return;
+      digest.update(chunk);
+      written = checkedZipTotal(written, chunk.byteLength);
+      await sink.write(new Uint8Array(chunk));
+    };
     const streamedEntries: StreamedZipEntry[] = [];
     const conformanceErrors: OkfDiagnostic[] = [];
     let lastInspectedReport = 0;
+    let lastWrittenReport = 0;
+    reportProgress("inspect", 0, namedEntries.length);
+    reportProgress("write", 0, namedEntries.length);
     for (let offset = 0; offset < namedEntries.length;) {
-      // Opaque files may be 256 MiB and must never share an inspection batch.
-      // Only contract-bounded Markdown (and generated metadata) can overlap.
+      // Opaque files may be 256 MiB and never share an inspection batch.
+      // Verified Markdown bytes stay in memory only until this batch is written.
       let end = offset + 1;
       if (namedEntries[offset]!.entry.kind !== "opaque") {
         while (
@@ -891,8 +920,7 @@ export class DeterministicOkfExportService {
             crc32: calculateCrc32(entry.generatedBytes),
             markdownBytes: entry.generatedBytes,
           })));
-      for (let index = 0; index < batch.length; index += 1) {
-        const { entry, canonicalPath, nameBytes } = batch[index]!;
+      const ready = batch.map(({ entry, canonicalPath, nameBytes }, index) => {
         const inspected = inspections[index]!;
         if (entry.kind === "markdown") {
           const result = parseOkfFile({ path: canonicalPath, bytes: inspected.markdownBytes! });
@@ -905,7 +933,15 @@ export class DeterministicOkfExportService {
             collectOkfCrossLinkWarnings([result.file], markdownPaths);
           }
         }
-        streamedEntries.push({
+        return { entry, canonicalPath, nameBytes, inspected };
+      });
+      if (end === namedEntries.length || batch[0]!.entry.kind === "opaque" || end - lastInspectedReport >= 16) {
+        reportProgress("inspect", end, namedEntries.length);
+        lastInspectedReport = end;
+      }
+      for (let index = 0; index < batch.length; index += 1) {
+        const { entry, canonicalPath, nameBytes, inspected } = ready[index]!;
+        const zipEntry: StreamedZipEntry = {
           path: canonicalPath,
           nameBytes,
           kind: entry.kind,
@@ -914,17 +950,26 @@ export class DeterministicOkfExportService {
           size: entry.size,
           crc32: inspected.crc32,
           generatedBytes: entry.generatedBytes,
-          localOffset: 0,
-        });
+          localOffset: written,
+        };
+        await emit(streamedLocalHeader(zipEntry));
+        if (entry.kind === "markdown") {
+          for (let byteOffset = 0; byteOffset < inspected.markdownBytes!.byteLength; byteOffset += EXPORT_STREAM_CHUNK_BYTES) {
+            await emit(inspected.markdownBytes!.subarray(byteOffset, byteOffset + EXPORT_STREAM_CHUNK_BYTES));
+          }
+        } else if (entry.generatedBytes !== null) {
+          for (let byteOffset = 0; byteOffset < entry.generatedBytes.byteLength; byteOffset += EXPORT_STREAM_CHUNK_BYTES) {
+            await emit(entry.generatedBytes.subarray(byteOffset, byteOffset + EXPORT_STREAM_CHUNK_BYTES));
+          }
+        } else {
+          await this.#emitStreamedFile(parsed.spaceId, parsed.revisionId, zipEntry, emit, session);
+        }
+        streamedEntries.push(zipEntry);
       }
       offset = end;
-      if (
-        end === namedEntries.length ||
-        batch[0]!.entry.kind === "opaque" ||
-        end - lastInspectedReport >= 16
-      ) {
-        reportProgress("inspect", end, namedEntries.length);
-        lastInspectedReport = end;
+      if (end === namedEntries.length || batch[0]!.entry.kind === "opaque" || end - lastWrittenReport >= 16) {
+        reportProgress("write", end, namedEntries.length);
+        lastWrittenReport = end;
       }
     }
     if (conformanceErrors.length > 0) {
@@ -934,71 +979,8 @@ export class DeterministicOkfExportService {
         conformanceErrors,
       );
     }
-
-    streamedEntries.sort((left, right) => compareBytes(left.nameBytes, right.nameBytes));
-    let localSize = 0;
-    for (const entry of streamedEntries) {
-      entry.localOffset = localSize;
-      localSize = checkedZipTotal(
-        localSize,
-        ZIP_LOCAL_HEADER_SIZE + entry.nameBytes.byteLength + entry.size,
-      );
-    }
-    let centralSize = 0;
-    for (const entry of streamedEntries) {
-      centralSize = checkedZipTotal(
-        centralSize,
-        ZIP_CENTRAL_HEADER_SIZE + entry.nameBytes.byteLength,
-      );
-    }
-    const totalSize = checkedZipTotal(
-      checkedZipTotal(localSize, centralSize),
-      ZIP_END_SIZE,
-    );
-    const digest = new IncrementalSha256();
-    let written = 0;
-    const emit = async (chunk: Uint8Array) => {
-      if (chunk.byteLength === 0) return;
-      digest.update(chunk);
-      written = checkedZipTotal(written, chunk.byteLength);
-      await sink.write(new Uint8Array(chunk));
-    };
-    reportProgress("write", 0, streamedEntries.length);
-    let lastWrittenReport = 0;
-    for (let offset = 0; offset < streamedEntries.length; offset += EXPORT_OBJECT_IO_CONCURRENCY) {
-      const batch = streamedEntries.slice(offset, offset + EXPORT_OBJECT_IO_CONCURRENCY);
-      const includesOpaque = batch.some((entry) => entry.kind === "opaque");
-      if (includesOpaque) reportProgress("write", offset, streamedEntries.length);
-      const markdownFiles = await settleExportBatch(batch.map((entry) => entry.kind === "markdown"
-        ? this.#inspectBoundedMarkdownFile(parsed.spaceId, parsed.revisionId, entry, session)
-        : null));
-      for (let index = 0; index < batch.length; index += 1) {
-        const entry = batch[index]!;
-        await emit(streamedLocalHeader(entry));
-        const markdown = markdownFiles[index];
-        if (markdown !== null && markdown !== undefined) {
-          if (markdown.crc32 !== entry.crc32) {
-            throw new OkfExportError(
-              "revision_integrity_failure",
-              "exact revision object changed between export passes",
-            );
-          }
-          for (let byteOffset = 0; byteOffset < markdown.markdownBytes.byteLength; byteOffset += EXPORT_STREAM_CHUNK_BYTES) {
-            await emit(markdown.markdownBytes.subarray(byteOffset, byteOffset + EXPORT_STREAM_CHUNK_BYTES));
-          }
-        } else if (entry.generatedBytes !== null) {
-          for (let byteOffset = 0; byteOffset < entry.generatedBytes.byteLength; byteOffset += EXPORT_STREAM_CHUNK_BYTES) {
-            await emit(entry.generatedBytes.subarray(byteOffset, byteOffset + EXPORT_STREAM_CHUNK_BYTES));
-          }
-        } else {
-          await this.#emitStreamedFile(parsed.spaceId, parsed.revisionId, entry, emit, session);
-        }
-      }
-      const completed = offset + batch.length;
-      if (includesOpaque || completed === streamedEntries.length || completed - lastWrittenReport >= 16) {
-        reportProgress("write", completed, streamedEntries.length);
-        lastWrittenReport = completed;
-      }
+    if (written !== localSize) {
+      throw new OkfExportError("revision_integrity_failure", "streamed ZIP local size differs from its plan");
     }
     for (const entry of streamedEntries) await emit(streamedCentralHeader(entry));
     await emit(streamedEndRecord(streamedEntries.length, centralSize, localSize));

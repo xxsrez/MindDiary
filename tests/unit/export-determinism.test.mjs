@@ -267,7 +267,7 @@ test("streamed exact export is byte-identical with bounded immutable reads", asy
   assert.ok(maxChunk <= 1_048_576);
 });
 
-test("streamed export reads at most eight Markdown files concurrently in both passes", async () => {
+test("streamed export reads each Markdown file once in batches of at most eight", async () => {
   const digest = new InMemoryObjectStore();
   const files = await Promise.all(Array.from({ length: 17 }, async (_, index) => {
     const entry = file(
@@ -323,14 +323,14 @@ test("streamed export reads at most eight Markdown files concurrently in both pa
   }
   assert.deepEqual(bytes, expected.bytes);
   assert.equal(actual.sha256, expected.sha256);
-  assert.equal(readCalls, 34);
+  assert.equal(readCalls, 17);
   assert.equal(peakReads, 8);
   assert.deepEqual(progress, [
     { phase: "inspect", completedEntries: 0, totalEntries: 17 },
-    { phase: "inspect", completedEntries: 16, totalEntries: 17 },
-    { phase: "inspect", completedEntries: 17, totalEntries: 17 },
     { phase: "write", completedEntries: 0, totalEntries: 17 },
+    { phase: "inspect", completedEntries: 16, totalEntries: 17 },
     { phase: "write", completedEntries: 16, totalEntries: 17 },
+    { phase: "inspect", completedEntries: 17, totalEntries: 17 },
     { phase: "write", completedEntries: 17, totalEntries: 17 },
   ]);
 });
@@ -374,7 +374,43 @@ test("a failed export batch drains its other object reads before rejecting", asy
   assert.equal(writes, 0);
 });
 
-test("streamed export reuses one verified revision session for every file pass", async () => {
+test("late OKF failure rejects the streamed export after bounded private writes", async () => {
+  const digest = new InMemoryObjectStore();
+  const files = await Promise.all(Array.from({ length: 9 }, async (_, index) => {
+    const entry = file(
+      `concepts/file-${String(index).padStart(2, "0")}.md`,
+      `---\ntype: Reference\n${index === 8 ? "acl: [reader]\n" : ""}---\n\n# File ${index}\n`,
+    );
+    return { ...entry, kind: "markdown", sha256: await digest.calculateSha256(entry.bytes) };
+  }));
+  const envelope = {
+    revision: { spaceId: SPACE_ID, revisionId: REVISION_ID },
+    manifest: { entries: files.map(({ bytes: _bytes, ...entry }) => entry) },
+  };
+  const service = new DeterministicOkfExportService({
+    materializer: {
+      async materialize() { return { envelope, files }; },
+      async readRevisionEnvelope() { return envelope; },
+      async readRevisionFile(_spaceId, _revisionId, path) {
+        const selected = files.find((entry) => entry.path === path);
+        return selected === undefined ? null : { ...selected, bytes: new Uint8Array(selected.bytes) };
+      },
+      async openRevisionFile() { throw new Error("Markdown should use bounded reads"); },
+    },
+    digest,
+  });
+  const chunks = [];
+  await assert.rejects(service.writeExactRevision({ spaceId: SPACE_ID, revisionId: REVISION_ID }, {
+    async write(chunk) { chunks.push(new Uint8Array(chunk)); },
+  }), (error) => error instanceof OkfExportError &&
+    error.code === "okf_validation_failed" &&
+    error.diagnostics.some((diagnostic) => diagnostic.code === "forbidden_service_metadata"));
+  assert.ok(chunks.length > 0, "earlier private ZIP parts may be staged before later validation fails");
+  assert.notEqual(new DataView(chunks.at(-1).buffer).getUint32(0, true), 0x06054b50,
+    "a failed export must not emit the ZIP end record");
+});
+
+test("streamed export reuses one verified revision session for Markdown and opaque reads", async () => {
   const digest = new InMemoryObjectStore();
   const markdown = file("concepts/source.md", "---\ntype: Reference\n---\n\n# Source\n");
   const opaqueBytes = Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
@@ -479,7 +515,7 @@ test("streamed export reuses one verified revision session for every file pass",
   assert.equal(sessionCalls, 1);
   assert.equal(legacyEnvelopeCalls, 0);
   assert.equal(legacyFileCalls, 0);
-  assert.deepEqual(sessionReads, ["concepts/source.md", "concepts/source.md"]);
+  assert.deepEqual(sessionReads, ["concepts/source.md"]);
   assert.deepEqual(sessionOpens, [
     "assets/source.pdf",
     "assets/source.pdf",

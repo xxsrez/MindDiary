@@ -477,16 +477,16 @@ reopens it. It never rebases or partially imports automatically.
 - Export is exact-revision, asynchronous and streaming/batched into R2; archive
   bytes never enter JSON-RPC or whole Worker memory.
 - Один export job открывает request-scoped exact-revision session: canonical
-  manifest читается и проверяется один раз, после чего оба deterministic ZIP
-  прохода повторно открывают только указанные в нём content objects и каждый
-  раз сверяют их metadata, размер и SHA-256. Session не переживает job attempt
-  и не является межзапросным manifest cache.
-- Чтение Markdown для двух проходов допускает не более восьми одновременных
-  object reads. Каждый read ограничен 1 MiB; в памяти одновременно находится
-  только одна batch, а ZIP выдаётся в стабильном порядке. Это уменьшает время
-  одного export attempt без изменения exact bytes, проверки целостности или
-  размера долговременного job state. Opaque objects читаются по одному и не
-  пересекаются с параллельной Markdown batch.
+  manifest читается и проверяется один раз. Markdown читается и проверяется
+  по размеру, SHA-256 и OKF в batch до восьми файлов; проверенные bytes той же
+  batch сразу идут в deterministic ZIP без второго object read. В памяти
+  одновременно находится только одна Markdown batch, каждый файл не больше
+  1 MiB, а ZIP выдаётся в стабильном порядке. Opaque objects проверяются и
+  записываются последовательными stream reads, без пересечения с Markdown
+  batch. Session не переживает job attempt и не является межзапросным cache.
+  До полной проверки exact revision и текущего доступа archive manifest не
+  публикуется; неудачный attempt оставляет лишь недоступные читателю temporary
+  parts до штатной cleanup. Размер долговременного job state не меняется.
 - Фоновая сборка export публикует best-effort progress только с закрытой фазой,
   числом обработанных файлов и общим числом файлов, opaque job ID и номером
   fenced claim. В лог не попадают пути, content, archive bytes, access tokens и
