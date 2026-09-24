@@ -598,7 +598,12 @@ test("export progress observer failures cannot alter the archive", async () => {
   let reports = 0;
   const actual = await service.writeExactRevision(request, {
     async write(chunk) { chunks.push(new Uint8Array(chunk)); },
-  }, () => { reports += 1; throw new Error("telemetry unavailable"); });
+  }, () => {
+    reports += 1;
+    if (reports % 2 === 0) return Promise.reject(new Error("telemetry unavailable"));
+    throw new Error("telemetry unavailable");
+  });
+  await new Promise((resolve) => setImmediate(resolve));
   const bytes = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }

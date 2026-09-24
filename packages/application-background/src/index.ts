@@ -1273,7 +1273,7 @@ export interface DeterministicExportBuilder {
     phase: "inspect" | "write";
     completedEntries: number;
     totalEntries: number;
-  }>) => void): Promise<{
+  }>) => void | PromiseLike<void>): Promise<{
     readonly revisionId: RevisionId;
     readonly archiveFormat: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
     readonly mediaType: "application/zip";
@@ -1329,7 +1329,7 @@ export class ExportJobHandler {
   readonly #clock: Clock;
   readonly #retryDelayMs: number;
   readonly #claimLeaseMs: number;
-  readonly #onProgress: ((event: ExportJobProgressEvent) => void) | null;
+  readonly #onProgress: ((event: ExportJobProgressEvent) => void | PromiseLike<void>) | null;
 
   constructor(dependencies: {
     readonly jobs: ExportJobStore;
@@ -1339,7 +1339,7 @@ export class ExportJobHandler {
     readonly clock: Clock;
     readonly retryDelayMs?: number;
     readonly claimLeaseMs?: number;
-    readonly onProgress?: (event: ExportJobProgressEvent) => void;
+    readonly onProgress?: (event: ExportJobProgressEvent) => void | PromiseLike<void>;
   }) {
     this.#jobs = dependencies.jobs;
     this.#backgroundAuthorizer = dependencies.backgroundAuthorizer;
@@ -1378,13 +1378,14 @@ export class ExportJobHandler {
     const job = claim.job;
     const report = (stage: ExportJobProgressStage, completedEntries = 0, totalEntries = 0) => {
       try {
-        this.#onProgress?.(Object.freeze({
+        const observation = this.#onProgress?.(Object.freeze({
           jobId: job.jobId,
           claimVersion: job.version,
           stage,
           completedEntries,
           totalEntries,
         }));
+        if (observation !== undefined) void Promise.resolve(observation).catch(() => undefined);
       } catch { /* Diagnostics cannot affect a durable export. */ }
     };
     report("claimed");

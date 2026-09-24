@@ -729,7 +729,7 @@ export class DeterministicOkfExportService {
   async writeExactRevision(
     request: unknown,
     sink: DeterministicExportChunkSink,
-    onProgress?: (progress: DeterministicExportProgress) => void,
+    onProgress?: (progress: DeterministicExportProgress) => void | PromiseLike<void>,
   ): Promise<StreamedDeterministicOkfExport> {
     if (typeof sink?.write !== "function") {
       throw new OkfExportError("invalid_request", "export chunk sink is required");
@@ -861,7 +861,10 @@ export class DeterministicOkfExportService {
       return { entry, canonicalPath, nameBytes };
     });
     const reportProgress = (phase: DeterministicExportProgress["phase"], completedEntries: number, totalEntries: number) => {
-      try { onProgress?.(Object.freeze({ phase, completedEntries, totalEntries })); }
+      try {
+        const observation = onProgress?.(Object.freeze({ phase, completedEntries, totalEntries }));
+        if (observation !== undefined) void Promise.resolve(observation).catch(() => undefined);
+      }
       catch { /* Best-effort diagnostics never affect exact export bytes. */ }
     };
     reportProgress("inspect", 0, namedEntries.length);

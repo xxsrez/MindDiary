@@ -134,6 +134,7 @@ import {
   createBoundedInMemoryIngressAdapter,
   type BoundedInMemoryIngressPort,
 } from "./bounded-in-memory-ingress.js";
+import { serializeSafeExportProgress } from "./export-progress-log.js";
 import {
   createOpenAiFileParameterComposition,
   createVerifiedNativeFileParameterComposition,
@@ -1908,27 +1909,8 @@ export async function createProductSiteRuntime(
     archives: objects,
     clock,
     onProgress: (event) => {
-      const jobId = String(event.jobId);
-      if (
-        !/^[A-Za-z0-9._:-]{1,128}$/u.test(jobId) ||
-        ![
-          "claimed", "authorized", "upload_opened", "inspect", "write",
-          "archive_built", "archive_stored", "completed", "failed",
-        ].includes(event.stage) ||
-        !Number.isSafeInteger(event.claimVersion) ||
-        !Number.isSafeInteger(event.completedEntries) ||
-        !Number.isSafeInteger(event.totalEntries) ||
-        event.completedEntries < 0 || event.completedEntries > event.totalEntries ||
-        event.totalEntries > 65_535
-      ) return;
-      console.info(JSON.stringify({
-        event: "mind-diary-export-progress",
-        jobId,
-        claimVersion: event.claimVersion,
-        stage: event.stage,
-        completedEntries: event.completedEntries,
-        totalEntries: event.totalEntries,
-      }));
+      const line = serializeSafeExportProgress(event);
+      if (line !== null) console.info(line);
     },
   });
   const auditJobs = new AuditOutboxDeliveryHandler({ work: metadata, audit, clock });

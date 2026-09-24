@@ -369,11 +369,15 @@ test("reconstructed worker builds the exact archive into object storage and stat
   assert.equal(started.kind, "started");
 
   const progress = [];
-  const handled = await env.worker(env.builder, (event) => progress.push(event)).handle({
+  const handled = await env.worker(env.builder, (event) => {
+    progress.push(event);
+    return Promise.reject(new Error("diagnostics unavailable"));
+  }).handle({
     actor: workerActor(),
     jobId: started.job.jobId,
   });
   assert.deepEqual(handled, { kind: "completed" });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(progress[0].stage, "claimed");
   assert.equal(progress.at(-1).stage, "completed");
   assert.ok(progress.some((event) => event.stage === "inspect"));
