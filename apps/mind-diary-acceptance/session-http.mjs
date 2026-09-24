@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory, recoverRunOrphans) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -85,6 +85,10 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     if (cleanupRoute && request.method === "POST" && cleanup) {
       if (Object.keys(await body(request)).length !== 0) return json({ error: "invalid_request" }, 400);
       return json(await cleanup(cleanupRoute[1]));
+    }
+    const orphanRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/orphan-cleanup$/.exec(pathname);
+    if (orphanRoute && request.method === "POST" && recoverRunOrphans) {
+      return json(await recoverRunOrphans(orphanRoute[1], await body(request)));
     }
     if (pathname === "/_acceptance/runs" && request.method === "POST") {
       return json(projection(await store.create(await body(request), request.headers.get("idempotency-key"))));
