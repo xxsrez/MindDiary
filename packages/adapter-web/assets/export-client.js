@@ -59,6 +59,7 @@
   let volatileDownload = null;
   let polling = 0;
   let pollTimer = null;
+  let pollEpoch = 0;
 
   const readStored = () => {
     try {
@@ -104,9 +105,19 @@
     jobId: null,
   });
   const clearPoll = () => {
+    pollEpoch += 1;
     if (pollTimer !== null) window.clearTimeout(pollTimer);
     pollTimer = null;
     polling = 0;
+  };
+  const schedulePoll = (delayMs) => {
+    const epoch = pollEpoch;
+    const timer = window.setTimeout(() => {
+      if (pollEpoch !== epoch || pollTimer !== timer) return;
+      pollTimer = null;
+      void checkStatus(true);
+    }, delayMs);
+    pollTimer = timer;
   };
   const resetReceipt = () => {
     volatileDownload = null;
@@ -221,7 +232,7 @@
         shown(newButton, false);
         if (automatic && polling < 3) {
           polling += 1;
-          pollTimer = window.setTimeout(() => { pollTimer = null; void checkStatus(true); }, 5000);
+          schedulePoll(5000);
         } else if (automatic) {
           say("Export is still running. Use Check status, or submit Start export again to resume this exact job; the page will not poll indefinitely.");
         }
@@ -386,7 +397,7 @@
     } finally {
       setBusy(false);
     }
-    if (shouldCheck) pollTimer = window.setTimeout(() => { pollTimer = null; void checkStatus(true); }, 10_000);
+    if (shouldCheck) schedulePoll(10_000);
   });
   checkButton?.addEventListener("click", () => { clearPoll(); polling = 0; void checkStatus(true); });
   newButton?.addEventListener("click", startAnother);
@@ -416,7 +427,7 @@
       showJob(saved.selector.kind === "revision" ? saved.selector.revisionId : headRevision, "Recovering status");
       say("Recovering the actor-owned export status without starting another job…");
       polling = 0;
-      pollTimer = window.setTimeout(() => { pollTimer = null; void checkStatus(true); }, 10_000);
+      schedulePoll(10_000);
     } else {
       say("A previous start result was not confirmed. Submit again to reuse the same idempotent request.");
     }

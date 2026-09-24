@@ -87,6 +87,23 @@ test("current revision recovers without duplicate and independently verifies sav
   await expect(page.locator("[data-export-download-status]")).toContainText("Verified");
 });
 
+test("replaying a start cancels the earlier status timer", async ({ page }) => {
+  const statusReadTimes = [];
+  page.on("request", (request) => {
+    if (request.method() === "GET" && request.url().includes("/api/v1/export-jobs/")) statusReadTimes.push(Date.now());
+  });
+  await page.goto(`${origin}/research-notes`);
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.locator("[data-export-status]")).toContainText("Export started");
+  await page.waitForTimeout(7_500);
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.locator("[data-export-status]")).toContainText("Recovered the existing export");
+  await page.waitForTimeout(3_500);
+  expect(statusReadTimes).toHaveLength(0);
+  await ready(page);
+  expect((await state())).toMatchObject({ startRequests: 2, uniqueStartKeys: 1, uniqueJobs: 1 });
+});
+
 test("historical mixed revision requires explicit bundle and unknown start replays once", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
   await page.getByLabel("Exact historical revision").check();
