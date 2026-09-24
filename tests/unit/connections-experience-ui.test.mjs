@@ -33,12 +33,10 @@ const MINDS = Object.freeze([
 ]);
 
 test("copy-ready ChatGPT instructions fit the smallest supported field budget", () => {
-  assert.ok(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS.length <= 1_500);
-  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /get_mind_diary_guidance once per version/u);
-  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /Refresh list_minds before writing/u);
-  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /preflight_changeset, then commit_changeset/u);
-  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /every matching Mind/u);
-  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /this text grants no authority/u);
+  assert.ok(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS.length <= 500);
+  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /перед обращением к интернету проверь Mind Diary UAT/u);
+  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /В запланированных и фоновых задачах Mind Diary не используй/u);
+  assert.match(MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS, /Записывай туда только по моей прямой просьбе/u);
 });
 
 function detail(overrides = {}) {
