@@ -67,6 +67,7 @@ class FakeD1Database {
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
   principalActivities = new Map();
+  preflightProofs = new Map();
   localFileUploadIntents = new Map();
   search = new Map();
   searchDocuments = new Map();
@@ -168,6 +169,42 @@ class FakeD1Database {
         payload_json: values[3],
       });
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-preflight-proof-evict*/")) {
+      if (this.backupControl?.backup_sequence !== Number(values[2])) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      const foreign = [...this.preflightProofs.values()].filter((row) =>
+        row.space_id !== values[0]);
+      if (foreign.length < 128 &&
+          foreign.reduce((total, row) => total + row.byte_size, 0) + Number(values[1]) <= 8_000_000) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      const changes = this.preflightProofs.size;
+      this.preflightProofs.clear();
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-preflight-proof-upsert*/")) {
+      const expected = Number(values[4]);
+      if (this.backupControl?.backup_sequence !== expected ||
+          (this.metadataEvents.at(-1)?.sequence ?? 0) !== expected) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      this.preflightProofs.set(values[0], {
+        space_id: values[0], payload_json: values[1],
+        byte_size: Number(values[2]), updated_at: values[3],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-preflight-proof-purge-committed*/")) {
+      const event = this.metadataEvents.find((row) => row.sequence === Number(values[0]));
+      if (event?.target !== values[1] || event?.operation !== values[2] ||
+          event?.payload_json !== values[3]) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      const changes = this.preflightProofs.size;
+      this.preflightProofs.clear();
+      return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-backup-sequence-advance*/")) {
       const [sequence, invalidates, expected, target, operation, payload] = values;
@@ -483,6 +520,10 @@ class FakeD1Database {
   }
 
   async all(sql, values) {
+    if (sql.includes("/*md-preflight-proof-read*/")) {
+      const row = this.preflightProofs.get(values[0]);
+      return { success: true, results: row === undefined ? [] : [{ payload_json: row.payload_json }] };
+    }
     if (sql.includes("/*md-upload-intent-read-namespace*/")) {
       const row = [...this.localFileUploadIntents.values()].find(
         (candidate) => candidate.namespace_hash === values[0],

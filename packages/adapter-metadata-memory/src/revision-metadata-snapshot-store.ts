@@ -31,6 +31,7 @@ export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStor
         v: 6,
         spaces: new Map(this._spaces),
         revisionsById: new Map(this._revisionsById),
+        preflightProducerProofs: new Map(this._preflightProducerProofs),
         objectReachabilityCounts: Object.freeze({
           immutable: new Map(reachabilityCounts.immutable),
           bundle: new Map(reachabilityCounts.bundle),

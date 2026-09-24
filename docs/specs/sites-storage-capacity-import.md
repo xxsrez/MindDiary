@@ -204,6 +204,14 @@ Accounting не читает content bodies и использует manifest/obj
 - `temporary_bytes`: active staging/import/export objects плюс pending cleanup.
 - `d1_metadata_bytes`: measured/estimated rows for canonical metadata, jobs,
   ledger and indexes; private text fields отсутствуют.
+- Pending producer-preflight proofs являются disposable acceleration metadata:
+  не более 1 MB на proof, 8 MB и 128 proofs на Site. При заполнении весь
+  disposable cache очищается перед записью нового proof; oversized proof не
+  сохраняется, поэтому последующая validation может повторить полный анализ
+  из канонической revision. Sites держит их в отдельной перезаписываемой D1
+  таблице вне canonical event log и snapshots; successful whole-Mind/account
+  deletion атомарно очищает эту таблицу. Эта жёсткая граница удерживает proofs
+  вне основного committed-capacity ledger без неограниченного расхода D1.
 - `reserved_bytes`: worst-case growth active admitted operations, не уже
   committed usage.
 

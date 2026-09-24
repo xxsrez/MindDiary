@@ -33,6 +33,7 @@ import {
 } from "@mind-diary/composition-root";
 import {
   CapabilityAuthorizer,
+  PRODUCER_VALIDATION_CERTIFICATE_SCHEMA,
   REVISION_MANIFEST_MEDIA_TYPE,
 } from "@mind-diary/application-ports";
 
@@ -88,6 +89,82 @@ test("Sites metadata reconstructs durable capacity reservations after isolate re
   assert.equal(reservations.length, 1);
   assert.equal(reservations[0].reservationId, "capacity:restart:one");
   assert.equal(reservations[0].state, "active");
+});
+
+test("Sites metadata persists one exact preflight proof and purges it with its Space", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({ database, bucket: new FakeR2Bucket() });
+  const app = services(boundary, ids());
+  const owner = await app.bootstrap.bootstrapAccount(preRegistrationActor(130), {
+    action: "create_isolated_account",
+  });
+  const mind = await app.ordinary.createSpaceWithOwner(
+    actor(owner.principalId, "request_preflight_proof_mind", T0),
+    { name: "Preflight proof", handle: "preflight-proof", idempotencyKey: "preflight-proof" },
+  );
+  const base = await boundary.metadata.readRevision(mind.mindId, mind.headRevisionId);
+  assert.ok(base);
+  const proof = {
+    spaceId: mind.mindId,
+    baseRevisionId: mind.headRevisionId,
+    baseManifestHash: base.revision.manifestHash,
+    candidateFingerprint: SHA_A,
+    certificate: {
+      schema: PRODUCER_VALIDATION_CERTIFICATE_SCHEMA,
+      spaceId: mind.mindId,
+      manifestFingerprint: SHA_A,
+      rulesVersion: "test-rule",
+      profileVersion: "test-profile",
+      dependencyFingerprint: SHA_A,
+      files: [],
+    },
+  };
+  const canonicalEventCount = database.metadataEvents.length;
+  assert.equal(await boundary.metadata.storePreflightProducerProof(proof), true);
+  for (let index = 0; index < 24; index += 1) {
+    assert.equal(await boundary.metadata.storePreflightProducerProof({
+      ...proof,
+      candidateFingerprint: `sha256:${index.toString(16).padStart(64, "0")}`,
+    }), true);
+  }
+  assert.equal(await boundary.metadata.storePreflightProducerProof(proof), true);
+  assert.equal(await boundary.metadata.storePreflightProducerProof({
+    ...proof,
+    candidateFingerprint: `sha256:${"1".repeat(64)}`,
+    certificate: { ...proof.certificate, files: ["x".repeat(1_100_000)] },
+  }), false);
+  assert.equal(database.preflightProofs.size, 1);
+  assert.equal(database.metadataEvents.length, canonicalEventCount);
+  for (let index = 0; index < 128; index += 1) {
+    database.preflightProofs.set(`space_foreign_${index}`, {
+      space_id: `space_foreign_${index}`,
+      payload_json: "{}",
+      byte_size: 64,
+      updated_at: T0,
+    });
+  }
+  assert.equal(await boundary.metadata.storePreflightProducerProof(proof), true);
+  assert.equal(database.preflightProofs.size, 1);
+  assert.equal(database.metadataEvents.length, canonicalEventCount);
+  for (let index = 0; index < 8; index += 1) {
+    database.preflightProofs.set(`space_large_${index}`, {
+      space_id: `space_large_${index}`,
+      payload_json: "{}",
+      byte_size: 1_000_000,
+      updated_at: T0,
+    });
+  }
+  assert.equal(await boundary.metadata.storePreflightProducerProof(proof), true);
+  assert.equal(database.preflightProofs.size, 1);
+  assert.equal(database.metadataEvents.length, canonicalEventCount);
+  const restarted = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  assert.deepEqual(await restarted.metadata.readPreflightProducerProof(mind.mindId), proof);
+  await restarted.metadata.purgeSpaceTargetRecords(mind.mindId);
+  const afterPurge = await createSitesMetadataStore(database);
+  assert.equal(await afterPurge.readPreflightProducerProof(mind.mindId), null);
 });
 
 test("Sites metadata atomically retires an expired heavy reservation after isolate restart", async () => {
@@ -271,6 +348,7 @@ class FakeD1Database {
   metadataSnapshotChunks = new Map();
   metadataSnapshotWriteCount = 0;
   principalActivities = new Map();
+  preflightProofs = new Map();
   metadataReadLog = [];
   maxBoundStringLength = Number.POSITIVE_INFINITY;
   searchWriteParameterCounts = [];
@@ -322,6 +400,7 @@ class FakeD1Database {
       principalActivities: new Map(
         [...this.principalActivities].map(([key, value]) => [key, { ...value }]),
       ),
+      preflightProofs: new Map([...this.preflightProofs].map(([key, value]) => [key, { ...value }])),
       search: new Map(this.search),
       searchDocuments: new Map([...this.searchDocuments].map(([key, value]) => [key, { ...value }])),
       searchMemberships: new Map([...this.searchMemberships].map(([key, value]) => [key, { ...value }])),
@@ -346,6 +425,7 @@ class FakeD1Database {
       this.metadataSnapshotHead = before.metadataSnapshotHead;
       this.metadataSnapshotChunks = before.metadataSnapshotChunks;
       this.principalActivities = before.principalActivities;
+      this.preflightProofs = before.preflightProofs;
       this.search = before.search;
       this.searchDocuments = before.searchDocuments;
       this.searchMemberships = before.searchMemberships;
@@ -488,6 +568,42 @@ class FakeD1Database {
         else throw error;
       }
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-preflight-proof-evict*/")) {
+      if (this.backupControl.backup_sequence !== Number(values[2])) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      const foreign = [...this.preflightProofs.values()].filter((row) =>
+        row.space_id !== values[0]);
+      if (foreign.length < 128 &&
+          foreign.reduce((total, row) => total + row.byte_size, 0) + Number(values[1]) <= 8_000_000) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      const changes = this.preflightProofs.size;
+      this.preflightProofs.clear();
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-preflight-proof-upsert*/")) {
+      const expected = Number(values[4]);
+      if (this.backupControl.backup_sequence !== expected ||
+          (this.metadataEvents.at(-1)?.sequence ?? 0) !== expected) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      this.preflightProofs.set(values[0], {
+        space_id: values[0], payload_json: values[1],
+        byte_size: Number(values[2]), updated_at: values[3],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-preflight-proof-purge-committed*/")) {
+      const event = this.metadataEvents.find((row) => row.sequence === Number(values[0]));
+      if (event?.target !== values[1] || event?.operation !== values[2] ||
+          event?.payload_json !== values[3]) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      const changes = this.preflightProofs.size;
+      this.preflightProofs.clear();
+      return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-backup-sequence-advance*/")) {
       const [sequence, invalidates, expected, target, operation, payload] = values;
@@ -812,6 +928,10 @@ class FakeD1Database {
   }
 
   async all(sql, values) {
+    if (sql.includes("/*md-preflight-proof-read*/")) {
+      const row = this.preflightProofs.get(values[0]);
+      return { success: true, results: row === undefined ? [] : [{ payload_json: row.payload_json }] };
+    }
     if (sql.includes("/*md-upload-intent-collect-expired*/")) {
       this.#assertUploadIntentSchema();
       return { success: true, results: [] };
@@ -3424,6 +3544,25 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
       idempotencyKey: "create-restartable-deletion",
     },
   );
+  const proofFor = (spaceId, baseRevisionId, baseManifestHash) => ({
+    spaceId,
+    baseRevisionId,
+    baseManifestHash,
+    candidateFingerprint: SHA_A,
+    certificate: {
+      schema: PRODUCER_VALIDATION_CERTIFICATE_SCHEMA,
+      spaceId,
+      manifestFingerprint: SHA_A,
+      rulesVersion: "test-rule",
+      profileVersion: "test-profile",
+      dependencyFingerprint: SHA_A,
+      files: [],
+    },
+  });
+  const mindBase = await boundary.metadata.readRevision(mind.mindId, mind.headRevisionId);
+  assert.equal(await boundary.metadata.storePreflightProducerProof(
+    proofFor(mind.mindId, mind.headRevisionId, mindBase.revision.manifestHash)), true);
+  assert.equal(database.preflightProofs.size, 1);
   const mindBackupEpoch = database.backupControl.invalidation_epoch;
   database.backupSessions.set("mind-session", { status: "ready" });
 
@@ -3471,6 +3610,10 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
     /deletion cleanup is incomplete/iu,
   );
   assert.equal(await boundary.metadata.inspectOrdinaryMindStateForTest(mind.mindId), null);
+  assert.equal(database.preflightProofs.size, 0);
+  assert.equal(await boundary.metadata.storePreflightProducerProof(
+    proofFor(mind.mindId, mind.headRevisionId, mindBase.revision.manifestHash)), false);
+  assert.equal(database.preflightProofs.size, 0);
   assert.equal((await boundary.metadata.inspectDeletionCleanupForTest()).length, 1);
   assert.equal(database.backupControl.invalidation_epoch, mindBackupEpoch + 1);
   assert.equal(database.backupSessions.get("mind-session").status, "invalidated");
@@ -3518,6 +3661,13 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
     host: HOST,
   };
   const accountDeletion = new AccountDeletionService(accountDeletionOptions);
+  const accountRecord = await boundary.metadata.readAccount(owner.principalId);
+  const personalSpaceId = accountRecord.personalMind.space.spaceId;
+  const personalBaseRevisionId = accountRecord.personalMind.space.headRevisionId;
+  const personalBase = await boundary.metadata.readRevision(personalSpaceId, personalBaseRevisionId);
+  assert.equal(await boundary.metadata.storePreflightProducerProof(
+    proofFor(personalSpaceId, personalBaseRevisionId, personalBase.revision.manifestHash)), true);
+  assert.equal(database.preflightProofs.size, 1);
   const accountBackupEpoch = database.backupControl.invalidation_epoch;
   database.backupSessions.set("account-session", { status: "ready" });
   await boundary.metadata.recordPrincipalActivity({
@@ -3543,6 +3693,10 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
     /deletion cleanup is incomplete/iu,
   );
   assert.equal(await boundary.metadata.readAccount(owner.principalId), null);
+  assert.equal(database.preflightProofs.size, 0);
+  assert.equal(await boundary.metadata.storePreflightProducerProof(
+    proofFor(personalSpaceId, personalBaseRevisionId, personalBase.revision.manifestHash)), false);
+  assert.equal(database.preflightProofs.size, 0);
   assert.equal(database.principalActivities.size, 0);
   assert.equal((await boundary.metadata.inspectAccountDeletionCleanupForTest()).length, 1);
   assert.equal(database.backupControl.invalidation_epoch, accountBackupEpoch + 1);

@@ -92,6 +92,24 @@ export interface ProducerValidationCertificate {
   readonly files: readonly Readonly<ProducerValidationFileSummary>[];
 }
 
+/**
+ * Proof of a validated, uncommitted result. It belongs to the exact candidate,
+ * not to the unchanged parent revision. Only one pending proof per Space needs
+ * retention; a different candidate safely falls back to validation.
+ */
+export interface PreflightProducerProof {
+  readonly spaceId: SpaceId;
+  readonly baseRevisionId: RevisionId;
+  readonly baseManifestHash: Sha256Digest;
+  readonly candidateFingerprint: Sha256Digest;
+  readonly certificate: Readonly<Omit<ProducerValidationCertificate, "revisionId">>;
+}
+
+export interface PreflightProducerProofStore {
+  readPreflightProducerProof(spaceId: SpaceId): Promise<Readonly<PreflightProducerProof> | null>;
+  storePreflightProducerProof(proof: Readonly<PreflightProducerProof>): Promise<boolean>;
+}
+
 export type RevisionWithProducerValidationCertificate =
   CanonicalRevisionEnvelope["revision"] & {
     readonly producerCertificate?: Readonly<ProducerValidationCertificate>;
@@ -772,6 +790,7 @@ export interface ContentCommitMetadataTransaction
 /** Atomic metadata boundary for one application-level content commit. */
 export interface ContentCommitMetadataStore
   extends RevisionMetadataStore,
+    PreflightProducerProofStore,
     PrincipalMindUsageReader,
     BackgroundWorkStore,
     BundleFileStagingStore,

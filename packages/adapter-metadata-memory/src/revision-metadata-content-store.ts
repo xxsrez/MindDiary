@@ -30,6 +30,7 @@ import type {
   MindBindingOwnerId,
   PrincipalId,
   PrincipalMindUsageWritePin,
+  PreflightProducerProof,
   RevisionCommitRequest,
   RevisionCommitResult,
   StageContentCommitEffectsRequest,
@@ -81,7 +82,51 @@ import {
 import { cloneCopyOnWriteValue, copyOnWriteMap } from "./copy-on-write.js";
 import { RevisionMetadataOrdinaryStore } from "./revision-metadata-ordinary-store.js";
 
+// Pending proofs are disposable accelerators. Keep their D1 snapshot and
+// event payloads bounded independently of committed revision capacity.
+const MAX_PREFLIGHT_PROOF_BYTES = 1_000_000;
+const MAX_PENDING_PROOF_BYTES = 8_000_000;
+const MAX_PENDING_PROOFS = 128;
+const PROOF_ENCODER = new TextEncoder();
+
+function preflightProofBytes(proof: Readonly<PreflightProducerProof>): number {
+  return PROOF_ENCODER.encode(JSON.stringify(proof)).byteLength;
+}
+
 export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdinaryStore {
+  async readPreflightProducerProof(
+    spaceId: SpaceId,
+  ): Promise<Readonly<PreflightProducerProof> | null> {
+    const proof = this._preflightProducerProofs.get(spaceId);
+    return proof === undefined ? null : structuredClone(proof);
+  }
+
+  async storePreflightProducerProof(proof: Readonly<PreflightProducerProof>): Promise<boolean> {
+    return this._runExclusive(async () => {
+      // A racing HEAD change or deletion cannot retain a stale proof as a
+      // current Space record. The caller still performs its own HEAD CAS.
+      if (this._spaces.get(proof.spaceId)?.head !== proof.baseRevisionId ||
+          !this._revisionsById.has(proof.baseRevisionId)) return false;
+      const bytes = preflightProofBytes(proof);
+      if (bytes > MAX_PREFLIGHT_PROOF_BYTES) return false;
+      this._preflightProducerProofs.delete(proof.spaceId);
+      let retainedBytes = 0;
+      for (const retained of this._preflightProducerProofs.values()) {
+        retainedBytes += preflightProofBytes(retained);
+      }
+      while (this._preflightProducerProofs.size >= MAX_PENDING_PROOFS ||
+          retainedBytes + bytes > MAX_PENDING_PROOF_BYTES) {
+        const oldest = this._preflightProducerProofs.keys().next().value;
+        if (oldest === undefined) break;
+        const removed = this._preflightProducerProofs.get(oldest)!;
+        retainedBytes -= preflightProofBytes(removed);
+        this._preflightProducerProofs.delete(oldest);
+      }
+      this._preflightProducerProofs.set(proof.spaceId, structuredClone(proof));
+      return true;
+    });
+  }
+
   async commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult> {
       return this.runContentCommitTransaction((transaction) =>
         transaction.commitRevision(request),

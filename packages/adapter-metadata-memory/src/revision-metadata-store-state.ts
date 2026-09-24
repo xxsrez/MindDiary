@@ -60,6 +60,7 @@ import type {
   ObjectCleanupCheckpoint,
   OrdinaryMindRouteSnapshot,
   PrincipalActivitySummary,
+  PreflightProducerProof,
   PrincipalId,
   RevisionCommitRequest,
   RevisionCommitResult,
@@ -137,6 +138,9 @@ export abstract class RevisionMetadataStoreState {
   }
 
   protected _revisionsById = new Map<RevisionId, Envelope>();
+
+  /** One uncommitted exact-candidate proof per Space; never parent authority. */
+  protected _preflightProducerProofs = new Map<SpaceId, Readonly<PreflightProducerProof>>();
 
   protected _reachabilityCounts: Readonly<ObjectReachabilityCounts> | null = null;
 

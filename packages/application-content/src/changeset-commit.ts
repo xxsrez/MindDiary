@@ -523,6 +523,7 @@ export class ChangesetCommitService {
       clock: dependencies.clock,
       limits: this.#preflightLimits,
       stagedBundleFiles: dependencies.metadata,
+      producerProofs: dependencies.metadata,
     });
   }
 
