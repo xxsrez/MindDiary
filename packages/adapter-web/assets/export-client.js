@@ -44,9 +44,13 @@
   const failureMessage = (code, details) => ({
     capacity_fairness_limit: `Another heavy operation is active${({ mind: " for this Mind", principal: " for this account", site: " on this Site" })[details?.space_scope] ?? ""}; retry the same job after it finishes.`,
     capacity_soft_limit: details?.metric === "temporary_bytes"
-      ? "Temporary storage is near its limit. Finish or clean up earlier jobs, then retry the same job."
-      : "Storage capacity is near its limit. Reduce this archive or wait for capacity to change, then retry the same job.",
-    capacity_hard_limit: "This archive exceeds the supported size or capacity; reduce it and create a new job.",
+      ? "Temporary storage is near its limit. Choose a smaller revision or wait for capacity to be released, then retry the same job."
+      : "Storage capacity is near its limit. Wait for capacity to change, then retry the same job.",
+    capacity_hard_limit: details?.metric === "d1_metadata_bytes"
+      ? "Metadata storage is at its limit. Wait for capacity to change before starting a new export job."
+      : details?.metric === "temporary_bytes"
+        ? "Temporary storage is at its limit. Choose a smaller revision or wait for capacity to change before starting a new job."
+        : "This export exceeds current storage capacity. Wait for capacity to change before starting a new job.",
     capacity_accounting_untrusted: "Storage accounting is being reconciled; retry same plan/job after reconciliation finishes.",
     revision_not_found: "The exact revision no longer exists. Start another export from a revision you can still read.",
     revision_integrity_failure: "The exact revision failed integrity verification. No archive was published.",

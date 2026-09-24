@@ -65,6 +65,14 @@ test("capacity refusal names the occupied scope or temporary storage without cre
   await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.locator("[data-export-status]")).toContainText("Temporary storage is near its limit");
   expect((await state()).uniqueJobs).toBe(0);
+
+  await page.evaluate(() => sessionStorage.clear());
+  await reset("capacity_hard_d1");
+  await page.reload();
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.locator("[data-export-status]")).toContainText("Metadata storage is at its limit");
+  await expect(page.locator("[data-export-status]")).not.toContainText("smaller archive");
+  expect((await state()).uniqueJobs).toBe(0);
 });
 
 test("current revision recovers without duplicate and independently verifies saved bytes", async ({ page }) => {

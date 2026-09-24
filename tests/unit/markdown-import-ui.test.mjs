@@ -45,7 +45,7 @@ test("Markdown import distinguishes capacity outcomes without exposing reservati
   assert.match(client, /physical_canonical_bytes/u);
   assert.match(client, /Stored content is near its limit/u);
   assert.match(client, /payload\?\.error\?\.details/u);
-  assert.match(client, /This snapshot exceeds the supported size or capacity; reduce it and create a new plan\./u);
+  assert.match(client, /Metadata storage is at its limit/u);
   assert.match(client, /Storage accounting is being reconciled; retry same plan\/job after reconciliation finishes\./u);
   assert.match(client, /planAttemptKey \?\?= key\("import-plan"\)/u);
   assert.match(client, /sessionAttemptKey \?\?= key\("import-session"\)/u);

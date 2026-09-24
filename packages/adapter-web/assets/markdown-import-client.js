@@ -63,7 +63,9 @@
         : details?.metric === "temporary_bytes"
           ? "Temporary storage is near its limit. Finish or clean up earlier jobs, then retry the same plan."
           : "Storage capacity is near its limit. Reduce this snapshot or wait for capacity to change, then retry the same plan.",
-    capacity_hard_limit: "This snapshot exceeds the supported size or capacity; reduce it and create a new plan.",
+    capacity_hard_limit: details?.metric === "d1_metadata_bytes"
+      ? "Metadata storage is at its limit. Reduce the file count or wait for capacity to change before creating a new plan."
+      : "This snapshot exceeds current storage capacity. Reduce its size or wait for capacity to change before creating a new plan.",
     capacity_accounting_untrusted: "Storage accounting is being reconciled; retry same plan/job after reconciliation finishes.",
   })[code] ?? "This snapshot cannot fit within the current import or storage capacity.";
   const projectedCapacityCode = (value) => value?.projected_utilization === "hard_limit"

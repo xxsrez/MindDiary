@@ -121,6 +121,12 @@ const server = createServer(async (request, response) => {
           details: { operation: "export", space_scope: "principal", metric: "active_heavy_operations", state: "normal", heavy: true, recovery: { action: "retry_after_previous_operation" } },
         } });
       }
+      if (mode === "capacity_hard_d1") {
+        return json(response, 413, { ok: false, error: {
+          code: "capacity_hard_limit",
+          details: { operation: "export", space_scope: "site", metric: "d1_metadata_bytes", state: "hard_limit", heavy: true, recovery: { action: "retry_after_capacity_change" } },
+        } });
+      }
       let job = jobsByKey.get(key);
       const replayed = job !== undefined;
       if (!job) {
