@@ -509,6 +509,78 @@ test("streamed opaque bodies use at most 1 MiB application chunks", async () => 
   assert.deepEqual(readLocalEntries(bytes).find(({ path }) => path === "assets/source.bin").body, opaqueBytes);
 });
 
+test("opaque inspection is sequential and stops before later files on failure", async () => {
+  const digest = new InMemoryObjectStore();
+  const markdown = file("concepts/source.md", "---\ntype: Reference\n---\n\n# Source\n");
+  const source = [
+    { ...markdown, kind: "markdown", sha256: await digest.calculateSha256(markdown.bytes) },
+    ...await Promise.all([0, 1, 2].map(async (index) => {
+      const bytes = new Uint8Array(128).fill(index + 1);
+      return {
+        kind: "opaque", path: `assets/source-${index}.bin`,
+        mediaType: "application/octet-stream",
+        sha256: await digest.calculateSha256(bytes), size: bytes.byteLength, bytes,
+      };
+    })),
+  ];
+  const envelope = {
+    revision: { spaceId: SPACE_ID, revisionId: REVISION_ID },
+    manifest: { entries: source.map(({ bytes: _bytes, ...entry }) => entry) },
+  };
+  const createFixture = (badFirst) => {
+    let active = 0;
+    let peak = 0;
+    const opened = [];
+    const materializer = {
+      async materialize() { return { envelope, files: source }; },
+      async readRevisionEnvelope() { return envelope; },
+      async readRevisionFile(_spaceId, _revisionId, path) {
+        return path === markdown.path ? { ...source[0], bytes: new Uint8Array(markdown.bytes) } : null;
+      },
+      async openRevisionFile(_spaceId, _revisionId, path) {
+        const selected = source.find((entry) => entry.path === path && entry.kind === "opaque");
+        if (selected === undefined) return null;
+        opened.push(path);
+        active += 1;
+        peak = Math.max(peak, active);
+        let delivered = false;
+        let finished = false;
+        const finish = () => { if (!finished) { finished = true; active -= 1; } };
+        const body = new ReadableStream({
+          async pull(controller) {
+            if (delivered) { controller.close(); finish(); return; }
+            await new Promise((resolve) => setTimeout(resolve, 2));
+            controller.enqueue(new Uint8Array(selected.bytes));
+            delivered = true;
+          },
+          cancel() { finish(); },
+        }, { highWaterMark: 0 });
+        return { ...selected, sha256: badFirst && path === "assets/source-0.bin"
+          ? PLACEHOLDER_DIGEST : selected.sha256, body };
+      },
+    };
+    return {
+      service: new DeterministicOkfExportService({ materializer, digest }),
+      get opened() { return opened; },
+      get active() { return active; },
+      get peak() { return peak; },
+    };
+  };
+  const request = { spaceId: SPACE_ID, revisionId: REVISION_ID, profile: "MD-BUNDLE-ZIP-1" };
+  const successful = createFixture(false);
+  await successful.service.writeExactRevision(request, { async write() {} });
+  assert.equal(successful.peak, 1);
+  assert.equal(successful.active, 0);
+  assert.equal(successful.opened.length, 6);
+
+  const failed = createFixture(true);
+  await assert.rejects(failed.service.writeExactRevision(request, { async write() {} }),
+    (error) => error instanceof OkfExportError && error.code === "revision_integrity_failure");
+  assert.equal(failed.peak, 1);
+  assert.equal(failed.active, 0);
+  assert.deepEqual(failed.opened, ["assets/source-0.bin"]);
+});
+
 test("opaque metadata mismatch cancels the opened body", async () => {
   const fixture = await streamedOpaqueFixture(new Uint8Array(64).fill(0x5a), { wrongMetadata: true });
   await assert.rejects(fixture.service.writeExactRevision({

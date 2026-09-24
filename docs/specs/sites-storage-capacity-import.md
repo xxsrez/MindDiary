@@ -485,7 +485,8 @@ reopens it. It never rebases or partially imports automatically.
   object reads. Каждый read ограничен 1 MiB; в памяти одновременно находится
   только одна batch, а ZIP выдаётся в стабильном порядке. Это уменьшает время
   одного export attempt без изменения exact bytes, проверки целостности или
-  размера долговременного job state.
+  размера долговременного job state. Opaque objects читаются по одному и не
+  пересекаются с параллельной Markdown batch.
 - Download URLs are short-lived response-only bearer material, reauthorized
   before bytes and never durable/logged.
 - GC is mark/refcount assisted but treats committed manifests, active staging,

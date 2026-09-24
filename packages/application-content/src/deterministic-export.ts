@@ -855,8 +855,18 @@ export class DeterministicOkfExportService {
     });
     const streamedEntries: StreamedZipEntry[] = [];
     const conformanceErrors: OkfDiagnostic[] = [];
-    for (let offset = 0; offset < namedEntries.length; offset += EXPORT_OBJECT_IO_CONCURRENCY) {
-      const batch = namedEntries.slice(offset, offset + EXPORT_OBJECT_IO_CONCURRENCY);
+    for (let offset = 0; offset < namedEntries.length;) {
+      // Opaque files may be 256 MiB and must never share an inspection batch.
+      // Only contract-bounded Markdown (and generated metadata) can overlap.
+      let end = offset + 1;
+      if (namedEntries[offset]!.entry.kind !== "opaque") {
+        while (
+          end < namedEntries.length &&
+          end - offset < EXPORT_OBJECT_IO_CONCURRENCY &&
+          namedEntries[end]!.entry.kind !== "opaque"
+        ) end += 1;
+      }
+      const batch = namedEntries.slice(offset, end);
       const inspections = await settleExportBatch(batch.map(({ entry }) => entry.generatedBytes === null
         ? entry.kind === "markdown"
           ? this.#inspectBoundedMarkdownFile(parsed.spaceId, parsed.revisionId, entry, session)
@@ -891,6 +901,7 @@ export class DeterministicOkfExportService {
           localOffset: 0,
         });
       }
+      offset = end;
     }
     if (conformanceErrors.length > 0) {
       throw new OkfExportError(
