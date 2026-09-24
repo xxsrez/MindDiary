@@ -48,15 +48,21 @@
     if (status) status.textContent = message;
   };
   const key = (prefix) => `${prefix}:${crypto.randomUUID()}`;
-  const taggedError = (code, statusCode = 0, statusRead = false) => Object.assign(
+  const taggedError = (code, statusCode = 0, statusRead = false, details = null) => Object.assign(
     new Error("Import request failed"),
-    { code, statusCode, statusRead },
+    { code, statusCode, statusRead, details },
   );
   const number = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 
-  const capacityMessage = (code) => ({
-    capacity_fairness_limit: "Another heavy operation is active; retry same plan/job after it finishes.",
-    capacity_soft_limit: "Storage headroom is low; clean up completed imports or exports, then retry the same plan/job.",
+  const capacityMessage = (code, details) => ({
+    capacity_fairness_limit: `Another heavy operation is active${({ mind: " for this Mind", principal: " for this account", site: " on this Site" })[details?.space_scope] ?? ""}; retry the same plan after it finishes.`,
+    capacity_soft_limit: details?.metric === "physical_canonical_bytes"
+      ? "Stored content is near its limit. Reduce the new snapshot or wait for capacity to change, then retry the same plan."
+      : details?.metric === "d1_metadata_bytes"
+        ? "Metadata storage is near its limit. Reduce the file count or wait for capacity to change, then retry the same plan."
+        : details?.metric === "temporary_bytes"
+          ? "Temporary storage is near its limit. Finish or clean up earlier jobs, then retry the same plan."
+          : "Storage capacity is near its limit. Reduce this snapshot or wait for capacity to change, then retry the same plan.",
     capacity_hard_limit: "This snapshot exceeds the supported size or capacity; reduce it and create a new plan.",
     capacity_accounting_untrusted: "Storage accounting is being reconciled; retry same plan/job after reconciliation finishes.",
   })[code] ?? "This snapshot cannot fit within the current import or storage capacity.";
@@ -88,7 +94,7 @@
     if (error?.code === "import_file_conflict") {
       return "The selected snapshot no longer matches the reviewed plan. Review the exact files again.";
     }
-    if (error?.code?.startsWith("capacity_")) return capacityMessage(error.code);
+    if (error?.code?.startsWith("capacity_")) return capacityMessage(error.code, error.details);
     if (error?.code?.includes("limit")) return "This snapshot cannot fit within the current import or storage capacity.";
     if (error?.code?.includes("expired")) {
       return "The staged import expired. Review a fresh snapshot.";
@@ -119,7 +125,7 @@
       // The fixed error below deliberately avoids reflecting an intermediary response.
     }
     if (!response.ok || payload?.ok !== true) {
-      throw taggedError(payload?.error?.code ?? "operation_failed", response.status, statusRead);
+      throw taggedError(payload?.error?.code ?? "operation_failed", response.status, statusRead, payload?.error?.details);
     }
     return payload.data;
   };
@@ -375,7 +381,7 @@
         // Recovery reads the actor-owned checkpoint before any retry.
       }
       if (!response.ok || payload?.ok !== true) {
-        throw taggedError(payload?.error?.code ?? "operation_failed", response.status);
+        throw taggedError(payload?.error?.code ?? "operation_failed", response.status, false, payload?.error?.details);
       }
       session = payload.data.session;
       save();
@@ -552,7 +558,7 @@
       } else if (error?.code === "import_file_conflict") {
         setCheck(pathCheck, "failed", "Path conflict: the server rejected a selected path or the selection changed.");
       } else if (error?.code?.startsWith("capacity_")) {
-        setCheck(capacityCheck, "failed", capacityMessage(error.code));
+        setCheck(capacityCheck, "failed", capacityMessage(error.code, error.details));
       } else if (error?.code?.includes("limit")) {
         setCheck(capacityCheck, "failed", "Capacity conflict: reduce the snapshot before starting.");
       }

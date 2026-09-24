@@ -136,6 +136,16 @@ test("empty, path, UTF-8 and capacity conflicts stay before confirmation", async
   await expect(page.locator("[data-start-markdown-import]")).toBeDisabled();
 });
 
+test("import capacity error recommends reducing the snapshot for physical storage", async ({ page, request }) => {
+  await reset(request, "capacity_soft_physical");
+  await page.goto(`${origin}/research-notes`);
+  if (!page.url().includes("#markdown-import=")) await page.locator("summary").filter({ hasText: /^Import Markdown$/ }).click();
+  await page.locator("[data-import-files]").setInputFiles(directory("valid"));
+  await page.locator("[data-plan-markdown-import]").click();
+  await expect(page.locator("[data-import-capacity-check]")).toContainText("Reduce the new snapshot");
+  await expect(page.locator("[data-start-markdown-import]")).toBeDisabled();
+});
+
 test("refresh and navigation recover the actor-owned checkpoint without duplicate start, then cancel", async ({ page, request }) => {
   await reset(request, "open");
   const resume = "#markdown-import=import_recovery&markdown-import-mind=research-notes";

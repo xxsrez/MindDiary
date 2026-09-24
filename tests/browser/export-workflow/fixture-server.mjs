@@ -109,6 +109,18 @@ const server = createServer(async (request, response) => {
       if (revisionId === "revision_mixed" && input.profile === "MD-OKF-ZIP-1") {
         return json(response, 422, { ok: false, error: { code: "export_profile_required" } });
       }
+      if (mode === "capacity_soft_temporary") {
+        return json(response, 429, { ok: false, error: {
+          code: "capacity_soft_limit",
+          details: { operation: "export", space_scope: "site", metric: "temporary_bytes", state: "soft_limit", heavy: true, recovery: { action: "retry_after_capacity_change" } },
+        } });
+      }
+      if (mode === "capacity_fairness_principal") {
+        return json(response, 429, { ok: false, error: {
+          code: "capacity_fairness_limit",
+          details: { operation: "export", space_scope: "principal", metric: "active_heavy_operations", state: "normal", heavy: true, recovery: { action: "retry_after_previous_operation" } },
+        } });
+      }
       let job = jobsByKey.get(key);
       const replayed = job !== undefined;
       if (!job) {

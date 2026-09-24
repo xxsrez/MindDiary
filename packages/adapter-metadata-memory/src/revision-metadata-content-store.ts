@@ -328,6 +328,18 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
             if (!Number.isSafeInteger(siteD1MetadataLimit) || siteD1MetadataLimit < 1) {
               throw new TypeError("Markdown import plan D1 limit is invalid");
             }
+            for (const reservation of capacityReservations.values()) {
+              if (
+                reservation.state === "active" &&
+                Date.parse(reservation.expiresAt) <= Date.parse(plan.createdAt)
+              ) {
+                capacityReservations.set(reservation.reservationId, cloneCapacityReservation(Object.freeze({
+                  ...reservation,
+                  state: "cleanup_pending" as const,
+                  updatedAt: plan.createdAt,
+                })));
+              }
+            }
             const usage = this._capacityUsageFromLedger(
               new Set(spaces.keys()),
               {
@@ -339,7 +351,13 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
                 reservations: capacityReservations,
               },
             );
-            if (usage.d1MetadataBytes + 512 + plan.files.length * 160 > siteD1MetadataLimit) {
+            const reservedD1 = [...capacityReservations.values()].reduce((total, reservation) =>
+              reservation.state === "active" && spaces.has(reservation.spaceId)
+                ? total + reservation.requested.d1MetadataBytes
+                : total,
+              0,
+            );
+            if (usage.d1MetadataBytes + reservedD1 + 512 + plan.files.length * 160 > siteD1MetadataLimit) {
               this._capacityQuotaRejects += 1;
               return Object.freeze({
                 kind: "capacity_rejected" as const,
@@ -349,7 +367,7 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
                   metric: "d1_metadata_bytes" as const,
                   requested: 512 + plan.files.length * 160,
                   committed: usage.d1MetadataBytes,
-                  reserved: 0,
+                  reserved: reservedD1,
                   state: "hard_limit" as const,
                   heavy: true,
                   recovery: Object.freeze({ action: "retry_after_capacity_change" as const }),

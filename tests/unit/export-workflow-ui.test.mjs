@@ -60,8 +60,10 @@ test("browser workflow persists no receipt secret and verifies exact bytes befor
 });
 
 test("export workflow distinguishes capacity outcomes while retaining the exact job tuple", () => {
-  assert.match(client, /Another heavy operation is active; retry same plan\/job after it finishes\./u);
-  assert.match(client, /Storage headroom is low; clean up completed imports or exports, then retry the same plan\/job\./u);
+  assert.match(client, /Another heavy operation is active/u);
+  assert.match(client, /temporary_bytes/u);
+  assert.match(client, /Temporary storage is near its limit/u);
+  assert.match(client, /error\.details = payload\?\.error\?\.details/u);
   assert.match(client, /This archive exceeds the supported size or capacity; reduce it and create a new job\./u);
   assert.match(client, /Storage accounting is being reconciled; retry same plan\/job after reconciliation finishes\./u);
   assert.match(client, /idempotencyKey: "export-ui:" \+ crypto\.randomUUID\(\)/u);

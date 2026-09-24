@@ -51,6 +51,22 @@ test.beforeEach(async ({ context }) => {
   await reset();
 });
 
+test("capacity refusal names the occupied scope or temporary storage without creating a job", async ({ page }) => {
+  await reset("capacity_fairness_principal");
+  await page.goto(`${origin}/research-notes`);
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.locator("[data-export-status]")).toContainText("active for this account");
+  expect((await state()).uniqueJobs).toBe(0);
+  expect((await state()).startRequests).toBe(1);
+
+  await page.evaluate(() => sessionStorage.clear());
+  await reset("capacity_soft_temporary");
+  await page.reload();
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.locator("[data-export-status]")).toContainText("Temporary storage is near its limit");
+  expect((await state()).uniqueJobs).toBe(0);
+});
+
 test("current revision recovers without duplicate and independently verifies saved bytes", async ({ page }) => {
   const statusReadTimes = [];
   page.on("request", (request) => {
