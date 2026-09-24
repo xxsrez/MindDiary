@@ -409,6 +409,82 @@ test("reconstructed worker builds the exact archive into object storage and stat
   assert.equal((await env.objects.listExportArchivesForTest()).length, 1);
 });
 
+test("transient D1 authorization timeout is retried before building an export", async () => {
+  const env = await harness();
+  const started = await env.application().start(startRequest(env.actor));
+  const currentAuthorizer = new CurrentAccessBackgroundAuthorizer(env.metadata);
+  let checks = 0;
+  const worker = new ExportJobHandler({
+    jobs: env.metadata,
+    backgroundAuthorizer: {
+      async authorize(request) {
+        checks += 1;
+        if (checks === 1) {
+          throw Object.assign(new Error("D1 read timed out"), { code: "metadata_d1_timeout" });
+        }
+        return currentAuthorizer.authorize(request);
+      },
+    },
+    builder: env.builder,
+    archives: env.objects,
+    clock: env.clock,
+    retryDelayMs: 1_000,
+    claimLeaseMs: 10_000,
+  });
+  assert.deepEqual(await worker.handle({ actor: workerActor(), jobId: started.job.jobId }), {
+    kind: "completed",
+  });
+  assert.equal(checks, 3);
+  assert.equal((await env.metadata.readExportJob(started.job.jobId)).state, "succeeded");
+  assert.equal((await env.objects.listExportArchivesForTest()).length, 1);
+});
+
+test("repeated D1 authorization timeouts fail the fenced claim and same job can retry", async () => {
+  const env = await harness();
+  const started = await env.application().start(startRequest(env.actor));
+  let checks = 0;
+  let failWrites = 0;
+  const worker = new ExportJobHandler({
+    jobs: {
+      claimExportJob: (...args) => env.metadata.claimExportJob(...args),
+      completeExportJob: (...args) => env.metadata.completeExportJob(...args),
+      async failExportJob(...args) {
+        failWrites += 1;
+        if (failWrites === 1) {
+          throw Object.assign(new Error("D1 write timed out"), { code: "metadata_queue_timeout" });
+        }
+        return env.metadata.failExportJob(...args);
+      },
+    },
+    backgroundAuthorizer: {
+      async authorize() {
+        checks += 1;
+        throw Object.assign(new Error("D1 read timed out"), { code: "metadata_queue_timeout" });
+      },
+    },
+    builder: env.builder,
+    archives: env.objects,
+    clock: env.clock,
+    retryDelayMs: 1_000,
+    claimLeaseMs: 10_000,
+  });
+  assert.deepEqual(await worker.handle({ actor: workerActor(), jobId: started.job.jobId }), {
+    kind: "failed",
+    failureCode: "transient_storage_failure",
+  });
+  assert.equal(checks, 2);
+  assert.equal(failWrites, 2);
+  assert.equal((await env.metadata.readExportJob(started.job.jobId)).state, "failed");
+  assert.equal((await env.objects.listExportArchivesForTest()).length, 0);
+
+  env.clock.set(at(1_000));
+  assert.deepEqual(await env.worker().handle({
+    actor: workerActor(at(1_000)), jobId: started.job.jobId,
+  }), { kind: "completed" });
+  assert.equal((await env.metadata.readExportJob(started.job.jobId)).attempts, 2);
+  assert.equal((await env.objects.listExportArchivesForTest()).length, 1);
+});
+
 test("explicit bundle export profile is durable and reaches the reconstructed worker", async () => {
   const env = await harness();
   const started = await env.application().start({

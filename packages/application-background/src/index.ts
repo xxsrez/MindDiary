@@ -1307,7 +1307,13 @@ const SAFE_EXPORT_FAILURE_CODES = new Set([
   "export_profile_required",
 ]);
 
+function isMetadataTimeout(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    (error.code === "metadata_queue_timeout" || error.code === "metadata_d1_timeout");
+}
+
 function safeExportFailureCode(error: unknown): string {
+  if (isMetadataTimeout(error)) return "transient_storage_failure";
   if (
     typeof error === "object" &&
     error !== null &&
@@ -1389,7 +1395,13 @@ export class ExportJobHandler {
       } catch { /* Diagnostics cannot affect a durable export. */ }
     };
     report("claimed");
-    const authorized = await this.#authorizeCurrent(request.actor, job);
+    let authorized: boolean;
+    try {
+      authorized = await this.#authorizeCurrentWithRetry(request.actor, job);
+    } catch {
+      report("failed");
+      return this.#failClaim(job.jobId, job.version, "transient_storage_failure");
+    }
     if (!authorized) {
       report("failed");
       return this.#failClaim(job.jobId, job.version, "export_access_denied");
@@ -1474,7 +1486,7 @@ export class ExportJobHandler {
       report("archive_stored");
 
       // Current access is rebuilt again after the potentially long build.
-      if (!(await this.#authorizeCurrent(request.actor, job))) {
+      if (!(await this.#authorizeCurrentWithRetry(request.actor, job))) {
         await this.#archives.deleteExportArchive(storedObjectKey);
         objectKey = null;
         report("failed");
@@ -1526,19 +1538,38 @@ export class ExportJobHandler {
     return decision.kind === "allowed";
   }
 
+  async #authorizeCurrentWithRetry(
+    actor: ServiceActorContext,
+    job: { readonly requestedByPrincipalId: PrincipalId; readonly spaceId: SpaceId },
+  ): Promise<boolean> {
+    try {
+      return await this.#authorizeCurrent(actor, job);
+    } catch (error) {
+      if (!isMetadataTimeout(error)) throw error;
+      return this.#authorizeCurrent(actor, job);
+    }
+  }
+
   async #failClaim(
     jobId: JobId,
     version: Version,
     failureCode: string,
   ): Promise<BackgroundHandleResult> {
     const failedAt = this.#clock.now();
-    const failed = await this.#jobs.failExportJob(
+    const fail = () => this.#jobs.failExportJob(
       jobId,
       version,
       failureCode,
       failedAt,
       retryAt(failedAt, this.#retryDelayMs),
     );
+    let failed: boolean;
+    try {
+      failed = await fail();
+    } catch (error) {
+      if (!isMetadataTimeout(error)) throw error;
+      failed = await fail();
+    }
     return failed
       ? Object.freeze({ kind: "failed", failureCode })
       : Object.freeze({ kind: "not_available" });

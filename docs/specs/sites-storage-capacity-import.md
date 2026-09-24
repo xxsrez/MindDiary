@@ -492,6 +492,13 @@ reopens it. It never rebases or partially imports automatically.
   fenced claim. В лог не попадают пути, content, archive bytes, access tokens и
   download URLs; сбой telemetry не меняет исход job. Progress не считается
   квитанцией об успешном архиве.
+- После claim фоновый export заново проверяет текущий доступ. Timeout чтения
+  D1 при этой проверке не равен отзыву доступа: worker делает один bounded
+  повтор, затем пытается перевести fenced job в retryable
+  `transient_storage_failure`. Если D1 недоступна и для записи failure,
+  сохранённый claim остаётся под lease и может быть восстановлен только после
+  его истечения. Неопознанная ошибка проверки доступа также не превращается в
+  `export_access_denied`; отказ возможен только после явного решения authorizer.
 - Download URLs are short-lived response-only bearer material, reauthorized
   before bytes and never durable/logged.
 - GC is mark/refcount assisted but treats committed manifests, active staging,
