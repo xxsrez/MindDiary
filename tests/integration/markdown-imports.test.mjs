@@ -963,7 +963,10 @@ test("plan metadata is admitted against D1 hard capacity and unreferenced expiry
       idempotencyKey: "plan-d1-rejected",
       files: files.map(({ path, sha256, size }) => ({ path, sha256, size })),
     }),
-    (error) => error instanceof MarkdownImportError && error.code === "capacity_hard_limit",
+    (error) => error instanceof MarkdownImportError &&
+      error.code === "capacity_hard_limit" &&
+      error.details?.spaceScope === "site" &&
+      error.details?.metric === "d1_metadata_bytes",
   );
   assert.equal(await metadata.readMarkdownImportPlan("import-plan_1"), null);
 
@@ -1082,7 +1085,10 @@ test("quota rejection, cancel and stale HEAD publish no partial imported revisio
       planId: plan.plan.planId,
       idempotencyKey: "session-quota",
     }),
-    (error) => error instanceof MarkdownImportError && error.code === "capacity_hard_limit",
+    (error) => error instanceof MarkdownImportError &&
+      error.code === "capacity_hard_limit" &&
+      error.details?.operation === "import" &&
+      error.details?.state === "hard_limit",
   );
   assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_import_initial");
 

@@ -341,7 +341,20 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
             );
             if (usage.d1MetadataBytes + 512 + plan.files.length * 160 > siteD1MetadataLimit) {
               this._capacityQuotaRejects += 1;
-              return Object.freeze({ kind: "capacity_rejected" as const });
+              return Object.freeze({
+                kind: "capacity_rejected" as const,
+                diagnostic: Object.freeze({
+                  operation: "import" as const,
+                  spaceScope: "site" as const,
+                  metric: "d1_metadata_bytes" as const,
+                  requested: 512 + plan.files.length * 160,
+                  committed: usage.d1MetadataBytes,
+                  reserved: 0,
+                  state: "hard_limit" as const,
+                  heavy: true,
+                  recovery: Object.freeze({ action: "retry_after_capacity_change" as const }),
+                }),
+              });
             }
             const stored = freezeMarkdownImportPlan(plan);
             markdownImportPlans.set(plan.planId, stored);

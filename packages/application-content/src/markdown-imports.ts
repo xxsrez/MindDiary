@@ -4,6 +4,7 @@ import {
   type Authorizer,
   type BundleFileObjectStore,
   type CapacityLimits,
+  type CapacityAdmissionDiagnostic,
   type Clock,
   type CommitEffectIdGenerator,
   type MarkdownImportMetadataStore,
@@ -127,16 +128,19 @@ export type MarkdownImportErrorCode =
 export class MarkdownImportError extends Error {
   readonly code: MarkdownImportErrorCode;
   readonly failures: readonly Readonly<MarkdownImportSessionFailure>[];
+  readonly details: Readonly<CapacityAdmissionDiagnostic> | undefined;
 
   constructor(
     code: MarkdownImportErrorCode,
     message: string,
     failures: readonly Readonly<MarkdownImportSessionFailure>[] = [],
+    details?: Readonly<CapacityAdmissionDiagnostic>,
   ) {
     super(message);
     this.name = "MarkdownImportError";
     this.code = code;
     this.failures = Object.freeze(failures.map((failure) => Object.freeze({ ...failure })));
+    this.details = details;
   }
 }
 
@@ -415,7 +419,19 @@ export class MarkdownImportService {
     })}\n`));
     const usage = await this.#metadata.readMindCapacityUsage(request.spaceId);
     if (usage === null || !usage.trustworthy) {
-      throw new MarkdownImportError("capacity_accounting_untrusted", "capacity accounting is unavailable");
+      throw new MarkdownImportError(
+        "capacity_accounting_untrusted",
+        "capacity accounting is unavailable",
+        [],
+        Object.freeze({
+          operation: "import",
+          spaceScope: "mind",
+          metric: "reservation_state",
+          state: "untrusted",
+          heavy: true,
+          recovery: Object.freeze({ action: "retry_after_reconciliation" }),
+        }),
+      );
     }
     const projectedUtilization = utilizationForRatio(
       (usage.physicalCanonicalBytes + usage.reservedBytes + logicalBytes + files.length * 256 + 512) /
@@ -456,7 +472,12 @@ export class MarkdownImportService {
         this.#capacityLimits.siteD1MetadataBytes,
       );
       if (created.kind === "capacity_rejected") {
-        throw new MarkdownImportError("capacity_hard_limit", "import plan metadata capacity rejected");
+        throw new MarkdownImportError(
+          "capacity_hard_limit",
+          "import plan metadata capacity rejected",
+          [],
+          created.diagnostic,
+        );
       }
       if (created.kind === "idempotency_conflict") {
         throw new MarkdownImportError("import_idempotency_conflict", "import plan key was reused");
@@ -545,7 +566,12 @@ export class MarkdownImportService {
         expiresAt: capacityExpiry("import", createdAt),
       }), this.#capacityLimits);
       if (admission.kind === "rejected") {
-        throw new MarkdownImportError(capacityCode(admission.reason), "import capacity admission rejected");
+        throw new MarkdownImportError(
+          capacityCode(admission.reason),
+          "import capacity admission rejected",
+          [],
+          admission.diagnostic,
+        );
       }
       const session: Readonly<MarkdownImportSession> = Object.freeze({
         importId,

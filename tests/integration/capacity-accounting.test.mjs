@@ -190,10 +190,19 @@ test("reservation admission is serialized, retry-safe and enforces fairness plus
     [left.kind, right.kind].sort(),
     ["admitted", "rejected"],
   );
-  assert.equal(
-    [left, right].find((result) => result.kind === "rejected").reason,
-    "fairness_limit",
-  );
+  const fairness = [left, right].find((result) => result.kind === "rejected");
+  assert.equal(fairness.reason, "fairness_limit");
+  assert.deepEqual(fairness.diagnostic, {
+    operation: "import",
+    spaceScope: "mind",
+    metric: "active_heavy_operations",
+    requested: 1,
+    committed: 0,
+    reserved: 1,
+    state: "normal",
+    heavy: true,
+    recovery: { action: "retry_after_previous_operation" },
+  });
   const winner = [left, right].find((result) => result.kind === "admitted");
   const replay = await metadata.runCapacityTransaction((transaction) =>
     transaction.admitCapacityReservation(
@@ -215,6 +224,9 @@ test("reservation admission is serialized, retry-safe and enforces fairness plus
     ));
   assert.equal(soft.kind, "rejected");
   assert.equal(soft.reason, "soft_limit");
+  assert.equal(soft.diagnostic.spaceScope, "mind");
+  assert.equal(soft.diagnostic.metric, "physical_canonical_bytes");
+  assert.equal(soft.diagnostic.requested, 85);
 
   const hard = await softStore.runCapacityTransaction((transaction) =>
     transaction.admitCapacityReservation(
@@ -223,6 +235,31 @@ test("reservation admission is serialized, retry-safe and enforces fairness plus
     ));
   assert.equal(hard.kind, "rejected");
   assert.equal(hard.reason, "hard_limit");
+  assert.equal(hard.diagnostic.state, "hard_limit");
+  assert.equal(hard.diagnostic.requested, 101);
+});
+
+test("heavy-operation denial identifies the first occupied principal or Site lane", async () => {
+  for (const [scope, perPrincipal, perSite] of [
+    ["principal", 1, 2],
+    ["site", 2, 1],
+  ]) {
+    const metadata = new InMemoryRevisionMetadataStore();
+    const constrained = limits({
+      activeHeavyPerMind: 2,
+      activeHeavyPerPrincipal: perPrincipal,
+      activeHeavyPerSite: perSite,
+    });
+    const first = await metadata.runCapacityTransaction((transaction) =>
+      transaction.admitCapacityReservation(request({ suffix: `${scope}-first`, heavy: true }), constrained));
+    assert.equal(first.kind, "admitted");
+    const second = await metadata.runCapacityTransaction((transaction) =>
+      transaction.admitCapacityReservation(request({ suffix: `${scope}-second`, heavy: true }), constrained));
+    assert.equal(second.kind, "rejected");
+    assert.equal(second.reason, "fairness_limit");
+    assert.equal(second.diagnostic.spaceScope, scope);
+    assert.equal(second.diagnostic.reserved, 1);
+  }
 });
 
 test("expired reservations become bounded cleanup work and telemetry stays content-free", async () => {

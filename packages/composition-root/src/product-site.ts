@@ -600,7 +600,10 @@ class ProductControlApplication {
             : result.kind === "invalid"
               ? result.code
               : result.kind;
-          throw Object.assign(new Error("Export was not started."), { code });
+          throw Object.assign(new Error("Export was not started."), {
+            code,
+            details: result.kind === "invalid" ? result.details : undefined,
+          });
         }
         await this.services.scheduleExport(String(result.job.jobId));
         return Object.freeze({

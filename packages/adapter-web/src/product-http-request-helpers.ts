@@ -115,11 +115,58 @@ export function errorResponse(
   code: string,
   requestId: string,
   retryable = false,
+  details?: unknown,
 ): Response {
+  const capacityDetails = safeCapacityErrorDetails(code, details);
   return json(status, {
     ok: false,
-    error: { code, message: safeErrorMessage(code), retryable, request_id: requestId },
+    error: {
+      code,
+      message: safeErrorMessage(code),
+      retryable,
+      request_id: requestId,
+      ...(capacityDetails === null ? {} : { details: capacityDetails }),
+    },
   });
+}
+
+function safeCapacityErrorDetails(code: string, value: unknown): Readonly<Record<string, unknown>> | null {
+  if (![
+    "capacity_accounting_untrusted",
+    "capacity_soft_limit",
+    "capacity_hard_limit",
+    "capacity_fairness_limit",
+  ].includes(code)) return null;
+  const isAllowed = (candidate: unknown, allowed: readonly string[]): candidate is string =>
+    typeof candidate === "string" && allowed.includes(candidate);
+  try {
+    const detail = record(value);
+    const recovery = record(detail?.recovery);
+    if (
+      detail === null || recovery === null ||
+      !isAllowed(detail.operation, ["commit", "stage", "export", "import"]) ||
+      !isAllowed(detail.spaceScope, ["mind", "principal", "site"]) ||
+      !isAllowed(detail.metric, ["active_heavy_operations", "physical_canonical_bytes", "temporary_bytes", "d1_metadata_bytes", "reservation_state"]) ||
+      !isAllowed(detail.state, ["normal", "warning", "soft_limit", "hard_limit", "untrusted"]) ||
+      typeof detail.heavy !== "boolean" ||
+      !isAllowed(recovery.action, ["retry_after_previous_operation", "retry_after_capacity_change", "retry_after_reconciliation"])
+    ) return null;
+    const counters = [detail.requested, detail.committed, detail.reserved];
+    if (counters.some((counter) => counter !== undefined && (!Number.isSafeInteger(counter) || Number(counter) < 0))) return null;
+    return Object.freeze({
+      operation: detail.operation,
+      space_scope: detail.spaceScope,
+      metric: detail.metric,
+      ...(detail.requested === undefined ? {} : { requested: detail.requested }),
+      ...(detail.committed === undefined ? {} : { committed: detail.committed }),
+      ...(detail.reserved === undefined ? {} : { reserved: detail.reserved }),
+      state: detail.state,
+      heavy: detail.heavy,
+      recovery: Object.freeze({ action: recovery.action }),
+    });
+  } catch {
+    return null;
+  }
 }
 
 function safeErrorMessage(code: string): string {

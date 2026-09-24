@@ -29,7 +29,7 @@ test("product HTTP retryability preserves existing transient metadata errors", (
   assert.equal(applicationErrorRetryable("operation_failed"), false);
 });
 
-test("product HTTP handler emits the capacity taxonomy without private admission details", async () => {
+test("product HTTP handler emits only whitelisted capacity diagnostics", async () => {
   const origin = "https://mind-diary.example";
   const actor = Object.freeze({
     kind: "registered_principal",
@@ -50,7 +50,21 @@ test("product HTTP handler emits the capacity taxonomy without private admission
       applicationOrigin: origin,
       resolveIdentity: () => ({ kind: "authenticated", actor }),
       csrf: { issue: () => "csrf-capacity", verify: () => true },
-      control: { execute() { throw Object.assign(new Error("private capacity diagnostic"), { code }); } },
+      control: { execute() { throw Object.assign(new Error("private capacity diagnostic"), {
+        code,
+        details: {
+          operation: "export",
+          spaceScope: "principal",
+          metric: "active_heavy_operations",
+          requested: 1,
+          committed: 0,
+          reserved: 2,
+          state: "normal",
+          heavy: true,
+          recovery: { action: "retry_after_previous_operation", privateToken: "secret" },
+          objectKey: "private-object-key",
+        },
+      }); } },
     });
     const response = await handler(new Request(`${origin}/api/v1/minds/research-notes/exports`, {
       method: "POST",
@@ -69,6 +83,17 @@ test("product HTTP handler emits the capacity taxonomy without private admission
     const body = await response.json();
     assert.equal(body.error.code, code);
     assert.equal(body.error.retryable, retryable);
-    assert.doesNotMatch(JSON.stringify(body), /private capacity diagnostic|reservation|object[_ -]?key/iu);
+    assert.deepEqual(body.error.details, {
+      operation: "export",
+      space_scope: "principal",
+      metric: "active_heavy_operations",
+      requested: 1,
+      committed: 0,
+      reserved: 2,
+      state: "normal",
+      heavy: true,
+      recovery: { action: "retry_after_previous_operation" },
+    });
+    assert.doesNotMatch(JSON.stringify(body), /private capacity diagnostic|private-object-key|secret/iu);
   }
 });
