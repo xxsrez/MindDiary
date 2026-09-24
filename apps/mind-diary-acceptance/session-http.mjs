@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -50,6 +50,17 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     if (!(await controller(request, controllerKey))) return json({ error: "controller_required" }, 401);
     if (pathname === "/_acceptance/backup-schema-probe" && request.method === "GET" && backupSchemaProbe) {
       return json(await backupSchemaProbe());
+    }
+    if (pathname === "/_acceptance/object-inventory" && request.method === "GET" && objectInventory) {
+      const parameters = new URL(request.url).searchParams;
+      if ([...parameters.keys()].some((key) => key !== "cursor") || parameters.getAll("cursor").length > 1) {
+        return json({ error: "invalid_request" }, 400);
+      }
+      const cursor = parameters.get("cursor");
+      if (cursor !== null && (cursor.length === 0 || cursor.length > 4096)) {
+        return json({ error: "invalid_request" }, 400);
+      }
+      return json(await objectInventory(cursor));
     }
     const externalRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/external-mcp$/.exec(pathname);
     if (externalRoute) {

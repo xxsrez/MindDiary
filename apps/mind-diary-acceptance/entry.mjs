@@ -113,6 +113,23 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
           }
         }
         return { tables };
+      }, async (cursor) => {
+        const page = await environment.MIND_DIARY_BUCKET.list({
+          limit: 250,
+          include: ["customMetadata"],
+          ...(cursor === null ? {} : { cursor }),
+        });
+        if (page.truncated && !page.cursor) throw new Error("object_inventory_cursor_missing");
+        return {
+          complete: !page.truncated,
+          next_cursor: page.truncated ? page.cursor : null,
+          objects: page.objects.map((object) => ({
+            key: object.key,
+            etag: object.etag,
+            size: object.size,
+            metadata: object.customMetadata ?? {},
+          })),
+        };
       });
       if (sessionResponse) return sessionResponse;
       if (path.startsWith("/api/v1/internal/system-backup/")) {
