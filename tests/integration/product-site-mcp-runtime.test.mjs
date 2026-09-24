@@ -2880,10 +2880,10 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(codexHelpHtml, /Writing is optional/u);
   assert.match(codexHelpHtml, /choose Read and write independently for every ordinary or Personal Mind/u);
   assert.match(codexHelpHtml, /This account-wide set is shared by every Connection and personal token/u);
-  assert.match(codexHelpHtml, /Save durable facts\/decisions from this request to every matching Mind/u);
-  assert.match(codexHelpHtml, /Refresh list_minds before writing/u);
+  assert.match(codexHelpHtml, /перед обращением к интернету проверь Mind Diary UAT/u);
+  assert.match(codexHelpHtml, /Записывай туда только по моей прямой просьбе/u);
   assert.match(codexHelpHtml, /Updating this help page does not replace Custom Instructions you already saved/u);
-  assert.match(codexHelpHtml, /Copy isolated routing check/u);
+  assert.match(codexHelpHtml, /Check the source order/u);
   assert.doesNotMatch(codexHelpHtml, /\b(?:bind|unbind)\b|writable target|attach at least one Mind/iu);
   assert.doesNotMatch(codexHelpHtml, /This instruction permits reading, not writing|at most one ordinary Mind/u);
   assert.match(codexHelpHtml, /Create the first useful Memory/u);
