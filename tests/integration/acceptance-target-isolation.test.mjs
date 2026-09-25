@@ -79,3 +79,19 @@ test("cold fixture seeding requires controller authority", async () => {
   assert.equal((await invoke(`Bearer ${key}`)).status, 200);
   assert.equal(calls.length, 1);
 });
+
+test("cold fixture orphan cleanup requires controller authority", async () => {
+  const key = "a".repeat(43);
+  const calls = [];
+  const path = `${ACCEPTANCE_ORIGIN}/_acceptance/runs/41d3bca2-40b3-4dc0-b8f5-d9fe7e97bbed/cold-orphan-cleanup`;
+  const invoke = (authorization) => handleAcceptanceSession(
+    new Request(path, { method: "POST", headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ space_id: "space_test" }) }),
+    {}, key, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+    async (runId, input) => { calls.push({ runId, input }); return { deleted_pair: 1 }; },
+  );
+  assert.equal((await invoke("Bearer " + "b".repeat(43))).status, 401);
+  assert.deepEqual(calls, []);
+  assert.equal((await invoke(`Bearer ${key}`)).status, 200);
+  assert.equal(calls.length, 1);
+});

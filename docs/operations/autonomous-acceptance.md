@@ -85,6 +85,17 @@ HEAD, добавляет два синтетических ZIP-объекта и
 preflight и повтор после перезапуска проверяются уже через публичный MCP;
 controller завершает run и сверяет полную baseline inventory.
 
+Legacy cold fixture создаёт два ZIP напрямую, без product lifecycle bindings.
+Если обычный cleanup удалил всех участников и Minds, но оставил эти ZIP и их
+integrity sidecars, controller тестового Site может удалить их только после
+полной проверки run: все actor cleanup journal завершены, иных незакрытых
+runs и живого HEAD нет, инвентарь содержит ровно две известные пары либо одну
+после первого прохода. Проверяются точные SHA синтетических ZIP, `space_id`,
+R2 metadata, времена создания в пределах run и наличие sidecar. Удаление
+выполняет object-store CAS для одного ZIP с sidecar за вызов; неизвестный
+объект останавливает операцию. После нулевого R2-инвентаря обычный `cleanup`
+завершает barrier receipts и подтверждает baseline.
+
 ## Применимость платформенных проверок
 
 Управляющий запуск фиксирует exact base/candidate SHA, выбранные Task Manager
