@@ -27,11 +27,13 @@ export class SystemBackupCleanupBarrier {
        )`,
     ).bind(id, now).run();
     if (!changed(admitted)) return false;
+    let phase = "operation";
     try {
       const outcome = await operation();
       // A rejected completion write leaves the operation registered. New
       // sessions fail closed until an operator reconciles that uncertain R2
       // outcome; no automatic lease timeout can prove it finished.
+      phase = "finish";
       await this.#database.prepare(
         `/*md-backup-cleanup-finish*/ DELETE FROM md_backup_cleanup_ops
          WHERE operation_id = ?1`,
@@ -40,6 +42,8 @@ export class SystemBackupCleanupBarrier {
     } catch (error) {
       // A physical R2 mutation may have reached the provider. Preserve the
       // admission record rather than letting a new session pin stale bytes.
+      console.error(JSON.stringify({ event: "md-backup-cleanup-failure", phase,
+        error_code: error instanceof Error ? error.name : "unknown" }));
       throw error;
     }
   }

@@ -262,6 +262,36 @@ test("pending physical cleanup blocks target registration; expiry rejects old pa
   } finally { fixture.database.close(); }
 });
 
+test("uncertain cleanup completion reports its stage and keeps the backup barrier", async () => {
+  const fixture = await setup();
+  const originalPrepare = fixture.database.prepare.bind(fixture.database);
+  const originalError = console.error;
+  const errors = [];
+  try {
+    fixture.database.prepare = (sql) => {
+      if (sql.includes("/*md-backup-cleanup-finish*/")) {
+        throw new Error("synthetic D1 finish failure");
+      }
+      return originalPrepare(sql);
+    };
+    console.error = (value) => { errors.push(value); };
+    const barrier = new SystemBackupCleanupBarrier(fixture.database, fixture.now);
+    await assert.rejects(() => barrier.run(async () => true),
+      /synthetic D1 finish failure/u);
+    assert.deepEqual(errors.map((entry) => JSON.parse(entry)), [{
+      event: "md-backup-cleanup-failure", phase: "finish", error_code: "Error",
+    }]);
+    assert.equal(fixture.database.database.prepare(
+      "SELECT COUNT(*) AS count FROM md_backup_cleanup_ops",
+    ).get().count, 1);
+    await assert.rejects(() => fixture.service.createSession(), /backup_target_changed/u);
+  } finally {
+    console.error = originalError;
+    fixture.database.prepare = originalPrepare;
+    fixture.database.close();
+  }
+});
+
 test("an active target pins physical cleanup until deletion invalidates it", async () => {
   const fixture = await setup();
   try {
