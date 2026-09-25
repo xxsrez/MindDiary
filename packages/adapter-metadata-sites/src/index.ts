@@ -358,7 +358,6 @@ const METADATA_MUTATIONS = new Set([
   "revokeCredentialWriteTargetOwner",
   "collectStagedBundleFilesForGc",
   "deleteExpiredStagedBundleFileRecord",
-  "deleteDeletionStagedBundleFileRecord",
   "reconcileCapacityUsage",
   "collectExpiredCapacityReservations",
   "releaseCapacityReservation",

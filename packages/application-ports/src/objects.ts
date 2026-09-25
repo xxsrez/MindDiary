@@ -371,8 +371,6 @@ export interface BundleFileObjectPutResult {
 }
 
 export interface BundleFileObjectListRequest {
-  /** Limit enumeration to one deleted Space during its restartable erasure. */
-  readonly spaceId?: SpaceId;
   readonly createdBefore: UtcInstant;
   readonly excluded: readonly Readonly<{
     spaceId: SpaceId;

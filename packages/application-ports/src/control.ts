@@ -36,7 +36,6 @@ import {
   type SpaceRevision,
   type SpaceInvitation,
   type SpaceMembership,
-  type StagedBundleFileId,
   type UtcInstant,
   type VerifiedSpaceHost,
   type Version,
@@ -1173,9 +1172,6 @@ export interface CanonicalObjectReachabilityReader {
 export interface OrdinaryMindStore
   extends HandleRegistry,
     CanonicalObjectReachabilityReader {
-  /** Exact refs remain available while a deleted Space's erasure work is pending. */
-  listDeletionStagedBundleFiles(spaceId: SpaceId, limit: number): Promise<readonly StagedBundleFileId[]>;
-  deleteDeletionStagedBundleFileRecord(spaceId: SpaceId, stagedFileId: StagedBundleFileId): Promise<boolean>;
   runOrdinaryMindTransaction<Result>(
     operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
   ): Promise<Result>;

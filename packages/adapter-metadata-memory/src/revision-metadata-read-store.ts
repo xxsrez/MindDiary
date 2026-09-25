@@ -1252,36 +1252,6 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       });
     }
 
-  async listDeletionStagedBundleFiles(
-      spaceId: SpaceId,
-      limit: number,
-    ): Promise<readonly StagedBundleFileId[]> {
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
-        throw new TypeError("deletion staging list limit is invalid");
-      }
-      return this._runExclusive(async () => {
-        if (this._knowledgeSpaces.has(spaceId)) throw new Error("Space is still active");
-        return Object.freeze([...this._stagedBundleFiles.values()]
-          .filter((record) => record.spaceId === spaceId)
-          .map((record) => record.stagedFileId)
-          .sort()
-          .slice(0, limit));
-      });
-    }
-
-  async deleteDeletionStagedBundleFileRecord(
-      spaceId: SpaceId,
-      stagedFileId: StagedBundleFileId,
-    ): Promise<boolean> {
-      return this._runExclusive(async () => {
-        if (this._knowledgeSpaces.has(spaceId)) throw new Error("Space is still active");
-        const record = this._stagedBundleFiles.get(stagedFileId);
-        return record?.spaceId === spaceId
-          ? this._stagedBundleFiles.delete(stagedFileId)
-          : false;
-      });
-    }
-
   async deleteExpiredStagedBundleFileRecord(
       stagedFileId: StagedBundleFileId,
     ): Promise<boolean> {
