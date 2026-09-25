@@ -14,6 +14,7 @@ import { recoverRunOrphans } from "./run-orphan-cleanup.mjs";
 import { seedValidationFixture } from "./validation-fixture.mjs";
 import { seedColdFixture } from "./cold-fixture.mjs";
 import { recoverColdFixtureOrphans } from "./cold-orphan-cleanup.mjs";
+import { recoverMixedFixtureOrphans } from "./mixed-orphan-cleanup.mjs";
 import { recoverOrphanOAuth } from "./oauth-recovery.mjs";
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
@@ -140,7 +141,8 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
         return recovery.runtime(environment.DB).recoverBackground(16, "full");
       }), (runId, input) => seedValidationFixture(store, runId, input, environment),
       (runId, input) => seedColdFixture(store, runId, input, environment),
-      (runId, input) => recoverColdFixtureOrphans(store, runId, input, environment));
+      (runId, input) => recoverColdFixtureOrphans(store, runId, input, environment),
+      (runId, input) => recoverMixedFixtureOrphans(store, runId, input, environment));
       if (sessionResponse) return sessionResponse;
       if (path.startsWith("/api/v1/internal/system-backup/")) {
         let backupRun;

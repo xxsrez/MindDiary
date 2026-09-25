@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory, recoverRunOrphans, seedValidationFixture, seedColdFixture, recoverColdFixtureOrphans) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory, recoverRunOrphans, seedValidationFixture, seedColdFixture, recoverColdFixtureOrphans, recoverMixedFixtureOrphans) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -102,6 +102,10 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     if (coldOrphanRoute && request.method === "POST" && recoverColdFixtureOrphans) {
       return json(await recoverColdFixtureOrphans(coldOrphanRoute[1], await body(request)));
     }
+    const mixedOrphanRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/mixed-orphan-cleanup$/.exec(pathname);
+    if (mixedOrphanRoute && request.method === "POST" && recoverMixedFixtureOrphans) {
+      return json(await recoverMixedFixtureOrphans(mixedOrphanRoute[1], await body(request)));
+    }
     if (pathname === "/_acceptance/runs" && request.method === "POST") {
       return json(projection(await store.create(await body(request), request.headers.get("idempotency-key"))));
     }
@@ -123,7 +127,8 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     const controllerDiagnostic = pathname.endsWith("/orphan-cleanup") && code.startsWith("orphan_") ||
       pathname.endsWith("/validation-fixture") && code.startsWith("validation_fixture_") ||
       pathname.endsWith("/cold-fixture") && code.startsWith("cold_fixture_") ||
-      pathname.endsWith("/cold-orphan-cleanup") && code.startsWith("cold_orphan_");
+      pathname.endsWith("/cold-orphan-cleanup") && code.startsWith("cold_orphan_") ||
+      pathname.endsWith("/mixed-orphan-cleanup") && code.startsWith("mixed_orphan_");
     return json({ error: status === 503 && !controllerDiagnostic ? "acceptance_unavailable" : code }, status);
   }
 }

@@ -96,6 +96,19 @@ R2 metadata, времена создания в пределах run и нали
 объект останавливает операцию. После нулевого R2-инвентаря обычный `cleanup`
 завершает barrier receipts и подтверждает baseline.
 
+Для смешанного приёмочного snapshot два ZIP проходят штатные OAuth upload
+intents и MCP commit, а Markdown — import session. Если после удаления
+синтетического аккаунта остаются staged ZIP и canonical ZIP с sidecar,
+отдельный controller route принимает точные `space_id`, committed `import_id`,
+два digest/размера и staged refs из закрытого журнала. Он требует завершённые
+actor cleanup, отсутствие других runs, principals, Minds и live HEAD, сверяет
+полную R2 inventory с import staged records и каждой ZIP-парой, общую OAuth
+binding, метаданные и время создания внутри run. За вызов удаляется только
+один staged ZIP либо одна canonical ZIP-пара; любой посторонний объект или
+неполная пара останавливают удаление. После этого прежний bounded import
+recovery удаляет staged Markdown, а обычный `cleanup` подтверждает нулевой
+инвентарь и baseline.
+
 ## Применимость платформенных проверок
 
 Управляющий запуск фиксирует exact base/candidate SHA, выбранные Task Manager
