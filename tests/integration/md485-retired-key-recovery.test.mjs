@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
 import { createSitesMetadataStore } from "../../packages/adapter-metadata-sites/dist/index.js";
+import { DEFAULT_CAPACITY_LIMITS } from "../../packages/application-content/dist/index.js";
 import { AcceptanceSessionStore } from "../../apps/mind-diary-acceptance/session-store.mjs";
 import { recoverMd485RetiredKey } from "../../apps/mind-diary-acceptance/md485-retired-key-recovery.mjs";
 
@@ -114,5 +115,37 @@ test("exact retired-key cleanup retries physical deletion and conditionally rele
       JSON.stringify({ run_id: runId, state: "cleaned" })).run();
     assert.deepEqual(await recoverMd485RetiredKey(f.environment, "release"),
       { released: true, replayed: true });
+  } finally { f.database.close(); }
+});
+
+test("unsettled canonical writer blocks retired-key recovery before any R2 delete", async () => {
+  const f = await fixture();
+  try {
+    const metadata = await createSitesMetadataStore(f.database);
+    const request = {
+      reservationId: "capacity:commit:unsettled-md485", requestedByPrincipalId: "principal_synthetic",
+      spaceId, operation: "commit", operationRef: "synthetic-unsettled",
+      baseRevisionId: null, idempotencyKey: "synthetic-unsettled",
+      requested: { physicalCanonicalBytes: 61, temporaryBytes: 0, d1MetadataBytes: 512 },
+      bulk: false, heavy: false, createdAt: "2026-09-25T19:07:00.000Z",
+      expiresAt: "2026-09-25T19:22:00.000Z",
+    };
+    const admitted = await metadata.runCapacityTransaction((transaction) =>
+      transaction.admitCapacityReservation(request, DEFAULT_CAPACITY_LIMITS));
+    assert.equal(admitted.kind, "admitted");
+    assert.equal((await recoverMd485RetiredKey(f.environment, "inspect")).eligible, false);
+    await assert.rejects(() => recoverMd485RetiredKey(f.environment, "delete"),
+      /recovery_preflight_failed/u);
+    assert.equal(f.objects.has(key), true);
+    await metadata.runCapacityTransaction((transaction) =>
+      transaction.cancelCapacityReservation({ reservationId: request.reservationId,
+        canceledAt: "2026-09-25T19:08:00.000Z" }));
+    const pending = (await metadata.listCapacityReservationsForSpace(spaceId))[0];
+    assert.equal(pending.state, "cleanup_pending");
+    assert.equal(pending.writerClosedAt ?? null, null);
+    assert.equal((await recoverMd485RetiredKey(f.environment, "inspect")).eligible, false);
+    await assert.rejects(() => recoverMd485RetiredKey(f.environment, "delete"),
+      /recovery_preflight_failed/u);
+    assert.equal(f.objects.has(key), true);
   } finally { f.database.close(); }
 });
