@@ -124,6 +124,7 @@ export async function cleanupRun(store, runId, productCall, resumeDeletion, faul
       store.statement("DELETE FROM md_acceptance_cleanup_journal WHERE actor_id IN (SELECT id FROM md_acceptance_actors WHERE run_id = ?)", runId),
       store.statement("DELETE FROM md_acceptance_sessions WHERE run_id = ?", runId),
       store.statement("DELETE FROM md_acceptance_external_mcp WHERE run_id = ?", runId),
+      store.statement("DELETE FROM md_acceptance_export_holds WHERE run_id = ?", runId),
       store.statement("DELETE FROM md_acceptance_exchanges WHERE run_id = ?", runId),
       store.statement("DELETE FROM md_acceptance_actors WHERE run_id = ?", runId),
       store.statement("UPDATE md_acceptance_runs SET state = 'cleaned' WHERE id = ?", runId),

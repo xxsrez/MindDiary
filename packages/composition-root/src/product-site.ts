@@ -200,6 +200,8 @@ export interface ProductSiteRuntimeOptions {
   readonly performanceCorrelationKey?: Uint8Array;
   /** Optional UAT safeguard: skip best-effort Web activity writes on navigation. */
   readonly webActivityEnabled?: boolean;
+  /** Constructor-only acceptance override; normal Product Site uses the default export retention. */
+  readonly exportJobRetentionMs?: number;
   /** Constructor-only service authority. Missing/empty configuration fails closed. */
   readonly serviceOperatorPrincipalIds?: readonly string[];
   /** Separate operator-only read capability; absent keeps backup HTTP hidden. */
@@ -1284,6 +1286,9 @@ export async function createProductSiteRuntime(
     jobIds: generated,
     downloadSecretCrypto: downloadCrypto,
     downloadUrlBase: `${options.publicOrigin}/api/v1/exports`,
+    ...(options.exportJobRetentionMs === undefined
+      ? {}
+      : { retentionMs: options.exportJobRetentionMs }),
   });
   const bundleFileDownloads = new BundleFileDownloadService({
     store: metadata,

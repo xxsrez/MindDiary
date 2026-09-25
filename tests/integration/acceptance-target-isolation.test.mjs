@@ -130,3 +130,21 @@ test("expired heavy reservation check requires controller authority", async () =
   assert.equal((await invoke(`Bearer ${key}`)).status, 200);
   assert.deepEqual(calls, [{ id: runId, input: { phase: "seed" } }]);
 });
+
+test("real export expiry check requires controller authority", async () => {
+  const key = "a".repeat(43);
+  const calls = [];
+  const runId = "41d3bca2-40b3-4dc0-b8f5-d9fe7e97bbed";
+  const path = `${ACCEPTANCE_ORIGIN}/_acceptance/runs/${runId}/export-job-expiry`;
+  const invoke = (authorization) => handleAcceptanceSession(
+    new Request(path, { method: "POST", headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ phase: "arm" }) }),
+    {}, key, undefined, undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+    async (id, input) => { calls.push({ id, input }); return { phase: "armed" }; },
+  );
+  assert.equal((await invoke("Bearer " + "b".repeat(43))).status, 401);
+  assert.deepEqual(calls, []);
+  assert.equal((await invoke(`Bearer ${key}`)).status, 200);
+  assert.deepEqual(calls, [{ id: runId, input: { phase: "arm" } }]);
+});

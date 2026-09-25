@@ -6,6 +6,7 @@ export const ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA = Object.freeze({
   md_acceptance_exchanges: "verifier run_id actor_id audience expires_at used_at",
   md_acceptance_sessions: "verifier run_id actor_id audience expires_at revoked",
   md_acceptance_external_mcp: "run_id actor_id expires_at revoked",
+  md_acceptance_export_holds: "run_id principal_id space_id expires_at",
   md_acceptance_cleanup_locks: "run_id holder expires_at",
   md_acceptance_cleanup_journal: "actor_id command_json result_json done",
   md_acceptance_cleanup_receipts: "run_id receipt_json",

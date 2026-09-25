@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory, recoverRunOrphans, seedValidationFixture, seedColdFixture, recoverColdFixtureOrphans, recoverMixedFixtureOrphans, cleanupFailedImportOrphan, expiredHeavyReservation) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory, recoverRunOrphans, seedValidationFixture, seedColdFixture, recoverColdFixtureOrphans, recoverMixedFixtureOrphans, cleanupFailedImportOrphan, expiredHeavyReservation, exportJobExpiry) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -113,6 +113,10 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     const expiredHeavyRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/expired-heavy-reservation$/.exec(pathname);
     if (expiredHeavyRoute && request.method === "POST" && expiredHeavyReservation) {
       return json(await expiredHeavyReservation(expiredHeavyRoute[1], await body(request)));
+    }
+    const exportExpiryRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/export-job-expiry$/.exec(pathname);
+    if (exportExpiryRoute && request.method === "POST" && exportJobExpiry) {
+      return json(await exportJobExpiry(exportExpiryRoute[1], await body(request)));
     }
     if (pathname === "/_acceptance/runs" && request.method === "POST") {
       return json(projection(await store.create(await body(request), request.headers.get("idempotency-key"))));

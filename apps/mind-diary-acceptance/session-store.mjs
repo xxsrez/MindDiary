@@ -12,6 +12,7 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS md_acceptance_sessions (verifier TEXT PRIMARY KEY, run_id TEXT NOT NULL, actor_id TEXT NOT NULL, audience TEXT NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS md_acceptance_sessions_actor ON md_acceptance_sessions(actor_id)`,
   `CREATE TABLE IF NOT EXISTS md_acceptance_external_mcp (run_id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS md_acceptance_export_holds (run_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, space_id TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
 ];
 
 export class AcceptanceSessionStore {

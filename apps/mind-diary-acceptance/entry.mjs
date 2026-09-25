@@ -3,6 +3,7 @@ import {
   createProductUiStaticAssetResponse,
 } from "../../packages/composition-root/dist/index.js";
 import { createMindDiaryProductWorker } from "../mind-diary-site/worker/request-recovery.js";
+import { createSitesMetadataStore } from "../../packages/adapter-metadata-sites/dist/index.js";
 import { readRuntimeConfig } from "../mind-diary-site/worker/runtime-config.ts";
 import { assertAcceptanceTarget } from "./runtime-target.mjs";
 import probe from "./worker.mjs";
@@ -17,6 +18,7 @@ import { recoverColdFixtureOrphans } from "./cold-orphan-cleanup.mjs";
 import { recoverMixedFixtureOrphans } from "./mixed-orphan-cleanup.mjs";
 import { cleanupFailedImportOrphan } from "./failed-import-orphan-cleanup.mjs";
 import { expiredHeavyReservation } from "./expired-heavy-reservation.mjs";
+import { exportJobExpiry } from "./export-job-expiry.mjs";
 import { recoverOrphanOAuth } from "./oauth-recovery.mjs";
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
@@ -56,6 +58,21 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
             return actor ? { kind: "authenticated", verifiedEmail: actor.subject, verifiedFullName: `Test actor ${actor.ordinal + 1}` } : { kind: "unauthenticated" };
           } },
           identityBindingProvider: "synthetic-test",
+          exportJobRetentionMs: 180_000,
+          schedule: async (work) => {
+            if (work.kind === "export") {
+              const store = storeFor(options.database);
+              await store.ready();
+              const job = await (await createSitesMetadataStore(options.database)).readExportJob(work.id);
+              const hold = job && await store.statement(`SELECT h.run_id FROM md_acceptance_export_holds h
+                JOIN md_acceptance_runs r ON r.id = h.run_id
+                WHERE h.principal_id = ? AND h.space_id = ? AND h.expires_at > ?
+                AND r.profile = 'operator' AND r.state = 'active' AND r.expires_at > ?`,
+              job.requestedByPrincipalId, job.spaceId, Date.now(), Date.now()).first();
+              if (hold) return;
+            }
+            return options.schedule(work);
+          },
           mcpPrincipalAdmission: (principalId, request) => storeFor(options.database).admitPrincipal(principalId, request),
         });
         runtimes.set(options.database, runtime);
@@ -146,7 +163,12 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
       (runId, input) => recoverColdFixtureOrphans(store, runId, input, environment),
       (runId, input) => recoverMixedFixtureOrphans(store, runId, input, environment),
       (runId, input) => cleanupFailedImportOrphan(store, runId, input, environment),
-      (runId, input) => expiredHeavyReservation(store, runId, input, environment));
+      (runId, input) => expiredHeavyReservation(store, runId, input, environment),
+      (runId, input) => exportJobExpiry(store, runId, input, environment, async () => {
+        const recovery = createProduct();
+        await recovery.worker.fetch(new Request(ACCEPTANCE_ORIGIN + "/api/v1/session"), environment, context);
+        return recovery.runtime(environment.DB).recoverBackground(16, "full");
+      }));
       if (sessionResponse) return sessionResponse;
       if (path.startsWith("/api/v1/internal/system-backup/")) {
         let backupRun;
