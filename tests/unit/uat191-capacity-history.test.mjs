@@ -75,7 +75,7 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
   const body = await result.json();
   assert.deepEqual(body.data.heavy_admission_attempts,
     { target: 1, owned_other: 0, site_other: 1 });
-  assert.equal(body.data.owned_reservations[0].reservation_id, ownId);
+  assert.equal(body.data.target_reservations[0].reservation_id, ownId);
   assert.equal(JSON.stringify(body).includes(foreignId), false);
   assert.equal(JSON.stringify(body).includes(FOREIGN), false);
   assert.equal(JSON.stringify(body).includes("job-foreign"), false);

@@ -133,18 +133,19 @@ export function createUat191CapacityHistory(input: {
       }
       if (!ownedMindIds.has(actor.mindId)) throw new Error("ownership changed");
 
-      const currentReservations = new Map<string, Record<string, unknown>>();
+      const snapshotReservations = new Map<string, Record<string, unknown>>();
       for (const [id, entry] of pairs(metadata.capacityReservations)) {
         const reservation = object(entry);
         if (typeof id === "string" && reservation !== null) {
-          currentReservations.set(id, reservation);
+          snapshotReservations.set(id, reservation);
         }
       }
 
       const eventResult = await input.database.prepare(
         `/*md485-capacity-events*/ SELECT sequence, payload_json, committed_at
          FROM md_metadata_events
-         WHERE committed_at >= ?1 AND committed_at < ?2 AND target = 'metadata'
+         WHERE sequence < 13025 AND committed_at >= ?1 AND committed_at < ?2
+           AND target = 'metadata'
            AND (instr(payload_json, 'capacity:') > 0 OR
                 instr(payload_json, '"heavy":true') > 0 OR
                 instr(payload_json, '"method":"completeExportJob"') > 0 OR
@@ -197,7 +198,7 @@ export function createUat191CapacityHistory(input: {
       const unique = [...new Map(admissions.map((item) => [item.id, item])).values()];
       const byScope = { target: 0, owned_other: 0, site_other: 0 };
       const confirmed = { target: 0, owned_other: 0, site_other: 0 };
-      const existing = { target: 0, owned_other: 0, site_other: 0 };
+      const existingAtSnapshot = { target: 0, owned_other: 0, site_other: 0 };
       const owned: Record<string, unknown>[] = [];
       for (const item of unique) {
         const scope = item.spaceId === actor.mindId ? "target" :
@@ -208,9 +209,9 @@ export function createUat191CapacityHistory(input: {
             firstArg(call)?.capacityReservationId === item.id));
         const confirmedCreate = item.confirmedInTransaction || laterStage;
         if (confirmedCreate) confirmed[scope] += 1;
-        const current = currentReservations.get(item.id);
-        if (current !== undefined) existing[scope] += 1;
-        if (scope === "site_other") continue;
+        const atSnapshot = snapshotReservations.get(item.id);
+        if (atSnapshot !== undefined) existingAtSnapshot[scope] += 1;
+        if (scope !== "target") continue;
         const lifecycleCalls = observed.flatMap((event) =>
           event.sequence <= item.sequence ? [] : event.calls.flatMap((call) => {
             const args = firstArg(call);
@@ -223,22 +224,22 @@ export function createUat191CapacityHistory(input: {
         owned.push({ reservation_id: item.id, operation: item.operation,
           scope, sequence: item.sequence, created_at: item.createdAt,
           expires_at: item.expiresAt, confirmed_create: confirmedCreate,
-          current_state: current?.state ?? null,
-          current_updated_at: current?.updatedAt ?? null,
+          state_at_snapshot: atSnapshot?.state ?? null,
+          updated_at_snapshot: atSnapshot?.updatedAt ?? null,
           lifecycle_calls_before_incident: lifecycleCalls.slice(0, 20),
         });
       }
       const older = { target: 0, owned_other: 0, site_other: 0 };
-      const olderActiveNow = { target: 0, owned_other: 0, site_other: 0 };
-      for (const reservation of currentReservations.values()) {
+      const olderStateActiveAtSnapshot = { target: 0, owned_other: 0, site_other: 0 };
+      for (const reservation of snapshotReservations.values()) {
         if (reservation.heavy !== true ||
             typeof reservation.createdAt !== "string" ||
-            reservation.createdAt >= FROM || reservation.createdAt >= AT ||
+            reservation.createdAt >= FROM ||
             typeof reservation.spaceId !== "string") continue;
         const scope = reservation.spaceId === actor.mindId ? "target" :
           ownedMindIds.has(reservation.spaceId) ? "owned_other" : "site_other";
         older[scope] += 1;
-        if (reservation.state === "active") olderActiveNow[scope] += 1;
+        if (reservation.state === "active") olderStateActiveAtSnapshot[scope] += 1;
       }
       return response(200, { ok: true, data: {
         incident: "MD-485/UAT191", from_utc: FROM, before_utc: AT,
@@ -246,12 +247,12 @@ export function createUat191CapacityHistory(input: {
         events_scanned: rows.length,
         heavy_admission_attempts: byScope,
         creation_confirmed_by_followup: confirmed,
-        present_in_current_ledger: existing,
-        older_than_window_in_current_ledger: older,
-        older_than_window_active_now: olderActiveNow,
-        owned_reservations: owned,
+        present_in_snapshot_ledger: existingAtSnapshot,
+        older_than_window_in_snapshot_ledger: older,
+        older_than_window_state_active_at_snapshot: olderStateActiveAtSnapshot,
+        target_reservations: owned,
         limits_at_incident: { mind: 1, owner: 2, site: 8 },
-        interpretation: "Events list attempted calls, not return values. Confirmed create follows an export/import admission in the same transaction or a later stage record. Current ledger state is not historical state. Current ownership is used only for privacy grouping.",
+        interpretation: "Events list attempted calls, not return values. Confirmed create follows an export/import admission in the same transaction or a later stage record. Ledger and memberships are as of snapshot_sequence, may lag the latest event, and are not historical state at the incident. A snapshot state of active can be expired by time. IDs are disclosed only for the currently owner-authorized target Mind.",
       } });
     } catch {
       return response(503, { ok: false, error: "diagnostic_unavailable" });
