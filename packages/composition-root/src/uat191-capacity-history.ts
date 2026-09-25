@@ -504,12 +504,18 @@ export function createUat191CapacityHistory(input: {
         const id = safeId(candidate.reservationId);
         const ref = safeId(candidate.operationRef);
         if (id === null || ref === null) throw new Error("invalid candidate identifier");
+        const exportJobs = metadata.exportJobs;
+        const job = pairs(exportJobs).map(([, value]) => object(value))
+          .find((value) => value?.jobId === ref);
+        const hasTargetExportJob = candidate.operation === "export" &&
+          job?.spaceId === actor.mindId;
         const relatedResult = await input.database.prepare(
           `/*md485-target-related*/ SELECT sequence, payload_json, committed_at
-           FROM md_metadata_events WHERE target = 'metadata'
-             AND (instr(payload_json, ?1) > 0 OR instr(payload_json, ?2) > 0)
+           FROM md_metadata_events WHERE sequence BETWEEN ?1 AND ?2
+             AND target = 'metadata'
+             AND instr(payload_json, ?3) > 0
            ORDER BY sequence ASC LIMIT 201`,
-        ).bind(id, ref).all<EventRow>();
+        ).bind(1269, head.sequence, id).all<EventRow>();
         const relatedRows = relatedResult.results ?? [];
         if (relatedResult.success === false || relatedRows.length > 200) {
           throw new Error("target event trace unavailable");
@@ -518,51 +524,51 @@ export function createUat191CapacityHistory(input: {
           const event = object(JSON.parse(row.payload_json));
           return { sequence: row.sequence, committed_at: row.committed_at,
             methods: calls(event).filter((call) => {
-              const args = JSON.stringify(call.args ?? []);
-              return args.includes(id) || args.includes(ref);
+              const args = Array.isArray(call.args) ? call.args : [];
+              const first = object(args[0]);
+              const reservationCall = first?.reservationId === id &&
+                (first.spaceId === undefined || first.spaceId === actor.mindId);
+              const jobCreation = hasTargetExportJob &&
+                call.method === "createExportJob" &&
+                first?.jobId === ref && first.spaceId === actor.mindId;
+              return reservationCall || jobCreation;
             }).map((call) => String(call.method)).slice(0, 20) };
         }).filter((item) => item.methods.length > 0);
-        const exportJobs = metadata.exportJobs;
-        const job = pairs(exportJobs).map(([, value]) => object(value))
-          .find((value) => value?.jobId === ref);
         targetCandidateTraces.push({ reservation_id: id, operation_ref: ref,
           operation: candidate.operation, created_at_snapshot: candidate.createdAt,
           expires_at_snapshot: candidate.expiresAt, state_at_snapshot: candidate.state,
           updated_at_snapshot: candidate.updatedAt,
           related_calls: relatedCalls,
-          job_at_snapshot: job == null ? null : {
+          trace_limitation: "Unscoped job lifecycle calls are omitted because a job ID alone does not prove the Mind boundary.",
+          job_at_snapshot: !hasTargetExportJob ? null : {
             state: job.state, version: job.version, updated_at: job.updatedAt,
             completed_at: job.completedAt, expires_at: job.expiresAt,
             archive_cleaned_at: job.archiveCleanedAt,
           } });
       }
+      const collectorColumns = targetCandidates.map((_, index) =>
+        `SUM(CASE WHEN committed_at >= ?${index + 5} AND committed_at < ?3 THEN 1 ELSE 0 END) AS since_expiry_${index}`);
       const collectorResult = await input.database.prepare(
-        `/*md485-target-collectors*/ SELECT sequence, payload_json, committed_at
-         FROM md_metadata_events WHERE target = 'metadata' AND committed_at < ?1
-           AND instr(payload_json, 'collectExpiredCapacityReservations') > 0
-         ORDER BY sequence ASC LIMIT 201`,
-      ).bind("2026-09-21T15:41:52.951Z").all<EventRow>();
-      const collectorRows = collectorResult.results ?? [];
-      if (collectorResult.success === false || collectorRows.length > 200) {
-        throw new Error("collector trace unavailable");
+        `/*md485-target-collectors*/ SELECT
+           SUM(CASE WHEN committed_at < ?3 THEN 1 ELSE 0 END) AS before_export,
+           SUM(CASE WHEN committed_at >= ?3 AND committed_at < ?4 THEN 1 ELSE 0 END) AS export_to_import
+           ${collectorColumns.length > 0 ? `, ${collectorColumns.join(", ")}` : ""}
+         FROM md_metadata_events WHERE sequence BETWEEN ?1 AND ?2
+           AND target = 'metadata' AND operation = 'collectExpiredCapacityReservations'`,
+      ).bind(1269, 13027, AT, "2026-09-21T15:41:52.951Z",
+        ...targetCandidates.map((candidate) =>
+          typeof candidate.expiresAt === "string" ? candidate.expiresAt : AT))
+        .all<Record<string, number | null>>();
+      const collectorRow = collectorResult.results?.[0];
+      if (collectorResult.success === false || collectorRow === undefined) {
+        throw new Error("collector summary unavailable");
       }
-      const collectorCallsBeforeImport = collectorRows.flatMap((row) => {
-        const event = object(JSON.parse(row.payload_json));
-        return calls(event).filter((call) =>
-          call.method === "collectExpiredCapacityReservations").map(() => ({
-            committed_at: row.committed_at,
-          }));
-      });
       const collectorCounts = {
-        before_export: collectorCallsBeforeImport.filter((call) =>
-          call.committed_at < AT).length,
-        export_to_import: collectorCallsBeforeImport.filter((call) =>
-          call.committed_at >= AT).length,
+        before_export: collectorRow.before_export ?? 0,
+        export_to_import: collectorRow.export_to_import ?? 0,
         since_target_expiry_before_export: targetCandidates.map((candidate) => ({
           reservation_id: candidate.reservationId,
-          count: collectorCallsBeforeImport.filter((call) =>
-            typeof candidate.expiresAt === "string" &&
-            call.committed_at >= candidate.expiresAt && call.committed_at < AT).length,
+          count: collectorRow[`since_expiry_${targetCandidates.indexOf(candidate)}`] ?? 0,
         })),
       };
       return response(200, { ok: true, data: {

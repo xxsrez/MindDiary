@@ -54,6 +54,8 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
       memberships: encodedMap([["membership-own", {
         principalId: "principal_owner", spaceId: OWN, state: "active", role: "owner",
       }]]),
+      exportJobs: encodedMap([["job-own", { jobId: "job-own", spaceId: OWN,
+        state: "completed", updatedAt: "2026-09-25T12:00:00.000Z" }]]),
       capacityReservations: encodedMap([
         [ownId, { reservationId: ownId, spaceId: OWN, heavy: true,
           operation: "export", operationRef: "job-own",
@@ -109,13 +111,25 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
                   payload_json: '{"v":1,"kind":"direct","target":"tokens","method":"noop","args":[]}' };
               }) };
           }
-          if (sql.includes("/*md485-target-collectors*/")) return {
-            success: true, results: [],
-          };
-          if (sql.includes("/*md485-target-related*/")) return {
-            success: true, results: [event(1, ownId, OWN, "job-own"),
-              event(2, foreignId, FOREIGN, "job-foreign")],
-          };
+          if (sql.includes("/*md485-target-collectors*/")) {
+            assert.match(sql, /sequence BETWEEN \?1 AND \?2/u);
+            assert.match(sql, /operation = 'collectExpiredCapacityReservations'/u);
+            assert.deepEqual(this.args.slice(0, 4), [1269, 13027,
+              "2026-09-21T15:40:15.540Z", "2026-09-21T15:41:52.951Z"]);
+            return { success: true, results: [{ before_export: 2,
+              export_to_import: 1, since_expiry_0: 1 }] };
+          }
+          if (sql.includes("/*md485-target-related*/")) {
+            assert.match(sql, /sequence BETWEEN \?1 AND \?2/u);
+            assert.deepEqual(this.args, [1269, 13040, ownId]);
+            return { success: true, results: [event(1, ownId, OWN, "job-own"),
+              event(2, foreignId, FOREIGN, "job-own"),
+              { sequence: 3, committed_at: "2026-09-21T10:00:03.000Z",
+                payload_json: JSON.stringify({ v: 1, kind: "direct", target: "metadata",
+                  method: "updateUnrelatedEntry", args: [{ spaceId: FOREIGN,
+                    body: `contains ${ownId} but is unrelated` }] }) }],
+            };
+          }
           if (sql.includes("/*md485-capacity-events*/")) {
             assert.match(sql, /completeExpiredExportCleanup/u);
             return { success: true,
@@ -180,6 +194,12 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
     { target: 1, owned_other: 0, site_other: 1 });
   assert.equal(boundedBody.data.target_candidate_traces[0].reservation_id, ownId);
   assert.equal(boundedBody.data.target_candidate_traces[0].related_calls.length, 1);
+  assert.deepEqual(boundedBody.data.target_candidate_traces[0].related_calls[0].methods,
+    ["admitCapacityReservation", "createExportJob"]);
+  assert.equal(boundedBody.data.collector_counts.before_export, 2);
+  assert.equal(boundedBody.data.collector_counts.export_to_import, 1);
+  assert.equal(boundedBody.data.collector_counts
+    .since_target_expiry_before_export[0].count, 1);
   assert.equal(JSON.stringify(boundedBody).includes(foreignId), false);
 });
 
