@@ -11,6 +11,7 @@ import { handleAcceptanceSession } from "./session-http.mjs";
 import { cleanupRun } from "./cleanup.mjs";
 import { acceptanceInventory } from "./inventory.mjs";
 import { recoverRunOrphans } from "./run-orphan-cleanup.mjs";
+import { seedValidationFixture } from "./validation-fixture.mjs";
 import { recoverOrphanOAuth } from "./oauth-recovery.mjs";
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
@@ -135,7 +136,7 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
         const recovery = createProduct();
         await recovery.worker.fetch(new Request(ACCEPTANCE_ORIGIN + "/api/v1/session"), environment, context);
         return recovery.runtime(environment.DB).recoverBackground(16, "full");
-      }));
+      }), (runId, input) => seedValidationFixture(store, runId, input, environment));
       if (sessionResponse) return sessionResponse;
       if (path.startsWith("/api/v1/internal/system-backup/")) {
         let backupRun;

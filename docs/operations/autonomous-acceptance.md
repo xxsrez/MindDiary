@@ -67,6 +67,16 @@ run-owned `space_id`, отсутствии основного объекта и 
 ссылка останавливают очистку; barrier receipts завершаются только обычным
 `cleanup` после нулевой полной inventory.
 
+Для проверки публичной пагинации `validate_mind` controller отдельного
+acceptance Site может построить legacy revision с 105 недействительными
+Markdown-ссылками в уже созданном run-owned ordinary Mind. Этот test-only seed
+проверяет текущего Owner по серверному состоянию, exact HEAD и принадлежность
+Mind текущему active run; повтор этапа возвращает ту же revision. Он обходит
+обычную write-validation, чтобы проверить чтение диагностик существующей
+legacy revision через настоящий MCP. Второй этап создаёт свежий HEAD для
+проверки привязки cursor к старой revision. После сценария controller закрывает
+run и сверяет полную baseline inventory. Product Site такого маршрута не имеет.
+
 ## Применимость платформенных проверок
 
 Управляющий запуск фиксирует exact base/candidate SHA, выбранные Task Manager

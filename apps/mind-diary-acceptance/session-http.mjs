@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory, recoverRunOrphans) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory, recoverRunOrphans, seedValidationFixture) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -90,6 +90,10 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     if (orphanRoute && request.method === "POST" && recoverRunOrphans) {
       return json(await recoverRunOrphans(orphanRoute[1], await body(request)));
     }
+    const validationRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/validation-fixture$/.exec(pathname);
+    if (validationRoute && request.method === "POST" && seedValidationFixture) {
+      return json(await seedValidationFixture(validationRoute[1], await body(request)));
+    }
     if (pathname === "/_acceptance/runs" && request.method === "POST") {
       return json(projection(await store.create(await body(request), request.headers.get("idempotency-key"))));
     }
@@ -108,7 +112,8 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     const status = code === "exchange_denied" ? 401 : code === "external_mcp_denied" ? 403 : code === "run_not_found" ? 404
       : ["run_capacity_reached", "idempotency_conflict"].includes(code) ? 409
       : ["invalid_run", "invalid_actor", "invalid_run_request", "invalid_idempotency_key", "invalid_request"].includes(code) ? 400 : 503;
-    const controllerDiagnostic = pathname.endsWith("/orphan-cleanup") && code.startsWith("orphan_");
+    const controllerDiagnostic = pathname.endsWith("/orphan-cleanup") && code.startsWith("orphan_") ||
+      pathname.endsWith("/validation-fixture") && code.startsWith("validation_fixture_");
     return json({ error: status === 503 && !controllerDiagnostic ? "acceptance_unavailable" : code }, status);
   }
 }
