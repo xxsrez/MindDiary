@@ -47,7 +47,7 @@ function fixture() {
     readMetadata: async () => {
       calls.metadata++;
       return { reservations: [{
-        reservationId: "capacity:commit:synthetic", spaceId: mind,
+        reservationId: "<script>alert(1)</script>", spaceId: mind,
         operation: "commit", state: "cleanup_pending", createdAt: created,
         expiresAt: expires, writerClosedAt: null,
         requested: { physicalCanonicalBytes: 6_961_159,
@@ -105,6 +105,13 @@ test("MD-485 projection requires owner and returns bounded object metadata witho
   });
   assert.equal(body.data.reservation.actual, null);
   assert.equal(JSON.stringify(body).includes(hashA), false);
+  const htmlResponse = await f.handler(new Request(url, {
+    headers: { "x-test-owner": "yes", accept: "text/html" },
+  }));
+  assert.equal(htmlResponse.headers.get("content-type"), "text/html; charset=utf-8");
+  const html = await htmlResponse.text();
+  assert.ok(html.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
+  assert.equal(html.includes("<script>"), false);
   assert.deepEqual([f.calls.get, f.calls.put, f.calls.delete], [0, 0, 0]);
   f.rows.set(`spaces/${mind}/objects/sha256/${"d".repeat(64)}`,
     { size: 1, customMetadata: { spaceId: "other" } });

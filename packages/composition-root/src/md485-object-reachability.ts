@@ -16,7 +16,16 @@ const HEADERS = {
   "x-content-type-options": "nosniff",
 } as const;
 
-function respond(status: number, data: unknown): Response {
+function respond(status: number, data: unknown, html = false): Response {
+  if (html && status === 200) {
+    const escaped = JSON.stringify(data, null, 2).replace(/[&<>"']/gu, (char) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[char] ?? char);
+    return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>MD-485 UAT diagnostic</title></head><body><pre>${escaped}</pre></body></html>`, {
+      status, headers: { ...HEADERS, "content-type": "text/html; charset=utf-8",
+        "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'" },
+    });
+  }
   return new Response(`${JSON.stringify(data)}\n`, { status, headers: HEADERS });
 }
 
@@ -213,7 +222,7 @@ export function createMd485ObjectReachability(input: {
           integrity_sidecar_bytes: sidecars.reduce((sum, item) => sum + item.size, 0),
         },
         limitation: "Creation time is only a candidate association. R2 and D1 are not one atomic snapshot; an unsettled writer may change R2 later. No contents were read or changed.",
-      } });
+      } }, request.headers.get("accept")?.includes("text/html") ?? false);
     } catch {
       return respond(503, { ok: false, error: "diagnostic_unavailable" });
     }
