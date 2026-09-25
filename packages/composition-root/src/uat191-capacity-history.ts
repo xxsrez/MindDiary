@@ -149,7 +149,7 @@ export function createUat191CapacityHistory(input: {
                 instr(payload_json, '"heavy":true') > 0 OR
                 instr(payload_json, '"method":"completeExportJob"') > 0 OR
                 instr(payload_json, '"method":"expireExportJob"') > 0 OR
-                instr(payload_json, '"method":"markExportArchiveCleaned"') > 0 OR
+                instr(payload_json, '"method":"completeExpiredExportCleanup"') > 0 OR
                 instr(payload_json, '"method":"collectExpiredCapacityReservations"') > 0)
          ORDER BY sequence ASC LIMIT ?3`,
       ).bind(FROM, AT, MAX_EVENTS + 1).all<EventRow>();
@@ -194,7 +194,15 @@ export function createUat191CapacityHistory(input: {
           });
         }
       }
-      const unique = [...new Map(admissions.map((item) => [item.id, item])).values()];
+      const uniqueById = new Map<string, typeof admissions[number]>();
+      for (const item of admissions) {
+        const existing = uniqueById.get(item.id);
+        if (existing === undefined ||
+            (item.confirmedInTransaction && !existing.confirmedInTransaction)) {
+          uniqueById.set(item.id, item);
+        }
+      }
+      const unique = [...uniqueById.values()];
       const byScope = { target: 0, owned_other: 0, site_other: 0 };
       const confirmed = { target: 0, owned_other: 0, site_other: 0 };
       const confirmedNoTerminalUnexpired = { target: 0, owned_other: 0, site_other: 0 };
@@ -220,10 +228,12 @@ export function createUat191CapacityHistory(input: {
         const lifecycleCalls = observed.flatMap((event) =>
           event.sequence <= item.sequence ? [] : event.calls.flatMap((call) => {
             const args = firstArg(call);
-            const directId = args?.reservationId === item.id;
+            const directId = args?.reservationId === item.id &&
+              ["consumeCapacityReservation", "cancelCapacityReservation",
+                "releaseCapacityReservation"].includes(String(call.method));
             const jobId = Array.isArray(call.args) && call.args[0] === item.operationRef;
             return directId || (item.operation === "export" && jobId &&
-              ["completeExportJob", "expireExportJob", "markExportArchiveCleaned"].includes(String(call.method)))
+              ["completeExportJob", "expireExportJob", "completeExpiredExportCleanup"].includes(String(call.method)))
               ? [{ sequence: event.sequence, method: call.method }] : [];
           }));
         if (confirmedCreate) {
@@ -262,7 +272,7 @@ export function createUat191CapacityHistory(input: {
         incident: "MD-485/UAT191", from_utc: FROM, before_utc: AT,
         snapshot_sequence: head.sequence, snapshot_updated_at: head.updated_at,
         events_scanned: rows.length,
-        heavy_admission_attempts: byScope,
+        distinct_heavy_admission_ids_seen: byScope,
         creation_confirmed_by_followup: confirmed,
         confirmed_operations: confirmedOperations,
         confirmed_without_terminal_call_unexpired_at_cutoff: confirmedNoTerminalUnexpired,

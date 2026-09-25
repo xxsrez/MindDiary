@@ -58,14 +58,25 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
           }] };
           if (sql.includes("/*md485-capacity-chunks*/")) return { success: true,
             results: [{ chunk_index: 0, payload_json: snapshot }] };
-          if (sql.includes("/*md485-capacity-events*/")) return { success: true,
+          if (sql.includes("/*md485-capacity-events*/")) {
+            assert.match(sql, /completeExpiredExportCleanup/u);
+            return { success: true,
             results: [event(1, ownId, OWN, "job-own"),
               event(2, foreignId, FOREIGN, "job-foreign"),
               { sequence: 3, committed_at: "2026-09-21T10:00:03.000Z",
                 payload_json: JSON.stringify({ v: 1, kind: "direct", target: "metadata",
-                  method: "releaseCapacityReservation",
-                  args: [{ reservationId: ownId, releasedAt: "2026-09-21T10:00:03.000Z" }],
+                  method: "completeExpiredExportCleanup",
+                  args: ["job-own", 2, "2026-09-21T10:00:03.000Z"],
+                }) },
+              { sequence: 4, committed_at: "2026-09-21T10:00:04.000Z",
+                payload_json: JSON.stringify({ v: 1, kind: "transaction", target: "metadata",
+                  method: "runExportStartTransaction", calls: [{ method: "admitCapacityReservation",
+                    args: [{ reservationId: foreignId, spaceId: FOREIGN, operation: "export",
+                      operationRef: "job-foreign", heavy: true,
+                      createdAt: "2026-09-21T10:00:04.000Z",
+                      expiresAt: "2026-09-22T10:00:04.000Z" }] }],
                 }) }] };
+          }
           throw new Error("unexpected query");
         },
       };
@@ -78,7 +89,9 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
   ));
   assert.equal(result.status, 200);
   const body = await result.json();
-  assert.deepEqual(body.data.heavy_admission_attempts,
+  assert.deepEqual(body.data.distinct_heavy_admission_ids_seen,
+    { target: 1, owned_other: 0, site_other: 1 });
+  assert.deepEqual(body.data.creation_confirmed_by_followup,
     { target: 1, owned_other: 0, site_other: 1 });
   assert.deepEqual(body.data.confirmed_with_terminal_call_before_cutoff,
     { target: 1, owned_other: 0, site_other: 0 });
