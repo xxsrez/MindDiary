@@ -4,6 +4,11 @@ import {
   type D1DatabaseLike as AuditD1DatabaseLike,
   type SitesObservabilityWriter,
 } from "@mind-diary/adapter-audit-sites";
+import {
+  authorizedUat191MindId,
+  createUat191IncidentDiagnostic,
+  UAT191_INCIDENT_DIAGNOSTIC_PATH,
+} from "./uat191-incident-diagnostic.js";
 import { NoteQueueService } from "@mind-diary/application-content";
 import {
   createBackgroundServiceActor,
@@ -1732,6 +1737,14 @@ export async function createProductSiteRuntime(
     ...controlServices,
     consistentRead,
   });
+  const uat191IncidentDiagnostic = createUat191IncidentDiagnostic({
+    database: options.database,
+    authorizedMindId: authorizedUat191MindId({
+      resolveIdentity, operatorPrincipalIds: configuredOperatorPrincipalIds,
+      resolveTargetMind: (actor) => control.services.routes.resolveRoute(
+        actor as never, "/madeira-bus-schedules"),
+    }),
+  });
 
   const restrictedUatGeneratedSourceHandler =
     restrictedUatGeneratedSourceTest === undefined
@@ -2359,6 +2372,10 @@ export async function createProductSiteRuntime(
       const path = new URL(request.url).pathname;
       if (path.startsWith("/api/v1/internal/system-backup")) {
         return systemBackupHttp(request);
+      }
+      if (options.publicOrigin === "https://mind-diary.example.invalid" &&
+          path === UAT191_INCIDENT_DIAGNOSTIC_PATH) {
+        return uat191IncidentDiagnostic(request);
       }
       const oauthResponse = await oauth.fetch(request);
       if (oauthResponse !== null) return oauthResponse;
