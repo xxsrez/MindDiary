@@ -4,11 +4,6 @@ import {
   type D1DatabaseLike as AuditD1DatabaseLike,
   type SitesObservabilityWriter,
 } from "@mind-diary/adapter-audit-sites";
-import {
-  authorizedUat191CapacityActor,
-  createUat191CapacityHistory,
-  UAT191_CAPACITY_HISTORY_PATH,
-} from "./uat191-capacity-history.js";
 import { NoteQueueService } from "@mind-diary/application-content";
 import {
   createBackgroundServiceActor,
@@ -1740,14 +1735,6 @@ export async function createProductSiteRuntime(
     ...controlServices,
     consistentRead,
   });
-  const uat191CapacityHistory = createUat191CapacityHistory({
-    database: options.database,
-    authorizedActor: authorizedUat191CapacityActor({
-      resolveIdentity, operatorPrincipalIds: configuredOperatorPrincipalIds,
-      resolveTargetMind: (actor) => control.services.routes.resolveRoute(
-        actor as never, "/madeira-bus-schedules"),
-    }),
-  });
 
   const restrictedUatGeneratedSourceHandler =
     restrictedUatGeneratedSourceTest === undefined
@@ -2375,10 +2362,6 @@ export async function createProductSiteRuntime(
       const path = new URL(request.url).pathname;
       if (path.startsWith("/api/v1/internal/system-backup")) {
         return systemBackupHttp(request);
-      }
-      if (options.publicOrigin === "https://mind-diary.example.invalid" &&
-          path === UAT191_CAPACITY_HISTORY_PATH) {
-        return uat191CapacityHistory(request);
       }
       const oauthResponse = await oauth.fetch(request);
       if (oauthResponse !== null) return oauthResponse;
