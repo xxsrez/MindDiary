@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { InMemoryRevisionMetadataStore } from "../../packages/adapter-metadata-memory/dist/index.js";
+import { DEFAULT_CAPACITY_LIMITS } from "../../packages/application-content/dist/capacity.js";
 
 import {
   authorizedUat191CapacityActor,
@@ -13,6 +15,16 @@ const foreignId = `capacity:export:${FOREIGN}:job-foreign`;
 
 function encodedMap(entries) {
   return { __md_sites_type: "map", entries };
+}
+
+function encodeDurable(value) {
+  return JSON.stringify(value, (_key, item) => {
+    if (item === undefined) return { __md_sites_type: "undefined" };
+    if (item instanceof Uint8Array) return { __md_sites_type: "uint8array", bytes: [...item] };
+    if (item instanceof Map) return encodedMap([...item.entries()]);
+    if (item instanceof Set) return { __md_sites_type: "set", values: [...item.values()] };
+    return item;
+  });
 }
 
 function event(sequence, reservationId, spaceId, jobId) {
@@ -34,6 +46,9 @@ function event(sequence, reservationId, spaceId, jobId) {
 }
 
 test("UAT191 capacity summary never exposes another owner's identifiers", async () => {
+  let incidentOperation = "runExportStartTransaction";
+  const legacySnapshot = encodeDurable({ v: 1,
+    metadata: new InMemoryRevisionMetadataStore().exportDurableSnapshot(), tokens: {} });
   const snapshot = JSON.stringify({
     v: 1, metadata: {
       memberships: encodedMap([["membership-own", {
@@ -50,7 +65,7 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
   const database = {
     prepare(sql) {
       return {
-        bind() { return this; },
+        bind(...args) { this.args = args; return this; },
         async all() {
           if (sql.includes("/*md485-capacity-head*/")) return { success: true, results: [{
             sequence: 13040, chunk_count: 1, payload_chars: snapshot.length,
@@ -63,9 +78,35 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
               first_sequence: 1269, last_sequence: 13024 }],
           };
           if (sql.includes("/*md485-capacity-legacy-snapshot*/")) return {
-            success: true, results: [{ sequence: 1268, payload_json: snapshot,
+            success: true, results: [{ sequence: 1268, payload_json: legacySnapshot,
               updated_at: "2026-08-23T02:11:42.275Z" }],
           };
+          if (sql.includes("/*md485-capacity-replay*/")) {
+            const [first, last] = this.args;
+            return { success: true, results: Array.from(
+              { length: Math.min(512, last - first + 1) }, (_, index) => {
+                const sequence = first + index;
+                if (sequence === 13025) return {
+                  sequence, target: "metadata", operation: incidentOperation,
+                  committed_at: "2026-09-21T15:40:15.540Z",
+                  payload_json: encodeDurable({ v: 1, kind: "transaction", target: "metadata",
+                    method: incidentOperation, calls: [{
+                      method: "admitCapacityReservation", args: [{
+                        reservationId: ownId, requestedByPrincipalId: "principal_owner",
+                        spaceId: OWN, operation: "export", operationRef: "job-own",
+                        baseRevisionId: null, idempotencyKey: "test-export-key",
+                        requested: { physicalCanonicalBytes: 0, temporaryBytes: 1024,
+                          d1MetadataBytes: 1280 }, bulk: true,
+                        heavy: true, createdAt: "2026-09-21T15:40:15.540Z",
+                        expiresAt: "2026-09-22T15:40:15.540Z",
+                      }, DEFAULT_CAPACITY_LIMITS],
+                    }] }),
+                };
+                return { sequence, target: "tokens", operation: "noop",
+                  committed_at: "2026-09-21T10:00:00.000Z",
+                  payload_json: '{"v":1,"kind":"direct","target":"tokens","method":"noop","args":[]}' };
+              }) };
+          }
           if (sql.includes("/*md485-capacity-events*/")) {
             assert.match(sql, /completeExpiredExportCleanup/u);
             return { success: true,
@@ -107,9 +148,18 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
     { target: 0, owned_other: 0, site_other: 1 });
   assert.equal(body.data.target_reservations[0].reservation_id, ownId);
   assert.equal(body.data.historical_replay_feasibility.contiguous_by_count, true);
+  assert.equal(body.data.historical_replay.status, "replayed_under_current_semantics",
+    JSON.stringify(body.data.historical_replay));
+  assert.equal(body.data.historical_replay.before_export.active_heavy_site, 0);
   assert.equal(JSON.stringify(body).includes(foreignId), false);
   assert.equal(JSON.stringify(body).includes(FOREIGN), false);
   assert.equal(JSON.stringify(body).includes("job-foreign"), false);
+  incidentOperation = "runCapacityTransaction";
+  const mismatched = await handler(new Request(
+    "https://mind-diary.example.invalid/api/v1/internal/operators/diagnostics/md485-uat191-capacity",
+  ));
+  assert.equal((await mismatched.json()).data.historical_replay.status,
+    "incompatible_or_unavailable");
 });
 
 test("UAT191 capacity summary fails closed for an unauthorized caller", async () => {

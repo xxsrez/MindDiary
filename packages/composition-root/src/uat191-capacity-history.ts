@@ -1,4 +1,5 @@
 import type { D1DatabaseLike } from "@mind-diary/adapter-metadata-sites";
+import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import type { ProductSitesIdentityResolution, ProductWebActor } from "@mind-diary/adapter-web";
 
 /** One-time, read-only UAT incident projection. Remove after read-back. */
@@ -39,6 +40,13 @@ interface LegacySnapshotRow {
   readonly payload_json: string;
   readonly updated_at: string;
 }
+interface ReplayRow {
+  readonly sequence: number;
+  readonly target: string;
+  readonly operation: string;
+  readonly payload_json: string;
+  readonly committed_at: string;
+}
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -74,6 +82,159 @@ function calls(value: unknown): readonly Record<string, unknown>[] {
 
 function firstArg(call: Record<string, unknown>): Record<string, unknown> | null {
   return Array.isArray(call.args) ? object(call.args[0]) : null;
+}
+
+function revive<T>(payload: string): T {
+  return JSON.parse(payload, (_key, value: unknown) => {
+    const tagged = object(value);
+    if (tagged?.__md_sites_type === "undefined") return undefined;
+    if (tagged?.__md_sites_type === "uint8array" && Array.isArray(tagged.bytes)) {
+      return Uint8Array.from(tagged.bytes as number[]);
+    }
+    if (tagged?.__md_sites_type === "map" && Array.isArray(tagged.entries)) {
+      return new Map(tagged.entries as readonly (readonly [unknown, unknown])[]);
+    }
+    if (tagged?.__md_sites_type === "set" && Array.isArray(tagged.values)) {
+      return new Set(tagged.values);
+    }
+    return value;
+  }) as T;
+}
+
+function callable(target: object, method: string): (...args: unknown[]) => unknown {
+  const candidate = Reflect.get(target, method) as unknown;
+  if (typeof candidate !== "function") throw new Error("historical method unavailable");
+  return candidate.bind(target) as (...args: unknown[]) => unknown;
+}
+
+async function replayHistoricalCapacity(input: {
+  database: D1DatabaseLike;
+  checkpointJson: string;
+  principalId: string;
+  mindId: string;
+}): Promise<Record<string, unknown>> {
+  const checkpoint = revive<Record<string, unknown>>(input.checkpointJson);
+  const metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(checkpoint.metadata);
+  const endSequence = 13025;
+  let nextSequence = 1269;
+  let tokenEventsSkipped = 0;
+  let replayStage = "read_page";
+  let beforeExport: Record<string, unknown> | null = null;
+  let exportAdmission: Record<string, unknown> | null = null;
+  try {
+  while (nextSequence <= endSequence) {
+    const result = await input.database.prepare(
+      `/*md485-capacity-replay*/ SELECT sequence, target, operation, payload_json, committed_at
+       FROM md_metadata_events WHERE sequence >= ?1 AND sequence <= ?2
+       ORDER BY sequence ASC LIMIT 512`,
+    ).bind(nextSequence, endSequence).all<ReplayRow>();
+    const rows = result.results ?? [];
+    if (result.success === false || rows.length === 0) {
+      throw new Error("historical replay gap");
+    }
+    for (const row of rows) {
+      replayStage = "validate_event";
+      if (row.sequence !== nextSequence) throw new Error("historical replay gap");
+      const event = revive<Record<string, unknown>>(row.payload_json);
+      if (event.v !== 1 || event.target !== row.target || event.method !== row.operation) {
+        throw new Error("historical event envelope invalid");
+      }
+      if (row.sequence === endSequence) {
+        replayStage = "incident_identity";
+        const targetCalls = calls(event).filter((call) => {
+          const args = firstArg(call);
+          return call.method === "admitCapacityReservation" &&
+            args?.spaceId === input.mindId && args.operation === "export" &&
+            args.createdAt === AT;
+        });
+        if (row.target !== "metadata" || event.kind !== "transaction" ||
+            row.operation !== "runExportStartTransaction" ||
+            row.committed_at !== AT || targetCalls.length !== 1) {
+          throw new Error("incident event identity mismatch");
+        }
+        replayStage = "incident_state";
+        const state = object(metadata.exportDurableSnapshot());
+        const reservations = state?.capacityReservations;
+        const memberships = state?.memberships;
+        if (!(reservations instanceof Map) || !(memberships instanceof Map)) {
+          throw new Error("historical replay state unavailable");
+        }
+        const ownedMindIds = new Set<string>([input.mindId]);
+        for (const value of memberships.values()) {
+          const membership = object(value);
+          if (membership?.principalId === input.principalId &&
+              membership.state === "active" && membership.role === "owner" &&
+              typeof membership.spaceId === "string") {
+            ownedMindIds.add(membership.spaceId);
+          }
+        }
+        const active = [...reservations.values()].filter((value) => {
+          const reservation = object(value);
+          return reservation?.state === "active" && reservation.heavy === true;
+        });
+        const target = active.filter((value) => object(value)?.spaceId === input.mindId);
+        const owned = active.filter((value) =>
+          ownedMindIds.has(String(object(value)?.spaceId)));
+        beforeExport = {
+          active_heavy_target: target.length,
+          active_heavy_owner: owned.length,
+          active_heavy_site: active.length,
+          expired_active_target: target.filter((value) =>
+            String(object(value)?.expiresAt) <= AT).length,
+          expired_active_owner: owned.filter((value) =>
+            String(object(value)?.expiresAt) <= AT).length,
+          expired_active_site: active.filter((value) =>
+            String(object(value)?.expiresAt) <= AT).length,
+          holders_by_scope: {
+            target: target.length,
+            owned_other: owned.length - target.length,
+            site_other: active.length - owned.length,
+          },
+          target_reservations: target.map((value) => {
+            const reservation = object(value);
+            return { reservation_id: reservation?.reservationId,
+              operation: reservation?.operation, state: reservation?.state,
+              created_at: reservation?.createdAt, expires_at: reservation?.expiresAt };
+          }),
+        };
+      }
+      if (row.target === "tokens") {
+        tokenEventsSkipped += 1;
+      } else if (row.target === "metadata" && event.kind === "direct") {
+        replayStage = "apply_metadata";
+        await callable(metadata, String(event.method))(...event.args as unknown[]);
+      } else if (row.target === "metadata" && event.kind === "transaction") {
+        replayStage = "apply_metadata";
+        await callable(metadata, String(event.method))(async (transaction: object) => {
+          let last: unknown;
+          for (const call of event.calls as Array<Record<string, unknown>>) {
+            last = await callable(transaction, String(call.method))(...call.args as unknown[]);
+            if (row.sequence === endSequence && call.method === "admitCapacityReservation" &&
+                firstArg(call)?.spaceId === input.mindId) {
+              const admission = object(last);
+              exportAdmission = { kind: admission?.kind ?? null,
+                reason: admission?.reason ?? null };
+            }
+          }
+          return last;
+        });
+      } else {
+        throw new Error("historical event kind invalid");
+      }
+      nextSequence += 1;
+      replayStage = "read_page";
+    }
+  }
+  } catch {
+    return { status: "incompatible_or_unavailable",
+      last_contiguous_sequence: nextSequence - 1, failed_stage: replayStage,
+      limitation: "Read-only replay did not complete; no historical holder is inferred." };
+  }
+  return { status: "replayed_under_current_semantics", from_sequence: 1268,
+    through_sequence: endSequence, metadata_events_replayed: endSequence - 1268 - tokenEventsSkipped,
+    token_events_skipped: tokenEventsSkipped, before_export: beforeExport,
+    export_admission_under_current_semantics: exportAdmission,
+    limitation: "Current metadata-store behavior can differ from the UAT191 artifact; this replay is a diagnostic comparison, not historical proof until semantics are reconciled." };
 }
 
 export function authorizedUat191CapacityActor(input: {
@@ -156,6 +317,15 @@ export function createUat191CapacityHistory(input: {
       const legacyMetadata = object(legacyEnvelope?.metadata);
       if (legacyEnvelope?.v !== 1 || legacyMetadata === null) {
         throw new Error("legacy snapshot invalid");
+      }
+      let historicalReplay: Record<string, unknown>;
+      try {
+        historicalReplay = await replayHistoricalCapacity({ database: input.database,
+          checkpointJson: legacySnapshot.payload_json,
+          principalId: actor.principalId, mindId: actor.mindId });
+      } catch {
+        historicalReplay = { status: "incompatible_or_unavailable",
+          limitation: "The temporary read-only replay did not complete; no historical holder is inferred." };
       }
       const ownedMindIds = new Set<string>();
       for (const [, entry] of pairs(metadata.memberships)) {
@@ -317,6 +487,7 @@ export function createUat191CapacityHistory(input: {
           contiguous_by_count: historicalStats.event_count === 11756 &&
             historicalStats.first_sequence === 1269 && historicalStats.last_sequence === 13024,
         },
+        historical_replay: historicalReplay,
         snapshot_sequence: head.sequence, snapshot_updated_at: head.updated_at,
         events_scanned: rows.length,
         distinct_heavy_admission_ids_seen: byScope,
