@@ -1,4 +1,5 @@
 import type { R2BucketLike } from "@mind-diary/adapter-object-sites";
+import { createSitesMetadataStore, type D1DatabaseLike } from "@mind-diary/adapter-metadata-sites";
 import type { ProductSitesIdentityResolution, ProductWebActor } from "@mind-diary/adapter-web";
 
 /** Temporary read-only UAT projection for the user-authorized MD-485 diagnosis. */
@@ -79,6 +80,36 @@ export function authorizeMd485ObjectReachability(input: {
         mind.access.role === "owner" ? mind.mindId : null;
     } catch { return null; }
   };
+}
+
+export function createMd485ProductObjectReachability(input: {
+  readonly bucket: R2BucketLike;
+  readonly database: D1DatabaseLike;
+  readonly metadata: Awaited<ReturnType<typeof createSitesMetadataStore>>;
+  readonly resolveIdentity: (request: Request) => Promise<ProductSitesIdentityResolution>;
+  readonly operatorPrincipalIds: ReadonlySet<string>;
+  readonly resolveTargetMind: (actor: ProductWebActor) => Promise<{
+    readonly isPersonal: boolean;
+    readonly mindId: string;
+    readonly access: { readonly kind: string; readonly role: string | null };
+  }>;
+}): (request: Request) => Promise<Response> {
+  return createMd485ObjectReachability({
+    bucket: input.bucket,
+    readSequence: async () => {
+      const rows = await input.database.prepare(
+        "SELECT backup_sequence AS sequence FROM md_backup_control WHERE singleton_id = 1",
+      ).all<{ sequence: number }>();
+      const row = rows.results?.[0];
+      if (!Number.isSafeInteger(row?.sequence)) throw new Error("metadata sequence unavailable");
+      return row!.sequence;
+    },
+    readMetadata: (mindId) => input.metadata.withConsistentRead(async (store) => ({
+      reservations: await store.listCapacityReservationsForSpace(mindId as never),
+      reachable: await store.listReachableSpaceCanonicalObjectsForSpace(mindId as never),
+    })),
+    authorizedMindId: authorizeMd485ObjectReachability(input),
+  });
 }
 
 export function createMd485ObjectReachability(input: {
