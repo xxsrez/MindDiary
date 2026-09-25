@@ -48,6 +48,11 @@ export async function cleanupFailedImportOrphan(store, runId, input, environment
       await metadata.readHead(session.spaceId) !== null) {
     fail("failed_import_orphan_session_mismatch");
   }
+  const overlapping = await store.statement(
+    "SELECT COUNT(*) AS count FROM md_acceptance_runs WHERE id != ? AND created_at <= ? AND expires_at >= ?",
+    runId, sessionCreated, sessionCreated,
+  ).first();
+  if (overlapping.count !== 0) fail("failed_import_orphan_run_provenance_ambiguous");
   const stagedRecords = await metadata.listMarkdownImportStagedFiles(input.import_id);
   if (stagedRecords.length !== 1 || stagedRecords[0].importId !== input.import_id) {
     fail("failed_import_orphan_staged_record_mismatch");

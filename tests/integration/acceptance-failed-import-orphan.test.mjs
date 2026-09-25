@@ -9,6 +9,7 @@ test("failed import cleanup deletes only the single run-proven staged object", a
     actors: [], created_at: now - 1000, expires_at: now + 1000 };
   const importId = "import_synthetic", spaceId = "space_synthetic", stagedFileId = "staged_synthetic";
   const bucket = new FakeR2Bucket();
+  let overlappingRuns = 0;
   await bucket.put(`staged-bundle-files/${stagedFileId}`, new Uint8Array([1, 2]), {
     customMetadata: { schema: "md-r2-staged-bundle-file-v1", spaceId,
       bindingOwnerId: `import-owner_${importId}`, stagedFileId, size: "2",
@@ -18,7 +19,7 @@ test("failed import cleanup deletes only the single run-proven staged object", a
     run: async () => run,
     statement: (sql) => ({ first: async () => sql.includes("cleanup_receipts")
       ? { receipt_json: JSON.stringify({ state: "cleaned", actors_cleaned: 4 }) }
-      : { count: 0 } }),
+      : { count: sql.includes("created_at <=") ? overlappingRuns : 0 } }),
   };
   const metadata = {
     captureSystemBackupState: async () => ({ snapshot: {
@@ -42,6 +43,10 @@ test("failed import cleanup deletes only the single run-proven staged object", a
     { DB: {}, MIND_DIARY_BUCKET: bucket }, dependencies);
   await assert.rejects(cleanup({ import_id: "import_foreign" }), /failed_import_orphan_session_mismatch/);
   assert.equal((await bucket.list()).objects.length, 1);
+  overlappingRuns = 1;
+  await assert.rejects(cleanup({ import_id: importId }), /failed_import_orphan_run_provenance_ambiguous/);
+  assert.equal((await bucket.list()).objects.length, 1);
+  overlappingRuns = 0;
   await bucket.put("foreign-object", new Uint8Array([3]));
   await assert.rejects(cleanup({ import_id: importId }), /failed_import_orphan_object_inventory/);
   assert.equal((await bucket.list()).objects.length, 2);
