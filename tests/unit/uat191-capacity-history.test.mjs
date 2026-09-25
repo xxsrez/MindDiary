@@ -131,7 +131,7 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
       };
     },
   };
-  const handler = createUat191CapacityHistory({ database,
+  const handler = createUat191CapacityHistory({ database, replay: true,
     authorizedActor: async () => ({ principalId: "principal_owner", mindId: OWN }) });
   const result = await handler(new Request(
     "https://mind-diary.example.invalid/api/v1/internal/operators/diagnostics/md485-uat191-capacity",
@@ -160,6 +160,16 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
   ));
   assert.equal((await mismatched.json()).data.historical_replay.status,
     "incompatible_or_unavailable");
+  const boundedHandler = createUat191CapacityHistory({ database,
+    authorizedActor: async () => ({ principalId: "principal_owner", mindId: OWN }) });
+  const bounded = await boundedHandler(new Request(
+    "https://mind-diary.example.invalid/api/v1/internal/operators/diagnostics/md485-uat191-capacity",
+  ));
+  const boundedBody = await bounded.json();
+  assert.equal(boundedBody.data.historical_replay.status, "skipped_after_hosted_timeout");
+  assert.deepEqual(boundedBody.data.snapshot_rows_created_before_cutoff_possible_active,
+    { target: 0, owned_other: 0, site_other: 1 });
+  assert.equal(JSON.stringify(boundedBody).includes(foreignId), false);
 });
 
 test("UAT191 capacity summary fails closed for an unauthorized caller", async () => {

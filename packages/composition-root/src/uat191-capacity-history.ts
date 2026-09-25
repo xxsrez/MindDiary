@@ -262,6 +262,8 @@ export function authorizedUat191CapacityActor(input: {
 
 export function createUat191CapacityHistory(input: {
   readonly database: D1DatabaseLike;
+  /** Unit-only replay switch; live UAT uses bounded ledger projection. */
+  readonly replay?: boolean;
   readonly authorizedActor: (request: Request) => Promise<{
     principalId: string;
     mindId: string;
@@ -318,14 +320,19 @@ export function createUat191CapacityHistory(input: {
       if (legacyEnvelope?.v !== 1 || legacyMetadata === null) {
         throw new Error("legacy snapshot invalid");
       }
-      let historicalReplay: Record<string, unknown>;
-      try {
-        historicalReplay = await replayHistoricalCapacity({ database: input.database,
-          checkpointJson: legacySnapshot.payload_json,
-          principalId: actor.principalId, mindId: actor.mindId });
-      } catch {
-        historicalReplay = { status: "incompatible_or_unavailable",
-          limitation: "The temporary read-only replay did not complete; no historical holder is inferred." };
+      let historicalReplay: Record<string, unknown> = {
+        status: "skipped_after_hosted_timeout",
+        limitation: "Full replay exceeded the UAT request deadline; no historical holder is inferred.",
+      };
+      if (input.replay === true) {
+        try {
+          historicalReplay = await replayHistoricalCapacity({ database: input.database,
+            checkpointJson: legacySnapshot.payload_json,
+            principalId: actor.principalId, mindId: actor.mindId });
+        } catch {
+          historicalReplay = { status: "incompatible_or_unavailable",
+            limitation: "The temporary read-only replay did not complete; no historical holder is inferred." };
+        }
       }
       const ownedMindIds = new Set<string>();
       for (const [, entry] of pairs(metadata.memberships)) {
@@ -461,15 +468,33 @@ export function createUat191CapacityHistory(input: {
       }
       const older = { target: 0, owned_other: 0, site_other: 0 };
       const olderStateActiveAtSnapshot = { target: 0, owned_other: 0, site_other: 0 };
+      const possibleActiveAtCutoff = { target: 0, owned_other: 0, site_other: 0 };
+      const lastTransitionBeforeCutoffNonactive = { target: 0, owned_other: 0, site_other: 0 };
+      const possibleExpiredAtCutoff = { target: 0, owned_other: 0, site_other: 0 };
+      const snapshotRowsCreatedAfterCutoff = { target: 0, owned_other: 0, site_other: 0 };
       for (const reservation of snapshotReservations.values()) {
         if (reservation.heavy !== true ||
             typeof reservation.createdAt !== "string" ||
-            reservation.createdAt >= FROM ||
             typeof reservation.spaceId !== "string") continue;
         const scope = reservation.spaceId === actor.mindId ? "target" :
           ownedMindIds.has(reservation.spaceId) ? "owned_other" : "site_other";
-        older[scope] += 1;
-        if (reservation.state === "active") olderStateActiveAtSnapshot[scope] += 1;
+        if (reservation.createdAt < FROM) {
+          older[scope] += 1;
+          if (reservation.state === "active") olderStateActiveAtSnapshot[scope] += 1;
+        }
+        if (reservation.createdAt >= AT) {
+          snapshotRowsCreatedAfterCutoff[scope] += 1;
+          continue;
+        }
+        if (reservation.state === "active" ||
+            typeof reservation.updatedAt !== "string" || reservation.updatedAt >= AT) {
+          possibleActiveAtCutoff[scope] += 1;
+          if (typeof reservation.expiresAt === "string" && reservation.expiresAt <= AT) {
+            possibleExpiredAtCutoff[scope] += 1;
+          }
+        } else {
+          lastTransitionBeforeCutoffNonactive[scope] += 1;
+        }
       }
       return response(200, { ok: true, data: {
         incident: "MD-485/UAT191", from_utc: FROM, before_utc: AT,
@@ -501,9 +526,13 @@ export function createUat191CapacityHistory(input: {
         present_in_snapshot_ledger: existingAtSnapshot,
         older_than_window_in_snapshot_ledger: older,
         older_than_window_state_active_at_snapshot: olderStateActiveAtSnapshot,
+        snapshot_rows_created_before_cutoff_possible_active: possibleActiveAtCutoff,
+        snapshot_rows_created_before_cutoff_last_transition_nonactive: lastTransitionBeforeCutoffNonactive,
+        snapshot_rows_created_before_cutoff_possible_expired: possibleExpiredAtCutoff,
+        snapshot_rows_created_after_cutoff: snapshotRowsCreatedAfterCutoff,
         target_reservations: owned,
         limits_at_incident: { mind: 1, owner: 2, site: 8 },
-        interpretation: "Events list committed callbacks' attempted calls, not return values; failed import admission can be absent. Confirmed create follows an export/import admission in the same transaction or a later stage record. Terminal calls are observed calls, not proof of successful state transitions. Ledger and memberships are as of snapshot_sequence, may lag the latest event, and are not historical state at the incident. A snapshot state of active can be expired by time. IDs are disclosed only for the currently owner-authorized target Mind.",
+        interpretation: "Events list committed callbacks' attempted calls, not return values; failed import admission can be absent. Confirmed create follows an export/import admission in the same transaction or a later stage record. Terminal calls are observed calls, not proof of successful state transitions. Ledger and memberships are as of snapshot_sequence, may lag the latest event, and are not historical state at the incident. Snapshot rows cannot exclude deleted or reacquired reservations. A snapshot state of active can be expired by time. IDs are disclosed only for the currently owner-authorized target Mind.",
       } });
     } catch {
       return response(503, { ok: false, error: "diagnostic_unavailable" });
