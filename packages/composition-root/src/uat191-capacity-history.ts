@@ -64,6 +64,15 @@ function safeId(value: unknown): string | null {
     ? value : null;
 }
 
+function safeAmounts(value: unknown): Record<string, number> | null {
+  const amounts = object(value);
+  if (amounts === null) return null;
+  const fields = ["physicalCanonicalBytes", "temporaryBytes", "d1MetadataBytes"];
+  if (!fields.every((field) => Number.isSafeInteger(amounts[field]) &&
+      (amounts[field] as number) >= 0)) return null;
+  return Object.fromEntries(fields.map((field) => [field, amounts[field] as number]));
+}
+
 function response(status: number, data: unknown): Response {
   return new Response(`${JSON.stringify(data)}\n`, { status, headers: HEADERS });
 }
@@ -499,6 +508,45 @@ export function createUat191CapacityHistory(input: {
         }
       }
       if (targetCandidates.length > 10) throw new Error("too many target candidates");
+      const incidentResult = await input.database.prepare(
+        `/*md485-target-incident*/ SELECT sequence, payload_json, committed_at
+         FROM md_metadata_events WHERE sequence = 13025 AND target = 'metadata'`,
+      ).all<EventRow>();
+      const incidentRow = incidentResult.results?.[0];
+      if (incidentResult.success === false || incidentRow?.committed_at !== AT) {
+        throw new Error("incident event unavailable");
+      }
+      const incidentCalls = calls(JSON.parse(incidentRow.payload_json))
+        .filter((call) => call.method === "admitCapacityReservation" &&
+          firstArg(call)?.spaceId === actor.mindId &&
+          firstArg(call)?.operation === "export" &&
+          firstArg(call)?.createdAt === AT);
+      const incidentArgs = firstArg(incidentCalls[0] ?? {});
+      const incidentId = safeId(incidentArgs?.reservationId);
+      const incidentRequested = safeAmounts(incidentArgs?.requested);
+      if (incidentCalls.length !== 1 || incidentId === null ||
+          incidentRequested === null || incidentArgs?.heavy !== true) {
+        throw new Error("incident request invalid");
+      }
+      const priorIncidentResult = await input.database.prepare(
+        `/*md485-incident-prior*/ SELECT sequence, payload_json, committed_at
+         FROM md_metadata_events WHERE sequence BETWEEN 1269 AND 13024
+           AND target = 'metadata' AND instr(payload_json, ?1) > 0
+         ORDER BY sequence ASC LIMIT 201`,
+      ).bind(incidentId).all<EventRow>();
+      const priorIncidentRows = priorIncidentResult.results ?? [];
+      if (priorIncidentResult.success === false || priorIncidentRows.length > 200) {
+        throw new Error("incident prior trace unavailable");
+      }
+      const priorIncidentCalls = priorIncidentRows.flatMap((row) =>
+        calls(JSON.parse(row.payload_json)).filter((call) =>
+          firstArg(call)?.reservationId === incidentId &&
+          firstArg(call)?.spaceId === actor.mindId));
+      const incidentRequest = { reservation_id: incidentId,
+        requested: incidentRequested,
+        prior_admission_calls_with_same_id: priorIncidentCalls.filter((call) =>
+          call.method === "admitCapacityReservation").length,
+        present_in_current_snapshot: snapshotReservations.has(incidentId) };
       const targetCandidateTraces: Record<string, unknown>[] = [];
       for (const candidate of targetCandidates) {
         const id = safeId(candidate.reservationId);
@@ -534,10 +582,24 @@ export function createUat191CapacityHistory(input: {
               return reservationCall || jobCreation;
             }).map((call) => String(call.method)).slice(0, 20) };
         }).filter((item) => item.methods.length > 0);
+        const admissionMatchesSnapshot = relatedRows.some((row) =>
+          calls(JSON.parse(row.payload_json)).some((call) => {
+            const first = firstArg(call);
+            return call.method === "admitCapacityReservation" &&
+              first?.reservationId === id && first.spaceId === actor.mindId &&
+              first.createdAt === candidate.createdAt &&
+              first.expiresAt === candidate.expiresAt &&
+              first.heavy === candidate.heavy &&
+              JSON.stringify(safeAmounts(first.requested)) ===
+                JSON.stringify(safeAmounts(candidate.requested));
+          }));
         targetCandidateTraces.push({ reservation_id: id, operation_ref: ref,
           operation: candidate.operation, created_at_snapshot: candidate.createdAt,
           expires_at_snapshot: candidate.expiresAt, state_at_snapshot: candidate.state,
           updated_at_snapshot: candidate.updatedAt,
+          requested_at_snapshot: safeAmounts(candidate.requested),
+          actual_at_snapshot: candidate.actual === null ? null : safeAmounts(candidate.actual),
+          admission_matches_snapshot: admissionMatchesSnapshot,
           related_calls: relatedCalls,
           trace_limitation: "Unscoped job lifecycle calls are omitted because a job ID alone does not prove the Mind boundary.",
           job_at_snapshot: !hasTargetExportJob ? null : {
@@ -606,6 +668,7 @@ export function createUat191CapacityHistory(input: {
         snapshot_rows_created_before_cutoff_possible_expired: possibleExpiredAtCutoff,
         snapshot_rows_created_after_cutoff: snapshotRowsCreatedAfterCutoff,
         target_candidate_traces: targetCandidateTraces,
+        incident_export_request: incidentRequest,
         collector_counts: collectorCounts,
         target_reservations: owned,
         limits_at_incident: { mind: 1, owner: 2, site: 8 },

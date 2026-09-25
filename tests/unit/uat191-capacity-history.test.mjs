@@ -38,6 +38,8 @@ function event(sequence, reservationId, spaceId, jobId) {
           reservationId, spaceId, operation: "export", operationRef: jobId,
           heavy: true, createdAt: `2026-09-21T10:00:0${sequence}.000Z`,
           expiresAt: `2026-09-22T10:00:0${sequence}.000Z`,
+          requested: { physicalCanonicalBytes: 0, temporaryBytes: 4096,
+            d1MetadataBytes: 1280 },
         }] },
         { method: "createExportJob", args: [{ jobId, spaceId }] },
       ],
@@ -59,7 +61,9 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
       capacityReservations: encodedMap([
         [ownId, { reservationId: ownId, spaceId: OWN, heavy: true,
           operation: "export", operationRef: "job-own",
-          createdAt: "2026-09-21T10:00:01.000Z", expiresAt: "2026-09-21T12:00:00.000Z",
+          createdAt: "2026-09-21T10:00:01.000Z", expiresAt: "2026-09-22T10:00:01.000Z",
+          requested: { physicalCanonicalBytes: 0, temporaryBytes: 4096,
+            d1MetadataBytes: 1280 }, actual: null,
           state: "released", updatedAt: "2026-09-25T12:00:00.000Z" }],
         [foreignId, { reservationId: foreignId, spaceId: FOREIGN, heavy: true,
           createdAt: "2026-09-21T10:00:02.000Z", state: "active", updatedAt: "2026-09-21T10:00:02.000Z" }],
@@ -118,6 +122,27 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
               "2026-09-21T15:40:15.540Z", "2026-09-21T15:41:52.951Z"]);
             return { success: true, results: [{ before_export: 2,
               export_to_import: 1, since_expiry_0: 1 }] };
+          }
+          if (sql.includes("/*md485-target-incident*/")) {
+            assert.match(sql, /sequence = 13025/u);
+            return { success: true, results: [{ sequence: 13025,
+              committed_at: "2026-09-21T15:40:15.540Z",
+              payload_json: JSON.stringify({ v: 1, kind: "transaction", target: "metadata",
+                method: "runExportStartTransaction", calls: [{
+                  method: "admitCapacityReservation", args: [{
+                    reservationId: `capacity:export:${OWN}:job-incident`,
+                    spaceId: OWN, operation: "export", heavy: true,
+                    createdAt: "2026-09-21T15:40:15.540Z",
+                    requested: { physicalCanonicalBytes: 0,
+                      temporaryBytes: 8192, d1MetadataBytes: 2048 },
+                  }],
+                }] }),
+            }] };
+          }
+          if (sql.includes("/*md485-incident-prior*/")) {
+            assert.match(sql, /sequence BETWEEN 1269 AND 13024/u);
+            assert.deepEqual(this.args, [`capacity:export:${OWN}:job-incident`]);
+            return { success: true, results: [] };
           }
           if (sql.includes("/*md485-target-related*/")) {
             assert.match(sql, /sequence BETWEEN \?1 AND \?2/u);
@@ -194,6 +219,13 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
     { target: 1, owned_other: 0, site_other: 1 });
   assert.equal(boundedBody.data.target_candidate_traces[0].reservation_id, ownId);
   assert.equal(boundedBody.data.target_candidate_traces[0].related_calls.length, 1);
+  assert.deepEqual(boundedBody.data.target_candidate_traces[0].requested_at_snapshot,
+    { physicalCanonicalBytes: 0, temporaryBytes: 4096, d1MetadataBytes: 1280 });
+  assert.equal(boundedBody.data.target_candidate_traces[0].admission_matches_snapshot,
+    true);
+  assert.equal(boundedBody.data.incident_export_request.prior_admission_calls_with_same_id, 0);
+  assert.deepEqual(boundedBody.data.incident_export_request.requested,
+    { physicalCanonicalBytes: 0, temporaryBytes: 8192, d1MetadataBytes: 2048 });
   assert.deepEqual(boundedBody.data.target_candidate_traces[0].related_calls[0].methods,
     ["admitCapacityReservation", "createExportJob"]);
   assert.equal(boundedBody.data.collector_counts.before_export, 2);
