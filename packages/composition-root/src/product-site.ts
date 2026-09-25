@@ -36,10 +36,6 @@ import {
   type R2BucketLike,
 } from "@mind-diary/adapter-object-sites";
 import {
-  createMd485ProductObjectReachability,
-  MD485_OBJECT_REACHABILITY_PATH,
-} from "./md485-object-reachability.js";
-import {
   createSitesSearchIndex,
   type D1DatabaseLike as SearchD1DatabaseLike,
 } from "@mind-diary/adapter-search-sites";
@@ -1743,15 +1739,6 @@ export async function createProductSiteRuntime(
     ...controlServices,
     consistentRead,
   });
-  const md485ObjectReachability = createMd485ProductObjectReachability({
-    bucket: options.bucket,
-    database: options.database,
-    metadata,
-    resolveIdentity,
-    operatorPrincipalIds: configuredOperatorPrincipalIds,
-    resolveTargetMind: (actor) => control.services.routes.resolveRoute(
-      actor as never, "/madeira-bus-schedules"),
-  });
 
   const restrictedUatGeneratedSourceHandler =
     restrictedUatGeneratedSourceTest === undefined
@@ -2379,10 +2366,6 @@ export async function createProductSiteRuntime(
       const path = new URL(request.url).pathname;
       if (path.startsWith("/api/v1/internal/system-backup")) {
         return systemBackupHttp(request);
-      }
-      if (options.publicOrigin === "https://mind-diary.example.invalid" &&
-          path === MD485_OBJECT_REACHABILITY_PATH) {
-        return md485ObjectReachability(request);
       }
       const oauthResponse = await oauth.fetch(request);
       if (oauthResponse !== null) return oauthResponse;
