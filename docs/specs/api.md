@@ -899,7 +899,7 @@ corpus/Mind names/request history и audit-ит только opaque operator,
 operation/time. Это не content MCP и не customer-wide user-search API.
 
 Для разрешённой диагностики MD-485 временно доступен только в Product UAT
-`GET /api/v1/internal/operators/diagnostics/md485-object-reachability` без
+`GET /md485-diagnostic` без
 query. Маршрут требует Sites identity, service-operator allowlist и текущую
 роль Owner конкретного автобусного Mind. Ответ содержит только состояние
 одной исторической capacity reservation и агрегаты R2 metadata по canonical
@@ -908,11 +908,9 @@ query. Маршрут требует Sites identity, service-operator allowlist 
 возвращаются. Неполный обход R2 или изменение metadata sequence во время чтения
 даёт `503`. Это read-only исследование: совпадение времени создания с резервом
 не доказывает, что именно этот резерв записал объект. После адресного чтения
-маршрут удаляется отдельным UAT cut.
-Временная страница `/md485-diagnostic` выполняет этот GET из уже
-аутентифицированной browser session и показывает его ответ; отдельного
-доступа, данных или операции записи она не предоставляет. Она удаляется
-вместе с маршрутом.
+маршрут удаляется отдельным UAT cut. Адрес вне `/api/v1/*` нужен только
+для прямого чтения во встроенном Browser, который блокирует навигацию на
+API-пути; он не ослабляет проверки identity и текущих прав Owner.
 
 Markdown import wire contract в local candidate:
 

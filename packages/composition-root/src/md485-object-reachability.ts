@@ -4,7 +4,7 @@ import type { ProductSitesIdentityResolution, ProductWebActor } from "@mind-diar
 
 /** Temporary read-only UAT projection for the user-authorized MD-485 diagnosis. */
 export const MD485_OBJECT_REACHABILITY_PATH =
-  "/api/v1/internal/operators/diagnostics/md485-object-reachability";
+  "/md485-diagnostic";
 
 const RESERVATION_CREATED = "2026-09-20T15:02:59.165Z";
 const RESERVATION_EXPIRES = "2026-09-20T15:17:59.165Z";
