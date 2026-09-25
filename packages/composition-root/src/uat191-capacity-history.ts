@@ -515,8 +515,13 @@ export function createUat191CapacityHistory(input: {
          FROM md_metadata_events WHERE sequence = 13025 AND target = 'metadata'`,
       ).all<EventRow>();
       const incidentRow = incidentResult.results?.[0];
-      if (incidentResult.success === false || incidentRow?.committed_at !== AT) {
+      if (incidentResult.success === false || incidentRow === undefined) {
         throw new Error("incident event unavailable");
+      }
+      stage = "incident_identity";
+      if (incidentRow.committed_at < AT ||
+          incidentRow.committed_at > "2026-09-21T15:40:18.243Z") {
+        throw new Error("incident event timestamp outside request");
       }
       const incidentCalls = calls(JSON.parse(incidentRow.payload_json))
         .filter((call) => call.method === "admitCapacityReservation" &&
@@ -526,6 +531,7 @@ export function createUat191CapacityHistory(input: {
       const incidentArgs = firstArg(incidentCalls[0] ?? {});
       const incidentId = safeId(incidentArgs?.reservationId);
       const incidentRequested = safeAmounts(incidentArgs?.requested);
+      stage = "incident_shape";
       if (incidentCalls.length !== 1 || incidentId === null ||
           incidentRequested === null || incidentArgs?.heavy !== true) {
         throw new Error("incident request invalid");
