@@ -197,6 +197,14 @@ export function createUat191CapacityHistory(input: {
       const unique = [...new Map(admissions.map((item) => [item.id, item])).values()];
       const byScope = { target: 0, owned_other: 0, site_other: 0 };
       const confirmed = { target: 0, owned_other: 0, site_other: 0 };
+      const confirmedNoTerminalUnexpired = { target: 0, owned_other: 0, site_other: 0 };
+      const confirmedWithTerminalCall = { target: 0, owned_other: 0, site_other: 0 };
+      const confirmedExpiredBeforeCutoff = { target: 0, owned_other: 0, site_other: 0 };
+      const confirmedOperations = {
+        target: { export: 0, import: 0, stage: 0, other: 0 },
+        owned_other: { export: 0, import: 0, stage: 0, other: 0 },
+        site_other: { export: 0, import: 0, stage: 0, other: 0 },
+      };
       const existingAtSnapshot = { target: 0, owned_other: 0, site_other: 0 };
       const owned: Record<string, unknown>[] = [];
       for (const item of unique) {
@@ -207,10 +215,8 @@ export function createUat191CapacityHistory(input: {
           event.calls.some((call) => call.method === "createStagedBundleFile" &&
             firstArg(call)?.capacityReservationId === item.id));
         const confirmedCreate = item.confirmedInTransaction || laterStage;
-        if (confirmedCreate) confirmed[scope] += 1;
         const atSnapshot = snapshotReservations.get(item.id);
         if (atSnapshot !== undefined) existingAtSnapshot[scope] += 1;
-        if (scope !== "target") continue;
         const lifecycleCalls = observed.flatMap((event) =>
           event.sequence <= item.sequence ? [] : event.calls.flatMap((call) => {
             const args = firstArg(call);
@@ -220,6 +226,18 @@ export function createUat191CapacityHistory(input: {
               ["completeExportJob", "expireExportJob", "markExportArchiveCleaned"].includes(String(call.method)))
               ? [{ sequence: event.sequence, method: call.method }] : [];
           }));
+        if (confirmedCreate) {
+          confirmed[scope] += 1;
+          const operation = item.operation === "export" || item.operation === "import" ||
+            item.operation === "stage" ? item.operation : "other";
+          confirmedOperations[scope][operation] += 1;
+          if (lifecycleCalls.length > 0) confirmedWithTerminalCall[scope] += 1;
+          if (item.expiresAt <= AT) confirmedExpiredBeforeCutoff[scope] += 1;
+          if (lifecycleCalls.length === 0 && item.expiresAt > AT) {
+            confirmedNoTerminalUnexpired[scope] += 1;
+          }
+        }
+        if (scope !== "target") continue;
         owned.push({ reservation_id: item.id, operation: item.operation,
           scope, sequence: item.sequence, created_at: item.createdAt,
           expires_at: item.expiresAt, confirmed_create: confirmedCreate,
@@ -246,12 +264,18 @@ export function createUat191CapacityHistory(input: {
         events_scanned: rows.length,
         heavy_admission_attempts: byScope,
         creation_confirmed_by_followup: confirmed,
+        confirmed_operations: confirmedOperations,
+        confirmed_without_terminal_call_unexpired_at_cutoff: confirmedNoTerminalUnexpired,
+        confirmed_with_terminal_call_before_cutoff: confirmedWithTerminalCall,
+        confirmed_expired_before_cutoff: confirmedExpiredBeforeCutoff,
+        expiry_collector_calls_in_window: observed.reduce((total, event) => total +
+          event.calls.filter((call) => call.method === "collectExpiredCapacityReservations").length, 0),
         present_in_snapshot_ledger: existingAtSnapshot,
         older_than_window_in_snapshot_ledger: older,
         older_than_window_state_active_at_snapshot: olderStateActiveAtSnapshot,
         target_reservations: owned,
         limits_at_incident: { mind: 1, owner: 2, site: 8 },
-        interpretation: "Events list attempted calls, not return values. Confirmed create follows an export/import admission in the same transaction or a later stage record. Ledger and memberships are as of snapshot_sequence, may lag the latest event, and are not historical state at the incident. A snapshot state of active can be expired by time. IDs are disclosed only for the currently owner-authorized target Mind.",
+        interpretation: "Events list committed callbacks' attempted calls, not return values; failed import admission can be absent. Confirmed create follows an export/import admission in the same transaction or a later stage record. Terminal calls are observed calls, not proof of successful state transitions. Ledger and memberships are as of snapshot_sequence, may lag the latest event, and are not historical state at the incident. A snapshot state of active can be expired by time. IDs are disclosed only for the currently owner-authorized target Mind.",
       } });
     } catch {
       return response(503, { ok: false, error: "diagnostic_unavailable" });

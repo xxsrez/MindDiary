@@ -60,7 +60,12 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
             results: [{ chunk_index: 0, payload_json: snapshot }] };
           if (sql.includes("/*md485-capacity-events*/")) return { success: true,
             results: [event(1, ownId, OWN, "job-own"),
-              event(2, foreignId, FOREIGN, "job-foreign")] };
+              event(2, foreignId, FOREIGN, "job-foreign"),
+              { sequence: 3, committed_at: "2026-09-21T10:00:03.000Z",
+                payload_json: JSON.stringify({ v: 1, kind: "direct", target: "metadata",
+                  method: "releaseCapacityReservation",
+                  args: [{ reservationId: ownId, releasedAt: "2026-09-21T10:00:03.000Z" }],
+                }) }] };
           throw new Error("unexpected query");
         },
       };
@@ -75,6 +80,10 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
   const body = await result.json();
   assert.deepEqual(body.data.heavy_admission_attempts,
     { target: 1, owned_other: 0, site_other: 1 });
+  assert.deepEqual(body.data.confirmed_with_terminal_call_before_cutoff,
+    { target: 1, owned_other: 0, site_other: 0 });
+  assert.deepEqual(body.data.confirmed_without_terminal_call_unexpired_at_cutoff,
+    { target: 0, owned_other: 0, site_other: 1 });
   assert.equal(body.data.target_reservations[0].reservation_id, ownId);
   assert.equal(JSON.stringify(body).includes(foreignId), false);
   assert.equal(JSON.stringify(body).includes(FOREIGN), false);
