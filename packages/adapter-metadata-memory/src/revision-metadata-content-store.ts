@@ -30,6 +30,7 @@ import type {
   MindBindingOwnerId,
   PrincipalId,
   PrincipalMindUsageWritePin,
+  PreflightProducerProof,
   RevisionCommitRequest,
   RevisionCommitResult,
   StageContentCommitEffectsRequest,
@@ -81,7 +82,51 @@ import {
 import { cloneCopyOnWriteValue, copyOnWriteMap } from "./copy-on-write.js";
 import { RevisionMetadataOrdinaryStore } from "./revision-metadata-ordinary-store.js";
 
+// Pending proofs are disposable accelerators. Keep their D1 snapshot and
+// event payloads bounded independently of committed revision capacity.
+const MAX_PREFLIGHT_PROOF_BYTES = 1_000_000;
+const MAX_PENDING_PROOF_BYTES = 8_000_000;
+const MAX_PENDING_PROOFS = 128;
+const PROOF_ENCODER = new TextEncoder();
+
+function preflightProofBytes(proof: Readonly<PreflightProducerProof>): number {
+  return PROOF_ENCODER.encode(JSON.stringify(proof)).byteLength;
+}
+
 export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdinaryStore {
+  async readPreflightProducerProof(
+    spaceId: SpaceId,
+  ): Promise<Readonly<PreflightProducerProof> | null> {
+    const proof = this._preflightProducerProofs.get(spaceId);
+    return proof === undefined ? null : structuredClone(proof);
+  }
+
+  async storePreflightProducerProof(proof: Readonly<PreflightProducerProof>): Promise<boolean> {
+    return this._runExclusive(async () => {
+      // A racing HEAD change or deletion cannot retain a stale proof as a
+      // current Space record. The caller still performs its own HEAD CAS.
+      if (this._spaces.get(proof.spaceId)?.head !== proof.baseRevisionId ||
+          !this._revisionsById.has(proof.baseRevisionId)) return false;
+      const bytes = preflightProofBytes(proof);
+      if (bytes > MAX_PREFLIGHT_PROOF_BYTES) return false;
+      this._preflightProducerProofs.delete(proof.spaceId);
+      let retainedBytes = 0;
+      for (const retained of this._preflightProducerProofs.values()) {
+        retainedBytes += preflightProofBytes(retained);
+      }
+      while (this._preflightProducerProofs.size >= MAX_PENDING_PROOFS ||
+          retainedBytes + bytes > MAX_PENDING_PROOF_BYTES) {
+        const oldest = this._preflightProducerProofs.keys().next().value;
+        if (oldest === undefined) break;
+        const removed = this._preflightProducerProofs.get(oldest)!;
+        retainedBytes -= preflightProofBytes(removed);
+        this._preflightProducerProofs.delete(oldest);
+      }
+      this._preflightProducerProofs.set(proof.spaceId, structuredClone(proof));
+      return true;
+    });
+  }
+
   async commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult> {
       return this.runContentCommitTransaction((transaction) =>
         transaction.commitRevision(request),
@@ -283,6 +328,18 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
             if (!Number.isSafeInteger(siteD1MetadataLimit) || siteD1MetadataLimit < 1) {
               throw new TypeError("Markdown import plan D1 limit is invalid");
             }
+            for (const reservation of capacityReservations.values()) {
+              if (
+                reservation.state === "active" &&
+                Date.parse(reservation.expiresAt) <= Date.parse(plan.createdAt)
+              ) {
+                capacityReservations.set(reservation.reservationId, cloneCapacityReservation(Object.freeze({
+                  ...reservation,
+                  state: "cleanup_pending" as const,
+                  updatedAt: plan.createdAt,
+                })));
+              }
+            }
             const usage = this._capacityUsageFromLedger(
               new Set(spaces.keys()),
               {
@@ -294,9 +351,28 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
                 reservations: capacityReservations,
               },
             );
-            if (usage.d1MetadataBytes + 512 + plan.files.length * 160 > siteD1MetadataLimit) {
+            const reservedD1 = [...capacityReservations.values()].reduce((total, reservation) =>
+              reservation.state === "active" && spaces.has(reservation.spaceId)
+                ? total + reservation.requested.d1MetadataBytes
+                : total,
+              0,
+            );
+            if (usage.d1MetadataBytes + reservedD1 + 512 + plan.files.length * 160 > siteD1MetadataLimit) {
               this._capacityQuotaRejects += 1;
-              return Object.freeze({ kind: "capacity_rejected" as const });
+              return Object.freeze({
+                kind: "capacity_rejected" as const,
+                diagnostic: Object.freeze({
+                  operation: "import" as const,
+                  spaceScope: "site" as const,
+                  metric: "d1_metadata_bytes" as const,
+                  requested: 512 + plan.files.length * 160,
+                  committed: usage.d1MetadataBytes,
+                  reserved: reservedD1,
+                  state: "hard_limit" as const,
+                  heavy: true,
+                  recovery: Object.freeze({ action: "retry_after_capacity_change" as const }),
+                }),
+              });
             }
             const stored = freezeMarkdownImportPlan(plan);
             markdownImportPlans.set(plan.planId, stored);

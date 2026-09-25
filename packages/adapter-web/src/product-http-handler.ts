@@ -530,6 +530,9 @@ export function createProductWebHttpHandler(
         code,
         requestId,
         applicationErrorRetryable(code),
+        typeof error === "object" && error !== null && "details" in error
+          ? error.details
+          : undefined,
       );
     }
   };

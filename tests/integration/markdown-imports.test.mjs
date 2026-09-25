@@ -963,20 +963,66 @@ test("plan metadata is admitted against D1 hard capacity and unreferenced expiry
       idempotencyKey: "plan-d1-rejected",
       files: files.map(({ path, sha256, size }) => ({ path, sha256, size })),
     }),
-    (error) => error instanceof MarkdownImportError && error.code === "capacity_hard_limit",
+    (error) => error instanceof MarkdownImportError &&
+      error.code === "capacity_hard_limit" &&
+      error.details?.spaceScope === "site" &&
+      error.details?.metric === "d1_metadata_bytes",
   );
   assert.equal(await metadata.readMarkdownImportPlan("import-plan_1"), null);
 
-  imports = service({ metadata, objects, revisions, clock, generatedIds });
+  const held = await metadata.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation({
+      reservationId: "capacity:held-plan",
+      requestedByPrincipalId: PRINCIPALS.owner.principalId,
+      spaceId: MINDS.ordinary.spaceId,
+      operation: "export",
+      operationRef: "held-plan",
+      baseRevisionId: null,
+      idempotencyKey: "capacity-held-plan",
+      requested: { physicalCanonicalBytes: 0, temporaryBytes: 0, d1MetadataBytes: 200 },
+      bulk: true,
+      heavy: true,
+      createdAt: T1,
+      expiresAt: "2026-08-22T19:10:00.000Z",
+    }, DEFAULT_CAPACITY_LIMITS));
+  assert.equal(held.kind, "admitted");
+  const usageWithHold = await metadata.readSiteCapacityUsage();
+  imports = service({
+    metadata,
+    objects,
+    revisions,
+    clock,
+    generatedIds,
+    capacityLimits: {
+      ...DEFAULT_CAPACITY_LIMITS,
+      siteD1MetadataBytes: usageWithHold.d1MetadataBytes + 512 + files.length * 160 + 100,
+    },
+  });
+  await assert.rejects(
+    imports.plan({
+      actor: actor(),
+      spaceId: MINDS.ordinary.spaceId,
+      expectedRevisionId: "revision_import_initial",
+      idempotencyKey: "plan-d1-reserved",
+      files: files.map(({ path, sha256, size }) => ({ path, sha256, size })),
+    }),
+    (error) => error instanceof MarkdownImportError &&
+      error.code === "capacity_hard_limit" &&
+      error.details?.committed === usageWithHold.d1MetadataBytes &&
+      error.details?.reserved === 200,
+  );
+
+  now = "2026-08-22T20:00:00.000Z";
   const accepted = await imports.plan({
     actor: actor(),
     spaceId: MINDS.ordinary.spaceId,
     expectedRevisionId: "revision_import_initial",
-    idempotencyKey: "plan-expiry-cleanup",
+    idempotencyKey: "plan-after-reservation-expiry",
     files: files.map(({ path, sha256, size }) => ({ path, sha256, size })),
   });
   assert.equal(await metadata.readMarkdownImportPlan(accepted.plan.planId) !== null, true);
-  now = "2026-08-22T20:00:00.000Z";
+  assert.equal((await metadata.listCapacityReservationsForTest())[0].state, "cleanup_pending");
+  now = "2026-08-22T22:00:00.000Z";
   const cleaned = await imports.collectExpired({ maxFiles: 10 });
   assert.equal(cleaned.expiredPlans, 1);
   assert.equal(await metadata.readMarkdownImportPlan(accepted.plan.planId), null);
@@ -1082,7 +1128,10 @@ test("quota rejection, cancel and stale HEAD publish no partial imported revisio
       planId: plan.plan.planId,
       idempotencyKey: "session-quota",
     }),
-    (error) => error instanceof MarkdownImportError && error.code === "capacity_hard_limit",
+    (error) => error instanceof MarkdownImportError &&
+      error.code === "capacity_hard_limit" &&
+      error.details?.operation === "import" &&
+      error.details?.state === "hard_limit",
   );
   assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_import_initial");
 

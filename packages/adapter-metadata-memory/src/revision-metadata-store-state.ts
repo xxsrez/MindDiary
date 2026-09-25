@@ -60,6 +60,7 @@ import type {
   ObjectCleanupCheckpoint,
   OrdinaryMindRouteSnapshot,
   PrincipalActivitySummary,
+  PreflightProducerProof,
   PrincipalId,
   RevisionCommitRequest,
   RevisionCommitResult,
@@ -137,6 +138,9 @@ export abstract class RevisionMetadataStoreState {
   }
 
   protected _revisionsById = new Map<RevisionId, Envelope>();
+
+  /** One uncommitted exact-candidate proof per Space; never parent authority. */
+  protected _preflightProducerProofs = new Map<SpaceId, Readonly<PreflightProducerProof>>();
 
   protected _reachabilityCounts: Readonly<ObjectReachabilityCounts> | null = null;
 
@@ -346,6 +350,14 @@ export abstract class RevisionMetadataStoreState {
                 kind: "rejected",
                 reason: "accounting_untrusted",
                 utilization: "normal",
+                diagnostic: Object.freeze({
+                  operation: request.operation,
+                  spaceScope: "mind",
+                  metric: "reservation_state",
+                  state: "untrusted",
+                  heavy: request.heavy,
+                  recovery: Object.freeze({ action: "retry_after_reconciliation" }),
+                }),
               });
             }
             if (existing.state === "released" || resumableCommit) {
@@ -413,6 +425,14 @@ export abstract class RevisionMetadataStoreState {
           );
           const siteReserved = activeReservationAmounts(reservations, () => true);
 
+          const capacityAxes = [
+            { spaceScope: "mind", metric: "physical_canonical_bytes", requested: request.requested.physicalCanonicalBytes, committed: spaceUsage.physicalCanonicalBytes, reserved: spaceReserved.physicalCanonicalBytes, limit: limits.mindPhysicalCanonicalBytes },
+            { spaceScope: "principal", metric: "physical_canonical_bytes", requested: request.requested.physicalCanonicalBytes, committed: principalUsage.physicalCanonicalBytes, reserved: principalReserved.physicalCanonicalBytes, limit: limits.principalPhysicalCanonicalBytes },
+            { spaceScope: "site", metric: "physical_canonical_bytes", requested: request.requested.physicalCanonicalBytes, committed: siteUsage.physicalCanonicalBytes, reserved: siteReserved.physicalCanonicalBytes, limit: limits.sitePhysicalCanonicalBytes },
+            { spaceScope: "site", metric: "temporary_bytes", requested: request.requested.temporaryBytes, committed: siteUsage.temporaryBytes, reserved: siteReserved.temporaryBytes, limit: limits.siteTemporaryBytes },
+            { spaceScope: "site", metric: "d1_metadata_bytes", requested: request.requested.d1MetadataBytes, committed: siteUsage.d1MetadataBytes, reserved: siteReserved.d1MetadataBytes, limit: limits.siteD1MetadataBytes },
+          ] as const;
+
           const currentRatios = [
             (spaceUsage.physicalCanonicalBytes + spaceReserved.physicalCanonicalBytes) /
               limits.mindPhysicalCanonicalBytes,
@@ -449,28 +469,52 @@ export abstract class RevisionMetadataStoreState {
             const activeHeavy = [...reservations.values()].filter(
               (reservation) => reservation.state === "active" && reservation.heavy,
             );
-            if (
-              activeHeavy.filter((reservation) => reservation.spaceId === request.spaceId).length >=
-                limits.activeHeavyPerMind ||
-              activeHeavy.filter((reservation) =>
-                principalSpaceIds.has(reservation.spaceId)).length >=
-                limits.activeHeavyPerPrincipal ||
-              activeHeavy.length >= limits.activeHeavyPerSite
-            ) {
+            const heavyLanes = [
+              { spaceScope: "mind", reserved: activeHeavy.filter((reservation) => reservation.spaceId === request.spaceId).length, limit: limits.activeHeavyPerMind },
+              { spaceScope: "principal", reserved: activeHeavy.filter((reservation) => principalSpaceIds.has(reservation.spaceId)).length, limit: limits.activeHeavyPerPrincipal },
+              { spaceScope: "site", reserved: activeHeavy.length, limit: limits.activeHeavyPerSite },
+            ] as const;
+            const occupiedLane = heavyLanes.find((lane) => lane.reserved >= lane.limit);
+            if (occupiedLane !== undefined) {
               this._capacityQuotaRejects += 1;
               return Object.freeze({
                 kind: "rejected",
                 reason: "fairness_limit",
                 utilization: maxUtilizationState(currentRatios),
+                diagnostic: Object.freeze({
+                  operation: request.operation,
+                  spaceScope: occupiedLane.spaceScope,
+                  metric: "active_heavy_operations",
+                  requested: 1,
+                  committed: 0,
+                  reserved: occupiedLane.reserved,
+                  state: maxUtilizationState(currentRatios),
+                  heavy: true,
+                  recovery: Object.freeze({ action: "retry_after_previous_operation" }),
+                }),
               });
             }
           }
           if (growth > 0 && projectedRatios.some((ratio) => ratio > 1)) {
             this._capacityQuotaRejects += 1;
+            const axis = capacityAxes.find((candidate) =>
+              (candidate.committed + candidate.reserved + candidate.requested) > candidate.limit
+            )!;
             return Object.freeze({
               kind: "rejected",
               reason: "hard_limit",
               utilization: projectedUtilization,
+              diagnostic: Object.freeze({
+                operation: request.operation,
+                spaceScope: axis.spaceScope,
+                metric: axis.metric,
+                requested: axis.requested,
+                committed: axis.committed,
+                reserved: axis.reserved,
+                state: projectedUtilization,
+                heavy: request.heavy,
+                recovery: Object.freeze({ action: "retry_after_capacity_change" }),
+              }),
             });
           }
           const reachesSoftLimit = projectedRatios.some((ratio) => ratio >= 0.85);
@@ -480,10 +524,24 @@ export abstract class RevisionMetadataStoreState {
               limits.ordinaryCommitSoftGrowthBytes;
           if (growth > 0 && reachesSoftLimit && (request.bulk || !ordinaryCommitAllowed)) {
             this._capacityQuotaRejects += 1;
+            const axis = capacityAxes.find((candidate) =>
+              (candidate.committed + candidate.reserved + candidate.requested) / candidate.limit >= 0.85
+            )!;
             return Object.freeze({
               kind: "rejected",
               reason: "soft_limit",
               utilization: projectedUtilization,
+              diagnostic: Object.freeze({
+                operation: request.operation,
+                spaceScope: axis.spaceScope,
+                metric: axis.metric,
+                requested: axis.requested,
+                committed: axis.committed,
+                reserved: axis.reserved,
+                state: projectedUtilization,
+                heavy: request.heavy,
+                recovery: Object.freeze({ action: "retry_after_capacity_change" }),
+              }),
             });
           }
           const reservation = cloneCapacityReservation(Object.freeze({

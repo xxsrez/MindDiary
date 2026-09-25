@@ -92,6 +92,24 @@ export interface ProducerValidationCertificate {
   readonly files: readonly Readonly<ProducerValidationFileSummary>[];
 }
 
+/**
+ * Proof of a validated, uncommitted result. It belongs to the exact candidate,
+ * not to the unchanged parent revision. Only one pending proof per Space needs
+ * retention; a different candidate safely falls back to validation.
+ */
+export interface PreflightProducerProof {
+  readonly spaceId: SpaceId;
+  readonly baseRevisionId: RevisionId;
+  readonly baseManifestHash: Sha256Digest;
+  readonly candidateFingerprint: Sha256Digest;
+  readonly certificate: Readonly<Omit<ProducerValidationCertificate, "revisionId">>;
+}
+
+export interface PreflightProducerProofStore {
+  readPreflightProducerProof(spaceId: SpaceId): Promise<Readonly<PreflightProducerProof> | null>;
+  storePreflightProducerProof(proof: Readonly<PreflightProducerProof>): Promise<boolean>;
+}
+
 export type RevisionWithProducerValidationCertificate =
   CanonicalRevisionEnvelope["revision"] & {
     readonly producerCertificate?: Readonly<ProducerValidationCertificate>;
@@ -480,7 +498,8 @@ export interface MarkdownImportSession {
 
 export type CreateMarkdownImportPlanResult =
   | { readonly kind: "created"; readonly plan: Readonly<MarkdownImportPlan>; readonly replayed: boolean }
-  | { readonly kind: "idempotency_conflict" | "id_collision" | "capacity_rejected" };
+  | { readonly kind: "idempotency_conflict" | "id_collision" }
+  | { readonly kind: "capacity_rejected"; readonly diagnostic: Readonly<CapacityAdmissionDiagnostic> };
 
 export type CreateMarkdownImportSessionResult =
   | { readonly kind: "created"; readonly session: Readonly<MarkdownImportSession>; readonly replayed: boolean }
@@ -646,6 +665,29 @@ export interface CapacityAdmissionRequest {
   readonly expiresAt: UtcInstant;
 }
 
+/** Bounded, identity-free admission evidence suitable for a public capacity error. */
+export interface CapacityAdmissionDiagnostic {
+  readonly operation: CapacityOperation;
+  readonly spaceScope: "mind" | "principal" | "site";
+  readonly metric:
+    | "active_heavy_operations"
+    | "physical_canonical_bytes"
+    | "temporary_bytes"
+    | "d1_metadata_bytes"
+    | "reservation_state";
+  readonly requested?: number;
+  readonly committed?: number;
+  readonly reserved?: number;
+  readonly state: CapacityUtilizationState | "untrusted";
+  readonly heavy: boolean;
+  readonly recovery: Readonly<{
+    action:
+      | "retry_after_previous_operation"
+      | "retry_after_capacity_change"
+      | "retry_after_reconciliation";
+  }>;
+}
+
 export type CapacityAdmissionResult =
   | {
       readonly kind: "admitted";
@@ -663,6 +705,7 @@ export type CapacityAdmissionResult =
         | "fairness_limit"
         | "idempotency_conflict";
       readonly utilization: CapacityUtilizationState;
+      readonly diagnostic?: Readonly<CapacityAdmissionDiagnostic>;
     };
 
 export interface CapacityReservationTransaction {
@@ -772,6 +815,7 @@ export interface ContentCommitMetadataTransaction
 /** Atomic metadata boundary for one application-level content commit. */
 export interface ContentCommitMetadataStore
   extends RevisionMetadataStore,
+    PreflightProducerProofStore,
     PrincipalMindUsageReader,
     BackgroundWorkStore,
     BundleFileStagingStore,

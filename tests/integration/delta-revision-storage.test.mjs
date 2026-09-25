@@ -176,7 +176,14 @@ function countedStore(objects, { markdownReadDelayMs = 0 } = {}) {
   return { store, metrics, reset };
 }
 
-async function seedLargeV3(objects, metadata, fileCount = 2_000, withIndex = false) {
+async function seedLargeV3(
+  objects,
+  metadata,
+  fileCount = 2_000,
+  withIndex = false,
+  withLog = false,
+  withZip = false,
+) {
   const entries = [];
   for (let index = 0; index < fileCount; index += 1) {
     const path = `concepts/concept-${String(index).padStart(4, "0")}.md`;
@@ -217,6 +224,39 @@ async function seedLargeV3(objects, metadata, fileCount = 2_000, withIndex = fal
       mediaType: MARKDOWN_MEDIA_TYPE,
       size: put.object.size,
     });
+  }
+  if (withLog) {
+    const put = await objects.putSpaceCanonicalObject({
+      kind: "markdown",
+      spaceId: MINDS.ordinary.spaceId,
+      bytes: ENCODER.encode("# Log\n\n## 2026-08-22\n\n- **Create**: Initial entry.\n"),
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: "2026-08-22T17:00:00.000Z",
+    });
+    entries.push({
+      kind: "markdown",
+      path: "log.md",
+      sha256: put.object.sha256,
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      size: put.object.size,
+    });
+  }
+  if (withZip) {
+    for (let index = 0; index < 2; index += 1) {
+      const put = await objects.putBundleFile({
+        spaceId: MINDS.ordinary.spaceId,
+        bytes: ENCODER.encode(`ZIP fixture ${index}`),
+        mediaType: "application/zip",
+        createdAt: "2026-08-22T17:00:00.000Z",
+      });
+      entries.push({
+        kind: "opaque",
+        path: `assets/archive-${index}.zip`,
+        sha256: put.object.sha256,
+        mediaType: "application/zip",
+        size: put.object.size,
+      });
+    }
   }
   const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V3);
   const manifestObject = await objects.putSpaceCanonicalObject({
@@ -487,6 +527,202 @@ test("producer additive validation reads only changed files and the retained roo
   assert.ok(counted.metrics.markdownReadBytes > indexObject.size);
   assert.ok(counted.metrics.markdownReadMaximum > 1);
   assert.ok(counted.metrics.markdownReadMaximum <= 8);
+});
+
+test("standalone cold replace and log preflight reuses its exact proof after restart", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = principalMountedMetadata(new InMemoryRevisionMetadataStore());
+  const initial = await seedLargeV3(objects, metadata, 160, true, true, true);
+  const counted = countedStore(objects);
+  const currentActor = actor();
+  metadata.setCurrentAuthorizationStateForTest(
+    {
+      principalId: currentActor.principalId,
+      spaceId: MINDS.ordinary.spaceId,
+      tokenId: currentActor.authentication.tokenId,
+    },
+    authorizationState(currentActor),
+  );
+  const operations = [{
+    type: "replace_file",
+    path: "concepts/concept-0000.md",
+    text: concept(0, "cold producer preflight"),
+    expected_sha256: initial.manifest.entries.find((entry) =>
+      entry.path === "concepts/concept-0000.md").sha256,
+  }, {
+    type: "add_log_entry",
+    path: "log.md",
+    category: "Update",
+    message: "Updated concept 0.",
+  }];
+  const service = new ChangesetCommitService({
+    authorizer: new CapabilityAuthorizer(metadata),
+    metadata,
+    revisions: new CanonicalRevisionCoordinator({ objects: counted.store, revisions: metadata }),
+    objects: counted.store,
+    clock: { now: () => "2026-08-22T18:14:00.000Z" },
+    revisionIds: { nextRevisionId: () => "revision_delta_preflight_restart" },
+  });
+
+  counted.reset();
+  const first = await service.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: INITIAL_REVISION,
+    producerProfile: true,
+    operations,
+  });
+  assert.equal(first.kind, "ready");
+  assert.ok(counted.metrics.markdownReadCount >= 160);
+
+  const snapshot = metadata.exportDurableSnapshot();
+  const alternateMetadata = principalMountedMetadata(
+    InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot),
+  );
+  const alternate = new ChangesetCommitService({
+    authorizer: new CapabilityAuthorizer(alternateMetadata),
+    metadata: alternateMetadata,
+    revisions: new CanonicalRevisionCoordinator({
+      objects: counted.store,
+      revisions: alternateMetadata,
+    }),
+    objects: counted.store,
+    clock: { now: () => "2026-08-22T18:17:00.000Z" },
+    revisionIds: { nextRevisionId: () => "revision_delta_alternate_preflight" },
+  });
+  counted.reset();
+  const differentCandidate = await alternate.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: INITIAL_REVISION,
+    producerProfile: true,
+    operations: [{
+      ...operations[0],
+      text: concept(0, "different candidate"),
+    }, operations[1]],
+  });
+  assert.equal(differentCandidate.kind, "ready");
+  assert.ok(counted.metrics.markdownReadCount >= 160);
+
+  const corrupted = structuredClone(snapshot);
+  const storedProof = corrupted.preflightProducerProofs.get(MINDS.ordinary.spaceId);
+  corrupted.preflightProducerProofs.set(MINDS.ordinary.spaceId, {
+    ...storedProof,
+    certificate: {
+      ...storedProof.certificate,
+      dependencyFingerprint: `sha256:${"0".repeat(64)}`,
+    },
+  });
+  const corruptMetadata = principalMountedMetadata(
+    InMemoryRevisionMetadataStore.fromDurableSnapshot(corrupted),
+  );
+  const corruptService = new ChangesetCommitService({
+    authorizer: new CapabilityAuthorizer(corruptMetadata),
+    metadata: corruptMetadata,
+    revisions: new CanonicalRevisionCoordinator({
+      objects: counted.store,
+      revisions: corruptMetadata,
+    }),
+    objects: counted.store,
+    clock: { now: () => "2026-08-22T18:18:00.000Z" },
+    revisionIds: { nextRevisionId: () => "revision_delta_corrupt_preflight" },
+  });
+  counted.reset();
+  assert.equal((await corruptService.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: INITIAL_REVISION,
+    producerProfile: true,
+    operations,
+  })).kind, "ready");
+  assert.ok(counted.metrics.markdownReadCount >= 160);
+
+  const unavailableCacheBase = principalMountedMetadata(
+    InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot),
+  );
+  const unavailableCache = new Proxy(unavailableCacheBase, {
+    get(target, property) {
+      if (property === "readPreflightProducerProof" ||
+          property === "storePreflightProducerProof") {
+        return async () => { throw new Error("synthetic disposable proof cache failure"); };
+      }
+      return Reflect.get(target, property);
+    },
+  });
+  const cacheFailureService = new ChangesetCommitService({
+    authorizer: new CapabilityAuthorizer(unavailableCache),
+    metadata: unavailableCache,
+    revisions: new CanonicalRevisionCoordinator({
+      objects: counted.store,
+      revisions: unavailableCache,
+    }),
+    objects: counted.store,
+    clock: { now: () => "2026-08-22T18:18:30.000Z" },
+    revisionIds: { nextRevisionId: () => "revision_delta_cache_failure" },
+  });
+  counted.reset();
+  assert.equal((await cacheFailureService.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: INITIAL_REVISION,
+    producerProfile: true,
+    operations,
+  })).kind, "ready");
+  assert.ok(counted.metrics.markdownReadCount >= 160);
+
+  const restartedMetadata = principalMountedMetadata(
+    InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot),
+  );
+  const restarted = new ChangesetCommitService({
+    authorizer: new CapabilityAuthorizer(restartedMetadata),
+    metadata: restartedMetadata,
+    revisions: new CanonicalRevisionCoordinator({
+      objects: counted.store,
+      revisions: restartedMetadata,
+    }),
+    objects: counted.store,
+    clock: { now: () => "2026-08-22T18:19:00.000Z" },
+    revisionIds: { nextRevisionId: () => "revision_delta_preflight_restart" },
+  });
+  counted.reset();
+  const repeated = await restarted.preflight({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: INITIAL_REVISION,
+    producerProfile: true,
+    operations,
+  });
+  assert.equal(repeated.kind, "ready");
+  assert.equal(repeated.changesetIdentity, first.changesetIdentity);
+  assert.equal(counted.metrics.markdownReadCount, 1);
+
+  counted.reset();
+  const committed = await restarted.commit({
+    actor: currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: INITIAL_REVISION,
+    idempotencyKey: "cold-producer-preflight-restart",
+    summary: "Commit previously validated candidate",
+    producerProfile: true,
+    operations,
+  });
+  assert.equal(committed.kind, "committed");
+  assert.equal(counted.metrics.markdownReadCount, 1);
+  assert.equal(committed.envelope.revision.producerCertificate.revisionId,
+    committed.envelope.revision.revisionId);
+  assert.equal(committed.envelope.manifest.entries.length, 164);
+  for (const original of initial.manifest.entries.filter((entry) => entry.kind === "opaque")) {
+    assert.deepEqual(committed.envelope.manifest.entries.find((entry) =>
+      entry.path === original.path), original);
+  }
+  const exact = await new CanonicalRevisionCoordinator({
+    objects: counted.store,
+    revisions: restartedMetadata,
+  }).materialize(MINDS.ordinary.spaceId, committed.envelope.revision.revisionId);
+  assert.equal(exact.files.find((file) => file.path === "concepts/concept-0000.md").text,
+    concept(0, "cold producer preflight"));
+  assert.match(exact.files.find((file) => file.path === "log.md").text,
+    /\*\*Update\*\*: Updated concept 0\./u);
 });
 
 test("producer additive validation cannot trust an unproved consumer-warning parent", async () => {

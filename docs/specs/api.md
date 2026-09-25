@@ -2941,11 +2941,17 @@ The tool resolves one explicit effective `read_write` Mind and requires
 `content:write`. It applies the exact file operations to the named base in
 memory and runs the same strict producer profile, consistency doctor,
 BundleFile limits and source-reference authorization used by
-`commit_changeset`. The first producer preflight for an unproved exact bundle
-materializes the complete result and persists a durable exact-revision
-validation certificate. A later preflight may reuse that certificate only when
-its Space, revision, validation-rules, manifest and dependency/reference
-fingerprints still match. The operation-specific dependency closure covers
+`commit_changeset`. The first successful producer preflight for an unproved
+exact bundle materializes the complete result and persists a durable proof of
+that exact candidate within bounded pending-proof retention. This pending proof is bound to the Space, base revision
+and manifest, logical candidate manifest, validation rules and dependency graph;
+it never certifies the unchanged parent by implication. A repeated exact
+preflight or commit may reuse it after restart while retained; eviction or an
+oversized proof falls back to full validation. A different candidate must
+validate independently. Commit binds the proof to the new immutable
+revision and its canonical manifest. A later preflight may reuse that revision
+certificate only when its Space, revision, validation-rules, manifest and
+dependency/reference fingerprints still match. The operation-specific dependency closure covers
 create, ordinary replace, delete, `replace_index`, `add_log_entry` and mixed
 changesets; any missing, stale, corrupt or insufficient certificate falls back
 to the full exact scan. A process-local cache may accelerate certificate lookup

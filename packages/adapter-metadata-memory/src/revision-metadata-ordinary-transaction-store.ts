@@ -201,6 +201,9 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
         this._memberships = state.memberships;
         this._invitations = state.invitations;
         this._spaces = state.revisionSpaces;
+        for (const spaceId of this._preflightProducerProofs.keys()) {
+          if (!this._spaces.has(spaceId)) this._preflightProducerProofs.delete(spaceId);
+        }
         this._revisionsById = state.revisionsById;
         this._reachabilityCounts = null;
         this._ordinaryMindIdempotencyRecords = state.idempotencyRecords;

@@ -56,6 +56,7 @@ import type {
   ObjectCleanupCheckpointStore,
   OrdinaryMindStore,
   PersonalMindStore,
+  PreflightProducerProof,
   PrincipalMindUsageStore,
   PrincipalActivitySummary,
   PrincipalId,
@@ -142,6 +143,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
       isCopyOnWriteSet(source) ? source.materialize() : source;
     this._spaceStates = map(this._spaceStates);
     this._revisionsById = map(this._revisionsById);
+    this._preflightProducerProofs = map(this._preflightProducerProofs);
     this._idempotencyRecords = map(this._idempotencyRecords);
     this._auditEvents = map(this._auditEvents);
     this._auditOutbox = map(this._auditOutbox);
@@ -195,6 +197,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
       copyOnWriteMap(source, cloneCopyOnWriteValue, stats);
     fork._spaceStates = map(this._spaceStates);
     fork._revisionsById = map(this._revisionsById);
+    fork._preflightProducerProofs = map(this._preflightProducerProofs);
     fork._idempotencyRecords = map(this._idempotencyRecords);
     fork._auditEvents = map(this._auditEvents);
     fork._auditOutbox = map(this._auditOutbox);
@@ -333,6 +336,10 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
       if (snapshot.queuedNotes !== undefined && !(snapshot.queuedNotes instanceof Map)) {
         throw new TypeError("Queued note snapshot is invalid");
       }
+      if (snapshot.preflightProducerProofs !== undefined &&
+          !(snapshot.preflightProducerProofs instanceof Map)) {
+        throw new TypeError("Preflight producer proof snapshot is invalid");
+      }
       restored._queuedNotes = new Map(snapshot.queuedNotes ?? []);
       for (const [id, note] of restored._queuedNotes) {
         if (!isQueuedNote(note) || id !== note.receiptId) throw new TypeError("Queued note snapshot is invalid");
@@ -343,6 +350,9 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         ensureSpaceRevisionProjections(spaceId, state);
       }
       restored._revisionsById = new Map(snapshot.revisionsById as Map<RevisionId, Envelope>);
+      restored._preflightProducerProofs = new Map(
+        snapshot.preflightProducerProofs as Map<SpaceId, Readonly<PreflightProducerProof>> | undefined,
+      );
       const persistedReachability = snapshot.objectReachabilityCounts;
       restored._reachabilityCounts =
         snapshot.v !== 6 ||

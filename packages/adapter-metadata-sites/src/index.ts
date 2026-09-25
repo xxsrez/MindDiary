@@ -10,13 +10,19 @@ import type {
   PrincipalActivitySummary,
   PrincipalActivitySurface,
   PrincipalId,
+  PreflightProducerProof,
   RecordPrincipalActivityRequest,
   ServiceOperatorDirectoryPage,
   ServiceOperatorDirectoryQuery,
+  SpaceId,
   UtcInstant,
 } from "@mind-diary/application-ports";
 
 export const SITES_METADATA_ADAPTER = "sites-d1-fenced-event-log" as const;
+const MAX_PREFLIGHT_PROOF_BYTES = 1_000_000;
+const MAX_PENDING_PROOF_BYTES = 8_000_000;
+const MAX_PENDING_PROOFS = 128;
+const PROOF_ENCODER = new TextEncoder();
 
 export interface D1ResultLike<Row = Record<string, unknown>> {
   readonly success?: boolean;
@@ -173,6 +179,18 @@ export const SITES_METADATA_MIGRATIONS = Object.freeze([
       `CREATE TABLE IF NOT EXISTS md_backup_cleanup_ops (
         operation_id TEXT PRIMARY KEY,
         started_at TEXT NOT NULL
+      )`,
+    ]),
+  }),
+  Object.freeze({
+    version: 6,
+    name: "bounded-disposable-preflight-proofs",
+    statements: Object.freeze([
+      `CREATE TABLE IF NOT EXISTS md_preflight_proofs (
+        space_id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size > 0 AND byte_size <= 1000000),
+        updated_at TEXT NOT NULL
       )`,
     ]),
   }),
@@ -693,6 +711,78 @@ export class SitesMetadataStore {
     return this.#proxy;
   }
 
+  /** Disposable D1 projection, deliberately excluded from canonical events. */
+  async readPreflightProducerProof(
+    spaceId: SpaceId,
+  ): Promise<Readonly<PreflightProducerProof> | null> {
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      if (await this.#metadata.readHead(spaceId) === null) return null;
+      const rows = await this.#boundedD1(
+        this.#database.prepare(
+          `/*md-preflight-proof-read*/ SELECT payload_json FROM md_preflight_proofs
+           WHERE space_id = ?1`,
+        ).bind(spaceId).all<{ payload_json: string }>(),
+        "preflight proof read",
+      );
+      const row = rows.results?.[0];
+      if (row === undefined) return null;
+      try {
+        return decode<PreflightProducerProof>(row.payload_json);
+      } catch {
+        return null;
+      }
+    }, "read");
+  }
+
+  async storePreflightProducerProof(
+    proof: Readonly<PreflightProducerProof>,
+  ): Promise<boolean> {
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      if (await this.#metadata.readHead(proof.spaceId) !== proof.baseRevisionId) return false;
+      const base = await this.#metadata.readRevision(proof.spaceId, proof.baseRevisionId);
+      if (base?.revision.manifestHash !== proof.baseManifestHash) return false;
+      const payload = encode(proof);
+      const bytes = PROOF_ENCODER.encode(payload).byteLength;
+      if (bytes > MAX_PREFLIGHT_PROOF_BYTES) return false;
+      const sequence = this.#sequence;
+      const evict = this.#database.prepare(
+        `/*md-preflight-proof-evict*/ DELETE FROM md_preflight_proofs
+         WHERE (SELECT backup_sequence FROM md_backup_control WHERE singleton_id = 1) = ?3
+           AND (
+             (SELECT COALESCE(SUM(byte_size), 0) FROM md_preflight_proofs
+              WHERE space_id <> ?1) + ?2 > ${MAX_PENDING_PROOF_BYTES}
+             OR (SELECT COUNT(*) FROM md_preflight_proofs
+                 WHERE space_id <> ?1) >= ${MAX_PENDING_PROOFS}
+           )`,
+      ).bind(proof.spaceId, bytes, sequence);
+      const upsert = this.#database.prepare(
+        `/*md-preflight-proof-upsert*/ INSERT OR REPLACE INTO md_preflight_proofs
+         (space_id, payload_json, byte_size, updated_at)
+         SELECT ?1, ?2, ?3, ?4
+         WHERE (SELECT backup_sequence FROM md_backup_control WHERE singleton_id = 1) = ?5
+           AND COALESCE((SELECT MAX(sequence) FROM md_metadata_events), 0) = ?5`,
+      ).bind(proof.spaceId, payload, bytes, new Date().toISOString(), sequence);
+      try {
+        const [, stored] = await this.#boundedD1(
+          this.#database.batch([evict, upsert]),
+          "preflight proof store",
+        );
+        return changes(stored ?? {}) === 1;
+      } catch (error) {
+        // A provider rejection can follow a committed D1 batch. The proof is
+        // disposable; exact readback resolves success without replaying it.
+        const rows = await this.#boundedD1(this.#database.prepare(
+          `/*md-preflight-proof-read*/ SELECT payload_json FROM md_preflight_proofs
+           WHERE space_id = ?1`,
+        ).bind(proof.spaceId).all<{ payload_json: string }>(), "preflight proof readback");
+        if (rows.results?.[0]?.payload_json === payload) return true;
+        throw error;
+      }
+    }, "mutation");
+  }
+
   /** Internal backup capture. The caller must publish with a D1 sequence CAS. */
   async captureSystemBackupState(): Promise<Readonly<{
     eventSequence: number;
@@ -1193,6 +1283,7 @@ export class SitesMetadataStore {
       const loaded = await this.#createMutationBase();
       const target = targetName === "metadata" ? loaded.metadata : loaded.tokens;
       const result = await methodOf(target, method)(...args);
+      if (method === "storePreflightProducerProof" && result === false) return false;
       if (isEmptyRecoveryDirectCall(method, result)) return result;
       const event: DurableEvent = { v: 1, kind: "direct", target: targetName, method, args };
       if (await this.#append(
@@ -1402,6 +1493,17 @@ export class SitesMetadataStore {
              )`,
         )
         .bind(deletedPrincipalId, sequence, event.target, event.method, payloadJson));
+    }
+    if (invalidatesBackup ||
+        (event.kind === "direct" && event.method === "purgeSpaceTargetRecords")) {
+      statements.push(this.#database.prepare(
+        `/*md-preflight-proof-purge-committed*/ DELETE FROM md_preflight_proofs
+         WHERE EXISTS (
+           SELECT 1 FROM md_metadata_events
+           WHERE sequence = ?1 AND target = ?2 AND operation = ?3
+             AND payload_json = ?4
+         )`,
+      ).bind(sequence, event.target, event.method, payloadJson));
     }
     // D1 promises do not expose cancellation. Timing out this canonical write
     // would let the caller observe failure while the same INSERT can still

@@ -197,6 +197,9 @@ test("export capacity admission is atomic with job creation", async () => {
   ));
   assert.equal(result.kind, "invalid");
   assert.equal(result.code, "capacity_hard_limit");
+  assert.equal(result.details.operation, "export");
+  assert.equal(result.details.spaceScope, "site");
+  assert.equal(result.details.metric, "temporary_bytes");
   assert.equal((await env.metadata.listExportJobsForTest()).length, 0);
   assert.equal((await env.metadata.listCapacityReservationsForTest()).length, 0);
 });

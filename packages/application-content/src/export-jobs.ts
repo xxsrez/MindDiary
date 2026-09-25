@@ -7,6 +7,7 @@ import type {
   BackgroundAuthorizer,
   Clock,
   CapacityLimits,
+  CapacityAdmissionDiagnostic,
   ExportArchiveStore,
   ExportDownloadGrantStore,
   ExportDownloadSecretCrypto,
@@ -123,7 +124,7 @@ export type StartExportResult =
       readonly kind: "denied";
       readonly decision: Extract<AuthorizationDecision, { readonly kind: "denied" }>;
     }
-  | { readonly kind: "invalid"; readonly code: string; readonly message: string }
+  | { readonly kind: "invalid"; readonly code: string; readonly message: string; readonly details?: Readonly<CapacityAdmissionDiagnostic> }
   | { readonly kind: "revision_not_found" | "idempotency_conflict" };
 
 export type GetExportStatusResult =
@@ -159,8 +160,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function invalid(code: string, message: string): StartExportResult {
-  return Object.freeze({ kind: "invalid", code, message });
+function invalid(code: string, message: string, details?: Readonly<CapacityAdmissionDiagnostic>): StartExportResult {
+  return Object.freeze({ kind: "invalid", code, message, ...(details === undefined ? {} : { details }) });
 }
 
 function normalizeDownloadUrlBase(input: string): string {
@@ -527,6 +528,7 @@ export class ExportJobApplicationService {
         return invalid(
           `capacity_${admitted.reason}`,
           `capacity admission rejected: ${admitted.reason}`,
+          admitted.diagnostic,
         );
       }
       const job: Readonly<ExportJob> = Object.freeze({

@@ -10,6 +10,8 @@ import type {
   ProducerValidationDependency,
   ProducerValidationFileSummary,
   ProducerValidationReverseDependency,
+  PreflightProducerProof,
+  PreflightProducerProofStore,
 } from "@mind-diary/application-ports";
 import {
   PRODUCER_VALIDATION_CERTIFICATE_SCHEMA,
@@ -316,6 +318,7 @@ export interface ChangesetPreflightDependencies {
   readonly revisions: HeadRevisionReader;
   readonly clock: Clock;
   readonly stagedBundleFiles?: Pick<BundleFileStagingStore, "readStagedBundleFile">;
+  readonly producerProofs?: PreflightProducerProofStore;
   readonly limits?: Readonly<ChangesetPreflightLimits>;
 }
 
@@ -1235,6 +1238,40 @@ function validProducerCertificateForEnvelope(
   });
 }
 
+function validPreflightProducerProof(
+  proof: unknown,
+  spaceId: SpaceId,
+  baseRevisionId: RevisionId,
+  baseManifestHash: Sha256Digest,
+  candidateFingerprint: Sha256Digest,
+  candidateFiles: readonly Readonly<ChangesetCandidateRevisionFile>[],
+): Readonly<ProducerCertificateDraft> | null {
+  if (!isRecord(proof) || proof.spaceId !== spaceId ||
+      proof.baseRevisionId !== baseRevisionId ||
+      proof.baseManifestHash !== baseManifestHash ||
+      proof.candidateFingerprint !== candidateFingerprint ||
+      !isRecord(proof.certificate) ||
+      Object.keys(proof).some((key) => ![
+        "spaceId", "baseRevisionId", "baseManifestHash", "candidateFingerprint", "certificate",
+      ].includes(key))) return null;
+  const certificate = validProducerCertificateForEnvelope(
+    { ...proof.certificate, revisionId: baseRevisionId },
+    spaceId,
+    baseRevisionId,
+    candidateFiles.map((file) => Object.freeze({
+      kind: file.kind,
+      path: file.path,
+      mediaType: file.mediaType,
+      sha256: actualCandidateDigest(file),
+      size: file.size,
+    })),
+    candidateFingerprint,
+  );
+  if (certificate === null) return null;
+  const { revisionId: _candidateIsNotARevision, ...draft } = certificate;
+  return Object.freeze(draft);
+}
+
 function markdownSummaryFromCertificate(
   file: Readonly<ProducerValidationFileSummary>,
 ): Readonly<MarkdownDependencySummary> {
@@ -1325,12 +1362,14 @@ export class ChangesetPreflightService {
   readonly #clock: Clock;
   readonly #limits: Readonly<ChangesetPreflightLimits>;
   readonly #stagedBundleFiles: Pick<BundleFileStagingStore, "readStagedBundleFile"> | null;
+  readonly #producerProofs: PreflightProducerProofStore | null;
 
   constructor(dependencies: ChangesetPreflightDependencies) {
     this.#authorizer = dependencies.authorizer;
     this.#revisions = dependencies.revisions;
     this.#clock = dependencies.clock;
     this.#stagedBundleFiles = dependencies.stagedBundleFiles ?? null;
+    this.#producerProofs = dependencies.producerProofs ?? null;
     this.#limits = normalizeLimits(
       dependencies.limits ?? DEFAULT_CHANGESET_PREFLIGHT_LIMITS,
     );
@@ -1771,9 +1810,35 @@ export class ChangesetPreflightService {
         }
       }
     }
+    let pendingCandidateFingerprint: Sha256Digest | null = null;
+    let pendingCandidateProof: Readonly<ProducerCertificateDraft> | null = null;
+    if (request.producerProfile === true && !incrementalProducerValidation &&
+        this.#producerProofs !== null && headEnvelope !== null && currentRevisionId !== null) {
+      const candidateProjection: readonly Readonly<ChangesetCandidateRevisionFile>[] =
+        [...working.values()].map((file) => file.kind === "markdown"
+          ? Object.freeze({ ...file, mediaType: MARKDOWN_MEDIA_TYPE })
+          : file);
+      pendingCandidateFingerprint = candidateManifestFingerprint(candidateProjection);
+      let storedProof: Readonly<PreflightProducerProof> | null = null;
+      try {
+        storedProof = await this.#producerProofs.readPreflightProducerProof(request.spaceId);
+      } catch {
+        // The proof is a disposable accelerator; canonical validation remains
+        // available when its separate cache cannot be read.
+      }
+      pendingCandidateProof = validPreflightProducerProof(
+        storedProof,
+        request.spaceId,
+        currentRevisionId,
+        headEnvelope.revision.manifestHash,
+        pendingCandidateFingerprint,
+        candidateProjection,
+      );
+    }
     if (
       deltaReader !== null &&
       currentRevisionId !== null &&
+      pendingCandidateProof === null &&
       (
         fullReferenceScan ||
         (request.producerProfile === true && !incrementalProducerValidation)
@@ -1829,6 +1894,20 @@ export class ChangesetPreflightService {
         "resulting_revision_size_limit_exceeded",
         "resulting revision bytes exceed their limit",
       );
+    }
+
+    if (pendingCandidateProof !== null) {
+      return Object.freeze({
+        kind: "ready",
+        authorization,
+        baseRevisionId: currentRevisionId,
+        operations: operationSet.operations,
+        candidateFiles: Object.freeze(candidateFiles),
+        stagedBundleFileRecords: Object.freeze([...stagedRecords.values()]),
+        validation: validateOkfProducerBundle([]),
+        producerCertificate: pendingCandidateProof,
+        committedAt,
+      });
     }
 
     const markdownCandidates = candidateFiles.filter(
@@ -2031,6 +2110,25 @@ export class ChangesetPreflightService {
         candidateFiles,
         completeSummaries,
       );
+    }
+
+    if (producerCertificate !== undefined && pendingCandidateFingerprint !== null &&
+        this.#producerProofs !== null && headEnvelope !== null && currentRevisionId !== null) {
+      if (producerCertificate.manifestFingerprint !== pendingCandidateFingerprint) {
+        throw new TypeError("preflight proof differs from validated candidate");
+      }
+      try {
+        await this.#producerProofs.storePreflightProducerProof(Object.freeze({
+          spaceId: request.spaceId,
+          baseRevisionId: currentRevisionId,
+          baseManifestHash: headEnvelope.revision.manifestHash,
+          candidateFingerprint: pendingCandidateFingerprint,
+          certificate: producerCertificate,
+        } satisfies PreflightProducerProof));
+      } catch {
+        // Validation has succeeded; a failed optional cache write cannot turn
+        // the exact preflight into an Internal error.
+      }
     }
 
     return Object.freeze({

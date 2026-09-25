@@ -41,10 +41,16 @@
   };
   const say = (message) => { if (status) status.textContent = message; };
   const sayDownload = (message) => { if (downloadStatus) downloadStatus.textContent = message; };
-  const failureMessage = (code) => ({
-    capacity_fairness_limit: "Another heavy operation is active; retry same plan/job after it finishes.",
-    capacity_soft_limit: "Storage headroom is low; clean up completed imports or exports, then retry the same plan/job.",
-    capacity_hard_limit: "This archive exceeds the supported size or capacity; reduce it and create a new job.",
+  const failureMessage = (code, details) => ({
+    capacity_fairness_limit: `Another heavy operation is active${({ mind: " for this Mind", principal: " for this account", site: " on this Site" })[details?.space_scope] ?? ""}; retry the same job after it finishes.`,
+    capacity_soft_limit: details?.metric === "temporary_bytes"
+      ? "Temporary storage is near its limit. Choose a smaller revision or wait for capacity to be released, then retry the same job."
+      : "Storage capacity is near its limit. Wait for capacity to change, then retry the same job.",
+    capacity_hard_limit: details?.metric === "d1_metadata_bytes"
+      ? "Metadata storage is at its limit. Wait for capacity to change before starting a new export job."
+      : details?.metric === "temporary_bytes"
+        ? "Temporary storage is at its limit. Choose a smaller revision or wait for capacity to change before starting a new job."
+        : "This export exceeds current storage capacity. Wait for capacity to change before starting a new job.",
     capacity_accounting_untrusted: "Storage accounting is being reconciled; retry same plan/job after reconciliation finishes.",
     revision_not_found: "The exact revision no longer exists. Start another export from a revision you can still read.",
     revision_integrity_failure: "The exact revision failed integrity verification. No archive was published.",
@@ -156,6 +162,7 @@
       const error = new Error("Export request failed");
       error.code = payload?.error?.code ?? "operation_failed";
       error.status = response.status;
+      error.details = payload?.error?.details;
       throw error;
     }
     return payload.data;
@@ -389,7 +396,7 @@
         profileInput?.focus();
         say("This revision contains attachments. Use the full bundle profile; nothing was silently omitted.");
       } else if (typeof error?.code === "string" && error.code.startsWith("capacity_")) {
-        say(failureMessage(error.code));
+        say(failureMessage(error.code, error.details));
       } else {
         say("The start result could not be confirmed. Submit again to reuse the same idempotent request; do not choose Start another.");
       }

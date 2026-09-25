@@ -1374,7 +1374,7 @@
         {
           "role": "help-route-source",
           "path": "packages/adapter-web/src/product-http-request-helpers.ts",
-          "gitBlob": "79c957eb21ed119d2be21736eb5cc48fb931c13a"
+          "gitBlob": "24b74d5e915093dd08c90525a75f150a4e3e2482"
         }
       ]
     },

@@ -178,6 +178,13 @@ const server = createServer(async (request, response) => {
     }
 
     if (/^\/api\/v1\/minds\/research-notes\/markdown-import-plans$/u.test(url.pathname) && request.method === "POST") {
+      if (scenario === "capacity_soft_physical") {
+        sendJson(response, 429, { ok: false, error: {
+          code: "capacity_soft_limit",
+          details: { operation: "import", space_scope: "mind", metric: "physical_canonical_bytes", state: "soft_limit", heavy: true, recovery: { action: "retry_after_capacity_change" } },
+        } });
+        return;
+      }
       if (scenario === "head-plan") {
         sendJson(response, 409, { ok: false, error: { code: "import_head_conflict" } });
         return;
