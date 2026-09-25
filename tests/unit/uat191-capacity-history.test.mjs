@@ -139,11 +139,6 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
                 }] }),
             }] };
           }
-          if (sql.includes("/*md485-incident-prior*/")) {
-            assert.match(sql, /sequence BETWEEN 1269 AND 13024/u);
-            assert.deepEqual(this.args, [`capacity:export:${OWN}:job-incident`]);
-            return { success: true, results: [] };
-          }
           if (sql.includes("/*md485-target-related*/")) {
             assert.match(sql, /sequence BETWEEN \?1 AND \?2/u);
             assert.deepEqual(this.args, [1269, 13040, ownId]);
@@ -223,7 +218,7 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
     { physicalCanonicalBytes: 0, temporaryBytes: 4096, d1MetadataBytes: 1280 });
   assert.equal(boundedBody.data.target_candidate_traces[0].admission_matches_snapshot,
     true);
-  assert.equal(boundedBody.data.incident_export_request.prior_admission_calls_with_same_id, 0);
+  assert.equal(boundedBody.data.incident_export_request.target_export_admission_calls, 1);
   assert.deepEqual(boundedBody.data.incident_export_request.requested,
     { physicalCanonicalBytes: 0, temporaryBytes: 8192, d1MetadataBytes: 2048 });
   assert.deepEqual(boundedBody.data.target_candidate_traces[0].related_calls[0].methods,

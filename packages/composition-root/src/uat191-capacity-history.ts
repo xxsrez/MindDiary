@@ -526,36 +526,21 @@ export function createUat191CapacityHistory(input: {
       const incidentCalls = calls(JSON.parse(incidentRow.payload_json))
         .filter((call) => call.method === "admitCapacityReservation" &&
           firstArg(call)?.spaceId === actor.mindId &&
-          firstArg(call)?.operation === "export" &&
-          firstArg(call)?.createdAt === AT);
+          firstArg(call)?.operation === "export");
       const incidentArgs = firstArg(incidentCalls[0] ?? {});
       const incidentId = safeId(incidentArgs?.reservationId);
       const incidentRequested = safeAmounts(incidentArgs?.requested);
-      stage = "incident_shape";
-      if (incidentCalls.length !== 1 || incidentId === null ||
-          incidentRequested === null || incidentArgs?.heavy !== true) {
-        throw new Error("incident request invalid");
-      }
-      stage = "incident_prior";
-      const priorIncidentResult = await input.database.prepare(
-        `/*md485-incident-prior*/ SELECT sequence, payload_json, committed_at
-         FROM md_metadata_events WHERE sequence BETWEEN 1269 AND 13024
-           AND target = 'metadata' AND instr(payload_json, ?1) > 0
-         ORDER BY sequence ASC LIMIT 201`,
-      ).bind(incidentId).all<EventRow>();
-      const priorIncidentRows = priorIncidentResult.results ?? [];
-      if (priorIncidentResult.success === false || priorIncidentRows.length > 200) {
-        throw new Error("incident prior trace unavailable");
-      }
-      const priorIncidentCalls = priorIncidentRows.flatMap((row) =>
-        calls(JSON.parse(row.payload_json)).filter((call) =>
-          firstArg(call)?.reservationId === incidentId &&
-          firstArg(call)?.spaceId === actor.mindId));
-      const incidentRequest = { reservation_id: incidentId,
-        requested: incidentRequested,
-        prior_admission_calls_with_same_id: priorIncidentCalls.filter((call) =>
-          call.method === "admitCapacityReservation").length,
-        present_in_current_snapshot: snapshotReservations.has(incidentId) };
+      const incidentRequest = {
+        committed_at: incidentRow.committed_at,
+        target_export_admission_calls: incidentCalls.length,
+        reservation_id: incidentCalls.length === 1 ? incidentId : null,
+        created_at: incidentCalls.length === 1 &&
+          typeof incidentArgs?.createdAt === "string" ? incidentArgs.createdAt : null,
+        requested: incidentCalls.length === 1 ? incidentRequested : null,
+        heavy: incidentCalls.length === 1 ? incidentArgs?.heavy === true : null,
+        present_in_current_snapshot: incidentCalls.length === 1 && incidentId !== null
+          ? snapshotReservations.has(incidentId) : null,
+      };
       stage = "target_trace";
       const targetCandidateTraces: Record<string, unknown>[] = [];
       for (const candidate of targetCandidates) {
