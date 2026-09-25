@@ -1246,60 +1246,78 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     assertUtc(request.createdBefore);
     assertUtc(request.expectedProtectedAt);
     const key = spaceCanonicalKey(request.kind, request.spaceId, request.sha256);
-    for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
-      const current = await this.#get(key);
-      if (!current) return false;
-      const metadata = spaceCanonicalMetadataFromR2(current);
-      if (
-        metadata.protectedAt !== request.expectedProtectedAt ||
-        compareUtc(metadata.protectedAt, request.createdBefore) >= 0
-      ) return false;
-      if ((current.customMetadata?.state ?? ACTIVE_STATE) === DELETE_STATE) {
-        const deleteBoundary = current.customMetadata?.deleteBoundary ?? "";
-        try {
-          assertUtc(deleteBoundary);
-        } catch {
-          throw new ObjectStoreFailure(
-            "object_tampered",
-            "Space canonical delete marker is invalid",
-          );
+    let phase = "read";
+    try {
+      for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
+        phase = "read";
+        const current = await this.#get(key);
+        if (!current) return false;
+        const metadata = spaceCanonicalMetadataFromR2(current);
+        if (
+          metadata.protectedAt !== request.expectedProtectedAt ||
+          compareUtc(metadata.protectedAt, request.createdBefore) >= 0
+        ) return false;
+        if ((current.customMetadata?.state ?? ACTIVE_STATE) === DELETE_STATE) {
+          const deleteBoundary = current.customMetadata?.deleteBoundary ?? "";
+          try {
+            assertUtc(deleteBoundary);
+          } catch {
+            throw new ObjectStoreFailure(
+              "object_tampered",
+              "Space canonical delete marker is invalid",
+            );
+          }
+          // A later cutoff may safely resume an older claim. Puts remain fenced
+          // by DELETE_STATE, while the caller re-applies current reachability
+          // before selecting this candidate.
+          if (compareUtc(deleteBoundary, request.createdBefore) > 0) return false;
+          markMutationStarted();
+          phase = "delete_object";
+          await this.#bucket.delete(key);
+          phase = "delete_integrity";
+          await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
+          return true;
         }
-        // A later cutoff may safely resume an older claim. Puts remain fenced
-        // by DELETE_STATE, while the caller re-applies current reachability
-        // before selecting this candidate.
-        if (compareUtc(deleteBoundary, request.createdBefore) > 0) return false;
-        markMutationStarted();
+        phase = "read_body";
+        const bytes = await bodyBytes(current);
+        phase = "read_integrity";
+        const integrityManifest = await this.#readIntegrityManifest(current, key, {
+          spaceId: request.spaceId,
+          kind: request.kind,
+          sha256: request.sha256,
+          size: metadata.size,
+        });
+        const confirmNoMutation = markMutationStarted();
+        phase = "mark_deleting";
+        const claimed = await this.#bucket.put(key, bytes, {
+          httpMetadata: { contentType: metadata.mediaType },
+          customMetadata: spaceCanonicalMetadataSource(
+            metadata,
+            DELETE_STATE,
+            request.createdBefore,
+            integrityManifest ?? undefined,
+            integrityManifest === null
+              ? undefined
+              : current.customMetadata?.integrityProofDigest as Digest | undefined,
+          ),
+          onlyIf: { etagMatches: current.etag },
+        });
+        if (!claimed) { confirmNoMutation(); continue; }
+        phase = "delete_object";
         await this.#bucket.delete(key);
+        phase = "delete_integrity";
         await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
         return true;
       }
-      const bytes = await bodyBytes(current);
-      const integrityManifest = await this.#readIntegrityManifest(current, key, {
-        spaceId: request.spaceId,
-        kind: request.kind,
-        sha256: request.sha256,
-        size: metadata.size,
-      });
-      const confirmNoMutation = markMutationStarted();
-      const claimed = await this.#bucket.put(key, bytes, {
-        httpMetadata: { contentType: metadata.mediaType },
-        customMetadata: spaceCanonicalMetadataSource(
-          metadata,
-          DELETE_STATE,
-          request.createdBefore,
-          integrityManifest ?? undefined,
-          integrityManifest === null
-            ? undefined
-            : current.customMetadata?.integrityProofDigest as Digest | undefined,
-        ),
-        onlyIf: { etagMatches: current.etag },
-      });
-      if (!claimed) { confirmNoMutation(); continue; }
-      await this.#bucket.delete(key);
-      await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
-      return true;
+      throw new Error("R2 Space canonical delete CAS retry budget exhausted");
+    } catch (error) {
+      // The public deletion response is deliberately generic. Log only the
+      // operation stage so an unknown R2 result can be investigated safely.
+      console.error(JSON.stringify({ event: "md-canonical-delete-failure", phase,
+        error_code: error instanceof ObjectStoreFailure ? error.code :
+          error instanceof Error ? error.name : "unknown" }));
+      throw error;
     }
-    throw new Error("R2 Space canonical delete CAS retry budget exhausted");
   }
 
   async putBundleFile(

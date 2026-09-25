@@ -4162,16 +4162,26 @@ test("Sites Space-canonical cleanup keeps an uncertain delete gated after restar
   });
 
   bucket.failNextDelete();
-  await assert.rejects(
-    store.deleteSpaceCanonicalObject({
-      kind: "markdown",
-      spaceId: "space_cleanup_resume",
-      sha256: put.object.sha256,
-      expectedProtectedAt: put.object.protectedAt,
-      createdBefore: T1,
-    }),
-    /synthetic R2 delete failure/u,
-  );
+  const logged = [];
+  const previousError = console.error;
+  console.error = (line) => logged.push(JSON.parse(line));
+  try {
+    await assert.rejects(
+      store.deleteSpaceCanonicalObject({
+        kind: "markdown",
+        spaceId: "space_cleanup_resume",
+        sha256: put.object.sha256,
+        expectedProtectedAt: put.object.protectedAt,
+        createdBefore: T1,
+      }),
+      /synthetic R2 delete failure/u,
+    );
+  } finally {
+    console.error = previousError;
+  }
+  assert.deepEqual(logged, [{
+    event: "md-canonical-delete-failure", phase: "delete_object", error_code: "Error",
+  }]);
   const canonicalKey = [
     `spaces/${encodeURIComponent("space_cleanup_resume")}/objects/sha256/`,
     put.object.sha256.slice(7),
