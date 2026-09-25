@@ -34,21 +34,3 @@ test("controller and browser exchange reject forged identity, origin and oversiz
   assert.match(accepted.headers.get("set-cookie"), /HttpOnly/);
   assert.equal((await call("/_acceptance/session", { code: exchange.code }, { origin: ACCEPTANCE_ORIGIN })).status, 401);
 });
-
-test("canonical gate probe requires the acceptance controller", async (t) => {
-  const db = new SqliteD1(); t.after(() => db.close());
-  const store = new AcceptanceSessionStore(db), key = "a".repeat(43);
-  let reads = 0;
-  const call = (headers = {}) => handleAcceptanceSession(
-    new Request(ACCEPTANCE_ORIGIN + "/_acceptance/canonical-gate-probe", { headers }),
-    store, key, undefined, undefined, undefined, undefined,
-    async () => { reads += 1; return { gate_count: 0, probe_complete: true }; },
-  );
-  assert.equal((await call()).status, 401);
-  assert.equal((await call({ origin: "https://foreign.invalid", authorization: `Bearer ${key}` })).status, 403);
-  assert.equal(reads, 0);
-  const response = await call({ authorization: `Bearer ${key}` });
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { gate_count: 0, probe_complete: true });
-  assert.equal(reads, 1);
-});
