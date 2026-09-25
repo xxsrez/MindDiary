@@ -62,7 +62,11 @@ async function fixture() {
 test("exact retired-key cleanup retries physical deletion and conditionally releases only its gate", async () => {
   const f = await fixture();
   try {
-    assert.equal((await recoverMd485RetiredKey(f.environment, "inspect")).eligible, true);
+    const initial = await recoverMd485RetiredKey(f.environment, "inspect");
+    assert.equal(initial.eligible, true);
+    assert.deepEqual(initial.residual_objects, [
+      { key, bytes: 61 }, { key: sidecar, bytes: 406 },
+    ]);
     await f.database.prepare(
       "UPDATE md_canonical_key_gates SET operation_id = 'different'",
     ).run();
