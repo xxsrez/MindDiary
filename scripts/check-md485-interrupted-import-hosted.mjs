@@ -160,25 +160,30 @@ if (phase === "resume") {
   assert.notEqual(coldDeploymentId, record.prepareDeploymentId,
     "provider_redeployment_receipt_required");
   let current = await status(record.importId);
-  assert.equal(current.state, "active");
-  assert.equal(current.checkpoint, 1);
-  for (let step = 0; step < 30 && current.state !== "validated"; step++) {
-    current = data(await mutation(`import:validate:${step}`,
-      `/api/v1/markdown-imports/${record.importId}/validate`,
-      { expected_version: current.version })).session;
-  }
-  assert.equal(current.state, "validated");
-  for (let step = 0; step < 30 && current.state !== "committed"; step++) {
-    const result = data(await mutation(`import:commit:${step}`,
-      `/api/v1/markdown-imports/${record.importId}/commit`,
-      { expected_version: current.version, summary: "Synthetic interrupted import" }));
-    current = result.session ?? { ...current, state: "committed", revision_id: result.revision_id };
+  if (current.state === "committed") {
+    assert.equal(current.revision_id,
+      client.state.operations["import:commit:0"]?.result?.data?.revision_id);
+  } else {
+    assert.equal(current.state, "active");
+    assert.equal(current.checkpoint, 1);
+    for (let step = 0; step < 30 && current.state !== "validated"; step++) {
+      current = data(await mutation(`import:validate:${step}`,
+        `/api/v1/markdown-imports/${record.importId}/validate`,
+        { expected_version: current.version })).session;
+    }
+    assert.equal(current.state, "validated");
+    for (let step = 0; step < 30 && current.state !== "committed"; step++) {
+      const result = data(await mutation(`import:commit:${step}`,
+        `/api/v1/markdown-imports/${record.importId}/commit`,
+        { expected_version: current.version, summary: "Synthetic interrupted import" }));
+      current = result.session ?? { ...current, state: "committed", revision_id: result.revision_id };
+    }
   }
   assert.equal(current.state, "committed");
   assert.ok(current.revision_id && current.revision_id !== record.baseRevision);
   const issued = client.state.operations["token:owner"].result.data.secret;
   const revisions = await client.mcp(issued, "list_revisions", { mind: "/me" });
-  assert.equal(revisions.revisions.filter(x => x.revision_id === current.revision_id).length, 1);
+  assert.equal(revisions.revisions.filter(x => x.revision?.revision_id === current.revision_id).length, 1);
   const file = await client.mcp(issued, "read_files", {
     mind: "/me", revision_selector: { kind: "revision", revision_id: current.revision_id },
     requests: [{ path: testFile.path, mode: "head", count: 1000 }],
