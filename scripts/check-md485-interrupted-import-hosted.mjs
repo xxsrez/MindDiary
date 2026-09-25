@@ -145,6 +145,7 @@ if (phase === "prepare") {
     preparedAt: new Date().toISOString() };
   await client.save();
   console.log(JSON.stringify({ phase: "prepared", candidate: expectedCandidate,
+    prepare_deployment_id: prepareDeploymentId,
     import_id: session.import_id, state: beforeCold.state, checkpoint: beforeCold.checkpoint,
     descriptor_count: descriptors.length }));
 }

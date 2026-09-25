@@ -54,28 +54,49 @@ export async function cleanupFailedImportOrphan(store, runId, input, environment
   ).first();
   if (overlapping.count !== 0) fail("failed_import_orphan_run_provenance_ambiguous");
   const stagedRecords = await metadata.listMarkdownImportStagedFiles(input.import_id);
-  if (stagedRecords.length !== 1 || stagedRecords[0].importId !== input.import_id) {
+  if (stagedRecords.length > 1 || stagedRecords.some((record) => record.importId !== input.import_id)) {
     fail("failed_import_orphan_staged_record_mismatch");
   }
   const page = await environment.MIND_DIARY_BUCKET.list({ limit: 2, include: ["customMetadata"] });
-  if (page.truncated || page.objects.length !== 1) fail("failed_import_orphan_object_inventory");
-  const object = page.objects[0];
-  const value = object.customMetadata ?? {};
-  const createdAt = Date.parse(value.createdAt);
-  if (value.schema !== "md-r2-staged-bundle-file-v1" ||
-      value.spaceId !== session.spaceId ||
-      value.bindingOwnerId !== `import-owner_${input.import_id}` ||
-      value.stagedFileId !== stagedRecords[0].stagedFileId ||
-      object.key !== `staged-bundle-files/${encodeURIComponent(value.stagedFileId)}` ||
-      Number(value.size) !== object.size || !object.etag ||
-      !Number.isFinite(createdAt) || createdAt < run.created_at || createdAt > run.expires_at) {
-    fail("failed_import_orphan_provenance_unknown");
+  if (page.truncated || page.objects.length > 1) fail("failed_import_orphan_object_inventory");
+  if (stagedRecords.length === 0 && page.objects.length !== 0) {
+    fail("failed_import_orphan_staged_record_mismatch");
   }
-  const objects = await createObjects(environment.MIND_DIARY_BUCKET);
-  if (!(await objects.deleteStagedBundleFile(value.stagedFileId))) {
-    fail("failed_import_orphan_delete_uncertain");
+  const object = page.objects[0];
+  if (object) {
+    const value = object.customMetadata ?? {};
+    const createdAt = Date.parse(value.createdAt);
+    if (value.schema !== "md-r2-staged-bundle-file-v1" ||
+        value.spaceId !== session.spaceId ||
+        value.bindingOwnerId !== `import-owner_${input.import_id}` ||
+        value.stagedFileId !== stagedRecords[0].stagedFileId ||
+        object.key !== `staged-bundle-files/${encodeURIComponent(value.stagedFileId)}` ||
+        Number(value.size) !== object.size || !object.etag ||
+        !Number.isFinite(createdAt) || createdAt < run.created_at || createdAt > run.expires_at) {
+      fail("failed_import_orphan_provenance_unknown");
+    }
+    const objects = await createObjects(environment.MIND_DIARY_BUCKET);
+    if (!(await objects.deleteStagedBundleFile(value.stagedFileId))) {
+      fail("failed_import_orphan_delete_uncertain");
+    }
   }
   const after = await environment.MIND_DIARY_BUCKET.list({ limit: 2 });
   if (after.truncated || after.objects.length !== 0) fail("failed_import_orphan_delete_uncertain");
-  return { run_id: runId, deleted_staged: 1, baseline_objects: 0 };
+  if (stagedRecords.length === 1) {
+    await metadata.runMarkdownImportTransaction((transaction) =>
+      transaction.deleteMarkdownImportStagedFile(stagedRecords[0].stagedFileId));
+  }
+  const current = await metadata.readMarkdownImportSession(input.import_id);
+  if (current === null) fail("failed_import_orphan_session_mismatch");
+  if (current.cleanupCompletedAt === null) {
+    const completed = await metadata.runMarkdownImportTransaction((transaction) =>
+      transaction.completeMarkdownImportCleanup({
+        importId: input.import_id,
+        expectedVersion: current.version,
+        completedAt: new Date().toISOString(),
+      }));
+    if (!completed) fail("failed_import_orphan_cleanup_incomplete");
+  }
+  return { run_id: runId, deleted_staged: object ? 1 : 0,
+    cleanup_completed: true, baseline_objects: 0 };
 }
