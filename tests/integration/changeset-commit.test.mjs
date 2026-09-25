@@ -1325,6 +1325,26 @@ test("closed commit writer releases its charge after a complete canonical cleanu
     item.reservationId === pending.reservationId)?.state, "released");
   assert.equal(await resumed.readHead(MINDS.ordinary.spaceId),
     "revision_closed_writer_race");
+  const retry = await resumed.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation({
+      reservationId: pending.reservationId,
+      attemptId: "commit_closed_writer_retry_attempt",
+      requestedByPrincipalId: pending.requestedByPrincipalId,
+      spaceId: pending.spaceId,
+      operation: pending.operation,
+      operationRef: pending.operationRef,
+      baseRevisionId: pending.baseRevisionId,
+      idempotencyKey: pending.idempotencyKey,
+      requested: pending.requested,
+      bulk: pending.bulk,
+      heavy: pending.heavy,
+      createdAt: "2027-01-02T00:01:00.000Z",
+      expiresAt: "2027-01-02T00:16:00.000Z",
+    }, DEFAULT_CAPACITY_LIMITS));
+  assert.equal(retry.kind, "admitted");
+  assert.equal(retry.replayed, false);
+  assert.equal(retry.reservation.state, "active");
+  assert.notEqual(retry.reservation.attemptId, pending.attemptId);
 });
 
 test("a young orphan BundleFile blocks closed commit capacity release", async () => {
