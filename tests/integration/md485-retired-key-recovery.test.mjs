@@ -47,7 +47,7 @@ async function fixture() {
   const bucket = {
     async head(address) { return objects.get(address) ?? null; },
     async list() { return { objects: [...objects].map(([address, item]) =>
-      ({ key: address, size: item.size })), truncated: false }; },
+      ({ key: address, size: item.size, customMetadata: item.customMetadata })), truncated: false }; },
     async delete(address) {
       if (address === sidecar && failSidecar) {
         failSidecar = false;
@@ -64,9 +64,10 @@ test("exact retired-key cleanup retries physical deletion and conditionally rele
   try {
     const initial = await recoverMd485RetiredKey(f.environment, "inspect");
     assert.equal(initial.eligible, true);
-    assert.deepEqual(initial.residual_objects, [
+    assert.deepEqual(initial.residual_objects.map(({ key, bytes }) => ({ key, bytes })), [
       { key, bytes: 61 }, { key: sidecar, bytes: 406 },
     ]);
+    assert.equal(initial.residual_objects[0].metadata.space_id, spaceId);
     await f.database.prepare(
       "UPDATE md_canonical_key_gates SET operation_id = 'different'",
     ).run();

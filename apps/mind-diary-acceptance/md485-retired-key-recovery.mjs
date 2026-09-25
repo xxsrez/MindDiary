@@ -86,7 +86,7 @@ export async function recoverMd485RetiredKey(environment, phase) {
   const before = await inspect(environment);
   if (phase === "inspect") {
     const residual = before.safe && before.inventory.object_count <= 16
-      ? await environment.MIND_DIARY_BUCKET.list({ limit: 17 }) : null;
+      ? await environment.MIND_DIARY_BUCKET.list({ limit: 17, include: ["customMetadata"] }) : null;
     if (residual && (residual.truncated ||
         residual.objects.length !== before.inventory.object_count)) {
       throw new Error("recovery_inventory_changed");
@@ -95,7 +95,17 @@ export async function recoverMd485RetiredKey(environment, phase) {
       eligible: before.safe, object_present: before.objectPresent,
       sidecar_present: before.sidecarPresent, actor_cleanup_done: before.actorDone,
       object_count: before.inventory.object_count,
-      residual_objects: residual?.objects.map((item) => ({ key: item.key, bytes: item.size })) ?? null,
+      residual_objects: residual?.objects.map((item) => ({
+        key: item.key, bytes: item.size,
+        metadata: item.customMetadata ? {
+          schema: item.customMetadata.schema ?? null,
+          staged_file_id: item.customMetadata.stagedFileId ?? null,
+          binding_owner_id: item.customMetadata.bindingOwnerId ?? null,
+          space_id: item.customMetadata.spaceId ?? null,
+          declared_size: item.customMetadata.size ?? null,
+          created_at: item.customMetadata.createdAt ?? null,
+        } : null,
+      })) ?? null,
     };
   }
   if (phase === "release" && before.releasedReplay) {
