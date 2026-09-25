@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory, recoverRunOrphans, seedValidationFixture, seedColdFixture, recoverColdFixtureOrphans, recoverMixedFixtureOrphans, recoverProduct) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, objectInventory, recoverRunOrphans, seedValidationFixture, seedColdFixture, recoverColdFixtureOrphans, recoverMixedFixtureOrphans, cleanupFailedImportOrphan) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -106,12 +106,9 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
     if (mixedOrphanRoute && request.method === "POST" && recoverMixedFixtureOrphans) {
       return json(await recoverMixedFixtureOrphans(mixedOrphanRoute[1], await body(request)));
     }
-    const productRecoveryRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/product-recovery$/.exec(pathname);
-    if (productRecoveryRoute && request.method === "POST" && recoverProduct) {
-      const input = await body(request);
-      if (Object.keys(input).join(",") !== "advance_hours" ||
-          ![0, 25].includes(input.advance_hours)) return json({ error: "invalid_request" }, 400);
-      return json(await recoverProduct(productRecoveryRoute[1], input.advance_hours));
+    const failedImportOrphanRoute = /^\/_acceptance\/runs\/([a-f0-9-]+)\/failed-import-orphan-cleanup$/.exec(pathname);
+    if (failedImportOrphanRoute && request.method === "POST" && cleanupFailedImportOrphan) {
+      return json(await cleanupFailedImportOrphan(failedImportOrphanRoute[1], await body(request)));
     }
     if (pathname === "/_acceptance/runs" && request.method === "POST") {
       return json(projection(await store.create(await body(request), request.headers.get("idempotency-key"))));
@@ -135,8 +132,8 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
       pathname.endsWith("/validation-fixture") && code.startsWith("validation_fixture_") ||
       pathname.endsWith("/cold-fixture") && code.startsWith("cold_fixture_") ||
       pathname.endsWith("/cold-orphan-cleanup") && code.startsWith("cold_orphan_") ||
-      pathname.endsWith("/mixed-orphan-cleanup") && code.startsWith("mixed_orphan_");
-    const productRecoveryDiagnostic = pathname.endsWith("/product-recovery") && code.startsWith("product_recovery_");
-    return json({ error: status === 503 && !controllerDiagnostic && !productRecoveryDiagnostic ? "acceptance_unavailable" : code }, status);
+      pathname.endsWith("/mixed-orphan-cleanup") && code.startsWith("mixed_orphan_") ||
+      pathname.endsWith("/failed-import-orphan-cleanup") && code.startsWith("failed_import_orphan_");
+    return json({ error: status === 503 && !controllerDiagnostic ? "acceptance_unavailable" : code }, status);
   }
 }

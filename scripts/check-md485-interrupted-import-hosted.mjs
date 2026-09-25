@@ -59,13 +59,16 @@ const testFile = {
 };
 
 if (phase === "prepare") {
+  const prepareDeploymentId = process.env.MD485_PREPARE_DEPLOYMENT_ID;
+  assert.match(prepareDeploymentId ?? "", /^appgdep_[a-f0-9]{32}$/);
   assert.ok(["prepared", "created"].includes(client.state.phase));
   if (!client.state.md485Interruption?.baseline) {
     const baseline = await client.control("/_acceptance/inventory");
     assert.equal(baseline.complete, true);
     assert.equal(baseline.principals, 0);
     assert.equal(baseline.owned_minds, 0);
-    client.state.md485Interruption = { baseline, candidate: expectedCandidate };
+    client.state.md485Interruption = { baseline, candidate: expectedCandidate,
+      prepareDeploymentId };
     await client.save();
   }
   await client.setup();
@@ -153,6 +156,8 @@ if (phase === "resume") {
   // A fresh Worker deployment is required between prepare and resume.
   const coldDeploymentId = process.env.MD485_COLD_DEPLOYMENT_ID;
   assert.match(coldDeploymentId ?? "", /^appgdep_[a-f0-9]{32}$/);
+  assert.notEqual(coldDeploymentId, record.prepareDeploymentId,
+    "provider_redeployment_receipt_required");
   let current = await status(record.importId);
   assert.equal(current.state, "active");
   assert.equal(current.checkpoint, 1);

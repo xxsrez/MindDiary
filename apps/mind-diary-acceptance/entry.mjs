@@ -15,6 +15,7 @@ import { seedValidationFixture } from "./validation-fixture.mjs";
 import { seedColdFixture } from "./cold-fixture.mjs";
 import { recoverColdFixtureOrphans } from "./cold-orphan-cleanup.mjs";
 import { recoverMixedFixtureOrphans } from "./mixed-orphan-cleanup.mjs";
+import { cleanupFailedImportOrphan } from "./failed-import-orphan-cleanup.mjs";
 import { recoverOrphanOAuth } from "./oauth-recovery.mjs";
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
@@ -34,13 +35,12 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
     return stores.get(database);
   }
 
-  function createProduct(now) {
+  function createProduct() {
     const runtimes = new WeakMap();
     const worker = createMindDiaryProductWorker({
       createRuntime: async (options) => {
         const runtime = await createRuntime({
           ...options,
-          ...(now === undefined ? {} : { now }),
           systemBackupRuntimeExtraD1Schema: ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA,
           systemBackupUnexpectedError: (error) => {
             const name = error instanceof Error ? error.name : "unknown";
@@ -144,45 +144,7 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
       (runId, input) => seedColdFixture(store, runId, input, environment),
       (runId, input) => recoverColdFixtureOrphans(store, runId, input, environment),
       (runId, input) => recoverMixedFixtureOrphans(store, runId, input, environment),
-      async (runId, advanceHours) => {
-        const run = await store.run(runId);
-        if (!["active", "cleaned"].includes(run.state)) {
-          throw new Error("product_recovery_run_unavailable");
-        }
-        const others = await store.statement(
-          "SELECT COUNT(*) AS count FROM md_acceptance_runs WHERE id != ? AND state != 'cleaned'",
-          runId,
-        ).first();
-        if (others.count !== 0) throw new Error("product_recovery_other_run_present");
-        const inventory = await acceptanceInventory(environment);
-        if (!inventory.complete || inventory.rows.md_backup_sessions !== 0 ||
-            inventory.principals > (run.state === "active" ? 1 : 0) ||
-            inventory.owned_minds > (run.state === "active" ? 1 : 0)) {
-          throw new Error("product_recovery_inventory_not_isolated");
-        }
-        if (advanceHours !== 0 && run.state !== "active") {
-          throw new Error("product_recovery_clock_requires_active_run");
-        }
-        const recovery = createProduct(advanceHours === 0
-          ? undefined
-          : () => new Date(Date.now() + advanceHours * 3_600_000));
-        await recovery.worker.fetch(
-          new Request(ACCEPTANCE_ORIGIN + "/api/v1/session"),
-          environment,
-          context,
-        );
-        const result = await recovery.runtime(environment.DB).recoverBackground(16, "full");
-        return {
-          run_id: runId,
-          clock: advanceHours === 0 ? "system" : "advanced_25_hours",
-          backfilled: result.backfilled,
-          repaired: result.repaired,
-          dispatched: result.dispatched,
-          failed: result.failed,
-          cleanup_deleted: result.cleanupDeleted,
-          cleanup_reclaimed_bytes: result.cleanupReclaimedBytes,
-        };
-      });
+      (runId, input) => cleanupFailedImportOrphan(store, runId, input, environment));
       if (sessionResponse) return sessionResponse;
       if (path.startsWith("/api/v1/internal/system-backup/")) {
         let backupRun;
