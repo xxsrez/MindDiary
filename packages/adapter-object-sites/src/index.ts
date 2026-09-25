@@ -44,7 +44,6 @@ import {
   type StagedBundleFileObjectWriteRequest,
   type StagedBundleFileUpload,
   type StagedBundleFileUploadRequest,
-  type StoredExportArchive,
   type BoundedObjectCleanupStore,
   type ObjectCleanupCandidate,
   type ObjectCleanupNamespace,
@@ -52,6 +51,18 @@ import {
 } from "@mind-diary/application-ports";
 import { IncrementalSha256 } from "./incremental-sha256.js";
 import { assertMatchingExportPart, exportStreamPartMetadata } from "./export-stream-part.js";
+import {
+  ACTIVE_STATE,
+  DELETE_STATE,
+  archiveCustomMetadata,
+  archiveMetadata,
+  assertBundleMediaType,
+  assertDigest,
+  assertUtc,
+  bundleCustomMetadata,
+  bundleMetadata,
+  stagedBundleMetadata,
+} from "./object-metadata.js";
 
 export const SITES_OBJECT_ADAPTER = "sites-r2-immutable-envelope" as const;
 
@@ -132,19 +143,15 @@ type Digest = ImmutableObjectMetadata["sha256"];
 type Utc = ImmutableObjectMetadata["createdAt"];
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
-const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u;
 const MARKDOWN = "text/markdown; charset=utf-8";
 const CANONICAL_PREFIX = "canonical/sha256/";
 const EXPORT_PREFIX = "exports/";
 const BUNDLE_PREFIX = "bundle-files/";
 const STAGED_BUNDLE_PREFIX = "staged-bundle-files/";
 const SPACE_CANONICAL_PREFIX = "spaces/";
-const DELETE_STATE = "deleting";
-const ACTIVE_STATE = "active";
 const MAX_R2_CAS_ATTEMPTS = 16;
 const R2_READ_TIMEOUT_MS = 5_000;
 const EXPORT_STREAM_PART_BYTES = 4_194_304;
-const SAFE_MEDIA_TYPE = /^[!#$%&'*+.^_`|~0-9a-z-]+\/[!#$%&'*+.^_`|~0-9a-z-]+$/u;
 const integrityEncoder = new TextEncoder();
 const CLEANUP_NAMESPACES = new Set<ObjectCleanupNamespace>([
   "immutable",
@@ -177,16 +184,6 @@ function integritySidecarMetadata(
 function validCleanupNamespace(value: unknown): value is ObjectCleanupNamespace {
   return typeof value === "string" && CLEANUP_NAMESPACES.has(value as ObjectCleanupNamespace);
 }
-function assertDigest(value: string): asserts value is Digest {
-  if (!SHA256.test(value)) {
-    throw new ObjectStoreFailure("invalid_digest", "object digest is invalid");
-  }
-}
-function assertUtc(value: string): asserts value is Utc {
-  if (!UTC.test(value) || !Number.isFinite(Date.parse(value))) {
-    throw new ObjectStoreFailure("invalid_timestamp", "object timestamp is invalid");
-  }
-}
 function compareUtc(left: string, right: string): number {
   const leftMs = Date.parse(left);
   const rightMs = Date.parse(right);
@@ -210,11 +207,6 @@ function assertMarkdown(bytes: Uint8Array, mediaType: string): void {
     new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     throw new ObjectStoreFailure("invalid_utf8", "canonical object is not UTF-8");
-  }
-}
-function assertBundleMediaType(mediaType: string): void {
-  if (mediaType.length > 127 || !SAFE_MEDIA_TYPE.test(mediaType)) {
-    throw new ObjectStoreFailure("invalid_media_type", "BundleFile media type is not allowed");
   }
 }
 function canonicalKey(digest: Digest): string {
@@ -855,7 +847,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       const object = await this.#get(key, { offset, length });
       if (object === null) throw new ObjectStoreFailure("object_tampered", "R2 integrity chunk is missing");
       const actualMetadata = metadata.kind === "bundle_file"
-        ? this.#bundleMetadata(object)
+        ? bundleMetadata(object)
         : spaceCanonicalMetadataFromR2(object);
       if (
         actualMetadata.spaceId !== metadata.spaceId ||
@@ -1336,7 +1328,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         const confirmNoMutation = markMutationStarted();
         const stored = await this.#bucket.put(key, bytes, {
           httpMetadata: { contentType: request.mediaType },
-          customMetadata: this.#bundleCustomMetadata(
+          customMetadata: bundleCustomMetadata(
             {
               spaceId: request.spaceId,
               sha256: digest,
@@ -1353,9 +1345,9 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           onlyIf: { etagDoesNotMatch: "*" },
         });
         if (!stored) { confirmNoMutation(); continue; }
-        return Object.freeze({ object: this.#bundleMetadata(stored), status: "stored", integrityRoot: integrityManifest.root });
+        return Object.freeze({ object: bundleMetadata(stored), status: "stored", integrityRoot: integrityManifest.root });
       }
-      const metadata = this.#bundleMetadata(existing);
+      const metadata = bundleMetadata(existing);
       const existingBytes = await bodyBytes(existing);
       if (
         metadata.sha256 !== digest ||
@@ -1376,7 +1368,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         const confirmNoMutation = markMutationStarted();
         const updated = await this.#bucket.put(key, existingBytes, {
           httpMetadata: { contentType: metadata.mediaType },
-          customMetadata: this.#bundleCustomMetadata(
+          customMetadata: bundleCustomMetadata(
             { ...metadata, protectedAt },
             ACTIVE_STATE,
             "",
@@ -1386,7 +1378,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           onlyIf: { etagMatches: existing.etag },
         });
         if (!updated) { confirmNoMutation(); continue; }
-        return Object.freeze({ object: this.#bundleMetadata(updated), status: "already_exists", integrityRoot: integrityManifest.root });
+        return Object.freeze({ object: bundleMetadata(updated), status: "already_exists", integrityRoot: integrityManifest.root });
       }
       return Object.freeze({ object: metadata, status: "already_exists", integrityRoot: integrityManifest.root });
     }
@@ -1402,7 +1394,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const key = `${BUNDLE_PREFIX}${encodeURIComponent(spaceId)}/sha256/${digest.slice(7)}`;
     const object = await this.#get(key);
     if (!object) return null;
-    const metadata = this.#bundleMetadata(object);
+    const metadata = bundleMetadata(object);
     const bytes = await bodyBytes(object);
     if (
       metadata.spaceId !== spaceId ||
@@ -1427,7 +1419,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const key = `${BUNDLE_PREFIX}${encodeURIComponent(spaceId)}/sha256/${digest.slice(7)}`;
     const object = await this.#get(key);
     if (!object) return null;
-    const metadata = this.#bundleMetadata(object);
+    const metadata = bundleMetadata(object);
     if (metadata.spaceId !== spaceId || metadata.sha256 !== digest) {
       throw new ObjectStoreFailure("object_tampered", "BundleFile metadata is invalid");
     }
@@ -1453,7 +1445,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const key = `${BUNDLE_PREFIX}${encodeURIComponent(spaceId)}/sha256/${digest.slice(7)}`;
     const object = await this.#get(key);
     if (!object) return null;
-    const metadata = this.#bundleMetadata(object);
+    const metadata = bundleMetadata(object);
     if (
       metadata.spaceId !== spaceId || metadata.sha256 !== digest ||
       range.offset + range.length > metadata.size
@@ -1498,7 +1490,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     );
     return Object.freeze((await this.#listAll(BUNDLE_PREFIX))
       .filter((object) => (object.customMetadata?.state ?? ACTIVE_STATE) === ACTIVE_STATE)
-      .map((object) => this.#bundleMetadata(object))
+      .map((object) => bundleMetadata(object))
       .filter((item) =>
         !excluded.has(`${item.spaceId}\u0000${item.sha256}`) &&
         compareUtc(item.protectedAt, request.createdBefore) < 0)
@@ -1534,7 +1526,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
       const current = await this.#get(key);
       if (!current) return false;
-      const metadata = this.#bundleMetadata(current);
+      const metadata = bundleMetadata(current);
       if (
         metadata.protectedAt !== request.expectedProtectedAt ||
         compareUtc(metadata.protectedAt, request.createdBefore) >= 0
@@ -1557,7 +1549,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       const confirmNoMutation = markMutationStarted();
       const claimed = await this.#bucket.put(key, bytes, {
         httpMetadata: { contentType: metadata.mediaType },
-        customMetadata: this.#bundleCustomMetadata(
+        customMetadata: bundleCustomMetadata(
           metadata,
           DELETE_STATE,
           request.createdBefore,
@@ -1755,7 +1747,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           const persisted = await this.#get(key);
           if (
             persisted === null || persisted.etag !== outcome.object.etag ||
-            this.#stagedBundleMetadata(persisted).size !== expectedSize ||
+            stagedBundleMetadata(persisted).size !== expectedSize ||
             !(await verifyBodyStream(persisted.body, expectedSize, sha256))
           ) throw new ObjectStoreFailure(
             "object_tampered",
@@ -1794,7 +1786,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(stagedFileId)}`,
     );
     if (object === null) return null;
-    return Object.freeze({ ...this.#stagedBundleMetadata(object), body: bodyStream(object) });
+    return Object.freeze({ ...stagedBundleMetadata(object), body: bodyStream(object) });
   }
 
   async promoteStagedBundleFile(
@@ -1809,14 +1801,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
       const staged = await this.#get(stagedKey);
       if (staged === null) throw new ObjectStoreFailure("object_tampered", "staged BundleFile is missing");
-      const stagedMetadata = this.#stagedBundleMetadata(staged);
+      const stagedMetadata = stagedBundleMetadata(staged);
       if (
         stagedMetadata.bindingOwnerId !== request.bindingOwnerId ||
         stagedMetadata.spaceId !== request.spaceId || stagedMetadata.size !== request.size
       ) throw new ObjectStoreFailure("object_tampered", "staged BundleFile metadata mismatch");
       const existing = await this.#get(canonicalKey);
       if (existing !== null) {
-        const metadata = this.#bundleMetadata(existing);
+        const metadata = bundleMetadata(existing);
         if (
           metadata.spaceId !== request.spaceId || metadata.sha256 !== request.sha256 ||
           metadata.size !== request.size
@@ -1833,14 +1825,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         const confirmNoMutation = markMutationStarted();
         const updated = await this.#bucket.put(canonicalKey, bodyStream(existing), {
           httpMetadata: { contentType: metadata.mediaType },
-          customMetadata: this.#bundleCustomMetadata({
+          customMetadata: bundleCustomMetadata({
             ...metadata,
             protectedAt: request.createdAt,
           }, ACTIVE_STATE, "", existingManifest ?? undefined, existing.customMetadata?.integrityProofDigest as Digest | undefined),
           onlyIf: { etagMatches: existing.etag },
         });
         if (updated === null) { confirmNoMutation(); continue; }
-        return Object.freeze({ object: this.#bundleMetadata(updated), status: "already_exists" });
+        return Object.freeze({ object: bundleMetadata(updated), status: "already_exists" });
       }
       const integrityManifest = await buildIntegrityManifestFromStream(
         (candidate) => this.calculateSha256(candidate),
@@ -1860,7 +1852,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       const confirmNoMutation = markMutationStarted();
       const storedPromise = this.#bucket.put(canonicalKey, bodyForPut, {
         httpMetadata: { contentType: request.mediaType },
-        customMetadata: this.#bundleCustomMetadata({
+        customMetadata: bundleCustomMetadata({
           spaceId: request.spaceId,
           sha256: request.sha256,
           mediaType: request.mediaType,
@@ -1889,7 +1881,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         throw new ObjectStoreFailure("object_tampered", "promoted BundleFile failed integrity verification");
       }
       if (stored === null) { confirmNoMutation(); continue; }
-      const metadata = this.#bundleMetadata(stored);
+      const metadata = bundleMetadata(stored);
       if (metadata.size !== request.size) {
         await this.#bucket.delete(canonicalKey).catch(() => undefined);
         throw new ObjectStoreFailure("object_tampered", "promoted BundleFile size mismatch");
@@ -2011,10 +2003,10 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const key = `${EXPORT_PREFIX}${encodeURIComponent(request.spaceId)}/${encodeURIComponent(
       request.jobId,
     )}/claim-${request.claimVersion}`;
-    const archive = this.#archiveMetadata(key, request, bytes.byteLength);
+    const archive = archiveMetadata(key, request, bytes.byteLength);
     const stored = await this.#bucket.put(key, bytes, {
       httpMetadata: { contentType: "application/zip" },
-      customMetadata: this.#archiveCustomMetadata(archive),
+      customMetadata: archiveCustomMetadata(archive),
       onlyIf: { etagDoesNotMatch: "*" },
     });
     if (stored) return Object.freeze({ kind: "stored", archive });
@@ -2104,7 +2096,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         }
         assertDigest(completion.sha256);
         const key = `${base}claim-${request.claimVersion}-manifest`;
-        const archive = this.#archiveMetadata(
+        const archive = archiveMetadata(
           key,
           { ...request, ...completion, bytes: new Uint8Array(0) },
           totalSize,
@@ -2116,7 +2108,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           parts,
         })}\n`);
         const customMetadata = Object.freeze({
-          ...this.#archiveCustomMetadata(archive),
+          ...archiveCustomMetadata(archive),
           schema: "md-r2-export-stream-manifest-v1",
           partCount: String(parts.length),
         });
@@ -2330,7 +2322,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           protectedAt: metadata.protectedAt,
         }));
       } else if (request.namespace === "bundle_file") {
-        const metadata = this.#bundleMetadata(object);
+        const metadata = bundleMetadata(object);
         candidates.push(Object.freeze({
           namespace: "bundle_file",
           objectKey: object.key,
@@ -2462,135 +2454,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     return objects;
   }
 
-  #bundleMetadata(
-    object: R2ListedObjectLike,
-  ): Readonly<BundleFileObjectMetadata> {
-    const custom = object.customMetadata ?? {};
-    const digest = custom.sha256 ?? "";
-    const createdAt = custom.createdAt ?? "";
-    const protectedAt = custom.protectedAt ?? "";
-    const mediaType = custom.mediaType ?? "";
-    assertDigest(digest);
-    assertUtc(createdAt);
-    assertUtc(protectedAt);
-    assertBundleMediaType(mediaType);
-    if (
-      custom.schema !== "md-r2-bundle-file-v1" ||
-      ![ACTIVE_STATE, DELETE_STATE].includes(custom.state ?? ACTIVE_STATE) ||
-      typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
-      !Number.isSafeInteger(Number(custom.size)) || Number(custom.size) < 0
-    ) throw new ObjectStoreFailure("object_tampered", "R2 BundleFile metadata is invalid");
-    return Object.freeze({
-      spaceId: custom.spaceId as BundleFileObjectMetadata["spaceId"],
-      sha256: digest,
-      mediaType: mediaType as BundleFileObjectMetadata["mediaType"],
-      size: Number(custom.size),
-      createdAt,
-      protectedAt,
-    });
-  }
-
-  #bundleCustomMetadata(
-    metadata: Readonly<BundleFileObjectMetadata>,
-    state = ACTIVE_STATE,
-    deleteBoundary = "",
-    integrityManifest?: Readonly<ObjectIntegrityManifest>,
-    integrityDigest?: Digest,
-  ): Readonly<Record<string, string>> {
-    return Object.freeze({
-      schema: "md-r2-bundle-file-v1",
-      state,
-      spaceId: metadata.spaceId,
-      sha256: metadata.sha256,
-      mediaType: metadata.mediaType,
-      size: String(metadata.size),
-      createdAt: metadata.createdAt,
-      protectedAt: metadata.protectedAt,
-      deleteBoundary,
-      ...(integrityManifest === undefined ? {} : {
-        integrityProofDigest: integrityDigest ?? "",
-        integrityProofRoot: integrityManifest.root,
-      }),
-    });
-  }
-
   async #stagedBundleFile(
     object: R2ObjectBodyLike,
   ): Promise<Readonly<StagedBundleFileObject>> {
-    const metadata = this.#stagedBundleMetadata(object);
+    const metadata = stagedBundleMetadata(object);
     const bytes = await bodyBytes(object);
     return Object.freeze({ ...metadata, bytes, size: bytes.byteLength });
   }
 
-  #stagedBundleMetadata(
-    object: R2ListedObjectLike,
-  ): Readonly<Omit<StagedBundleFileObject, "bytes">> {
-    const custom = object.customMetadata ?? {};
-    const createdAt = custom.createdAt ?? "";
-    assertUtc(createdAt);
-    const streamed = custom.schema === "md-r2-staged-bundle-file-stream-v1";
-    if (
-      (!streamed && custom.schema !== "md-r2-staged-bundle-file-v1") ||
-      typeof custom.stagedFileId !== "string" || custom.stagedFileId.length === 0 ||
-      typeof custom.bindingOwnerId !== "string" || custom.bindingOwnerId.length === 0 ||
-      typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
-      (streamed
-        ? !Number.isSafeInteger(Number(custom.maxBytes)) || Number(custom.maxBytes) < object.size
-        : Number(custom.size) !== object.size)
-    ) throw new ObjectStoreFailure("object_tampered", "staged BundleFile metadata is invalid");
-    return Object.freeze({
-      stagedFileId: custom.stagedFileId as StagedBundleFileObject["stagedFileId"],
-      bindingOwnerId: custom.bindingOwnerId as StagedBundleFileObject["bindingOwnerId"],
-      spaceId: custom.spaceId as StagedBundleFileObject["spaceId"],
-      size: object.size,
-      createdAt,
-    });
-  }
-
-  #archiveMetadata(
-    objectKey: string,
-    request: ExportArchiveWriteRequest,
-    size: number,
-  ): Readonly<StoredExportArchive> {
-    const bundleProfile = request.archiveFormat === "MD-BUNDLE-ZIP-1";
-    const archiveFormat = bundleProfile ? "MD-BUNDLE-ZIP-1" : "MD-OKF-ZIP-1";
-    const filename = bundleProfile ? "mind-diary-bundle.zip" : "mind-diary-okf-bundle.zip";
-    const contentDisposition = bundleProfile
-      ? 'attachment; filename="mind-diary-bundle.zip"'
-      : 'attachment; filename="mind-diary-okf-bundle.zip"';
-    if (
-      request.archiveFormat !== undefined && request.archiveFormat !== archiveFormat ||
-      request.filename !== undefined && request.filename !== filename ||
-      request.contentDisposition !== undefined && request.contentDisposition !== contentDisposition
-    ) throw new ObjectStoreFailure("invalid_media_type", "export profile metadata is invalid");
-    return Object.freeze({
-      objectKey,
-      jobId: request.jobId,
-      spaceId: request.spaceId,
-      claimVersion: request.claimVersion,
-      archiveFormat,
-      mediaType: "application/zip",
-      filename,
-      contentDisposition,
-      sha256: request.sha256,
-      size,
-      createdAt: request.createdAt,
-    });
-  }
-
-  #archiveCustomMetadata(archive: Readonly<StoredExportArchive>): Readonly<Record<string, string>> {
-    return Object.freeze({
-      schema: "md-r2-export-v1",
-      jobId: archive.jobId,
-      spaceId: archive.spaceId,
-      claimVersion: String(archive.claimVersion),
-      sha256: archive.sha256,
-      size: String(archive.size),
-      archiveFormat: archive.archiveFormat,
-      filename: archive.filename,
-      createdAt: archive.createdAt,
-    });
-  }
 }
 
 export async function createSitesObjectStore(
