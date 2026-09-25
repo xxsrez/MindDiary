@@ -154,3 +154,36 @@ test("unsettled canonical writer blocks retired-key recovery before any R2 delet
     assert.equal(f.objects.has(key), true);
   } finally { f.database.close(); }
 });
+
+test("staging recovery rejects foreign metadata before deletion and safely replays", async () => {
+  const f = await fixture();
+  const ids = [
+    ["import-file_082b0fa6-b42a-4e68-9f07-7bbfbf7b74b8", 75],
+    ["import-file_9f913556-f976-45ba-af28-d60417278ea9", 61],
+    ["import-file_cece5305-7fea-4bbe-98a3-a3cdeba20f51", 59],
+  ];
+  try {
+    f.objects.clear();
+    for (const [id, size] of ids) f.objects.set(`staged-bundle-files/${id}`, {
+      size, customMetadata: { schema: "md-r2-staged-bundle-file-v1",
+        stagedFileId: id, spaceId, size: String(size),
+        bindingOwnerId: "import-owner_import_02d9cd7c-c7d8-4928-877f-a69e10df7fa0",
+        createdAt: "2026-09-25T19:03:11.134Z" },
+    });
+    await assert.rejects(() => recoverMd485RetiredKey(f.environment, "delete_staging"),
+      /recovery_staging_preflight_failed/u);
+    await f.database.prepare("UPDATE md_acceptance_cleanup_journal SET done = 1").run();
+    const last = f.objects.get(`staged-bundle-files/${ids[2][0]}`);
+    last.customMetadata.spaceId = "foreign-space";
+    await assert.rejects(() => recoverMd485RetiredKey(f.environment, "delete_staging"),
+      /recovery_staging_preflight_failed/u);
+    assert.equal(f.objects.size, 3);
+    last.customMetadata.spaceId = spaceId;
+    assert.deepEqual(await recoverMd485RetiredKey(f.environment, "delete_staging"),
+      { staging_deleted: true });
+    assert.equal(f.objects.size, 0);
+    assert.deepEqual(await recoverMd485RetiredKey(f.environment, "delete_staging"),
+      { staging_deleted: true });
+    assert.deepEqual(await recoverMd485RetiredKey(f.environment, "release"), { released: true });
+  } finally { f.database.close(); }
+});

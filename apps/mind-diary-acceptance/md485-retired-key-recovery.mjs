@@ -10,6 +10,12 @@ const GATE_OPERATION = "e21698c6-8e4c-4bfa-86c3-080d45711b9c";
 const BACKUP_OPERATION = "66467e32-39a4-4ada-aec2-c0627352710f";
 const KEY = `spaces/${SPACE_ID}/objects/sha256/${SHA256}`;
 const SIDECAR = `spaces/${SPACE_ID}/integrity/${encodeURIComponent(KEY)}`;
+const IMPORT_ID = "import_02d9cd7c-c7d8-4928-877f-a69e10df7fa0";
+const STAGED_FILES = [
+  ["import-file_082b0fa6-b42a-4e68-9f07-7bbfbf7b74b8", 75],
+  ["import-file_9f913556-f976-45ba-af28-d60417278ea9", 61],
+  ["import-file_cece5305-7fea-4bbe-98a3-a3cdeba20f51", 59],
+];
 
 const first = (database, sql, ...args) => database.prepare(sql).bind(...args).first();
 
@@ -82,7 +88,7 @@ async function inspect(environment) {
 }
 
 export async function recoverMd485RetiredKey(environment, phase) {
-  if (!["inspect", "delete", "release"].includes(phase)) throw new Error("invalid_request");
+  if (!["inspect", "delete", "delete_staging", "release"].includes(phase)) throw new Error("invalid_request");
   const before = await inspect(environment);
   if (phase === "inspect") {
     const residual = before.safe && before.inventory.object_count <= 16
@@ -112,6 +118,32 @@ export async function recoverMd485RetiredKey(environment, phase) {
     return { released: true, replayed: true };
   }
   if (!before.safe) throw new Error("recovery_preflight_failed");
+  if (phase === "delete_staging") {
+    const metadata = await createSitesMetadataStore(environment.DB);
+    if (!before.actorDone || before.objectPresent || before.sidecarPresent ||
+        await metadata.readMarkdownImportSession(IMPORT_ID) !== null) {
+      throw new Error("recovery_staging_preflight_failed");
+    }
+    // Validate the entire exact allowlist before the first destructive call.
+    for (const [id, size] of STAGED_FILES) {
+      const item = await environment.MIND_DIARY_BUCKET.head(`staged-bundle-files/${id}`);
+      if (await metadata.readStagedBundleFile(id) !== null || (item !== null && (
+        item.size !== size || item.customMetadata?.schema !== "md-r2-staged-bundle-file-v1" ||
+        item.customMetadata?.stagedFileId !== id || item.customMetadata?.spaceId !== SPACE_ID ||
+        item.customMetadata?.bindingOwnerId !== `import-owner_${IMPORT_ID}` ||
+        item.customMetadata?.size !== String(size) ||
+        item.customMetadata?.createdAt !== "2026-09-25T19:03:11.134Z"
+      ))) throw new Error("recovery_staging_preflight_failed");
+    }
+    for (const [id] of STAGED_FILES) {
+      const key = `staged-bundle-files/${id}`;
+      await environment.MIND_DIARY_BUCKET.delete(key);
+      if (await environment.MIND_DIARY_BUCKET.head(key) !== null) {
+        throw new Error("recovery_delete_unconfirmed");
+      }
+    }
+    return { staging_deleted: true };
+  }
   if (phase === "delete") {
     await environment.MIND_DIARY_BUCKET.delete(KEY);
     await environment.MIND_DIARY_BUCKET.delete(SIDECAR);
