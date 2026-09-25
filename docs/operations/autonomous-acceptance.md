@@ -77,6 +77,14 @@ legacy revision через настоящий MCP. Второй этап соз�
 проверки привязки cursor к старой revision. После сценария controller закрывает
 run и сверяет полную baseline inventory. Product Site такого маршрута не имеет.
 
+Для холодного MCP preflight отдельный test-only маршрут принимает только
+run-owned ordinary Mind с ровно 160 Markdown, созданными обычными MCP
+commits, включая `index.md` и `log.md`. Он проверяет активного Owner и exact
+HEAD, добавляет два синтетических ZIP-объекта и фиксирует legacy v3 revision
+без producer proof. Повтор не создаёт второй revision. Первый короткий
+preflight и повтор после перезапуска проверяются уже через публичный MCP;
+controller завершает run и сверяет полную baseline inventory.
+
 ## Применимость платформенных проверок
 
 Управляющий запуск фиксирует exact base/candidate SHA, выбранные Task Manager
