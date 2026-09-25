@@ -84,11 +84,20 @@ async function inspect(environment) {
 export async function recoverMd485RetiredKey(environment, phase) {
   if (!["inspect", "delete", "release"].includes(phase)) throw new Error("invalid_request");
   const before = await inspect(environment);
-  if (phase === "inspect") return {
-    eligible: before.safe, object_present: before.objectPresent,
-    sidecar_present: before.sidecarPresent, actor_cleanup_done: before.actorDone,
-    object_count: before.inventory.object_count,
-  };
+  if (phase === "inspect") {
+    const residual = before.safe && before.inventory.object_count <= 16
+      ? await environment.MIND_DIARY_BUCKET.list({ limit: 17 }) : null;
+    if (residual && (residual.truncated ||
+        residual.objects.length !== before.inventory.object_count)) {
+      throw new Error("recovery_inventory_changed");
+    }
+    return {
+      eligible: before.safe, object_present: before.objectPresent,
+      sidecar_present: before.sidecarPresent, actor_cleanup_done: before.actorDone,
+      object_count: before.inventory.object_count,
+      residual_objects: residual?.objects.map((item) => ({ key: item.key, bytes: item.size })) ?? null,
+    };
+  }
   if (phase === "release" && before.releasedReplay) {
     return { released: true, replayed: true };
   }
