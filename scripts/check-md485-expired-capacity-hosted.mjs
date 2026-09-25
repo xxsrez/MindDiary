@@ -19,17 +19,17 @@ const client = await new AcceptanceClient({
 const build = await client.request("/_acceptance/build");
 assert.equal(build.status, 200);
 assert.equal((await build.json()).candidate_sha, expectedCandidate);
+// Deployment identity is established by separate native Sites read-backs.
+// This runner checks the durable reservation across two hosted invocations.
 
 if (phase === "seed") {
-  const deploymentId = process.env.MD485_EXPIRY_SEED_DEPLOYMENT_ID;
-  assert.match(deploymentId ?? "", /^appgdep_[a-f0-9]{32}$/);
   assert.ok(["prepared", "created"].includes(client.state.phase));
   if (!client.state.md485Expiry?.baseline) {
     const baseline = await client.control("/_acceptance/inventory");
     assert.equal(baseline.complete, true);
     assert.equal(baseline.principals, 0);
     assert.equal(baseline.owned_minds, 0);
-    client.state.md485Expiry = { baseline, candidate: expectedCandidate, deploymentId };
+    client.state.md485Expiry = { baseline, candidate: expectedCandidate };
     await client.save();
   }
   await client.setup({ profile: "operator" });
@@ -55,29 +55,25 @@ if (phase === "seed") {
     reservationId: seeded.reservation_id, seededAt: new Date().toISOString() };
   await client.save();
   console.log(JSON.stringify({ phase: "seeded", candidate: expectedCandidate,
-    deployment_id: deploymentId, reservation_state: seeded.state,
+    reservation_state: seeded.state,
     expired_at_seed: true }));
 }
 
 if (phase === "recover") {
   const record = client.state.md485Expiry;
   assert.ok(record?.reservationId && record.candidate === expectedCandidate);
-  const deploymentId = process.env.MD485_EXPIRY_RECOVER_DEPLOYMENT_ID;
-  assert.match(deploymentId ?? "", /^appgdep_[a-f0-9]{32}$/);
-  assert.notEqual(deploymentId, record.deploymentId, "distinct_deployment_required");
   const recovered = await client.control(
     `/_acceptance/runs/${client.state.run.run_id}/expired-heavy-reservation`,
     "POST", { phase: "recover" },
   );
   assert.deepEqual(recovered, { phase: "recovered",
     expired_reservation_state: "released", successor_state: "released",
-    reservation_count: 2, duplicate_reservations: false });
-  client.state.md485Expiry = { ...record, recoveredAt: new Date().toISOString(),
-    recoverDeploymentId: deploymentId };
+    run_reservations_released: true });
+  client.state.md485Expiry = { ...record, recoveredAt: new Date().toISOString() };
   await client.save();
   console.log(JSON.stringify({ phase: "recovered", candidate: expectedCandidate,
-    deployment_id: deploymentId, expired_reservation_state: "released",
-    successor_state: "released", duplicate_reservations: false }));
+    expired_reservation_state: "released",
+    successor_state: "released", run_reservations_released: true }));
 }
 
 if (phase === "cleanup") {

@@ -14,13 +14,11 @@ test("expired capacity probe refuses foreign Product principals before a ledger 
   };
   let mutations = 0;
   const metadata = {
-    captureSystemBackupState: async () => ({ snapshot: {
-      principals: new Map([[actor.principal_id, {}], ["principal_foreign", {}]]),
-      personalBindings: new Map([[actor.principal_id, { spaceId: "space_run_owner" }]]),
-      spaces: new Map([["space_run_owner", {}]]),
-      knowledgeSpaces: new Map([["space_run_owner", {}]]),
-      capacityReservations: new Map(), exportJobs: new Map(), markdownImportSessions: new Map(),
-    } }),
+    listServiceOperatorPrincipals: async () => ({ principals: [
+      { principalId: actor.principal_id, ownedMindCount: 0, participatingMindCount: 0 },
+      { principalId: "principal_foreign", ownedMindCount: 0, participatingMindCount: 0 },
+    ], nextCursor: null }),
+    resolvePersonalMind: async () => ({ spaceId: "space_run_owner" }),
     runCapacityTransaction: async () => { mutations += 1; },
   };
   await assert.rejects(expiredHeavyReservation(store, runId, { phase: "seed" }, { DB: {} }, {

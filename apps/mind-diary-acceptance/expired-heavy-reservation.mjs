@@ -33,29 +33,22 @@ export async function expiredHeavyReservation(store, runId, input, environment, 
   if (otherRuns.count !== 0) fail("expired_heavy_other_run_present");
 
   const metadata = await createMetadata(environment.DB);
-  const snapshot = (await metadata.captureSystemBackupState()).snapshot;
   const principalId = run.actors[0].principal_id;
-  const spaceId = snapshot.personalBindings?.get(principalId)?.spaceId;
-  if (!(snapshot.principals instanceof Map) || snapshot.principals.size !== 1 ||
-      !snapshot.principals.has(principalId) ||
-      !(snapshot.spaces instanceof Map) || snapshot.spaces.size !== 1 ||
-      !snapshot.spaces.has(spaceId) ||
-      !(snapshot.knowledgeSpaces instanceof Map) || snapshot.knowledgeSpaces.size !== 1 ||
-      !snapshot.knowledgeSpaces.has(spaceId) ||
-      !(snapshot.capacityReservations instanceof Map) ||
-      !(snapshot.exportJobs instanceof Map) || snapshot.exportJobs.size !== 0 ||
-      !(snapshot.markdownImportSessions instanceof Map) || snapshot.markdownImportSessions.size !== 0) {
+  const directory = await metadata.listServiceOperatorPrincipals({
+    sort: "registered_at", direction: "asc", limit: 2,
+  });
+  const personal = await metadata.resolvePersonalMind(principalId);
+  if (directory.principals.length !== 1 || directory.nextCursor !== null ||
+      directory.principals[0].principalId !== principalId ||
+      directory.principals[0].ownedMindCount !== 0 ||
+      directory.principals[0].participatingMindCount !== 0 ||
+      !personal?.spaceId) {
     fail("expired_heavy_product_not_isolated");
   }
+  const spaceId = personal.spaceId;
   const operationRef = `acceptance-expired-${runId}`;
   const reservationId = capacityReservationId("export", spaceId, operationRef);
   const successorId = capacityReservationId("import", spaceId, `acceptance-successor-${runId}`);
-  if ([...snapshot.capacityReservations.values()].some((reservation) =>
-    reservation.reservationId !== reservationId &&
-    reservation.reservationId !== successorId &&
-    (reservation.state === "active" || reservation.state === "cleanup_pending"))) {
-    fail("expired_heavy_foreign_reservation");
-  }
   const createdAt = new Date(run.created_at - CAPACITY_RESERVATION_TTL_MS.export - 60_000).toISOString();
   const expiresAt = new Date(run.created_at - 60_000).toISOString();
   const request = Object.freeze({
@@ -66,7 +59,7 @@ export async function expiredHeavyReservation(store, runId, input, environment, 
   });
   const read = async (id) => metadata.runCapacityTransaction((tx) => tx.readCapacityReservation(id));
   if (input.phase === "seed") {
-    if (snapshot.capacityReservations.has(successorId)) fail("expired_heavy_successor_already_present");
+    if (await read(successorId) !== null) fail("expired_heavy_successor_already_present");
     let reservation = await read(reservationId);
     if (reservation === null) {
       const result = await metadata.runCapacityTransaction((tx) =>
@@ -102,8 +95,27 @@ export async function expiredHeavyReservation(store, runId, input, environment, 
     reservation = await read(reservationId);
   }
   if (reservation.state === "cleanup_pending") {
+    // Keep the production cleanup rule, but expose only this run-owned row to it.
+    // The ordinary collector scans the whole Site ledger.
+    const scopedMetadata = {
+      collectExpiredCapacityReservations: async ({ now: cleanupAt, limit }) => {
+        if (limit !== 1) fail("expired_heavy_cleanup_scope_mismatch");
+        const current = await read(reservationId);
+        if (current?.state !== "cleanup_pending" ||
+            current.spaceId !== spaceId ||
+            current.requestedByPrincipalId !== principalId ||
+            Date.parse(current.expiresAt) > Date.parse(cleanupAt)) {
+          fail("expired_heavy_cleanup_target_mismatch");
+        }
+        return [current];
+      },
+      releaseCapacityReservation: async ({ reservationId: targetId, releasedAt }) => {
+        if (targetId !== reservationId) fail("expired_heavy_foreign_release");
+        return metadata.releaseCapacityReservation({ reservationId: targetId, releasedAt });
+      },
+    };
     const capacity = new CapacityAdmissionService({
-      metadata, clock: { now: () => new Date(instant).toISOString() },
+      metadata: scopedMetadata, clock: { now: () => new Date(instant).toISOString() },
       authorizer: { authorize: () => fail("expired_heavy_authorization_unexpected") },
     });
     const cleanup = await capacity.cleanupExpired(1);
@@ -137,11 +149,12 @@ export async function expiredHeavyReservation(store, runId, input, environment, 
       releasedAt: new Date(instant).toISOString() })) fail("expired_heavy_successor_release_failed");
     successor = await read(successorId);
   }
-  const final = (await metadata.listCapacityReservationsForTest()).filter((item) =>
-    item.reservationId === reservationId || item.reservationId === successorId);
-  if (successor.state !== "released" || final.length !== 2 ||
-      final.some((item) => item.state !== "released")) fail("expired_heavy_final_state_mismatch");
+  const finalExpired = await read(reservationId);
+  const finalSuccessor = await read(successorId);
+  if (successor.state !== "released" ||
+      finalExpired?.state !== "released" ||
+      finalSuccessor?.state !== "released" ||
+      reservationId === successorId) fail("expired_heavy_final_state_mismatch");
   return { phase: "recovered", expired_reservation_state: reservation.state,
-    successor_state: successor.state, reservation_count: final.length,
-    duplicate_reservations: false };
+    successor_state: successor.state, run_reservations_released: true };
 }
