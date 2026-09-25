@@ -5,7 +5,7 @@ import type { ProductSitesIdentityResolution, ProductWebActor } from "@mind-diar
 export const UAT191_INCIDENT_DIAGNOSTIC_PATH =
   "/api/v1/internal/operators/diagnostics/md485-uat191";
 
-const START = "2026-09-21T00:00:00.000Z";
+const START = "2026-09-20T15:30:00.000Z";
 const END = "2026-09-21T16:00:00.000Z";
 const PAGE_SIZE = 40;
 const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
@@ -241,7 +241,7 @@ export function createUat191IncidentDiagnostic(input: {
           incident: "MD-485/UAT191",
           from_utc: START,
           to_utc: END,
-          history_coverage: "21 September only; a 24-hour heavy reservation may have started on 20 September",
+          history_coverage: "20 September 15:30 through 21 September 16:00 UTC; older stale reservations remain outside this window",
           event_semantics: "transaction calls record attempted operations, not their return values or confirmed reservation state",
           events,
           next_before: rows.length > PAGE_SIZE && page.length > 0

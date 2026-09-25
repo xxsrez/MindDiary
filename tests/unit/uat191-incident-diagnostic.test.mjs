@@ -114,7 +114,7 @@ test("temporary diagnostic pages fixed-window D1 events without returning raw pa
   const payload = await result.json();
   assert.equal(payload.data.events.length, 40);
   assert.equal(payload.data.next_before, 11);
-  assert.deepEqual(queries[1], ["2026-09-21T00:00:00.000Z", "2026-09-21T16:00:00.000Z", Number.MAX_SAFE_INTEGER, MIND_ID, 41]);
+  assert.deepEqual(queries[1], ["2026-09-20T15:30:00.000Z", "2026-09-21T16:00:00.000Z", Number.MAX_SAFE_INTEGER, MIND_ID, 41]);
   assert.match(queries[0], /instr\(payload_json, \?4\) > 0/u);
   assert.equal(JSON.stringify(payload).includes("private@example.test"), false);
 });
