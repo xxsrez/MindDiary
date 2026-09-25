@@ -645,20 +645,6 @@ class FakeD1Database {
           .map((row) => ({ ...row })),
       };
     }
-    if (sql.includes("/*md485-uat191-temporary*/")) {
-      return {
-        success: true,
-        results: this.metadataEvents
-          .filter((row) => row.committed_at >= values[0] &&
-            row.committed_at < values[1] &&
-            row.sequence < Number(values[2]) &&
-            row.target === "metadata" &&
-            row.payload_json.includes(String(values[3])))
-          .sort((left, right) => right.sequence - left.sequence)
-          .slice(0, Number(values[4]))
-          .map((row) => ({ ...row })),
-      };
-    }
     if (sql.includes("/*md-metadata-append-readback*/")) {
       const row = this.metadataEvents.find((event) =>
         event.sequence === Number(values[0]));
@@ -1724,52 +1710,6 @@ test("operator recovery requires existing allowlist, Sites identity, exact Origi
   await assert.rejects(runtime.recoverBackground(1, "full", controller.signal), { code: "recovery_deadline_exceeded" });
   authenticated = false;
   assert.equal((await responseFrom(runtime, request())).status, 404);
-});
-
-test("UAT191 diagnostic requires the exact UAT origin, operator and target owner", async () => {
-  const uatOrigin = "https://mind-diary.example.invalid";
-  const database = new FakeD1Database();
-  let email = "incident.owner@example.com";
-  let authenticated = true;
-  const options = {
-    database, bucket: new FakeR2Bucket(), publicOrigin: uatOrigin,
-    identity: { readVerifiedIdentity() {
-      return authenticated
-        ? { kind: "authenticated", verifiedEmail: email, verifiedFullName: "Incident Test" }
-        : { kind: "unauthenticated" };
-    } },
-    tokenVerifierKey: key(173), locatorKey: key(213), exportDownloadVerifierKey: key(253), csrfKey: key(37),
-    observabilityWriter: { write() {} }, schedule() {},
-  };
-  let runtime = await createProductSiteRuntime(options);
-  const bootstrap = async (prefix) => {
-    const csrf = csrfFromHtml(await (await responseFrom(runtime, new Request(uatOrigin))).text());
-    const result = await responseFrom(runtime, new Request(uatOrigin + "/api/v1/account", {
-      method: "POST", headers: { origin: uatOrigin, "content-type": "application/json", "x-csrf-token": csrf, "idempotency-key": `${prefix}:bootstrap` },
-      body: JSON.stringify({ action: "create_isolated_account" }),
-    }));
-    assert.equal(result.status, 200, await result.clone().text());
-    return (await result.json()).data.principal_id;
-  };
-  const ownerId = await bootstrap("incident-owner");
-  const csrf = csrfFromHtml(await (await responseFrom(runtime, new Request(uatOrigin + "/settings/developer/mcp"))).text());
-  const created = await responseFrom(runtime, new Request(uatOrigin + "/api/v1/minds", {
-    method: "POST", headers: { origin: uatOrigin, "content-type": "application/json", "x-csrf-token": csrf, "idempotency-key": "incident:create-mind" },
-    body: JSON.stringify({ name: "Incident Mind", handle: "madeira-bus-schedules" }),
-  }));
-  assert.equal(created.status, 200, await created.clone().text());
-  const route = uatOrigin + "/api/v1/internal/operators/diagnostics/md485-uat191";
-  assert.equal((await responseFrom(runtime, new Request(route))).status, 404);
-  runtime = await createProductSiteRuntime({ ...options, serviceOperatorPrincipalIds: [ownerId] });
-  assert.equal((await responseFrom(runtime, new Request(route + "?other=1"))).status, 400);
-  const otherOrigin = await createProductSiteRuntime({ ...options, publicOrigin: ORIGIN, serviceOperatorPrincipalIds: [ownerId] });
-  assert.equal((await responseFrom(otherOrigin, new Request(ORIGIN + "/api/v1/internal/operators/diagnostics/md485-uat191"))).status, 404);
-  email = "incident.other@example.com";
-  const otherId = await bootstrap("incident-other");
-  runtime = await createProductSiteRuntime({ ...options, serviceOperatorPrincipalIds: [ownerId, otherId] });
-  assert.equal((await responseFrom(runtime, new Request(route))).status, 404);
-  authenticated = false;
-  assert.equal((await responseFrom(runtime, new Request(route))).status, 404);
 });
 
 test("Product Site publishes one modern file input and keeps exact transport verification separate", async () => {
