@@ -1313,9 +1313,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     } catch (error) {
       // The public deletion response is deliberately generic. Log only the
       // operation stage so an unknown R2 result can be investigated safely.
+      const providerCode = error instanceof Error
+        ? /\(([0-9]{4,6})\)\s*$/u.exec(error.message)?.[1] ?? null
+        : null;
       console.error(JSON.stringify({ event: "md-canonical-delete-failure", phase,
         error_code: error instanceof ObjectStoreFailure ? error.code :
-          error instanceof Error ? error.name : "unknown" }));
+          error instanceof Error ? error.name : "unknown", provider_code: providerCode }));
       throw error;
     }
   }

@@ -4180,7 +4180,8 @@ test("Sites Space-canonical cleanup keeps an uncertain delete gated after restar
     console.error = previousError;
   }
   assert.deepEqual(logged, [{
-    event: "md-canonical-delete-failure", phase: "delete_object", error_code: "Error",
+    event: "md-canonical-delete-failure", phase: "delete_object",
+    error_code: "Error", provider_code: null,
   }]);
   const canonicalKey = [
     `spaces/${encodeURIComponent("space_cleanup_resume")}/objects/sha256/`,
