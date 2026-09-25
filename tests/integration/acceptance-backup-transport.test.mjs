@@ -114,7 +114,7 @@ test("collaboration cleanup also reconciles an aged backup deletion barrier", as
     "INSERT INTO md_backup_cleanup_ops (operation_id, started_at) VALUES (?1, ?2)",
   ).bind(randomUUID(), new Date(Date.now() - 600_000).toISOString()).run();
 
-  assert.equal((await client.cleanup()).state, "cleaned");
+  assert.equal((await client.cleanup({ retryTransient: false })).state, "cleaned");
   assert.deepEqual(await client.control("/_acceptance/inventory"), baseline);
 });
 

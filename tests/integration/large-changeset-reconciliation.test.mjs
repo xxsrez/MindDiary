@@ -402,7 +402,7 @@ test("lost successful response reconciles the exact payload to one committed res
   assert.equal(after.audit.filter(({ eventType }) => eventType === "content.changeset_committed").length, 1);
 });
 
-test("metadata failure reconciles missing, then exact retry commits once", async () => {
+test("metadata failure reconciles missing, then exact retry fails closed without writer proof", async () => {
   const env = await fixture();
   const currentActor = actor("large-metadata-failure-token", "large-metadata-failure-request");
   const request = requestFor(
@@ -424,20 +424,14 @@ test("metadata failure reconciles missing, then exact retry commits once", async
     currentActor,
     nextRevisionId: "revision_large_metadata_failure",
   });
-  const committed = await retryService.commit(request);
-  assert.equal(committed.kind, "committed");
-  assert.equal(committed.replayed, false);
-  const replayed = await retryService.commit(request);
-  assert.equal(replayed.kind, "committed");
-  assert.equal(replayed.replayed, true);
+  const retry = await retryService.commit(request);
+  assert.equal(retry.kind, "invalid");
+  assert.equal(retry.error.code, "capacity_accounting_untrusted");
   const after = await env.state();
-  assert.deepEqual(after.revisions, [
-    REVISIONS.initial.revisionId,
-    "revision_large_metadata_failure",
-  ]);
-  assert.equal(after.head, "revision_large_metadata_failure");
-  assert.equal(after.idempotency.length, 1);
-  assert.equal(after.audit.filter(({ eventType }) => eventType === "content.changeset_committed").length, 1);
+  assert.deepEqual(after.revisions, [REVISIONS.initial.revisionId]);
+  assert.equal(after.head, REVISIONS.initial.revisionId);
+  assert.equal(after.idempotency.length, 0);
+  assert.equal(after.audit.filter(({ eventType }) => eventType === "content.changeset_committed").length, 0);
 });
 
 test("changed payload with the same idempotency key conflicts without new effects", async () => {

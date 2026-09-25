@@ -59,11 +59,13 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
   async claimObjectCleanup(request: Readonly<{
       now: UtcInstant;
       leaseExpiresAt: UtcInstant;
+      canonicalCreatedBefore: UtcInstant;
     }>): Promise<ClaimObjectCleanupResult> {
       return this._runExclusive(async () => {
         if (
           !Number.isFinite(Date.parse(request.now)) ||
           !Number.isFinite(Date.parse(request.leaseExpiresAt)) ||
+          !Number.isFinite(Date.parse(request.canonicalCreatedBefore)) ||
           Date.parse(request.leaseExpiresAt) <= Date.parse(request.now)
         ) throw new TypeError("object cleanup lease is invalid");
         const current = this._objectCleanupCheckpoint ?? Object.freeze({
@@ -71,6 +73,10 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
           namespace: "immutable" as const,
           cursor: null,
           cycleStartedAt: request.now,
+          canonicalCreatedBefore: request.canonicalCreatedBefore,
+          recoveryCohort: this.#closedCanonicalRecoveryCohort(request.now),
+          recoveryCursor: null,
+          blockedSpaceIds: Object.freeze([] as SpaceId[]),
           updatedAt: request.now,
           leaseExpiresAt: null,
           retries: 0,
@@ -83,6 +89,7 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
         const reclaimedLease = current.leaseExpiresAt !== null;
         this._objectCleanupCheckpoint = Object.freeze({
           ...current,
+          canonicalCreatedBefore: current.canonicalCreatedBefore ?? request.canonicalCreatedBefore,
           version: version(current.version + 1),
           updatedAt: request.now,
           leaseExpiresAt: request.leaseExpiresAt,
@@ -102,29 +109,101 @@ export abstract class RevisionMetadataBackgroundStore extends RevisionMetadataCo
       cursor: string | null;
       cycleStartedAt: UtcInstant;
       completedAt: UtcInstant;
+      cycleCompleted: boolean;
+      blockedSpaceIds: readonly SpaceId[];
     }>): Promise<boolean> {
       return this._runExclusive(async () => {
         const current = this._objectCleanupCheckpoint;
         if (
           !current || current.version !== request.expectedVersion ||
           current.leaseExpiresAt === null ||
+          Date.parse(current.leaseExpiresAt) <= Date.parse(request.completedAt) ||
           !(OBJECT_CLEANUP_NAMESPACES as readonly string[]).includes(request.namespace) ||
           (request.cursor !== null && request.cursor.length > 4096) ||
+          request.blockedSpaceIds.length > 32 ||
+          !request.blockedSpaceIds.every((spaceId) => typeof spaceId === "string" && spaceId.length > 0) ||
           !Number.isFinite(Date.parse(request.cycleStartedAt)) ||
           !Number.isFinite(Date.parse(request.completedAt))
         ) return false;
+        const blockedSpaceIds = new Set([
+          ...(current.blockedSpaceIds ?? []), ...request.blockedSpaceIds,
+        ]);
+        const recoveryCursor = request.cycleCompleted
+          ? current.recoveryCohort?.at(-1)?.reservationId ?? current.recoveryCursor ?? null
+          : current.recoveryCursor ?? null;
+        if (request.cycleCompleted) {
+          for (const candidate of current.recoveryCohort ?? []) {
+            if (blockedSpaceIds.has(candidate.spaceId)) continue;
+            const reservation = this._capacityReservations.get(candidate.reservationId);
+            if (
+              reservation === undefined || reservation.state !== "cleanup_pending" ||
+              reservation.attemptId !== candidate.attemptId ||
+              reservation.spaceId !== candidate.spaceId ||
+              reservation.writerClosedAt === undefined || reservation.writerClosedAt === null ||
+              Date.parse(reservation.writerClosedAt) > Date.parse(current.cycleStartedAt)
+            ) continue;
+            if (reservation.operation === "import") {
+              const session = [...this._markdownImportSessions.values()].find((item) =>
+                item.reservationId === reservation.reservationId);
+              if (
+                session === undefined ||
+                session.activeStagingStepIds === undefined ||
+                session.armedStagingStepIds === undefined ||
+                !["committed", "canceled", "validation_failed", "expired"].includes(session.state) ||
+                (session.activeStepId ?? null) !== null || session.unsettledWriterPossible ||
+                (session.activeStagingStepIds ?? []).length > 0 ||
+                [...this._markdownImportStagedFiles.values()].some((file) =>
+                  file.importId === session.importId)
+              ) continue;
+            } else if (reservation.operation !== "commit") continue;
+            this._capacityReservations.set(reservation.reservationId,
+              cloneCapacityReservation(Object.freeze({
+                ...reservation,
+                state: "released" as const,
+                updatedAt: request.completedAt,
+              })));
+          }
+        }
         this._objectCleanupCheckpoint = Object.freeze({
           ...current,
           version: version(current.version + 1),
           namespace: request.namespace,
           cursor: request.cursor,
           cycleStartedAt: request.cycleStartedAt,
+          canonicalCreatedBefore: request.cycleCompleted ? undefined : current.canonicalCreatedBefore,
+          recoveryCohort: request.cycleCompleted
+            ? this.#closedCanonicalRecoveryCohort(request.cycleStartedAt, recoveryCursor)
+            : current.recoveryCohort,
+          recoveryCursor,
+          blockedSpaceIds: request.cycleCompleted
+            ? Object.freeze([] as SpaceId[])
+            : Object.freeze([...blockedSpaceIds]),
           updatedAt: request.completedAt,
           leaseExpiresAt: null,
         });
         return true;
       });
     }
+
+  #closedCanonicalRecoveryCohort(startedAt: UtcInstant, after: string | null = null) {
+    const eligible = [...this._capacityReservations.values()]
+      .filter((reservation) =>
+        (reservation.operation === "commit" || reservation.operation === "import") &&
+        reservation.state === "cleanup_pending" &&
+        typeof reservation.attemptId === "string" && reservation.attemptId.length > 0 &&
+        reservation.writerClosedAt !== undefined && reservation.writerClosedAt !== null &&
+        Date.parse(reservation.writerClosedAt) <= Date.parse(startedAt))
+      .sort((left, right) => left.reservationId.localeCompare(right.reservationId));
+    const next = after === null ? eligible : eligible.filter((item) =>
+      item.reservationId.localeCompare(after) > 0);
+    return Object.freeze((next.length > 0 ? next : eligible)
+      .slice(0, 32)
+      .map((reservation) => Object.freeze({
+        reservationId: reservation.reservationId,
+        attemptId: reservation.attemptId!,
+        spaceId: reservation.spaceId,
+      })));
+  }
 
   async failObjectCleanupBatch(request: Readonly<{
       expectedVersion: ObjectCleanupCheckpoint["version"];

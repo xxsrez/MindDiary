@@ -268,6 +268,7 @@ test("expired reservations become bounded cleanup work and telemetry stays conte
     transaction.admitCapacityReservation(
       request({
         suffix: "expired",
+        operation: "export",
         requested: { physicalCanonicalBytes: 0, temporaryBytes: 16 },
       }),
       DEFAULT_CAPACITY_LIMITS,
@@ -290,6 +291,7 @@ test("expired reservations become bounded cleanup work and telemetry stays conte
     transaction.admitCapacityReservation(
       request({
         suffix: "expired",
+        operation: "export",
         createdAt: "2026-08-22T14:00:30.000Z",
         expiresAt: "2026-08-22T15:00:30.000Z",
         requested: { physicalCanonicalBytes: 0, temporaryBytes: 16 },
@@ -315,8 +317,8 @@ test("expired reservations become bounded cleanup work and telemetry stays conte
       createdAt: "2026-08-22T12:02:00.000Z",
       expiresAt: "2026-08-22T13:02:00.000Z",
     }, DEFAULT_CAPACITY_LIMITS));
-  assert.equal(resumedCommit.kind, "admitted");
-  assert.equal(resumedCommit.replayed, false);
+  assert.equal(resumedCommit.kind, "rejected");
+  assert.equal(resumedCommit.reason, "accounting_untrusted");
   const telemetry = await metadata.readCapacityTelemetry(
     DEFAULT_CAPACITY_LIMITS,
     "2026-08-22T14:00:00.000Z",
@@ -339,6 +341,7 @@ test("expired reservations become bounded cleanup work and telemetry stays conte
     transaction.admitCapacityReservation(
       request({
         suffix: "expired",
+        operation: "export",
         createdAt: "2026-08-22T14:02:00.000Z",
         expiresAt: "2026-08-22T15:02:00.000Z",
         requested: { physicalCanonicalBytes: 0, temporaryBytes: 16 },

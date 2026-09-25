@@ -175,6 +175,7 @@ function safeErrorMessage(code: string): string {
   if (code === "account_bootstrap_conflict") return "Account setup changed in another request. Reload the current account state before trying again.";
   if (code === "profile_conflict") return "The profile changed in another session. Reload the current account state before saving again.";
   if (code === "invalid_request") return "The request is invalid.";
+  if (code === "commit_in_progress") return "This exact changeset may still be committing. Reconcile its result before retrying.";
   if (code === "usage_conflict") return "Mind usage changed in another session. Reload the current settings before trying again.";
   if (code === "description_required") return "Add a routing description before allowing automatic writes.";
   if (code === "description_required_for_write") return "Change the Mind mode before clearing its writable routing description.";

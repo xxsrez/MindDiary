@@ -247,7 +247,8 @@ export type ChangesetValidationCode =
   | "capacity_accounting_untrusted"
   | "capacity_soft_limit"
   | "capacity_hard_limit"
-  | "capacity_fairness_limit";
+  | "capacity_fairness_limit"
+  | "commit_in_progress";
 
 export interface ChangesetValidationFailure {
   readonly code: ChangesetValidationCode;

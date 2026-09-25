@@ -105,6 +105,8 @@ export interface ReserveCapacityRequest {
   readonly spaceId: SpaceId;
   readonly operation: CapacityAdmissionRequest["operation"];
   readonly operationRef: string;
+  /** Optional stable claim identity when operationRef is a payload fingerprint. */
+  readonly reservationId?: string;
   readonly baseRevisionId: RevisionId | null;
   readonly idempotencyKey: IdempotencyKey;
   readonly requested: Readonly<CapacityAmounts>;
@@ -136,11 +138,16 @@ export class CapacityAdmissionService {
   reserve(request: ReserveCapacityRequest): Promise<CapacityAdmissionResult> {
     return this.#metadata.runCapacityTransaction((transaction) =>
       transaction.admitCapacityReservation(Object.freeze({
-        reservationId: capacityReservationId(
+        reservationId: request.reservationId ?? capacityReservationId(
           request.operation,
           request.spaceId,
           request.operationRef,
         ),
+        attemptId: crypto.randomUUID(),
+        requireActiveWritablePrincipal: request.operation === "commit",
+        authorizationTokenId: request.actor.authentication.kind === "mcp_token"
+          ? request.actor.authentication.tokenId
+          : null,
         requestedByPrincipalId: request.actor.principalId,
         spaceId: request.spaceId,
         operation: request.operation,

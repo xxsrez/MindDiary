@@ -114,6 +114,18 @@ metadata; collision или tamper fail closed. R2 listing никогда не и
 в foreground read/commit или как authority для quota; list нужен только
 bounded reconcile/GC по persisted cursor.
 
+Для physical cleanup условие R2 `etagMatches` не является поколением объекта:
+UAT-проверка 25.09.2026 показала, что metadata-only put тех же bytes сохраняет
+ETag, а условная запись со старым ETag проходит. Все put, metadata refresh и
+delete одного canonical key поэтому должны проходить через общий durable
+per-key gate. Gate захватывается до чтения объекта; неисполненный либо
+неизвестно завершившийся R2 mutation не разрешает его освобождать по времени.
+Перед физическим удалением под тем же gate повторно проверяются актуальная
+достижимость и незавершённое намерение записи. Намерение возникает до первого
+put и остаётся до подтверждённой фиксации либо остановки writer; истечение
+capacity reservation само по себе его не закрывает. Неизвестный исход оставляет
+ключ и резерв заряженными до доказательного восстановления.
+
 ### D1 responsibilities
 
 D1 хранит transactional records:
@@ -316,6 +328,46 @@ cancel and expiry move reservation to cleanup-pending; a persisted cursor
 reclaims temporary bytes before final release. Unknown outcome reconciles exact
 state before retry.
 
+An exact replay of a still-active commit reservation does not authorize a
+second object writer. It returns retryable `commit_in_progress` before object
+materialization; a changed payload with the same idempotency key returns
+`idempotency_conflict` before object materialization. The caller reconciles
+the original idempotency result and retries the unchanged request only after
+the current writer has demonstrably stopped. Expiry alone is not writer-safety
+proof and cannot authorize cleanup or a replacement writer.
+
+Для `commit` и `import` с возможной canonical записью обычный вызов release
+не завершает резерв. Подтверждённо остановленный writer фиксирует `attemptId` и
+`writerClosedAt`; неопределённый R2-вызов этого подтверждения не даёт.
+Background GC выбирает ограниченный набор таких `cleanup_pending` резервов
+на начало полного прохода и сохраняет его вместе с cursor и неизменным
+`createdBefore`. Недостижимый canonical Markdown/manifest, продвинутый
+BundleFile либо staged import object выбранного Mind, который слишком молод,
+не удалился или защищён другим writer, блокирует освобождение за этот проход.
+После прохода всех namespace checkpoint transaction повторно проверяет exact
+attempt, закрытие writer до начала прохода и отсутствие блокировки Mind и
+только тогда освобождает резерв. Достижимый объект остаётся учтённым в
+committed ledger. После неполного прохода, утраты lease либо ошибки удаления
+резерв остаётся заряженным. Неизвестный исход object write не участвует в
+автоматической финализации.
+
+Новые начальные ревизии Personal и ordinary Mind записывают Markdown и manifest
+в Space-scoped canonical namespace. До первого PUT они долговечно регистрируют
+точные object keys как pending creation intent. При успешном создании intent
+снимается в том же D1 batch, который фиксирует canonical metadata event;
+ответ, потерянный после commit, не оставляет блокирующую запись. При явно
+отклонённом создании вызывающий writer снимает intent после возвращения
+транзакции. При неопределённом исходе записи или прерывании до terminal
+metadata event intent остаётся до доказанного reconciliation. Физическое удаление каждого такого ключа
+проверяет intent внутри того же per-key gate, который сериализует R2 PUT/DELETE.
+Успешный metadata transition снимает intent атомарно; явно отклонённый —
+после подтверждённой остановки текущего writer. Неопределённый исход сохраняет
+его для reconciliation.
+Это защищает промежуток PUT → фиксация revision и не делает TTL доказательством
+остановки writer. Старый глобальный `canonical/sha256` namespace остаётся
+недоступным для автоматической физической очистки, пока не доказана остановка
+до-протокольных writers или совместимый с ними metadata fence.
+
 Для export transient `failed` job сохраняет reservation до bounded retry или
 expiry. Повтор exact selector/profile тем же principal восстанавливает этот job
 даже после утраты первоначального client key: новый namespace завершается тем же
@@ -454,9 +506,35 @@ One immutable plan can be claimed by exactly one import session. Exact start
 replay returns that session; a different idempotency key cannot create another
 session or share its reservation.
 
-Disconnect leaves the last committed checkpoint resumable. Cancel/expiry marks
-session closed, leaves HEAD unchanged and schedules bounded cleanup. A closed
-session never becomes active again; restart requires a new session/key.
+Перед первым staged R2 PUT batch создаёт durable staging step, затем отдельно
+вооружает его транзакцией D1. Неоружённый step можно снять при cancel/expiry:
+после этого запоздалый вызов arm не сможет начать PUT. Успешная D1 фиксация
+batch атомарно снимает его step, поэтому потерянный ответ не оставляет
+ложного живого writer. Если staged PUT мог завершиться неопределённо, armed
+step и резерв остаются заряженными; обычное удаление известных строк staging
+не доказывает отсутствия такого объекта или будущей записи.
+
+Disconnect leaves the last committed checkpoint resumable. A promotion page
+has a durable step generation. After a lost worker, an exact owner retry may
+supersede that generation and repeat the same deterministic page; its former
+worker may still write those same keys. The reservation remains charged even
+after a successful recovery until the former writer is fenced: a late put
+could otherwise recreate a key after whole-Mind deletion. Cancel/expiry
+without an active page marks the session
+closed, leaves HEAD unchanged and schedules bounded staging cleanup. An active
+page with uncertain writes is retained for exact recovery rather than
+released on elapsed time. A closed session never becomes active again;
+restart requires a new session/key.
+
+Если вытесненный page writer позже подтвердил успешное завершение **всех**
+выданных им object calls, его точный step ID может быть закрыт транзакционно.
+После закрытия всех таких шагов staged cleanup завершается и опубликованный
+импорт освобождает резерв. Неизвестный исход хотя бы одного R2-вызова таким
+подтверждением не является. Отменённый импорт, который уже вошёл в фазу
+canonical write, сохраняет физический резерв до полного доказательного
+GC-прохода по Mind, даже если прежний writer затем завершился.
+`cleanupCompletedAt` означает завершение очистки staging; оно само по себе
+не подтверждает освобождение canonical резерва.
 
 ### Validate, commit and finalize
 
@@ -473,10 +551,14 @@ namespace in durable pages of at most 8 files / 4 MiB, then writes one v5
 manifest and uses the normal D1 HEAD transaction. Exactly one new immutable
 revision becomes visible or nothing does. Search index job is queued after
 commit; canonical browse/fetch works immediately. Finalize records the
-idempotent result and schedules staged cleanup. A stale HEAD returns conflict;
-server atomically closes the session as `validation_failed` with sanitized
-`import_head_conflict`, schedules bounded staging/reservation cleanup and never
-reopens it. It never rebases or partially imports automatically.
+idempotent result and schedules staged cleanup. A stale HEAD returns conflict.
+Without a running promotion page, the server atomically closes the session as
+`validation_failed` with sanitized `import_head_conflict` and schedules bounded
+staging/reservation cleanup. With an uncertain page, a HEAD conflict or cancel
+also terminates the step generation and cleans staging, while retaining writer
+charge until late writes are fenced or their exact footprint is proven safe to
+release. Whole-Mind/account deletion cannot retire a Space with such an
+unclosed canonical writer. It never rebases or partially imports automatically.
 
 ## Sites-owned export, staging and GC lifecycle
 

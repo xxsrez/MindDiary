@@ -104,7 +104,9 @@ export async function cleanupRun(store, runId, productCall, resumeDeletion, faul
         const inventory = await acceptanceInventory({ DB: store.db, MIND_DIARY_BUCKET: bucket });
         if (!inventory.complete || inventory.principals !== 0 ||
           inventory.owned_minds !== 0 || inventory.object_count !== 0 ||
-          inventory.object_bytes !== 0) {
+          inventory.object_bytes !== 0 ||
+          inventory.rows.md_canonical_key_gates !== 0 ||
+          inventory.rows.md_canonical_creation_intents !== 0) {
           throw new Error("backup_cleanup_unreconciled");
         }
         backupCleanup.push(store.db.prepare("DELETE FROM md_backup_cleanup_ops"));
@@ -115,6 +117,23 @@ export async function cleanupRun(store, runId, productCall, resumeDeletion, faul
         store.db.prepare("DELETE FROM md_backup_inventory"),
         store.db.prepare("DELETE FROM md_backup_sessions"),
       );
+    }
+    const canonicalTables = await store.statement(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('md_canonical_key_gates', 'md_canonical_creation_intents')",
+    ).all();
+    if (canonicalTables.results.length === 1) {
+      throw new Error("canonical_cleanup_schema_incomplete");
+    }
+    if (canonicalTables.results.length === 2) {
+      const canonicalGates = await store.statement(
+        "SELECT COUNT(*) AS count FROM md_canonical_key_gates",
+      ).first();
+      const creationIntents = await store.statement(
+        "SELECT COUNT(*) AS count FROM md_canonical_creation_intents",
+      ).first();
+      if (canonicalGates.count !== 0 || creationIntents.count !== 0) {
+        throw new Error("canonical_cleanup_unreconciled");
+      }
     }
     const receipt = { run_id: runId, state: "cleaned", actors_cleaned: run.actors.length, results };
     await store.db.batch([

@@ -10,6 +10,8 @@ export const backupPolicy = Object.freeze({
     md_metadata_snapshot_chunks: ["rebuild", "sequence chunk_index payload_json"],
     md_principal_activity: ["reset", "principal_id last_web_seen_at last_mcp_seen_at last_activity_at last_activity_surface last_activity_kind"],
     md_preflight_proofs: ["reset", "space_id payload_json byte_size updated_at"],
+    md_canonical_key_gates: ["reset", "key_digest operation_id acquired_at"],
+    md_canonical_creation_intents: ["reset", "intent_id key_digest created_at"],
     md_search_schema_migrations: ["rebuild", "version name applied_at"],
     md_exact_revision_search: ["rebuild", "space_id revision_id documents_json"],
     md_search_documents: ["rebuild", "space_id digest text byte_size"],

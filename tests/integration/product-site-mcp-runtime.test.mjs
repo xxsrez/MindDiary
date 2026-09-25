@@ -63,6 +63,8 @@ class FakeD1Database {
   backupControl = null;
   backupSessions = new Map();
   backupCleanupOps = new Map();
+  canonicalKeyGates = new Map();
+  canonicalCreationIntents = new Map();
   metadataTailReads = 0;
   metadataSnapshot = null;
   metadataSnapshotHead = null;
@@ -114,6 +116,47 @@ class FakeD1Database {
     if (sql.includes("/*md-metadata-migration*/")) {
       this.metadataSchemaVersion = Math.max(this.metadataSchemaVersion, Number(values[0]));
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-canonical-gate-acquire*/")) {
+      if (this.canonicalKeyGates.has(values[0])) return { success: true, meta: { changes: 0 } };
+      this.canonicalKeyGates.set(values[0], { operation_id: values[1], acquired_at: values[2] });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-canonical-gate-release*/")) {
+      if (this.canonicalKeyGates.get(values[0])?.operation_id !== values[1]) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      this.canonicalKeyGates.delete(values[0]);
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-canonical-creation-begin*/")) {
+      const key = `${values[0]}\u0000${values[1]}`;
+      if (this.canonicalCreationIntents.has(key)) throw new Error("duplicate creation intent");
+      this.canonicalCreationIntents.set(key, {
+        intent_id: values[0], key_digest: values[1], created_at: values[2],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-canonical-creation-complete*/")) {
+      let changes = 0;
+      for (const [key, row] of this.canonicalCreationIntents) {
+        if (row.intent_id !== values[0]) continue;
+        this.canonicalCreationIntents.delete(key);
+        changes++;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-canonical-creation-commit*/")) {
+      const event = this.metadataEvents.find((row) => row.sequence === Number(values[1]));
+      if (event?.target !== values[2] || event.operation !== values[3] ||
+        event.payload_json !== values[4]) return { success: true, meta: { changes: 0 } };
+      let changes = 0;
+      for (const [key, row] of this.canonicalCreationIntents) {
+        if (row.intent_id !== values[0]) continue;
+        this.canonicalCreationIntents.delete(key);
+        changes++;
+      }
+      return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-upload-intent-create*/")) {
       if (
@@ -809,6 +852,11 @@ class FakeD1Database {
             event_json: row.event_json,
           })),
       };
+    }
+    if (sql.includes("/*md-canonical-creation-check*/")) {
+      const pending = [...this.canonicalCreationIntents.values()]
+        .some((row) => row.key_digest === values[0]);
+      return { success: true, results: pending ? [{ pending: 1 }] : [] };
     }
     throw new Error(`unsupported FakeD1 all statement: ${sql}`);
   }

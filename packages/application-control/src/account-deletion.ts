@@ -392,6 +392,12 @@ export class AccountDeletionService {
           "The idempotency key was already used for another request.",
         );
       }
+      if (deleted.kind === "writer_in_progress") {
+        throw new AccountDeletionFailure(
+          "account_deletion_unavailable",
+          "A canonical writer is still active or has an uncertain outcome; retry after recovery.",
+        );
+      }
       throw new AccountDeletionFailure(
         deleted.kind === "account_not_found"
           ? "account_not_found"
@@ -506,6 +512,15 @@ export class AccountDeletionService {
             else canonicalObjectsRetained += 1;
           }
           if (candidates.length < 1_000) break;
+        }
+        const remainingSpaceObjects = await this.#objects.listSpaceCanonicalObjects({
+          spaceId,
+          createdBefore: canonicalUtcInstant(Date.parse("9999-12-31T23:59:59.999Z")),
+          excluded: [],
+          limit: 1,
+        });
+        if (remainingSpaceObjects.length !== 0) {
+          throw new Error("deleted account Mind still has canonical objects");
         }
       }
       const completed = await this.#accounts.runAccountDeletionTransaction(

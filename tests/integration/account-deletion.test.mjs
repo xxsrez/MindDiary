@@ -155,7 +155,7 @@ async function createAccount(env, index) {
 
 async function createMind(env, owner, handle) {
   return env.ordinary.createSpaceWithOwner(
-    actor(owner.principalId, `request_create_${handle}`),
+    { ...actor(owner.principalId, `request_create_${handle}`), occurredAtUtc: CREATED_AT },
     {
       name: handle.replaceAll("-", " "),
       handle,
@@ -230,6 +230,7 @@ async function seedForeignRevision(env, mind, deletedPrincipalId) {
     summary: "Retained foreign commit",
     manifest: initial.manifest,
     manifestHash: initial.revision.manifestHash,
+    manifestSize: initial.revision.manifestSize,
   });
   const committed = await env.metadata.commitRevision({
     expectedHeadRevisionId: initial.revision.revisionId,

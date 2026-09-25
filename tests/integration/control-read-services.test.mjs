@@ -39,7 +39,7 @@ class EventLogD1 {
     return results;
   }
   async run(sql, values) {
-    if (/^\s*CREATE TABLE/u.test(sql)) return { meta: { changes: 0 } };
+    if (/^\s*CREATE (?:TABLE|INDEX)/u.test(sql)) return { meta: { changes: 0 } };
     if (/^\s*INSERT OR IGNORE INTO md_backup_control/u.test(sql)) {
       if (this.backupControl !== null) return { meta: { changes: 0 } };
       this.backupControl = {

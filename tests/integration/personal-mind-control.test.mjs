@@ -148,6 +148,7 @@ test("content commit atomically advances the Personal Mind metadata HEAD", async
     committedBy: before.envelope.revision.committedBy,
     manifest: before.envelope.manifest,
     manifestHash: before.envelope.revision.manifestHash,
+    manifestSize: before.envelope.revision.manifestSize,
     summary: "Roll back Personal Mind projected HEAD",
   });
   await assert.rejects(

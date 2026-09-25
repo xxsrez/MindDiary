@@ -994,6 +994,7 @@ export class BoundedObjectCleanupHandler {
     const claim = await this.#checkpoints.claimObjectCleanup({
       now,
       leaseExpiresAt: retryAt(now, maxDurationMs + 10_000),
+      canonicalCreatedBefore: request.createdBefore as UtcInstant,
     });
     if (claim.kind === "busy") {
       this.#observability?.recordCleanup({
@@ -1035,6 +1036,9 @@ export class BoundedObjectCleanupHandler {
     let queueAgeMs = 0;
     let cycleCompleted = false;
     let budgetExhausted = false;
+    const recoverySpaceIds = new Set((checkpoint.recoveryCohort ?? []).map((item) => item.spaceId));
+    const blockedSpaceIds = new Set<SpaceId>();
+    const canonicalCreatedBefore = checkpoint.canonicalCreatedBefore ?? request.createdBefore as UtcInstant;
     try {
       while (scanned < maxObjects && this.#monotonicNow() - startedAt < maxDurationMs) {
         const page = await this.#objects.listObjectCleanupPage({
@@ -1044,7 +1048,7 @@ export class BoundedObjectCleanupHandler {
         });
         scanned += page.listed;
         const collectable = await Promise.all(page.candidates.map((candidate) =>
-          this.#isCollectable(candidate, now, createdBeforeMs)
+          this.#isCollectable(candidate, now, Date.parse(canonicalCreatedBefore))
         ));
         let pageCompleted = true;
         for (let index = 0; index < page.candidates.length; index += 1) {
@@ -1055,6 +1059,23 @@ export class BoundedObjectCleanupHandler {
             break;
           }
           examined += 1;
+          if (
+            (candidate.namespace === "space_canonical" ||
+              candidate.namespace === "bundle_file" ||
+              candidate.namespace === "staged_bundle") &&
+            recoverySpaceIds.has(candidate.spaceId) && !collectable[index]
+          ) {
+            const stillOwned = candidate.namespace === "space_canonical"
+              ? await this.#reachability.isSpaceCanonicalObjectReachable(
+                  candidate.kind, candidate.spaceId, candidate.sha256,
+                )
+              : candidate.namespace === "bundle_file"
+                ? await this.#reachability.isBundleFileObjectReachable(
+                    candidate.spaceId, candidate.sha256,
+                  )
+                : (await this.#staging.readStagedBundleFile(candidate.stagedFileId)) !== null;
+            if (!stillOwned) blockedSpaceIds.add(candidate.spaceId);
+          }
           if (collectable[index]) {
             orphanCount += 1;
             queueAgeMs = Math.max(queueAgeMs, Date.parse(now) - Date.parse(candidate.createdAt));
@@ -1068,13 +1089,20 @@ export class BoundedObjectCleanupHandler {
               createdBefore: candidate.namespace === "staged_bundle" ||
                   candidate.namespace === "export"
                 ? now
-                : request.createdBefore as UtcInstant,
+                : canonicalCreatedBefore,
             })) {
               deleted += 1;
               reclaimedBytes += candidate.size;
               if (candidate.namespace === "export") {
                 await this.#finishExpiredExportIfEmpty(candidate, now);
               }
+            } else if (
+              (candidate.namespace === "space_canonical" ||
+                candidate.namespace === "bundle_file" ||
+                candidate.namespace === "staged_bundle") &&
+              recoverySpaceIds.has(candidate.spaceId)
+            ) {
+              blockedSpaceIds.add(candidate.spaceId);
             }
           }
         }
@@ -1102,6 +1130,8 @@ export class BoundedObjectCleanupHandler {
         cursor,
         cycleStartedAt,
         completedAt,
+        cycleCompleted,
+        blockedSpaceIds: Object.freeze([...blockedSpaceIds]),
       });
       const result = Object.freeze({
         kind: persisted ? "completed" as const : "fenced" as const,

@@ -1,11 +1,12 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
-import type { ObjectStore, OrdinaryMindIdGenerator, OrdinaryMindSnapshot, OrdinaryMindStore, VerifiedSpaceHost } from "@mind-diary/application-ports";
-import { MARKDOWN_MEDIA_TYPE, createCanonicalRevisionEnvelope, createRevisionManifest, isReservedTopLevelHandle, isReservedTopLevelRoute, normalizeOrdinaryMindDescription, parseCanonicalSpaceHandle, serializeRevisionManifest, version } from "@mind-diary/domain";
+import type { BundleFileObjectStore, OrdinaryMindIdGenerator, OrdinaryMindSnapshot, OrdinaryMindStore, VerifiedSpaceHost } from "@mind-diary/application-ports";
+import { createCanonicalRevisionEnvelope, isReservedTopLevelHandle, isReservedTopLevelRoute, normalizeOrdinaryMindDescription, parseCanonicalSpaceHandle, version } from "@mind-diary/domain";
 import type { PrincipalId, SpaceId, UtcInstant } from "@mind-diary/domain";
 import { personalProfileIdempotencyKey, PersonalMindControlFailure, registeredSitesPrincipal, PERSONAL_PROFILE_ENCODER } from "./personal-mind-control.js";
 import { parseUtcInstant } from "./token-lifecycle.js";
 import { safeBootstrapRequestId, normalizedDisplayName, initialRevisionIndexEffects } from "./account-bootstrap.js";
 import { createInitialOrdinaryMindFiles } from "./initial-mind-files.js";
+import { stageInitialMindRevision } from "./initial-mind-revision.js";
 
 export type OrdinaryMindControlFailureCode =
   | "authentication_required"
@@ -98,7 +99,7 @@ export interface OrdinaryMindControlSafeLogger {
 
 export interface OrdinaryMindControlDependencies {
   readonly ordinaryMinds: OrdinaryMindStore;
-  readonly objects: ObjectStore;
+  readonly objects: BundleFileObjectStore;
   readonly ids: OrdinaryMindIdGenerator;
   readonly host: VerifiedSpaceHost;
   readonly logger?: OrdinaryMindControlSafeLogger;
@@ -184,7 +185,7 @@ export function recordOrdinaryMindEvent(
 /** Ordinary Mind create/rename use cases for the trusted Sites control plane. */
 export class OrdinaryMindControlService {
   readonly #ordinaryMinds: OrdinaryMindStore;
-  readonly #objects: ObjectStore;
+  readonly #objects: BundleFileObjectStore;
   readonly #ids: OrdinaryMindIdGenerator;
   readonly #host: VerifiedSpaceHost;
   readonly #logger: OrdinaryMindControlSafeLogger | undefined;
@@ -285,28 +286,8 @@ export class OrdinaryMindControlService {
       const initialFiles = createInitialOrdinaryMindFiles(
         trustedActor.occurredAtUtc,
       );
-      const storedObjects = await Promise.all(
-        initialFiles.map(async (file) =>
-          this.#objects.putImmutable({
-            bytes: PERSONAL_PROFILE_ENCODER.encode(file.text),
-            mediaType: MARKDOWN_MEDIA_TYPE,
-            createdAt: trustedActor.occurredAtUtc,
-          }),
-        ),
-      );
-      const manifest = createRevisionManifest(
-        initialFiles.map((file, index) => {
-          const object = storedObjects[index]!.object;
-          return {
-            path: file.path,
-            sha256: object.sha256,
-            mediaType: MARKDOWN_MEDIA_TYPE,
-            size: object.size,
-          };
-        }),
-      );
-      const manifestHash = await this.#objects.calculateSha256(
-        PERSONAL_PROFILE_ENCODER.encode(serializeRevisionManifest(manifest)),
+      const staged = await stageInitialMindRevision(
+        this.#objects, spaceId, initialFiles, trustedActor.occurredAtUtc,
       );
       const initialRevision = createCanonicalRevisionEnvelope({
         revisionId,
@@ -318,8 +299,9 @@ export class OrdinaryMindControlService {
           kind: "principal",
           principalId: trustedActor.principalId,
         },
-        manifest,
-        manifestHash,
+        manifest: staged.manifest,
+        manifestHash: staged.manifestHash,
+        manifestSize: staged.manifestSize,
         summary: "Create Mind",
       });
       const initialIndex = initialRevisionIndexEffects(
@@ -329,6 +311,7 @@ export class OrdinaryMindControlService {
         trustedActor.occurredAtUtc,
       );
       const records = Object.freeze({
+        canonicalCreationIntentId: staged.intentId,
         host: this.#host,
         space: Object.freeze({
           spaceId,
@@ -365,6 +348,7 @@ export class OrdinaryMindControlService {
       const created = await this.#ordinaryMinds.runOrdinaryMindTransaction(
         (transaction) => transaction.createOrdinaryMind(records),
       );
+      if (created.kind !== "created" || created.replayed) await staged.completeIntent();
       if (created.kind === "created") {
         recordOrdinaryMindEvent(
           this.#logger,

@@ -2,6 +2,7 @@ import { createSitesMetadataStore } from "../../packages/adapter-metadata-sites/
 
 const tables = ["md_acceptance_actors", "md_acceptance_sessions", "md_acceptance_external_mcp", "md_acceptance_cleanup_journal", "md_acceptance_telemetry",
   "md_backup_sessions", "md_backup_pages", "md_backup_record_digests", "md_backup_inventory", "md_backup_cleanup_ops",
+  "md_canonical_key_gates", "md_canonical_creation_intents",
   "md_search_documents", "md_search_revision_documents", "md_exact_revision_search",
   "md_oauth_grants", "md_oauth_access_tokens", "md_oauth_refresh_tokens", "md_oauth_authorization_codes", "md_oauth_authorization_requests"];
 export async function acceptanceInventory(environment) {

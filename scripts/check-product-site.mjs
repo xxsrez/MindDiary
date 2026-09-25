@@ -8,6 +8,7 @@ const required = [
   ".openai/hosting.json", "package.json", "package-lock.json", "vite.config.ts",
   "worker/index.ts", "worker/runtime-config.ts", "tools/package-site.mjs", "tools/artifact-manifest.mjs", "drizzle/0000_product_site.sql",
   "drizzle/0001_oauth_connector.sql", "drizzle/0002_connection_presentation_refs.sql",
+  "drizzle/0003_system_backup.sql", "drizzle/0004_canonical_key_gates.sql",
 ];
 const errors = [];
 for (const path of required) {

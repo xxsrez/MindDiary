@@ -6,13 +6,16 @@ import {
   ChangesetCommitService,
   NoteQueueService,
   DeterministicOkfExportService,
+  DEFAULT_CAPACITY_LIMITS,
 } from "@mind-diary/application-content";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import { BoundedObjectCleanupHandler } from "@mind-diary/application-background";
 import {
   CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
+  bundleFileMediaType,
   createCanonicalRevisionEnvelope,
   version,
 } from "@mind-diary/domain";
@@ -334,6 +337,8 @@ async function fixture() {
     currentActor,
     nextRevisionId,
     objectStore = objects,
+    metadataStore = metadata,
+    revisionReader = coordinator,
     committedAt = REVISIONS.next.committedAt,
     capacityLimits,
   }) => {
@@ -341,8 +346,8 @@ async function fixture() {
     usage.ensure(currentActor.principalId, MINDS.ordinary.spaceId);
     return new ChangesetCommitService({
       authorizer,
-      metadata,
-      revisions: coordinator,
+      metadata: metadataStore,
+      revisions: revisionReader,
       objects: objectStore,
       clock: { now: () => committedAt },
       revisionIds: revisionIds(nextRevisionId),
@@ -1048,6 +1053,50 @@ test("denied preflight and transaction-time revocation leave HEAD/revisions unch
   assert.equal(afterRecheck.files.some(([path]) => path === "concepts/recheck.md"), false);
 });
 
+test("revocation after preflight but before capacity admission starts no canonical writer", async () => {
+  const env = await fixture();
+  const editor = actor(PRINCIPALS.editor.principalId, "token_admission_race", "request_admission_race");
+  let enteredAdmission;
+  const admissionEntered = new Promise((resolve) => { enteredAdmission = resolve; });
+  let resumeAdmission;
+  const admissionHold = new Promise((resolve) => { resumeAdmission = resolve; });
+  const delayedMetadata = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "runCapacityTransaction") {
+        return async (operation) => {
+          enteredAdmission();
+          await admissionHold;
+          return target.runCapacityTransaction(operation);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const commits = env.service({
+    currentActor: editor,
+    nextRevisionId: "revision_admission_race",
+    metadataStore: delayedMetadata,
+  });
+  const before = await env.snapshot();
+  const pending = commits.commit({
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_admission_race",
+    summary: "Revocation at capacity admission",
+    operations: changes("concepts/admission-race.md", "Admission race"),
+  });
+  await admissionEntered;
+  env.grant(editor, { membershipState: "revoked", membershipVersion: version(2),
+    accessVersion: version(2) });
+  resumeAdmission();
+  const result = await pending;
+  assert.notEqual(result.kind, "committed");
+  assert.deepEqual(await env.snapshot(), before);
+  assert.equal((await env.metadata.listCapacityReservationsForTest()).length, 0);
+});
+
 test("stale expected revision reports current HEAD and changes no final state", async () => {
   const env = await fixture();
   const advanced = await env.coordinator.commit({
@@ -1134,6 +1183,192 @@ test("metadata transaction failure leaves written objects unreachable and final 
   assert.equal(after.files.some(([path]) => path === "concepts/failure.md"), false);
   const [capacity] = await env.metadata.listCapacityReservationsForTest();
   assert.equal(capacity.state, "cleanup_pending");
+  assert.ok(capacity.requested.physicalCanonicalBytes > 0);
+
+  const restarted = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    env.metadata.exportDurableSnapshot(),
+  );
+  const pendingUsage = await restarted.readMindCapacityUsage(MINDS.ordinary.spaceId);
+  assert.ok(pendingUsage.temporaryBytes >= capacity.requested.physicalCanonicalBytes);
+  const cleanup = await new BoundedObjectCleanupHandler({
+    objects: env.objects,
+    checkpoints: restarted,
+    reachability: restarted,
+    staging: restarted,
+    exports: restarted,
+    clock: { now: () => "2027-01-02T00:00:00.000Z" },
+    monotonicNow: () => 0,
+  }).handle({
+    actor: { kind: "service", serviceId: "abandoned-commit-cleanup",
+      requestId: "request_abandoned_commit_cleanup",
+      occurredAtUtc: "2027-01-02T00:00:00.000Z", deploymentCapabilities: [] },
+    createdBefore: "2027-01-01T00:00:00.000Z",
+    maxObjects: 1_000,
+    maxBytes: 268_435_456,
+    maxDurationMs: 1_000,
+  });
+  assert.equal(cleanup.kind, "completed");
+  assert.ok(cleanup.deleted > 0);
+  for (const [kind, spaceId, sha256] of before.spaceReachable) {
+    assert.ok(await env.objects.getSpaceCanonicalObject(kind, spaceId, sha256));
+  }
+  assert.deepEqual((await env.snapshot()).spaceObjects, before.spaceObjects);
+  const afterCleanup = await restarted.listCapacityReservationsForTest();
+  assert.equal(afterCleanup[0].state, "cleanup_pending");
+  const stillCharged = await restarted.readMindCapacityUsage(MINDS.ordinary.spaceId);
+  assert.ok(stillCharged.temporaryBytes >= capacity.requested.physicalCanonicalBytes);
+  assert.equal((await restarted.listRevisions(MINDS.ordinary.spaceId)).length,
+    before.revisions.length);
+  const resumed = await restarted.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation({
+      reservationId: capacity.reservationId,
+      requestedByPrincipalId: capacity.requestedByPrincipalId,
+      spaceId: capacity.spaceId,
+      operation: capacity.operation,
+      operationRef: capacity.operationRef,
+      baseRevisionId: capacity.baseRevisionId,
+      idempotencyKey: capacity.idempotencyKey,
+      requested: capacity.requested,
+      bulk: capacity.bulk,
+      heavy: capacity.heavy,
+      createdAt: "2027-01-02T00:01:00.000Z",
+      expiresAt: "2027-01-02T00:16:00.000Z",
+    }, DEFAULT_CAPACITY_LIMITS));
+  assert.equal(resumed.kind, "rejected");
+  assert.equal(resumed.reason, "accounting_untrusted");
+  assert.equal((await restarted.listCapacityReservationsForTest())[0].state,
+    "cleanup_pending");
+});
+
+test("closed commit writer releases its charge after a complete canonical cleanup cycle", async () => {
+  const env = await fixture();
+  const editor = actor(PRINCIPALS.editor.principalId, "token_closed_writer",
+    "request_closed_writer");
+  let advanced = false;
+  const racingMetadata = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "runContentCommitTransaction") return async (operation) => {
+        if (!advanced && (await target.listCapacityReservationsForTest()).some((item) =>
+          item.operation === "commit" && item.state === "active")) {
+          advanced = true;
+          const concurrent = await env.coordinator.commit({
+            spaceId: MINDS.ordinary.spaceId,
+            expectedRevisionId: REVISIONS.initial.revisionId,
+            revisionId: "revision_closed_writer_race",
+            committedAt: REVISIONS.next.committedAt,
+            committedBy: REVISION_AUTHORS.active,
+            summary: "Concurrent revision",
+            files: CANONICAL_REVISION_FILES,
+          });
+          assert.equal(concurrent.kind, "committed");
+        }
+        return target.runContentCommitTransaction(operation);
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const service = env.service({ currentActor: editor,
+    nextRevisionId: "revision_closed_writer_lost", metadataStore: racingMetadata });
+  const result = await service.commit({
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_closed_writer_recovery",
+    summary: "Closed writer recovery",
+    operations: changes("concepts/closed-writer.md", "Closed writer"),
+  });
+  assert.equal(result.kind, "revision_conflict");
+  const pending = (await env.metadata.listCapacityReservationsForTest()).find((item) =>
+    item.operation === "commit");
+  assert.equal(pending.state, "cleanup_pending");
+  assert.ok(pending.writerClosedAt);
+  const restarted = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    env.metadata.exportDurableSnapshot(),
+  );
+  const cleanupRequest = {
+    actor: { kind: "service", serviceId: "closed-writer-cleanup",
+      requestId: "closed-writer-cleanup", occurredAtUtc: "2027-01-02T00:00:00.000Z",
+      deploymentCapabilities: [] },
+    createdBefore: "2027-01-01T00:00:00.000Z",
+    maxObjects: 1,
+    maxBytes: 268_435_456,
+    maxDurationMs: 1_000,
+  };
+  const firstPage = await new BoundedObjectCleanupHandler({
+    objects: env.objects, checkpoints: restarted, reachability: restarted,
+    staging: restarted, exports: restarted,
+    clock: { now: () => "2027-01-02T00:00:00.000Z" }, monotonicNow: () => 0,
+  }).handle(cleanupRequest);
+  assert.equal(firstPage.cycleCompleted, false);
+  assert.equal((await restarted.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === pending.reservationId)?.state, "cleanup_pending");
+  const resumed = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    restarted.exportDurableSnapshot(),
+  );
+  const collector = new BoundedObjectCleanupHandler({
+    objects: env.objects, checkpoints: resumed, reachability: resumed,
+    staging: resumed, exports: resumed,
+    clock: { now: () => "2027-01-02T00:00:00.000Z" }, monotonicNow: () => 0,
+  });
+  let cleanup;
+  let deleted = firstPage.deleted;
+  for (let page = 0; page < 100; page += 1) {
+    cleanup = await collector.handle(cleanupRequest);
+    deleted += cleanup.deleted;
+    if (cleanup.cycleCompleted) break;
+  }
+  assert.equal(cleanup.kind, "completed");
+  assert.equal(cleanup.cycleCompleted, true);
+  assert.ok(deleted > 0);
+  assert.equal((await resumed.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === pending.reservationId)?.state, "released");
+  assert.equal(await resumed.readHead(MINDS.ordinary.spaceId),
+    "revision_closed_writer_race");
+});
+
+test("a young orphan BundleFile blocks closed commit capacity release", async () => {
+  const env = await fixture();
+  const reservationId = "capacity:commit:bundle-orphan-proof";
+  const attemptId = "bundle-orphan-attempt";
+  const createdAt = REVISIONS.next.committedAt;
+  const admitted = await env.metadata.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation({ reservationId, attemptId,
+      requestedByPrincipalId: PRINCIPALS.editor.principalId,
+      spaceId: MINDS.ordinary.spaceId, operation: "commit",
+      operationRef: "bundle-orphan-proof", baseRevisionId: REVISIONS.initial.revisionId,
+      idempotencyKey: "bundle-orphan-proof", requested: {
+        physicalCanonicalBytes: 1_024, temporaryBytes: 0, d1MetadataBytes: 512,
+      }, bulk: false, heavy: false, createdAt,
+      expiresAt: "2027-01-01T00:00:00.000Z" }, DEFAULT_CAPACITY_LIMITS));
+  assert.equal(admitted.kind, "admitted");
+  const orphan = await env.objects.putBundleFile({
+    spaceId: MINDS.ordinary.spaceId,
+    bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
+    mediaType: bundleFileMediaType("image/png"), createdAt,
+  });
+  await env.metadata.runCapacityTransaction((transaction) =>
+    transaction.cancelCapacityReservation({ reservationId, canceledAt: createdAt }));
+  assert.equal(await env.metadata.closeCapacityReservationWriter({
+    reservationId, expectedAttemptId: attemptId, closedAt: createdAt,
+  }), true);
+  const handler = new BoundedObjectCleanupHandler({ objects: env.objects,
+    checkpoints: env.metadata, reachability: env.metadata, staging: env.metadata,
+    exports: env.metadata, clock: { now: () => "2027-01-02T00:00:00.000Z" },
+    monotonicNow: () => 0 });
+  const request = { actor: { kind: "service", serviceId: "bundle-orphan-gc",
+    requestId: "bundle-orphan-gc", occurredAtUtc: "2027-01-02T00:00:00.000Z",
+    deploymentCapabilities: [] }, maxObjects: 1_000, maxBytes: 268_435_456,
+    maxDurationMs: 1_000 };
+  assert.equal((await handler.handle({ ...request,
+    createdBefore: REVISIONS.initial.committedAt })).cycleCompleted, true);
+  assert.equal((await env.metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === reservationId)?.state, "cleanup_pending");
+  assert.ok(await env.objects.getBundleFile(MINDS.ordinary.spaceId, orphan.object.sha256));
+  assert.equal((await handler.handle({ ...request,
+    createdBefore: "2027-01-01T00:00:00.000Z" })).cycleCompleted, true);
+  assert.equal((await env.metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === reservationId)?.state, "released");
 });
 
 test("two Editors racing from one HEAD get one winner and one explicit conflict without hidden merge", async () => {
@@ -1218,6 +1453,279 @@ test("two Editors racing from one HEAD get one winner and one explicit conflict 
       ],
     ].sort((left, right) => left.join("\0").localeCompare(right.join("\0"))),
   );
+});
+
+test("same-key concurrent commit does not start a second object writer", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_same_key_race",
+    "request_same_key_race",
+  );
+  let signalFirstPut;
+  const firstPutStarted = new Promise((resolve) => { signalFirstPut = resolve; });
+  let releaseFirstPut;
+  const firstPutHold = new Promise((resolve) => { releaseFirstPut = resolve; });
+  let putsB = 0;
+  const objectsA = objectStoreWithFirstPutHook(env.objects, async () => {
+    signalFirstPut();
+    await firstPutHold;
+  });
+  const objectsB = objectStoreWithFirstPutHook(env.objects, async () => {
+    putsB += 1;
+  });
+  const request = {
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_same_key_race",
+    summary: "Same-key race",
+    operations: changes("concepts/same-key-race.md", "Same-key race"),
+  };
+  const firstPromise = env.service({ currentActor: editor,
+    nextRevisionId: "revision_same_key_a", objectStore: objectsA }).commit(request);
+  await firstPutStarted;
+  try {
+    const second = await env.service({ currentActor: editor,
+      nextRevisionId: "revision_same_key_b", objectStore: objectsB }).commit(request);
+    assert.equal(second.kind, "invalid");
+    assert.equal(second.error.code, "commit_in_progress");
+    assert.equal(putsB, 0);
+  } finally {
+    releaseFirstPut();
+  }
+  const first = await firstPromise;
+  assert.equal(first.kind, "committed");
+  const replay = await env.service({ currentActor: editor,
+    nextRevisionId: "revision_same_key_replay" }).commit(request);
+  assert.equal(replay.kind, "committed");
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.envelope.revision.revisionId,
+    first.envelope.revision.revisionId);
+  const reservations = await env.metadata.listCapacityReservationsForTest();
+  assert.equal(reservations.length, 1);
+  assert.equal(reservations[0].state, "consumed");
+});
+
+test("same-key changed payload conflicts before a second object writer starts", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_same_key_changed",
+    "request_same_key_changed",
+  );
+  let signalFirstPut;
+  const firstPutStarted = new Promise((resolve) => { signalFirstPut = resolve; });
+  let releaseFirstPut;
+  const firstPutHold = new Promise((resolve) => { releaseFirstPut = resolve; });
+  let secondPuts = 0;
+  const firstObjects = objectStoreWithFirstPutHook(env.objects, async () => {
+    signalFirstPut();
+    await firstPutHold;
+  });
+  const secondObjects = objectStoreWithFirstPutHook(env.objects, async () => {
+    secondPuts += 1;
+  });
+  const original = {
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_same_key_changed",
+    summary: "Original payload",
+    operations: changes("concepts/same-key-original.md", "Original"),
+  };
+  const firstPromise = env.service({ currentActor: editor,
+    nextRevisionId: "revision_same_key_original", objectStore: firstObjects }).commit(original);
+  await firstPutStarted;
+  try {
+    const changed = await env.service({ currentActor: editor,
+      nextRevisionId: "revision_same_key_changed", objectStore: secondObjects }).commit({
+      ...original,
+      summary: "Changed payload",
+      operations: changes("concepts/same-key-changed.md", "Changed"),
+    });
+    assert.deepEqual(changed, { kind: "idempotency_conflict" });
+    assert.equal(secondPuts, 0);
+  } finally {
+    releaseFirstPut();
+  }
+  assert.equal((await firstPromise).kind, "committed");
+  assert.equal((await env.metadata.listCapacityReservationsForTest()).length, 1);
+});
+
+test("commit reservation expiry does not authorize a second object writer", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_expired_writer",
+    "request_expired_writer",
+  );
+  let signalFirstPut;
+  const firstPutStarted = new Promise((resolve) => { signalFirstPut = resolve; });
+  let releaseFirstPut;
+  const firstPutHold = new Promise((resolve) => { releaseFirstPut = resolve; });
+  let secondPuts = 0;
+  const request = {
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_expired_writer",
+    summary: "Expired active writer",
+    operations: changes("concepts/expired-writer.md", "Expired writer"),
+  };
+  const firstPromise = env.service({ currentActor: editor,
+    nextRevisionId: "revision_expired_writer_first",
+    objectStore: objectStoreWithFirstPutHook(env.objects, async () => {
+      signalFirstPut();
+      await firstPutHold;
+    }),
+  }).commit(request);
+  await firstPutStarted;
+  try {
+    const second = await env.service({ currentActor: editor,
+      nextRevisionId: "revision_expired_writer_second",
+      committedAt: "2026-08-06T12:17:00.000Z",
+      objectStore: objectStoreWithFirstPutHook(env.objects, async () => {
+        secondPuts += 1;
+      }),
+    }).commit(request);
+    assert.equal(second.kind, "invalid");
+    assert.equal(second.error.code, "capacity_accounting_untrusted");
+    assert.equal(secondPuts, 0);
+  } finally {
+    releaseFirstPut();
+  }
+  await assert.rejects(firstPromise, /capacity reservation was not consumed/u);
+  assert.equal((await env.snapshot()).head, REVISIONS.initial.revisionId);
+  const reservation = (await env.metadata.listCapacityReservationsForTest())[0];
+  assert.equal(reservation.state, "cleanup_pending");
+  assert.equal(reservation.attemptId === undefined, false);
+  assert.ok(reservation.writerClosedAt);
+});
+
+test("same-key replay returns committed when the first commit finishes during admission", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_same_key_completed",
+    "request_same_key_completed",
+  );
+  let signalFirstPut;
+  const firstPutStarted = new Promise((resolve) => { signalFirstPut = resolve; });
+  let releaseFirstPut;
+  const firstPutHold = new Promise((resolve) => { releaseFirstPut = resolve; });
+  let signalAdmission;
+  const admissionStarted = new Promise((resolve) => { signalAdmission = resolve; });
+  let releaseAdmission;
+  const admissionHold = new Promise((resolve) => { releaseAdmission = resolve; });
+  let secondPuts = 0;
+  const delayedMetadata = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "runCapacityTransaction") {
+        return async (operation) => {
+          signalAdmission();
+          await admissionHold;
+          return target.runCapacityTransaction(operation);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const request = {
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_same_key_completed",
+    summary: "Completed during admission",
+    operations: changes("concepts/same-key-completed.md", "Completed"),
+  };
+  const firstPromise = env.service({ currentActor: editor,
+    nextRevisionId: "revision_same_key_completed",
+    objectStore: objectStoreWithFirstPutHook(env.objects, async () => {
+      signalFirstPut();
+      await firstPutHold;
+    }),
+  }).commit(request);
+  await firstPutStarted;
+  const secondPromise = env.service({ currentActor: editor,
+    nextRevisionId: "revision_same_key_completed_replay",
+    metadataStore: delayedMetadata,
+    objectStore: objectStoreWithFirstPutHook(env.objects, async () => {
+      secondPuts += 1;
+    }),
+  }).commit(request);
+  await admissionStarted;
+  releaseFirstPut();
+  const first = await firstPromise;
+  assert.equal(first.kind, "committed");
+  releaseAdmission();
+  const second = await secondPromise;
+  assert.equal(second.kind, "committed");
+  assert.equal(second.replayed, true);
+  assert.equal(second.envelope.revision.revisionId,
+    first.envelope.revision.revisionId);
+  assert.equal(secondPuts, 0);
+});
+
+test("same-key replay returns committed when HEAD advances during preflight", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_same_key_head_race",
+    "request_same_key_head_race",
+  );
+  let signalFirstPut;
+  const firstPutStarted = new Promise((resolve) => { signalFirstPut = resolve; });
+  let releaseFirstPut;
+  const firstPutHold = new Promise((resolve) => { releaseFirstPut = resolve; });
+  let signalHeadRead;
+  const headReadStarted = new Promise((resolve) => { signalHeadRead = resolve; });
+  let releaseHeadRead;
+  const headReadHold = new Promise((resolve) => { releaseHeadRead = resolve; });
+  const delayedReader = new Proxy(env.coordinator, {
+    get(target, property) {
+      if (property === "readHeadRevisionEnvelope") {
+        return async (spaceId) => {
+          signalHeadRead();
+          await headReadHold;
+          return target.readHeadRevisionEnvelope(spaceId);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const request = {
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_same_key_head_race",
+    summary: "HEAD advances during preflight",
+    operations: changes("concepts/same-key-head-race.md", "HEAD race"),
+  };
+  const firstPromise = env.service({ currentActor: editor,
+    nextRevisionId: "revision_same_key_head_race",
+    objectStore: objectStoreWithFirstPutHook(env.objects, async () => {
+      signalFirstPut();
+      await firstPutHold;
+    }),
+  }).commit(request);
+  await firstPutStarted;
+  const secondPromise = env.service({ currentActor: editor,
+    nextRevisionId: "revision_same_key_head_race_replay",
+    revisionReader: delayedReader,
+  }).commit(request);
+  await headReadStarted;
+  releaseFirstPut();
+  const first = await firstPromise;
+  assert.equal(first.kind, "committed");
+  releaseHeadRead();
+  const second = await secondPromise;
+  assert.equal(second.kind, "committed");
+  assert.equal(second.replayed, true);
+  assert.equal(second.envelope.revision.revisionId,
+    first.envelope.revision.revisionId);
 });
 
 test("only a change to the exact writable Mind fences a prepared commit", async () => {

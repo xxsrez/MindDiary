@@ -106,6 +106,15 @@ export function freezeMarkdownImportSession(
 ): Readonly<MarkdownImportSession> {
   return Object.freeze({
     ...session,
+    ...(session.activeStagingStepIds === undefined ? {} : {
+      activeStagingStepIds: Object.freeze([...session.activeStagingStepIds]),
+    }),
+    ...(session.armedStagingStepIds === undefined ? {} : {
+      armedStagingStepIds: Object.freeze([...session.armedStagingStepIds]),
+    }),
+    ...(session.unsettledStepIds === undefined ? {} : {
+      unsettledStepIds: Object.freeze([...session.unsettledStepIds]),
+    }),
     failures: Object.freeze(session.failures.map(freezeMarkdownImportFailure)),
   });
 }

@@ -60,11 +60,11 @@ test("four real bootstraps and normal bearer auth remain constrained by the run"
   assert.equal((await mcp(run.run_id)).status, 401);
   assert.equal((await call("/api/v1/session", { headers: { cookie } })).status, 401);
   await Promise.allSettled(pending);
-  const bucketDelete = env.MIND_DIARY_BUCKET.delete.bind(env.MIND_DIARY_BUCKET);
-  let failedDelete = false;
-  env.MIND_DIARY_BUCKET.delete = async (...args) => {
-    if (!failedDelete) { failedDelete = true; throw new Error("Injected object cleanup failure"); }
-    return bucketDelete(...args);
+  const bucketList = env.MIND_DIARY_BUCKET.list.bind(env.MIND_DIARY_BUCKET);
+  let failedList = false;
+  env.MIND_DIARY_BUCKET.list = async (...args) => {
+    if (!failedList) { failedList = true; throw new Error("Injected cleanup listing failure"); }
+    return bucketList(...args);
   };
   let interrupted;
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -72,7 +72,7 @@ test("four real bootstraps and normal bearer auth remain constrained by the run"
     if (interrupted.status === 503) break;
   }
   assert.equal(interrupted.status, 503);
-  assert.equal(failedDelete, true);
+  assert.equal(failedList, true);
   let cleaned;
   for (let attempt = 0; attempt < 5; attempt++) {
     cleaned = await control(`/_acceptance/runs/${run.run_id}/cleanup`, "POST", {});

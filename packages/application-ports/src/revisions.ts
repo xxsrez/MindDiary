@@ -21,6 +21,7 @@ import {
   type Sha256Digest,
   type SpaceId,
   type StagedBundleFileId,
+  type TokenId,
   type UtcInstant,
   type Version,
 } from "@mind-diary/domain";
@@ -484,10 +485,22 @@ export interface MarkdownImportSession {
   readonly checkpoint: number;
   readonly stagedFileCount: number;
   readonly stagedBytes: number;
+  /** Durable staging writers that may still create untracked R2 objects. */
+  readonly activeStagingStepIds?: readonly string[];
+  /** Staging writers that crossed the durable boundary immediately before R2 calls. */
+  readonly armedStagingStepIds?: readonly string[];
   readonly validationCheckpoint: number;
   readonly validatedBytes: number;
   readonly promotionCheckpoint: number;
   readonly promotedBytes: number;
+  /** One durable owner of the current canonical promotion page. */
+  readonly activeStepId?: string | null;
+  /** A superseded page owner may still finish R2 writes after its response is lost. */
+  readonly unsettledWriterPossible?: boolean;
+  /** Exact superseded page owners awaiting proof that all their R2 calls settled. */
+  readonly unsettledStepIds?: readonly string[];
+  /** A promotion page was claimed and may have written canonical objects. */
+  readonly canonicalWriteExposure?: boolean;
   readonly failures: readonly Readonly<MarkdownImportSessionFailure>[];
   readonly revisionId: RevisionId | null;
   readonly createdAt: UtcInstant;
@@ -546,6 +559,7 @@ export interface MarkdownImportMetadataTransaction
   ): Promise<readonly Readonly<MarkdownImportStagedFile>[]>;
   stageMarkdownImportBatch(request: Readonly<{
     importId: string;
+    stagingStepId: string;
     expectedVersion: Version;
     checkpoint: number;
     canonicalRequestHash: Sha256Digest;
@@ -553,6 +567,29 @@ export interface MarkdownImportMetadataTransaction
     failures: readonly Readonly<MarkdownImportSessionFailure>[];
     stagedAt: UtcInstant;
   }>): Promise<StageMarkdownImportBatchResult>;
+  beginMarkdownImportStagingStep(request: Readonly<{
+    importId: string;
+    expectedVersion: Version;
+    checkpoint: number;
+    canonicalRequestHash: Sha256Digest;
+    stepId: string;
+    startedAt: UtcInstant;
+  }>): Promise<
+    | { readonly kind: "claimed" }
+    | { readonly kind: "replayed"; readonly session: Readonly<MarkdownImportSession> }
+    | { readonly kind: "idempotency_conflict" | "state_conflict" | "checkpoint_conflict" }
+  >;
+  armMarkdownImportStagingStep(request: Readonly<{
+    importId: string;
+    expectedVersion: Version;
+    stepId: string;
+    armedAt: UtcInstant;
+  }>): Promise<boolean>;
+  settleMarkdownImportStagingStep(request: Readonly<{
+    importId: string;
+    stepId: string;
+    settledAt: UtcInstant;
+  }>): Promise<boolean>;
   transitionMarkdownImportSession(request: Readonly<{
     importId: string;
     expectedVersion: Version;
@@ -564,8 +601,16 @@ export interface MarkdownImportMetadataTransaction
     validatedBytes?: number;
     promotionCheckpoint?: number;
     promotedBytes?: number;
+    expectedActiveStepId?: string | null;
+    activeStepId?: string | null;
+    unsettledWriterPossible?: boolean;
     revisionId?: RevisionId | null;
   }>): Promise<TransitionMarkdownImportSessionResult>;
+  settleMarkdownImportStep(request: Readonly<{
+    importId: string;
+    stepId: string;
+    settledAt: UtcInstant;
+  }>): Promise<Readonly<MarkdownImportSession> | null>;
   claimMarkdownImportCleanup(request: Readonly<{
     now: UtcInstant;
     limit: number;
@@ -621,6 +666,7 @@ export interface CapacityUsageSnapshot extends CapacityAmounts {
 
 export interface CapacityReservation {
   readonly reservationId: string;
+  readonly attemptId?: string;
   readonly requestedByPrincipalId: PrincipalId;
   readonly ownerPrincipalId: PrincipalId;
   readonly spaceId: SpaceId;
@@ -633,6 +679,8 @@ export interface CapacityReservation {
   readonly bulk: boolean;
   readonly heavy: boolean;
   readonly state: CapacityReservationState;
+  /** Absent on legacy records; only a confirmed settled writer may set it. */
+  readonly writerClosedAt?: UtcInstant | null;
   readonly createdAt: UtcInstant;
   readonly expiresAt: UtcInstant;
   readonly updatedAt: UtcInstant;
@@ -652,6 +700,11 @@ export interface CapacityLimits {
 
 export interface CapacityAdmissionRequest {
   readonly reservationId: string;
+  readonly attemptId?: string;
+  /** Authorize a canonical writer in the same transaction as its reservation. */
+  readonly requireActiveWritablePrincipal?: boolean;
+  /** Selects the exact in-memory authorization fixture; Sites stores tokens separately. */
+  readonly authorizationTokenId?: TokenId | null;
   readonly requestedByPrincipalId: PrincipalId;
   readonly spaceId: SpaceId;
   readonly operation: CapacityOperation;
@@ -770,8 +823,14 @@ export interface CapacityLedgerStore extends MetadataStore {
     now: UtcInstant;
     limit: number;
   }>): Promise<readonly Readonly<CapacityReservation>[]>;
+  closeCapacityReservationWriter(request: Readonly<{
+    reservationId: string;
+    expectedAttemptId: string;
+    closedAt: UtcInstant;
+  }>): Promise<boolean>;
   releaseCapacityReservation(request: Readonly<{
     reservationId: string;
+    expectedAttemptId?: string;
     releasedAt: UtcInstant;
   }>): Promise<boolean>;
 }

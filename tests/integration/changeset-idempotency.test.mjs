@@ -125,19 +125,6 @@ function objectStoreWithFirstPutHook(objects, hook) {
   };
 }
 
-function twoPartyBarrier() {
-  let arrivals = 0;
-  let release;
-  const opened = new Promise((resolve) => {
-    release = resolve;
-  });
-  return async () => {
-    arrivals += 1;
-    if (arrivals === 2) release();
-    await opened;
-  };
-}
-
 function changes(path, title) {
   return [
     {
@@ -620,7 +607,7 @@ test("replay fails closed after current write authorization is revoked", async (
   assert.deepEqual(await env.snapshot(SPACE_A), before);
 });
 
-test("concurrent exact retries commit one canonical effect and replay one result", async () => {
+test("concurrent exact retry waits for one writer, then replays its result", async () => {
   const env = await fixture();
   await env.seed(SPACE_A, INITIAL_A);
   const editor = actor(
@@ -629,14 +616,21 @@ test("concurrent exact retries commit one canonical effect and replay one result
     "request_idempotency_concurrent",
   );
   env.grant(editor, SPACE_A);
-  const barrier = twoPartyBarrier();
+  let signalFirstPut;
+  let releaseFirstPut;
+  const firstPutStarted = new Promise((resolve) => { signalFirstPut = resolve; });
+  const firstPutReleased = new Promise((resolve) => { releaseFirstPut = resolve; });
+  let secondWriterPuts = 0;
   const serviceA = env.service(
     ["revision_concurrent_retry_a"],
-    objectStoreWithFirstPutHook(env.objects, barrier),
+    objectStoreWithFirstPutHook(env.objects, async () => {
+      signalFirstPut();
+      await firstPutReleased;
+    }),
   );
   const serviceB = env.service(
     ["revision_concurrent_retry_b"],
-    objectStoreWithFirstPutHook(env.objects, barrier),
+    objectStoreWithFirstPutHook(env.objects, () => { secondWriterPuts += 1; }),
   );
   const retry = request({
     currentActor: editor,
@@ -647,22 +641,30 @@ test("concurrent exact retries commit one canonical effect and replay one result
     title: "Concurrent idempotent",
   });
 
-  const results = await Promise.all([
-    serviceA.commit(retry),
-    serviceB.commit(retry),
-  ]);
-  assert.deepEqual(results.map((result) => result.kind), ["committed", "committed"]);
-  assert.deepEqual(
-    results.map((result) => result.replayed).sort(),
-    [false, true],
-  );
+  const firstCommit = serviceA.commit(retry);
+  await firstPutStarted;
+  try {
+    const concurrent = await serviceB.commit(retry);
+    assert.equal(concurrent.kind, "invalid");
+    assert.equal(concurrent.error.code, "commit_in_progress");
+    assert.equal(secondWriterPuts, 0);
+  } finally {
+    releaseFirstPut();
+  }
+  const first = await firstCommit;
+  const replay = await serviceB.commit(retry);
+  assert.equal(first.kind, "committed");
+  assert.equal(first.replayed, false);
+  assert.equal(replay.kind, "committed");
+  assert.equal(replay.replayed, true);
+  assert.equal(secondWriterPuts, 0);
   assert.equal(
-    results[0].envelope.revision.revisionId,
-    results[1].envelope.revision.revisionId,
+    first.envelope.revision.revisionId,
+    replay.envelope.revision.revisionId,
   );
 
   const final = await env.snapshot(SPACE_A);
-  assert.equal(final.head, results[0].envelope.revision.revisionId);
+  assert.equal(final.head, first.envelope.revision.revisionId);
   assert.equal(final.revisions.length, 2);
   assert.equal(final.idempotency.length, 1);
   assert.equal((await env.metadata.listAuditEventsForTest()).length, 1);

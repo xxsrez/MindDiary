@@ -453,7 +453,9 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
                 ? Object.freeze({ kind: "staged" as const, session: freezeMarkdownImportSession(current), replayed: true })
                 : Object.freeze({ kind: "idempotency_conflict" as const });
             }
-            if (current.version !== request.expectedVersion || current.state !== "active") {
+            if (current.version !== request.expectedVersion || current.state !== "active" ||
+              !(current.activeStagingStepIds ?? []).includes(request.stagingStepId) ||
+              !(current.armedStagingStepIds ?? []).includes(request.stagingStepId)) {
               return Object.freeze({ kind: "state_conflict" as const });
             }
             if (request.checkpoint !== current.checkpoint + 1) {
@@ -496,12 +498,102 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
               checkpoint: request.checkpoint,
               stagedFileCount,
               stagedBytes,
+              activeStagingStepIds: Object.freeze((current.activeStagingStepIds ?? []).filter((id) =>
+                id !== request.stagingStepId)),
+              armedStagingStepIds: Object.freeze((current.armedStagingStepIds ?? []).filter((id) =>
+                id !== request.stagingStepId)),
               failures: Object.freeze(request.failures.map(freezeMarkdownImportFailure)),
               updatedAt: request.stagedAt,
             });
             markdownImportSessions.set(current.importId, updated);
             markdownImportBatchHashes.set(batchKey, request.canonicalRequestHash);
             return Object.freeze({ kind: "staged" as const, session: updated, replayed: false });
+          },
+          beginMarkdownImportStagingStep: async (
+            request: Parameters<MarkdownImportMetadataTransaction["beginMarkdownImportStagingStep"]>[0],
+          ) => {
+            const current = markdownImportSessions.get(request.importId);
+            if (current === undefined) return Object.freeze({ kind: "state_conflict" as const });
+            const existingHash = markdownImportBatchHashes.get(markdownImportBatchKey(
+              request.importId, request.checkpoint,
+            ));
+            if (existingHash !== undefined) return existingHash === request.canonicalRequestHash
+              ? Object.freeze({ kind: "replayed" as const, session: freezeMarkdownImportSession(current) })
+              : Object.freeze({ kind: "idempotency_conflict" as const });
+            if (request.checkpoint !== current.checkpoint + 1) {
+              return Object.freeze({ kind: "checkpoint_conflict" as const });
+            }
+            if (
+              current.state !== "active" ||
+              current.version !== request.expectedVersion ||
+              (current.activeStagingStepIds ?? []).includes(request.stepId) ||
+              (current.activeStagingStepIds ?? []).length >= 128 ||
+              Date.parse(current.expiresAt) <= Date.parse(request.startedAt)
+            ) return Object.freeze({ kind: "state_conflict" as const });
+            markdownImportSessions.set(current.importId, freezeMarkdownImportSession({
+              ...current,
+              activeStagingStepIds: Object.freeze([
+                ...(current.activeStagingStepIds ?? []), request.stepId,
+              ]),
+              updatedAt: request.startedAt,
+            }));
+            return Object.freeze({ kind: "claimed" as const });
+          },
+          armMarkdownImportStagingStep: async (
+            request: Parameters<MarkdownImportMetadataTransaction["armMarkdownImportStagingStep"]>[0],
+          ) => {
+            const current = markdownImportSessions.get(request.importId);
+            if (
+              current === undefined || current.state !== "active" ||
+              current.version !== request.expectedVersion ||
+              !(current.activeStagingStepIds ?? []).includes(request.stepId) ||
+              (current.armedStagingStepIds ?? []).includes(request.stepId) ||
+              Date.parse(current.expiresAt) <= Date.parse(request.armedAt)
+            ) return false;
+            markdownImportSessions.set(current.importId, freezeMarkdownImportSession({
+              ...current,
+              armedStagingStepIds: Object.freeze([
+                ...(current.armedStagingStepIds ?? []), request.stepId,
+              ]),
+              updatedAt: request.armedAt,
+            }));
+            return true;
+          },
+          settleMarkdownImportStagingStep: async (
+            request: Parameters<MarkdownImportMetadataTransaction["settleMarkdownImportStagingStep"]>[0],
+          ) => {
+            const current = markdownImportSessions.get(request.importId);
+            if (current === undefined ||
+              !(current.activeStagingStepIds ?? []).includes(request.stepId)) return false;
+            const remaining = (current.activeStagingStepIds ?? []).filter((id) =>
+              id !== request.stepId);
+            const updated = freezeMarkdownImportSession({
+              ...current,
+              activeStagingStepIds: Object.freeze(remaining),
+              armedStagingStepIds: Object.freeze((current.armedStagingStepIds ?? []).filter((id) =>
+                id !== request.stepId)),
+              updatedAt: request.settledAt,
+            });
+            markdownImportSessions.set(updated.importId, updated);
+            if (
+              remaining.length === 0 && (updated.activeStepId ?? null) === null &&
+              !updated.unsettledWriterPossible &&
+              (updated.state === "committed" || updated.state === "canceled" ||
+                updated.state === "validation_failed" || updated.state === "expired")
+            ) {
+              const reservation = capacityReservations.get(updated.reservationId);
+              if (reservation?.operation === "import" &&
+                reservation.attemptId === updated.importId &&
+                (reservation.state === "active" || reservation.state === "cleanup_pending")) {
+                capacityReservations.set(reservation.reservationId,
+                  cloneCapacityReservation(Object.freeze({
+                    ...reservation,
+                    writerClosedAt: request.settledAt,
+                    updatedAt: request.settledAt,
+                  })));
+              }
+            }
+            return true;
           },
           transitionMarkdownImportSession: async (
             request: Parameters<
@@ -515,6 +607,21 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
             }
             if (!request.from.includes(current.state)) {
               return Object.freeze({ kind: "state_conflict" as const });
+            }
+            const currentStepId = current.activeStepId ?? null;
+            if (currentStepId !== (request.expectedActiveStepId ?? null)) {
+              return Object.freeze({ kind: "state_conflict" as const });
+            }
+            const nextStepId = request.activeStepId === undefined
+              ? currentStepId
+              : request.activeStepId;
+            const unsettledStepIds = [...(current.unsettledStepIds ?? [])];
+            if (
+              request.unsettledWriterPossible === true && currentStepId !== null &&
+              nextStepId !== currentStepId && !unsettledStepIds.includes(currentStepId)
+            ) unsettledStepIds.push(currentStepId);
+            if (unsettledStepIds.length > 128) {
+              throw new Error("Markdown import has too many unsettled promotion steps");
             }
             const updated = freezeMarkdownImportSession({
               ...current,
@@ -536,12 +643,75 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
               promotedBytes: request.promotedBytes === undefined
                 ? current.promotedBytes
                 : request.promotedBytes,
+              activeStepId: nextStepId,
+              canonicalWriteExposure: (current.canonicalWriteExposure ?? false) ||
+                nextStepId !== null,
+              unsettledStepIds: Object.freeze(unsettledStepIds),
+              unsettledWriterPossible: unsettledStepIds.length > 0 ||
+                (request.unsettledWriterPossible ?? current.unsettledWriterPossible ?? false),
               revisionId: request.revisionId === undefined
                 ? current.revisionId
                 : request.revisionId,
             });
             markdownImportSessions.set(current.importId, updated);
+            if (
+              (request.to === "committed" || request.to === "canceled" ||
+                request.to === "validation_failed" || request.to === "expired") &&
+              (updated.activeStepId ?? null) === null &&
+              !updated.unsettledWriterPossible &&
+              (updated.activeStagingStepIds ?? []).length === 0
+            ) {
+              const reservation = capacityReservations.get(updated.reservationId);
+              if (reservation?.operation === "import" &&
+                reservation.attemptId === updated.importId &&
+                (reservation.state === "active" || reservation.state === "cleanup_pending")) {
+                capacityReservations.set(reservation.reservationId,
+                  cloneCapacityReservation(Object.freeze({
+                    ...reservation,
+                    writerClosedAt: request.updatedAt,
+                    updatedAt: request.updatedAt,
+                  })));
+              }
+            }
             return Object.freeze({ kind: "updated" as const, session: updated });
+          },
+          settleMarkdownImportStep: async (
+            request: Parameters<MarkdownImportMetadataTransaction["settleMarkdownImportStep"]>[0],
+          ) => {
+            const current = markdownImportSessions.get(request.importId);
+            if (current === undefined) return null;
+            const pending = current.unsettledStepIds;
+            if (pending === undefined || !pending.includes(request.stepId)) {
+              return freezeMarkdownImportSession(current);
+            }
+            const remaining = pending.filter((stepId) => stepId !== request.stepId);
+            const updated = freezeMarkdownImportSession({
+              ...current,
+              version: version(current.version + 1),
+              updatedAt: request.settledAt,
+              unsettledStepIds: Object.freeze(remaining),
+              unsettledWriterPossible: remaining.length > 0,
+            });
+            markdownImportSessions.set(updated.importId, updated);
+            if (
+              remaining.length === 0 && (updated.activeStepId ?? null) === null &&
+              (updated.activeStagingStepIds ?? []).length === 0 &&
+              (updated.state === "committed" || updated.state === "canceled" ||
+                updated.state === "validation_failed" || updated.state === "expired")
+            ) {
+              const reservation = capacityReservations.get(updated.reservationId);
+              if (reservation?.operation === "import" &&
+                reservation.attemptId === updated.importId &&
+                (reservation.state === "active" || reservation.state === "cleanup_pending")) {
+                capacityReservations.set(reservation.reservationId,
+                  cloneCapacityReservation(Object.freeze({
+                    ...reservation,
+                    writerClosedAt: request.settledAt,
+                    updatedAt: request.settledAt,
+                  })));
+              }
+            }
+            return updated;
           },
           claimMarkdownImportCleanup: async (
             request: Parameters<
@@ -551,8 +721,40 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
             if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 1_000) {
               throw new TypeError("Markdown import cleanup limit is invalid");
             }
+            for (const current of markdownImportSessions.values()) {
+              const terminal = current.state === "committed" || current.state === "canceled" ||
+                current.state === "validation_failed" || current.state === "expired";
+              if (!terminal && Date.parse(current.expiresAt) > Date.parse(request.now)) continue;
+              const armed = new Set(current.armedStagingStepIds ?? []);
+              const remaining = (current.activeStagingStepIds ?? []).filter((id) => armed.has(id));
+              if (remaining.length === (current.activeStagingStepIds ?? []).length) continue;
+              const updated = freezeMarkdownImportSession({
+                ...current,
+                version: version(current.version + 1),
+                updatedAt: request.now,
+                activeStagingStepIds: Object.freeze(remaining),
+              });
+              markdownImportSessions.set(updated.importId, updated);
+              if (terminal && remaining.length === 0 &&
+                (updated.activeStepId ?? null) === null && !updated.unsettledWriterPossible) {
+                const reservation = capacityReservations.get(updated.reservationId);
+                if (reservation?.operation === "import" &&
+                  reservation.attemptId === updated.importId &&
+                  (reservation.state === "active" || reservation.state === "cleanup_pending")) {
+                  capacityReservations.set(reservation.reservationId,
+                    cloneCapacityReservation(Object.freeze({
+                      ...reservation,
+                      writerClosedAt: request.now,
+                      updatedAt: request.now,
+                    })));
+                }
+              }
+            }
             const selected = [...markdownImportSessions.values()]
               .filter((session) =>
+                (session.activeStepId ?? null) === null &&
+                (session.activeStagingStepIds ?? []).length === 0 &&
+                !session.unsettledWriterPossible &&
                 session.cleanupCompletedAt === null &&
                 (session.state === "committed" || session.state === "canceled" ||
                   session.state === "validation_failed" || session.state === "expired" ||
@@ -581,6 +783,18 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
                   reservationId: session.reservationId,
                   canceledAt: request.now,
                 });
+                const reservation = capacityReservations.get(session.reservationId);
+                if (reservation?.operation === "import" &&
+                  reservation.attemptId === session.importId &&
+                  reservation.state === "cleanup_pending" &&
+                  !session.unsettledWriterPossible) {
+                  capacityReservations.set(reservation.reservationId,
+                    cloneCapacityReservation(Object.freeze({
+                      ...reservation,
+                      writerClosedAt: request.now,
+                      updatedAt: request.now,
+                    })));
+                }
               }
               claimed.push(Object.freeze({
                 session: freezeMarkdownImportSession(session),
@@ -609,16 +823,35 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
                 file.importId === current.importId)
             ) return false;
             const reservation = capacityReservations.get(current.reservationId);
+            if (current.unsettledWriterPossible ||
+              (current.activeStagingStepIds ?? []).length > 0) return false;
             if (reservation !== undefined && reservation.state !== "released") {
               if (reservation.state === "active") return false;
-              capacityReservations.set(
-                reservation.reservationId,
-                cloneCapacityReservation(Object.freeze({
-                  ...reservation,
-                  state: "released" as const,
-                  updatedAt: request.completedAt,
-                })),
-              );
+              const committedRevision = current.state === "committed" &&
+                current.revisionId !== null
+                ? revisionsById.get(current.revisionId)
+                : undefined;
+              const fullyPublished = !current.unsettledWriterPossible &&
+                committedRevision?.revision.spaceId === current.spaceId;
+              if (reservation.operation === "import" &&
+                reservation.attemptId === current.importId &&
+                current.activeStagingStepIds !== undefined &&
+                current.armedStagingStepIds !== undefined &&
+                (fullyPublished ||
+                  (reservation.writerClosedAt !== undefined &&
+                    reservation.writerClosedAt !== null &&
+                    !current.unsettledWriterPossible &&
+                    current.promotionCheckpoint === 0 &&
+                    !current.canonicalWriteExposure))) {
+                capacityReservations.set(
+                  reservation.reservationId,
+                  cloneCapacityReservation(Object.freeze({
+                    ...reservation,
+                    state: "released" as const,
+                    updatedAt: request.completedAt,
+                  })),
+                );
+              }
             }
             markdownImportSessions.set(
               current.importId,
@@ -1021,4 +1254,44 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         `${kind}\u0000${spaceId}\u0000${sha256}`,
       ) ?? 0) > 0;
     }
+
+  /** One metadata snapshot checks both references and writers before physical GC. */
+  async canPhysicallyDeleteCanonicalObject(request: Readonly<{
+    namespace: "immutable" | "bundle_file" | "space_canonical";
+    spaceId?: SpaceId;
+    kind?: "markdown" | "revision_manifest";
+    sha256: Digest;
+  }>): Promise<boolean> {
+    // Legacy global objects have no durable write reservation. Keep their
+    // physical bytes until a separately fenced legacy cleanup is available.
+    if (request.namespace === "immutable") return false;
+    if (request.spaceId === undefined) return false;
+    for (const reservation of this._capacityReservations.values()) {
+      if (reservation.spaceId !== request.spaceId ||
+        (reservation.state !== "active" && reservation.state !== "cleanup_pending") ||
+        (reservation.state === "cleanup_pending" && reservation.writerClosedAt)) continue;
+      if (reservation.operation === "commit") return false;
+      if (reservation.operation !== "import") continue;
+      // Import writes only plan Markdown and one manifest. A lost promotion
+      // step must not stop GC of unrelated BundleFiles or Markdown.
+      if (request.namespace === "bundle_file") continue;
+      if (request.kind === "revision_manifest") return false;
+      const session = [...this._markdownImportSessions.values()].find((item) =>
+        item.reservationId === reservation.reservationId);
+      const plan = session === undefined ? undefined : this._markdownImportPlans.get(session.planId);
+      if (plan === undefined || plan.files.some((file) => file.sha256 === request.sha256)) {
+        return false;
+      }
+    }
+    const reachability = this._objectReachabilityCounts();
+    if (request.namespace === "bundle_file") {
+      return (reachability.bundle.get(`${request.spaceId}\u0000${request.sha256}`) ?? 0) === 0;
+    }
+    if (request.kind === undefined) return false;
+    if (request.kind === "markdown" && [...this._queuedNotes.values()].some((note) =>
+      note.spaceId === request.spaceId && note.payloadHash === request.sha256)) return false;
+    return (reachability.spaceCanonical.get(
+      `${request.kind}\u0000${request.spaceId}\u0000${request.sha256}`,
+    ) ?? 0) === 0;
+  }
 }

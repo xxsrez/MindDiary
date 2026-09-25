@@ -72,6 +72,7 @@ import {
   ControlPrivacySafeObservability,
   type AccountDeletionDependencies,
 } from "@mind-diary/application-control";
+import { SitesCanonicalKeyGate } from "./sites-canonical-key-gate.js";
 
 export * from "./product-site.js";
 export * from "./bounded-in-memory-ingress.js";
@@ -122,13 +123,14 @@ export interface SitesPersistenceBoundaryOptions {
 export async function createSitesPersistenceBoundary(
   options: SitesPersistenceBoundaryOptions,
 ) {
-  // D1-backed adapters probe their existing schema lazily and only run the
-  // idempotent migration batch when a table is genuinely missing or outdated.
-  // Keep R2 setup parallel while avoiding cold-start DDL contention in D1.
-  const [metadata, objects] = await Promise.all([
-    createSitesMetadataStore(options.database),
-    createSitesObjectStore(options.bucket),
-  ]);
+  // The canonical gate schema must exist before any R2 writer can start.
+  const metadata = await createSitesMetadataStore(options.database);
+  const objects = await createSitesObjectStore(
+    options.bucket,
+    undefined,
+    new SitesCanonicalKeyGate(options.database),
+    { canDelete: (request) => metadata.canPhysicallyDeleteCanonicalObject(request) },
+  );
   const index = await createSitesSearchIndex(options.database);
   const audit = await createSitesAuditSink(options.database);
   return Object.freeze({

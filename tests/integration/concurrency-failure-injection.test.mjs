@@ -15,6 +15,7 @@ import {
 } from "@mind-diary/adapter-security-webcrypto";
 import {
   AuditOutboxDeliveryHandler,
+  BoundedObjectCleanupHandler,
   ExportJobHandler,
   ReadyExactRevisionIndexService,
   RevisionIndexJobHandler,
@@ -730,6 +731,41 @@ test(
       0,
     );
 
+    const blocked = await commitService(env, actor).commit(crashRequest);
+    assert.equal(blocked.kind, "invalid");
+    assert.equal(blocked.error.code, "capacity_accounting_untrusted");
+    const [pending] = await env.metadata.listCapacityReservationsForTest();
+    assert.equal(pending.state, "cleanup_pending");
+    // The failure injector is known to have stopped before the metadata
+    // commit. Model the operator's exact writer-stop proof, then one complete
+    // object-cleanup cycle before reusing this idempotency key.
+    assert.equal(await env.metadata.closeCapacityReservationWriter({
+      reservationId: pending.reservationId,
+      expectedAttemptId: pending.attemptId,
+      closedAt: T3,
+    }), true);
+    const cleanup = await new BoundedObjectCleanupHandler({
+      objects: env.objects,
+      checkpoints: env.metadata,
+      reachability: env.metadata,
+      staging: env.metadata,
+      exports: env.metadata,
+      clock: { now: () => T4 },
+      monotonicNow: () => 0,
+    }).handle({
+      actor: backgroundActor(T4),
+      createdBefore: T4,
+      maxObjects: 1_000,
+      maxBytes: 268_435_456,
+      maxDurationMs: 1_000,
+    });
+    assert.equal(cleanup.cycleCompleted, true);
+    assert.equal((await env.metadata.listCapacityReservationsForTest())[0].state, "released");
+
+    const recovered = await commitService(env, actor).commit(crashRequest);
+    assert.equal(recovered.kind, "committed");
+    assert.equal(recovered.replayed, false);
+
     const exactResults = await Promise.all(
       Array.from({ length: 24 }, (_, index) =>
         commitService(
@@ -742,7 +778,7 @@ test(
       ),
     );
     assert.equal(exactResults.every((result) => result.kind === "committed"), true);
-    assert.equal(exactResults.filter((result) => result.replayed === false).length, 1);
+    assert.equal(exactResults.filter((result) => result.replayed === false).length, 0);
     assert.equal(
       new Set(
         exactResults.map((result) => result.envelope.revision.revisionId),

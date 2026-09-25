@@ -487,6 +487,7 @@ test("content commit keeps ordinary metadata HEAD atomic and immediately discove
     committedBy: before.envelope.revision.committedBy,
     manifest: before.envelope.manifest,
     manifestHash: before.envelope.revision.manifestHash,
+    manifestSize: before.envelope.revision.manifestSize,
     summary: "Roll back projected HEAD",
   });
   await assert.rejects(

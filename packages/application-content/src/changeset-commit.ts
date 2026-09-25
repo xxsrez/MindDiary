@@ -491,11 +491,13 @@ export class ChangesetCommitService {
   readonly #idempotencyKeyMaxBytes: number;
   readonly #maxRetainedBundleFileBytes: number;
   readonly #capacity: CapacityAdmissionService;
+  readonly #clock: Clock;
 
   constructor(dependencies: ChangesetCommitDependencies) {
     this.#authorizer = dependencies.authorizer;
     this.#metadata = dependencies.metadata;
     this.#objects = dependencies.objects;
+    this.#clock = dependencies.clock;
     this.#revisionIds = dependencies.revisionIds;
     this.#effectIds = dependencies.effectIds ?? null;
     this.#preflightLimits =
@@ -756,8 +758,8 @@ export class ChangesetCommitService {
       key: validated.idempotencyKey,
     });
 
-    const early = await this.#metadata.runContentCommitTransaction(
-      async (transaction) => {
+    const resolveCurrentIdempotency = () =>
+      this.#metadata.runContentCommitTransaction(async (transaction) => {
         const authorization = await this.#authorizer.reauthorizeInTransaction(
           {
             actor,
@@ -788,8 +790,8 @@ export class ChangesetCommitService {
           namespace,
           canonicalRequestHash,
         );
-      },
-    );
+      });
+    const early = await resolveCurrentIdempotency();
     if (early.kind !== "missing") return early;
 
     const preflight = await this.#preflight.preflight({
@@ -801,7 +803,13 @@ export class ChangesetCommitService {
       operations: validated.operations,
       producerProfile: validated.producerProfile,
     });
-    if (preflight.kind !== "ready") return preflight;
+    if (preflight.kind !== "ready") {
+      if (preflight.kind === "revision_conflict") {
+        const completed = await resolveCurrentIdempotency();
+        if (completed.kind !== "missing") return completed;
+      }
+      return preflight;
+    }
 
     const committedAt = preflight.committedAt;
     const stagedSourceReceipts = canonicalStagedSourceAuditReceipts(
@@ -809,10 +817,13 @@ export class ChangesetCommitService {
     );
     const revisionId = this.#revisionIds.nextRevisionId();
     const reservationOperationRef = String(canonicalRequestHash);
+    const reservationKeyDigest = await this.#objects.calculateSha256(
+      ENCODER.encode(JSON.stringify([actor.principalId, validated.idempotencyKey])),
+    );
     const reservationId = capacityReservationId(
       "commit",
       request.spaceId,
-      reservationOperationRef,
+      `key:${reservationKeyDigest}`,
     );
     const candidateWriteBytes = preflight.candidateFiles.reduce(
       (total, file) => total +
@@ -826,6 +837,7 @@ export class ChangesetCommitService {
       spaceId: request.spaceId,
       operation: "commit",
       operationRef: reservationOperationRef,
+      reservationId,
       baseRevisionId: preflight.baseRevisionId,
       idempotencyKey: validated.idempotencyKey,
       requested: Object.freeze({
@@ -842,6 +854,9 @@ export class ChangesetCommitService {
       createdAt: committedAt,
     });
     if (admission.kind === "rejected") {
+      if (admission.reason === "idempotency_conflict") {
+        return Object.freeze({ kind: "idempotency_conflict" });
+      }
       const code = admission.reason === "hard_limit"
         ? "capacity_hard_limit"
         : admission.reason === "soft_limit"
@@ -851,6 +866,32 @@ export class ChangesetCommitService {
             : "capacity_accounting_untrusted";
       return invalid(code, `capacity admission rejected: ${admission.reason}`);
     }
+    if (admission.replayed) {
+      const completed = await resolveCurrentIdempotency();
+      if (completed.kind !== "missing") return completed;
+      if (admission.reservation.state !== "active") {
+        return invalid(
+          "capacity_accounting_untrusted",
+          "the commit reservation is final without an idempotency result",
+        );
+      }
+      return invalid(
+        "commit_in_progress",
+        "the exact commit reservation is still active; reconcile before retrying",
+      );
+    }
+    const closeSettledWriter = async () => {
+      const closed = await this.#metadata.closeCapacityReservationWriter({
+        reservationId,
+        expectedAttemptId: admission.reservation.attemptId ?? "",
+        closedAt: this.#clock.now(),
+      });
+      if (!closed) throw new ChangesetCommitFailure(
+        "invalid_commit_effects",
+        "settled commit writer could not be fenced in the capacity ledger",
+      );
+    };
+    let materializationSettled = false;
     try {
     const materialized = await mapBounded(
       preflight.candidateFiles,
@@ -966,7 +1007,11 @@ export class ChangesetCommitService {
       (result): result is InvalidResult =>
         "kind" in result && result.kind === "invalid",
     );
-    if (materializationFailure !== undefined) return materializationFailure;
+    if (materializationFailure !== undefined) {
+      await closeSettledWriter();
+      await this.#capacity.cancel(reservationId);
+      return materializationFailure;
+    }
     let actualPhysicalGrowth = 0;
     const entries = materialized.map((result) => {
       if ("kind" in result) {
@@ -991,6 +1036,7 @@ export class ChangesetCommitService {
       actualPhysicalGrowth += manifestPut.object.size;
     }
     const manifestHash = manifestPut.object.sha256;
+    materializationSettled = true;
 
     const result = await this.#metadata.runContentCommitTransaction(async (transaction) => {
       const authorization = await this.#authorizer.reauthorizeInTransaction(
@@ -1295,9 +1341,18 @@ export class ChangesetCommitService {
         `metadata rejected the changeset revision: ${committed.reason}`,
       );
     });
-    if (result.kind !== "committed") await this.#capacity.cancel(reservationId);
+    if (result.kind !== "committed") {
+      await closeSettledWriter();
+      await this.#capacity.cancel(reservationId);
+    }
     return result;
     } catch (error) {
+      // A typed application failure inside the metadata transaction is a
+      // known rollback after all R2 writes settled. Provider/adapter errors
+      // can have an uncertain outcome and retain their writer charge.
+      if (materializationSettled && error instanceof ChangesetCommitFailure) {
+        await closeSettledWriter();
+      }
       await this.#capacity.cancel(reservationId).catch(() => undefined);
       throw error;
     }

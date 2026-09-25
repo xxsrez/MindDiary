@@ -90,6 +90,8 @@ export interface ExternalIdentityBindingLookup {
  * the initial revision committed with this record set.
  */
 export interface AccountBootstrapRecordSet {
+  /** Sites-only durable fence; settled with the canonical creation event. */
+  readonly canonicalCreationIntentId?: string;
   readonly principal: Readonly<Principal>;
   readonly externalBinding: Readonly<ExternalIdentityBinding>;
   readonly personalSpace: Readonly<KnowledgeSpace>;
@@ -467,6 +469,8 @@ export interface OrdinaryMindSnapshot {
  * independently.
  */
 export interface OrdinaryMindRecordSet {
+  /** Sites-only durable fence; settled with the canonical creation event. */
+  readonly canonicalCreationIntentId?: string;
   readonly host: VerifiedSpaceHost;
   readonly space: Readonly<KnowledgeSpace>;
   readonly ownerMembership: Readonly<SpaceMembership>;
@@ -651,6 +655,7 @@ export type DeleteAccountCascadeResult =
         | "deletion_impact_expired"
         | "deletion_impact_changed"
         | "idempotency_conflict"
+        | "writer_in_progress"
         | "invalid_record";
     };
 
@@ -776,6 +781,7 @@ export type DeleteOrdinaryMindResult =
         | "deletion_impact_expired"
         | "deletion_impact_changed"
         | "idempotency_conflict"
+        | "writer_in_progress"
         | "invalid_record";
     };
 

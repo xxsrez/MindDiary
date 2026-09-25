@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { RuntimeDiagnostics } from "../../apps/mind-diary-site/worker/runtime-diagnostics.js";
 import { withForegroundDeadline } from "../../apps/mind-diary-site/worker/foreground-deadline.js";
@@ -6,7 +7,9 @@ import { withForegroundDeadline } from "../../apps/mind-diary-site/worker/foregr
 import { InMemoryAuditSink } from "@mind-diary/adapter-audit-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
+import { BoundedObjectCleanupHandler } from "@mind-diary/application-background";
 import {
+  CapacityAdmissionService,
   DEFAULT_CAPACITY_LIMITS,
   MindDiscoveryService,
 } from "@mind-diary/application-content";
@@ -42,6 +45,7 @@ import {
   SITES_METADATA_MIGRATIONS,
   createSitesMetadataStore,
 } from "../../packages/adapter-metadata-sites/dist/index.js";
+import { createSitesObjectStore } from "../../packages/adapter-object-sites/dist/index.js";
 
 function canonicalSql(sql) {
   return sql.replace(/\s+/gu, " ").trim();
@@ -89,6 +93,61 @@ test("Sites metadata reconstructs durable capacity reservations after isolate re
   assert.equal(reservations.length, 1);
   assert.equal(reservations[0].reservationId, "capacity:restart:one");
   assert.equal(reservations[0].state, "active");
+});
+
+test("Sites capacity admits an authorized MCP writer from durable Mind membership", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({ database, bucket: new FakeR2Bucket() });
+  const app = services(boundary, ids());
+  const owner = await app.bootstrap.bootstrapAccount(preRegistrationActor(132), {
+    action: "create_isolated_account",
+  });
+  const mind = await app.ordinary.createSpaceWithOwner(
+    actor(owner.principalId, "request_capacity_mcp_mind", T0),
+    { name: "Capacity MCP Mind", handle: "capacity-mcp-mind", idempotencyKey: "capacity-mcp-mind" },
+  );
+  assert.equal((await boundary.metadata.createMcpToken({
+    tokenId: "token_capacity_mcp",
+    principalId: owner.principalId,
+    name: "Capacity MCP fixture",
+    verifier: `hmac-sha256:v1:${"c".repeat(64)}`,
+    displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read", "content:write"],
+    createdAt: T0,
+    expiresAt: "2026-11-06T08:00:00.000Z",
+  })).kind, "created");
+  const mcpActor = {
+    kind: "registered_principal",
+    principalId: owner.principalId,
+    authentication: { kind: "mcp_token", tokenId: "token_capacity_mcp",
+      effectiveScopes: ["content:read", "content:write"] },
+    deploymentCapabilities: CAPABILITIES,
+    requestId: "request_capacity_mcp_writer",
+    occurredAtUtc: T1,
+  };
+  const authorizer = new CapabilityAuthorizer(boundary.metadata);
+  assert.equal((await authorizer.authorize({ actor: mcpActor, spaceId: mind.mindId,
+    capability: "content:write", revisionMode: "head" })).kind, "allowed");
+  const admissions = new CapacityAdmissionService({
+    metadata: boundary.metadata,
+    authorizer,
+    clock: { now: () => T1 },
+  });
+  const admitted = await admissions.reserve({
+    actor: mcpActor,
+    spaceId: mind.mindId,
+    operation: "commit",
+    operationRef: "capacity-mcp-writer",
+    baseRevisionId: mind.headRevisionId,
+    idempotencyKey: idempotencyKey("capacity-mcp-writer"),
+    requested: { physicalCanonicalBytes: 1024, temporaryBytes: 0, d1MetadataBytes: 256 },
+    bulk: false,
+    heavy: false,
+    createdAt: T1,
+  });
+  assert.equal(admitted.kind, "admitted");
+  assert.equal((await (await createSitesMetadataStore(database))
+    .listCapacityReservationsForTest())[0]?.state, "active");
 });
 
 test("Sites metadata persists one exact preflight proof and purges it with its Space", async () => {
@@ -343,6 +402,8 @@ class FakeD1Database {
   metadataEvents = [];
   backupControl = { origin_id: "synthetic-origin", generation: 1, backup_sequence: 0, invalidation_epoch: 0 };
   backupSessions = new Map();
+  canonicalKeyGates = new Map();
+  canonicalCreationIntents = new Map();
   metadataSnapshot = null;
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
@@ -394,6 +455,8 @@ class FakeD1Database {
       metadataEvents: structuredClone(this.metadataEvents),
       backupControl: structuredClone(this.backupControl),
       backupSessions: structuredClone(this.backupSessions),
+      canonicalKeyGates: structuredClone(this.canonicalKeyGates),
+      canonicalCreationIntents: structuredClone(this.canonicalCreationIntents),
       metadataSnapshot: structuredClone(this.metadataSnapshot),
       metadataSnapshotHead: structuredClone(this.metadataSnapshotHead),
       metadataSnapshotChunks: new Map(this.metadataSnapshotChunks),
@@ -421,6 +484,8 @@ class FakeD1Database {
       this.metadataEvents = before.metadataEvents;
       this.backupControl = before.backupControl;
       this.backupSessions = before.backupSessions;
+      this.canonicalKeyGates = before.canonicalKeyGates;
+      this.canonicalCreationIntents = before.canonicalCreationIntents;
       this.metadataSnapshot = before.metadataSnapshot;
       this.metadataSnapshotHead = before.metadataSnapshotHead;
       this.metadataSnapshotChunks = before.metadataSnapshotChunks;
@@ -537,6 +602,51 @@ class FakeD1Database {
     if (sql.includes("/*md-metadata-migration*/")) {
       this.metadataSchemaVersion = Math.max(this.metadataSchemaVersion, Number(values[0]));
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-canonical-gate-acquire*/")) {
+      if (this.canonicalKeyGates.has(values[0])) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      this.canonicalKeyGates.set(values[0], { operation_id: values[1], acquired_at: values[2] });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-canonical-gate-release*/")) {
+      if (this.canonicalKeyGates.get(values[0])?.operation_id !== values[1]) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      this.canonicalKeyGates.delete(values[0]);
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-canonical-creation-begin*/")) {
+      const key = `${values[0]}\u0000${values[1]}`;
+      if (this.canonicalCreationIntents.has(key)) {
+        throw new Error("duplicate canonical creation intent");
+      }
+      this.canonicalCreationIntents.set(key, {
+        intent_id: values[0], key_digest: values[1], created_at: values[2],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-canonical-creation-complete*/")) {
+      let changes = 0;
+      for (const [key, row] of this.canonicalCreationIntents) {
+        if (row.intent_id !== values[0]) continue;
+        this.canonicalCreationIntents.delete(key);
+        changes++;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-canonical-creation-commit*/")) {
+      const event = this.metadataEvents.find((row) => row.sequence === Number(values[1]));
+      if (event?.target !== values[2] || event.operation !== values[3] ||
+        event.payload_json !== values[4]) return { success: true, meta: { changes: 0 } };
+      let changes = 0;
+      for (const [key, row] of this.canonicalCreationIntents) {
+        if (row.intent_id !== values[0]) continue;
+        this.canonicalCreationIntents.delete(key);
+        changes++;
+      }
+      return { success: true, meta: { changes } };
     }
     if (normalizedSql.startsWith("INSERT OR IGNORE INTO md_backup_control")) {
       if (this.backupControl !== null) return { success: true, meta: { changes: 0 } };
@@ -1214,6 +1324,11 @@ class FakeD1Database {
           })),
       };
     }
+    if (sql.includes("/*md-canonical-creation-check*/")) {
+      const pending = [...this.canonicalCreationIntents.values()]
+        .some((row) => row.key_digest === values[0]);
+      return { success: true, results: pending ? [{ pending: 1 }] : [] };
+    }
     throw new Error(`unsupported FakeD1 all statement: ${sql}`);
   }
 
@@ -1570,6 +1685,12 @@ class FakeR2Bucket {
   records = new Map();
   #version = 0;
   #failDelete = false;
+  #contentDerivedEtag;
+  beforeDeleteMark = null;
+
+  constructor({ contentDerivedEtag = false } = {}) {
+    this.#contentDerivedEtag = contentDerivedEtag;
+  }
 
   async get(key) {
     const record = this.records.get(key);
@@ -1577,6 +1698,11 @@ class FakeR2Bucket {
   }
 
   async put(key, value, options = {}) {
+    if (options.customMetadata?.state === "deleting" && this.beforeDeleteMark) {
+      const hook = this.beforeDeleteMark;
+      this.beforeDeleteMark = null;
+      await hook();
+    }
     const current = this.records.get(key);
     if (options.onlyIf?.etagDoesNotMatch === "*" && current) return null;
     if (options.onlyIf?.etagMatches && current?.etag !== options.onlyIf.etagMatches) {
@@ -1586,7 +1712,9 @@ class FakeR2Bucket {
     const record = {
       key,
       bytes,
-      etag: `etag-${++this.#version}`,
+      etag: this.#contentDerivedEtag
+        ? createHash("md5").update(bytes).digest("hex")
+        : `etag-${++this.#version}`,
       customMetadata: { ...(options.customMetadata ?? {}) },
     };
     this.records.set(key, record);
@@ -3128,6 +3256,12 @@ test("Sites composition persists account, invitation, ownership, HEAD CAS, idemp
     actor(owner.principalId, "request_sites_create", T1),
     { name: "Durable Mind", handle: "durable-mind", idempotencyKey: "create-durable" },
   );
+  const initial = await boundary.metadata.readRevision(mind.mindId, mind.headRevisionId);
+  assert.equal(initial?.manifest.format, "mind-diary-revision-manifest-v3");
+  assert.equal(database.canonicalCreationIntents.size, 0);
+  assert.equal([...bucket.records.keys()].some((key) => key.startsWith("canonical/sha256/")), false);
+  assert.ok([...bucket.records.keys()].some((key) =>
+    key.startsWith(`spaces/${mind.mindId}/objects/sha256/`)));
   const invitation = await app.invitations.createInvitation(
     actor(owner.principalId, "request_sites_invite", T2),
     {
@@ -3495,6 +3629,44 @@ test("Sites composition persists account, invitation, ownership, HEAD CAS, idemp
   );
 });
 
+test("a committed creation settles its intent in the metadata batch even when the D1 response is lost", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database, bucket: new FakeR2Bucket(),
+  });
+  const app = services(boundary, ids());
+  let separateCompletionCalls = 0;
+  boundary.objects.completeSpaceCanonicalCreationIntent = async () => {
+    separateCompletionCalls++;
+    throw new Error("separate intent completion must not be needed after commit");
+  };
+
+  const bootstrapGate = database.holdNextMetadataAppend({
+    operation: "runAccountBootstrapTransaction", commitThenReject: true,
+  });
+  const bootstrap = app.bootstrap.bootstrapAccount(preRegistrationActor(91), {
+    action: "create_isolated_account",
+  });
+  await bootstrapGate.started;
+  bootstrapGate.release();
+  const owner = await bootstrap;
+  assert.equal(database.canonicalCreationIntents.size, 0);
+
+  const ordinaryGate = database.holdNextMetadataAppend({
+    operation: "runOrdinaryMindTransaction", commitThenReject: true,
+  });
+  const creation = app.ordinary.createSpaceWithOwner(
+    actor(owner.principalId, "request_atomic_creation_intent", T1),
+    { name: "Atomic creation", handle: "atomic-creation", idempotencyKey: "atomic-creation" },
+  );
+  await ordinaryGate.started;
+  ordinaryGate.release();
+  const mind = await creation;
+  assert.ok(await boundary.metadata.readRevision(mind.mindId, mind.headRevisionId));
+  assert.equal(database.canonicalCreationIntents.size, 0);
+  assert.equal(separateCompletionCalls, 0);
+});
+
 test("D1 mutation failure exposes no process-memory success and retry survives restart", async () => {
   const database = new FakeD1Database();
   const store = await createSitesMetadataStore(database);
@@ -3803,15 +3975,181 @@ async function runObjectContract(name, factory) {
 }
 
 await runObjectContract("memory object contract baseline", async () => new InMemoryObjectStore());
-await runObjectContract("Sites R2 object contract", async () => {
-  const boundary = await createSitesPersistenceBoundary({
-    database: new FakeD1Database(),
-    bucket: new FakeR2Bucket(),
+await runObjectContract("Sites R2 adapter object contract", async () =>
+  createSitesObjectStore(new FakeR2Bucket()));
+
+test("Space-canonical cleanup keeps a concurrently protected object with content-derived ETags", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket({ contentDerivedEtag: true });
+  const store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const bytes = new TextEncoder().encode("# Protected during cleanup\n");
+  const original = await store.putSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId: "space_cleanup_content_etag",
+    bytes,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: T0,
   });
-  return boundary.objects;
+  let protectedPromise;
+  bucket.beforeDeleteMark = () => {
+    protectedPromise = store.putSpaceCanonicalObject({
+      kind: "markdown",
+      spaceId: "space_cleanup_content_etag",
+      bytes,
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: T2,
+    });
+  };
+
+  const deleted = await store.deleteSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId: "space_cleanup_content_etag",
+    sha256: original.object.sha256,
+    expectedProtectedAt: original.object.protectedAt,
+    createdBefore: T1,
+  });
+  const protectedWrite = await protectedPromise;
+  assert.equal(deleted, true);
+  assert.equal(protectedWrite.object.protectedAt, T2);
+  assert.ok(await store.getSpaceCanonicalObject(
+    "markdown", "space_cleanup_content_etag", original.object.sha256,
+  ));
 });
 
-test("Sites Space-canonical cleanup resumes after crash between delete mark and physical delete", async () => {
+test("new Space canonical creation intent survives restart and prevents premature cleanup", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  let store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const spaceId = opaqueId("space_creation_intent");
+  const bytes = new TextEncoder().encode("# Pending first revision\n");
+  const sha256 = await store.calculateSha256(bytes);
+  const intentId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  await store.beginSpaceCanonicalCreationIntent({
+    intentId, createdAt: T0, objects: [{ kind: "markdown", spaceId, sha256 }],
+  });
+  const put = await store.putSpaceCanonicalObject({
+    kind: "markdown", spaceId, bytes, mediaType: MARKDOWN_MEDIA_TYPE, createdAt: T0,
+  });
+  store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const deletion = {
+    kind: "markdown", spaceId, sha256,
+    expectedProtectedAt: put.object.protectedAt, createdBefore: T1,
+  };
+  assert.equal(await store.deleteSpaceCanonicalObject(deletion), false);
+  assert.ok(await store.getSpaceCanonicalObject("markdown", spaceId, sha256));
+  assert.equal(database.canonicalCreationIntents.size, 1);
+  await store.completeSpaceCanonicalCreationIntent(intentId);
+  assert.equal(await store.deleteSpaceCanonicalObject(deletion), true);
+  assert.equal(database.canonicalCreationIntents.size, 0);
+});
+
+test("Sites cleanup keeps bytes while a writer reservation is active or pending", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket({ contentDerivedEtag: true });
+  const { metadata, objects } = await createSitesPersistenceBoundary({ database, bucket });
+  const spaceId = opaqueId("space_writer_pin");
+  const reservationId = "capacity:commit:space_writer_pin:one";
+  const admitted = await metadata.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation({
+      reservationId,
+      attemptId: "writer-pin-attempt-one",
+      requestedByPrincipalId: opaqueId("principal_writer_pin"),
+      spaceId,
+      operation: "commit",
+      operationRef: "writer_pin",
+      baseRevisionId: null,
+      idempotencyKey: idempotencyKey("writer-pin"),
+      requested: { physicalCanonicalBytes: 1024, temporaryBytes: 0, d1MetadataBytes: 512 },
+      bulk: false,
+      heavy: false,
+      createdAt: T0,
+      expiresAt: T1,
+    }, DEFAULT_CAPACITY_LIMITS));
+  assert.equal(admitted.kind, "admitted");
+  const put = await objects.putSpaceCanonicalObject({
+    kind: "markdown", spaceId,
+    bytes: new TextEncoder().encode("# Uncommitted writer\n"),
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: T0,
+  });
+  const deletion = {
+    kind: "markdown", spaceId,
+    sha256: put.object.sha256,
+    expectedProtectedAt: put.object.protectedAt,
+    createdBefore: T2,
+  };
+  assert.equal(await objects.deleteSpaceCanonicalObject(deletion), false);
+  await metadata.runCapacityTransaction((transaction) =>
+    transaction.cancelCapacityReservation({ reservationId, canceledAt: T2 }));
+  assert.equal(await objects.deleteSpaceCanonicalObject(deletion), false);
+  assert.ok(await objects.getSpaceCanonicalObject("markdown", spaceId, put.object.sha256));
+  assert.equal(await metadata.releaseCapacityReservation({
+    reservationId, expectedAttemptId: "writer-pin-attempt-one", releasedAt: T3,
+  }), false);
+  assert.equal(await metadata.closeCapacityReservationWriter({
+    reservationId, expectedAttemptId: "writer-pin-attempt-one", closedAt: T3,
+  }), true);
+  assert.equal(await objects.deleteSpaceCanonicalObject(deletion), true);
+  assert.equal(await metadata.releaseCapacityReservation({
+    reservationId, expectedAttemptId: "writer-pin-attempt-one", releasedAt: T3,
+  }), false);
+  const recovery = await new BoundedObjectCleanupHandler({
+    objects, checkpoints: metadata, reachability: metadata, staging: metadata,
+    exports: metadata, clock: { now: () => T5 }, monotonicNow: () => 0,
+  }).handle({
+    actor: { kind: "service", serviceId: "writer-pin-cleanup",
+      requestId: "writer-pin-cleanup", occurredAtUtc: T5, deploymentCapabilities: [] },
+    createdBefore: T4, maxObjects: 1_000, maxBytes: 268_435_456, maxDurationMs: 1_000,
+  });
+  assert.equal(recovery.cycleCompleted, true);
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === reservationId)?.state, "released");
+});
+
+test("Sites canonical gate releases a read-only failure before R2 mutation", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const { metadata, objects } = await createSitesPersistenceBoundary({ database, bucket });
+  const spaceId = opaqueId("space_gate_read_failure");
+  const put = await objects.putSpaceCanonicalObject({
+    kind: "markdown", spaceId,
+    bytes: new TextEncoder().encode("# Retry after failed safety read\n"),
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: T0,
+  });
+  const deletion = {
+    kind: "markdown", spaceId, sha256: put.object.sha256,
+    expectedProtectedAt: put.object.protectedAt, createdBefore: T1,
+  };
+  const originalSafety = metadata.canPhysicallyDeleteCanonicalObject.bind(metadata);
+  metadata.canPhysicallyDeleteCanonicalObject = async () => {
+    throw new Error("synthetic metadata read failure");
+  };
+  await assert.rejects(objects.deleteSpaceCanonicalObject(deletion), /synthetic metadata read failure/u);
+  assert.equal(database.canonicalKeyGates.size, 0);
+  metadata.canPhysicallyDeleteCanonicalObject = originalSafety;
+  assert.equal(await objects.deleteSpaceCanonicalObject(deletion), true);
+});
+
+test("Sites canonical gate releases confirmed conditional PUT misses", async () => {
+  const database = new FakeD1Database();
+  class ConditionalMissBucket extends FakeR2Bucket {
+    async put(key, value, options) {
+      if (key.startsWith("canonical/sha256/")) return null;
+      return super.put(key, value, options);
+    }
+  }
+  const { objects } = await createSitesPersistenceBoundary({
+    database, bucket: new ConditionalMissBucket(),
+  });
+  await assert.rejects(objects.putImmutable({
+    bytes: new TextEncoder().encode("# No R2 mutation\n"),
+    mediaType: MARKDOWN_MEDIA_TYPE, createdAt: T0,
+  }), /CAS retry budget exhausted/u);
+  assert.equal(database.canonicalKeyGates.size, 0);
+});
+
+test("Sites Space-canonical cleanup keeps an uncertain delete gated after restart", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
   let store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
@@ -3853,27 +4191,21 @@ test("Sites Space-canonical cleanup resumes after crash between delete mark and 
     limit: 10,
   });
   assert.equal(resumable.length, 1);
-  assert.equal(
-    await store.deleteSpaceCanonicalObject({
+  await assert.rejects(
+    store.deleteSpaceCanonicalObject({
       kind: resumable[0].kind,
       spaceId: resumable[0].spaceId,
       sha256: resumable[0].sha256,
       expectedProtectedAt: resumable[0].protectedAt,
       createdBefore: T2,
     }),
-    true,
+    /canonical object key is busy or has an uncertain storage outcome/u,
   );
-  assert.equal(
-    await store.getSpaceCanonicalObject(
-      "markdown",
-      "space_cleanup_resume",
-      put.object.sha256,
-    ),
-    null,
-  );
+  assert.ok(await store.getSpaceCanonicalObject("markdown", "space_cleanup_resume", put.object.sha256));
+  assert.equal(database.canonicalKeyGates.size, 1);
 });
 
-test("R2 cleanup is lease-safe, restartable after failure, and export cleanup is durable", async () => {
+test("Sites boundary leaves legacy immutable cleanup disabled while export cleanup stays durable", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
   let store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
@@ -3888,14 +4220,13 @@ test("R2 cleanup is lease-safe, restartable after failure, and export cleanup is
     }),
     false,
   );
-  bucket.failNextDelete();
-  await assert.rejects(
-    store.deleteImmutableObject({
+  assert.equal(
+    await store.deleteImmutableObject({
       sha256: initial.object.sha256,
       expectedProtectedAt: protectedWrite.object.protectedAt,
       createdBefore: T3,
     }),
-    /synthetic R2 delete failure/u,
+    false,
   );
   store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
   const resumed = await store.listImmutableObjects({
@@ -3910,7 +4241,7 @@ test("R2 cleanup is lease-safe, restartable after failure, and export cleanup is
       expectedProtectedAt: resumed[0].protectedAt,
       createdBefore: T3,
     }),
-    true,
+    false,
   );
 
   const archiveBytes = Uint8Array.from([80, 75, 5, 6]);
@@ -4043,11 +4374,15 @@ test("Sites object cleanup checkpoint persists cursor and reclaims only an expir
     });
   }
   const snapshotWritesBeforeCleanup = database.metadataSnapshotWriteCount;
-  const first = await boundary.metadata.claimObjectCleanup({ now: T0, leaseExpiresAt: T1 });
+  const first = await boundary.metadata.claimObjectCleanup({
+    now: T0, leaseExpiresAt: T2, canonicalCreatedBefore: T1,
+  });
   assert.equal(first.kind, "claimed");
   assert.equal(first.reclaimedLease, false);
   assert.equal(
-    (await boundary.metadata.claimObjectCleanup({ now: T0, leaseExpiresAt: T1 })).kind,
+    (await boundary.metadata.claimObjectCleanup({
+      now: T0, leaseExpiresAt: T2, canonicalCreatedBefore: T1,
+    })).kind,
     "busy",
   );
   const page = await store.listObjectCleanupPage({
@@ -4063,11 +4398,15 @@ test("Sites object cleanup checkpoint persists cursor and reclaims only an expir
     cursor: page.nextCursor,
     cycleStartedAt: first.checkpoint.cycleStartedAt,
     completedAt: T1,
+    cycleCompleted: false,
+    blockedSpaceIds: [],
   }), true);
 
   boundary = await createSitesPersistenceBoundary({ database, bucket });
   store = boundary.objects;
-  const resumed = await boundary.metadata.claimObjectCleanup({ now: T2, leaseExpiresAt: T3 });
+  const resumed = await boundary.metadata.claimObjectCleanup({
+    now: T2, leaseExpiresAt: T3, canonicalCreatedBefore: T1,
+  });
   assert.equal(resumed.kind, "claimed");
   assert.equal(resumed.checkpoint.cursor, page.nextCursor);
   assert.equal(resumed.checkpoint.retries, 0);
@@ -4079,7 +4418,9 @@ test("Sites object cleanup checkpoint persists cursor and reclaims only an expir
   assert.equal(secondPage.listed, 1);
 
   boundary = await createSitesPersistenceBoundary({ database, bucket });
-  const reclaimed = await boundary.metadata.claimObjectCleanup({ now: T4, leaseExpiresAt: T5 });
+  const reclaimed = await boundary.metadata.claimObjectCleanup({
+    now: T4, leaseExpiresAt: T5, canonicalCreatedBefore: T1,
+  });
   assert.equal(reclaimed.kind, "claimed");
   assert.equal(reclaimed.reclaimedLease, true);
   assert.equal(reclaimed.checkpoint.cursor, page.nextCursor);

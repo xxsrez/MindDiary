@@ -1,9 +1,10 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
-import type { AccountBootstrapIdGenerator, AccountBootstrapStore, ExternalIdentityBindingLookup, ObjectStore, OrdinaryMindIdGenerator } from "@mind-diary/application-ports";
-import { MARKDOWN_MEDIA_TYPE, createCanonicalRevisionEnvelope, createRevisionManifest, isReservedTopLevelHandle, parseCanonicalSpaceHandle, serializeRevisionManifest, version } from "@mind-diary/domain";
+import type { AccountBootstrapIdGenerator, AccountBootstrapStore, BundleFileObjectStore, ExternalIdentityBindingLookup, OrdinaryMindIdGenerator } from "@mind-diary/application-ports";
+import { createCanonicalRevisionEnvelope, isReservedTopLevelHandle, parseCanonicalSpaceHandle, version } from "@mind-diary/domain";
 import type { JobId, PrincipalId, PrincipalAccountSnapshot, SensitiveExternalBinding, SpaceId, UtcInstant } from "@mind-diary/domain";
 import { parseUtcInstant } from "./token-lifecycle.js";
 import { createInitialPersonalMindFiles } from "./initial-mind-files.js";
+import { stageInitialMindRevision } from "./initial-mind-revision.js";
 
 export const ACCOUNT_BOOTSTRAP_ACTION = "create_isolated_account" as const;
 
@@ -74,7 +75,7 @@ export interface AccountBootstrapSafeLogger {
 
 export interface AccountBootstrapDependencies {
   readonly accounts: AccountBootstrapStore;
-  readonly objects: ObjectStore;
+  readonly objects: BundleFileObjectStore;
   readonly ids: AccountBootstrapIdGenerator;
   readonly logger?: AccountBootstrapSafeLogger;
 }
@@ -236,7 +237,7 @@ export function initialRevisionIndexEffects(
 
 export class AccountBootstrapService {
   readonly #accounts: AccountBootstrapStore;
-  readonly #objects: ObjectStore;
+  readonly #objects: BundleFileObjectStore;
   readonly #ids: AccountBootstrapIdGenerator;
   readonly #logger: AccountBootstrapSafeLogger | undefined;
 
@@ -306,29 +307,9 @@ export class AccountBootstrapService {
         );
       }
 
-      const encoder = new TextEncoder();
       const initialFiles = createInitialPersonalMindFiles(actor.occurredAtUtc);
-      const storedObjects = await Promise.all(
-        initialFiles.map(async (file) =>
-          this.#objects.putImmutable({
-            bytes: encoder.encode(file.text),
-            mediaType: MARKDOWN_MEDIA_TYPE,
-            createdAt: actor.occurredAtUtc,
-          })),
-      );
-      const manifest = createRevisionManifest(
-        initialFiles.map((file, index) => {
-          const object = storedObjects[index]!.object;
-          return {
-            path: file.path,
-            sha256: object.sha256,
-            mediaType: MARKDOWN_MEDIA_TYPE,
-            size: object.size,
-          };
-        }),
-      );
-      const manifestHash = await this.#objects.calculateSha256(
-        encoder.encode(serializeRevisionManifest(manifest)),
+      const staged = await stageInitialMindRevision(
+        this.#objects, spaceId, initialFiles, actor.occurredAtUtc,
       );
       const initialRevision = createCanonicalRevisionEnvelope({
         revisionId,
@@ -337,8 +318,9 @@ export class AccountBootstrapService {
         parentRevisionId: null,
         committedAt: actor.occurredAtUtc,
         committedBy: { kind: "principal", principalId },
-        manifest,
-        manifestHash,
+        manifest: staged.manifest,
+        manifestHash: staged.manifestHash,
+        manifestSize: staged.manifestSize,
         summary: "Create Personal Mind",
       });
       const initialIndex = initialRevisionIndexEffects(
@@ -348,6 +330,7 @@ export class AccountBootstrapService {
         actor.occurredAtUtc,
       );
       const records = Object.freeze({
+        canonicalCreationIntentId: staged.intentId,
         principal: Object.freeze({
           principalId,
           displayName,
@@ -413,6 +396,9 @@ export class AccountBootstrapService {
           return transaction.createAccountBootstrap(records);
         },
       );
+      // Sites settles a committed creation intent in the same D1 batch as
+      // its revision event. A known non-commit still owns its staged objects.
+      if (created.kind !== "created") await staged.completeIntent();
       if (created.kind === "created") {
         recordBootstrapEvent(this.#logger, "account_bootstrap_succeeded", requestId);
         return bootstrapResult(created.account, false);

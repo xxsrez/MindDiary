@@ -347,7 +347,7 @@ test("denied, invalid action and stale identifier conflicts leave no partial sta
   });
 });
 
-test("injected failure at every transaction stage rolls back metadata and leaves only unreachable immutable objects", async () => {
+test("injected failure at every transaction stage rolls back metadata and leaves only unreachable Space objects", async () => {
   const stages = [
     "after_principal",
     "after_binding",
@@ -372,12 +372,14 @@ test("injected failure at every transaction stage rolls back metadata and leaves
       memberships: 0,
       revisions: 0,
     });
-    const unreachable = await objects.listImmutableObjects({
+    const unreachable = await objects.listSpaceCanonicalObjects({
+      spaceId: "space_personal_1",
       createdBefore: "2026-08-07T03:21:00.000Z",
-      excludedDigests: [],
+      excluded: [],
       limit: 10,
     });
-    assert.equal(unreachable.length, 2);
+    assert.equal(unreachable.filter((object) => object.kind === "markdown").length, 2);
+    assert.equal(unreachable.filter((object) => object.kind === "revision_manifest").length, 1);
   }
 });
 

@@ -553,6 +553,11 @@ export class MarkdownImportService {
       }
       const admission = await transaction.admitCapacityReservation(Object.freeze({
         reservationId,
+        attemptId: importId,
+        requireActiveWritablePrincipal: true,
+        authorizationTokenId: actor.authentication.kind === "mcp_token"
+          ? actor.authentication.tokenId
+          : null,
         requestedByPrincipalId: actor.principalId,
         spaceId: plan.spaceId,
         operation: "import" as const,
@@ -591,6 +596,12 @@ export class MarkdownImportService {
         validatedBytes: 0,
         promotionCheckpoint: 0,
         promotedBytes: 0,
+        activeStepId: null,
+        activeStagingStepIds: Object.freeze([]),
+        armedStagingStepIds: Object.freeze([]),
+        unsettledWriterPossible: false,
+        unsettledStepIds: Object.freeze([]),
+        canonicalWriteExposure: false,
         failures: Object.freeze([]),
         revisionId: null,
         createdAt,
@@ -705,8 +716,42 @@ export class MarkdownImportService {
       files: validated.map(({ path, sha256, size }) => ({ path, sha256, size })),
     })}\n`));
     const createdAt = this.#clock.now();
+    const stagingStepId = crypto.randomUUID();
+    const stagingStep = await this.#metadata.runMarkdownImportTransaction((transaction) =>
+      transaction.beginMarkdownImportStagingStep({
+        importId: session.importId,
+        expectedVersion,
+        checkpoint,
+        canonicalRequestHash,
+        stepId: stagingStepId,
+        startedAt: createdAt,
+      }));
+    if (stagingStep.kind === "replayed") {
+      return Object.freeze({ kind: "staged" as const, session: stagingStep.session, replayed: true });
+    }
+    if (stagingStep.kind === "idempotency_conflict") {
+      throw new MarkdownImportError("import_idempotency_conflict", "import batch differs from replay");
+    }
+    if (stagingStep.kind === "checkpoint_conflict") {
+      throw new MarkdownImportError("import_checkpoint_conflict", "import checkpoint changed");
+    }
+    if (stagingStep.kind !== "claimed") {
+      throw new MarkdownImportError("import_state_conflict", "import session is not active");
+    }
     const stored: MarkdownImportStagedFile[] = [];
+    let unknownStagingPut = false;
+    let stagingPersisted = false;
+    let cleanupNeeded = false;
+    let metadataOutcomeUnknown = false;
     try {
+      const armed = await this.#metadata.runMarkdownImportTransaction((transaction) =>
+        transaction.armMarkdownImportStagingStep({
+          importId: session.importId,
+          expectedVersion,
+          stepId: stagingStepId,
+          armedAt: this.#clock.now(),
+        }));
+      if (!armed) throw new MarkdownImportError("import_state_conflict", "import staging step expired");
       const writes = validated.map((file) => Object.freeze({
         file,
         stagedFileId: this.#ids.nextStagedFileId(),
@@ -739,6 +784,7 @@ export class MarkdownImportService {
               }),
             });
           } catch (error) {
+            unknownStagingPut = true;
             return Object.freeze({ kind: "failed" as const, error });
           }
         },
@@ -755,7 +801,9 @@ export class MarkdownImportService {
         revisionMode: "head",
       });
       if (initial.kind === "denied") return Object.freeze({ kind: "denied" as const, decision: initial });
-      const result = await this.#metadata.runMarkdownImportTransaction(async (transaction) => {
+      let result;
+      try {
+        result = await this.#metadata.runMarkdownImportTransaction(async (transaction) => {
         const current = await this.#authorizer.reauthorizeInTransaction({
           actor,
           spaceId: session.spaceId,
@@ -765,6 +813,7 @@ export class MarkdownImportService {
         if (current.kind === "denied") return Object.freeze({ kind: "denied" as const, decision: current });
         return transaction.stageMarkdownImportBatch({
           importId: session.importId,
+          stagingStepId,
           expectedVersion,
           checkpoint,
           canonicalRequestHash,
@@ -772,11 +821,13 @@ export class MarkdownImportService {
           failures: Object.freeze([]),
           stagedAt: createdAt,
         });
-      });
-      if (result.kind !== "staged" || result.replayed) {
-        await Promise.all(stored.map((file) =>
-          this.#objects.deleteStagedBundleFile(file.stagedFileId).catch(() => false)));
+        });
+      } catch (error) {
+        metadataOutcomeUnknown = true;
+        throw error;
       }
+      cleanupNeeded = result.kind !== "staged" || result.replayed;
+      stagingPersisted = result.kind === "staged" && !result.replayed;
       if (result.kind === "staged") return result;
       if (result.kind === "denied") return result;
       if (result.kind === "checkpoint_conflict") {
@@ -790,9 +841,23 @@ export class MarkdownImportService {
       }
       throw new MarkdownImportError("import_state_conflict", "import session is not active");
     } catch (error) {
-      await Promise.all(stored.map((file) =>
-        this.#objects.deleteStagedBundleFile(file.stagedFileId).catch(() => false)));
+      if (!metadataOutcomeUnknown) cleanupNeeded = true;
       throw error;
+    } finally {
+      let deletedKnownObjects = false;
+      if (cleanupNeeded) {
+        const deletions = await Promise.allSettled(stored.map((file) =>
+          this.#objects.deleteStagedBundleFile(file.stagedFileId)));
+        deletedKnownObjects = deletions.every((item) => item.status === "fulfilled");
+      }
+      if (!unknownStagingPut && (stagingPersisted || deletedKnownObjects)) {
+        await this.#metadata.runMarkdownImportTransaction((transaction) =>
+          transaction.settleMarkdownImportStagingStep({
+            importId: session.importId,
+            stepId: stagingStepId,
+            settledAt: this.#clock.now(),
+          }));
+      }
     }
   }
 
@@ -963,7 +1028,9 @@ export class MarkdownImportService {
       this.#revisions.readHeadRevisionEnvelope(session.spaceId),
     ]);
     if (plan !== null && parent !== null && parent.revision.revisionId !== session.expectedRevisionId) {
-      const closed = await this.#closeForHeadConflict(session);
+      const closed = await this.#closeForHeadConflict(
+        session, session.activeStepId ?? undefined, (session.activeStepId ?? null) !== null,
+      );
       if (closed?.state === "committed" && closed.revisionId !== null) {
         return Object.freeze({ kind: "committed" as const, revisionId: closed.revisionId, replayed: true });
       }
@@ -989,11 +1056,52 @@ export class MarkdownImportService {
     if (session.state !== "validated" && session.state !== "finalizing") {
       throw new MarkdownImportError("import_state_conflict", "import session is not ready to finalize");
     }
+    const stepId = crypto.randomUUID();
+    const step = await this.#metadata.runMarkdownImportTransaction(async (transaction) => {
+      const current = await this.#authorizer.reauthorizeInTransaction({
+        actor,
+        spaceId: session.spaceId,
+        capability: "content:write",
+        revisionMode: "head",
+      }, transaction, initial.stamp);
+      if (current.kind === "denied") return Object.freeze({ kind: "denied" as const, decision: current });
+      if (await transaction.readHead(session.spaceId) !== session.expectedRevisionId) {
+        return Object.freeze({ kind: "head_conflict" as const });
+      }
+      const claimed = await transaction.transitionMarkdownImportSession({
+        importId: session.importId,
+        expectedVersion,
+        expectedActiveStepId: session.activeStepId ?? null,
+        activeStepId: stepId,
+        unsettledWriterPossible: (session.unsettledWriterPossible ?? false) ||
+          (session.activeStepId ?? null) !== null,
+        from: Object.freeze(["validated", "finalizing"]),
+        to: "finalizing",
+        updatedAt: this.#clock.now(),
+      });
+      if (claimed.kind !== "updated") {
+        throw new MarkdownImportError("import_state_conflict", "import promotion page was claimed concurrently");
+      }
+      return Object.freeze({ kind: "claimed" as const, session: claimed.session });
+    });
+    if (step.kind === "denied") return step;
+    if (step.kind === "head_conflict") {
+      const closed = await this.#closeForHeadConflict(
+        session, session.activeStepId ?? undefined, (session.activeStepId ?? null) !== null,
+      );
+      if (closed?.state === "committed" && closed.revisionId !== null) {
+        return Object.freeze({ kind: "committed" as const, revisionId: closed.revisionId, replayed: true });
+      }
+      throw new MarkdownImportError("import_head_conflict", "import base HEAD changed");
+    }
+    const stepSession = step.session;
     const committedAt = this.#clock.now();
     let promotionCheckpoint = session.promotionCheckpoint;
     let promotedBytes = session.promotedBytes;
     let promotionBytes = 0;
     let promotedFiles = 0;
+    let allIssuedObjectWritesSettled = true;
+    try {
     const promotionPage: MarkdownImportStagedFile[] = [];
     for (const file of staged.slice(promotionCheckpoint)) {
       if (
@@ -1012,13 +1120,19 @@ export class MarkdownImportService {
           object === null || object.spaceId !== session.spaceId || object.size !== file.size ||
           await this.#objects.calculateSha256(object.bytes) !== file.sha256
         ) throw new MarkdownImportError("import_validation_failed", "staged import object changed");
-        const put = await this.#objects.putSpaceCanonicalObject({
-          kind: "markdown",
-          spaceId: session.spaceId,
-          bytes: object.bytes,
-          mediaType: MARKDOWN_MEDIA_TYPE,
-          createdAt: committedAt,
-        });
+        let put;
+        try {
+          put = await this.#objects.putSpaceCanonicalObject({
+            kind: "markdown",
+            spaceId: session.spaceId,
+            bytes: object.bytes,
+            mediaType: MARKDOWN_MEDIA_TYPE,
+            createdAt: committedAt,
+          });
+        } catch (error) {
+          allIssuedObjectWritesSettled = false;
+          throw error;
+        }
         if (put.object.sha256 !== file.sha256 || put.object.size !== file.size) {
           throw new MarkdownImportError("import_validation_failed", "promoted import object changed");
         }
@@ -1038,7 +1152,8 @@ export class MarkdownImportService {
         if (current.kind === "denied") return Object.freeze({ kind: "denied" as const, decision: current });
         const currentSession = await transaction.readMarkdownImportSession(session.importId);
         if (
-          currentSession === null || currentSession.version !== expectedVersion ||
+          currentSession === null || currentSession.version !== stepSession.version ||
+          currentSession.activeStepId !== stepId ||
           (currentSession.state !== "validated" && currentSession.state !== "finalizing")
         ) throw new MarkdownImportError("import_state_conflict", "import session changed during finalization");
         if (await transaction.readHead(session.spaceId) !== session.expectedRevisionId) {
@@ -1046,7 +1161,9 @@ export class MarkdownImportService {
         }
         const transitioned = await transaction.transitionMarkdownImportSession({
           importId: session.importId,
-          expectedVersion,
+          expectedVersion: stepSession.version,
+          expectedActiveStepId: stepId,
+          activeStepId: null,
           from: Object.freeze(["validated", "finalizing"]),
           to: "finalizing",
           updatedAt: committedAt,
@@ -1062,8 +1179,15 @@ export class MarkdownImportService {
           replayed: false,
         });
       });
+      if (progress.kind === "denied") {
+        await this.#closeForTerminalFailure(
+          stepSession, Object.freeze([sessionFailure("(snapshot)", "import_authorization_lost")]),
+          stepId, false, "canceled",
+        );
+        return progress;
+      }
       if (progress.kind === "head_conflict") {
-        const closed = await this.#closeForHeadConflict(session);
+        const closed = await this.#closeForHeadConflict(stepSession, stepId);
         if (closed?.state === "committed" && closed.revisionId !== null) {
           return Object.freeze({ kind: "committed" as const, revisionId: closed.revisionId, replayed: true });
         }
@@ -1091,13 +1215,19 @@ export class MarkdownImportService {
     }
     const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V5);
     const manifestBytes = ENCODER.encode(serializeRevisionManifest(manifest));
-    const manifestPut = await this.#objects.putSpaceCanonicalObject({
-      kind: "revision_manifest",
-      spaceId: session.spaceId,
-      bytes: manifestBytes,
-      mediaType: REVISION_MANIFEST_MEDIA_TYPE,
-      createdAt: committedAt,
-    });
+    let manifestPut;
+    try {
+      manifestPut = await this.#objects.putSpaceCanonicalObject({
+        kind: "revision_manifest",
+        spaceId: session.spaceId,
+        bytes: manifestBytes,
+        mediaType: REVISION_MANIFEST_MEDIA_TYPE,
+        createdAt: committedAt,
+      });
+    } catch (error) {
+      allIssuedObjectWritesSettled = false;
+      throw error;
+    }
     const revisionId = this.#revisionIds.nextRevisionId();
     const envelope = createCanonicalRevisionEnvelope({
       revisionId,
@@ -1121,7 +1251,8 @@ export class MarkdownImportService {
       if (current.kind === "denied") return Object.freeze({ kind: "denied" as const, decision: current });
       const currentSession = await transaction.readMarkdownImportSession(session.importId);
       if (
-        currentSession === null || currentSession.version !== expectedVersion ||
+        currentSession === null || currentSession.version !== stepSession.version ||
+        currentSession.activeStepId !== stepId ||
         (currentSession.state !== "validated" && currentSession.state !== "finalizing")
       ) throw new MarkdownImportError("import_state_conflict", "import session changed before commit");
       if (await transaction.readHead(session.spaceId) !== session.expectedRevisionId) {
@@ -1139,7 +1270,9 @@ export class MarkdownImportService {
       }
       const transitioned = await transaction.transitionMarkdownImportSession({
         importId: session.importId,
-        expectedVersion,
+        expectedVersion: stepSession.version,
+        expectedActiveStepId: stepId,
+        activeStepId: null,
         from: Object.freeze(["validated", "finalizing"]),
         to: "committed",
         updatedAt: committedAt,
@@ -1209,14 +1342,40 @@ export class MarkdownImportService {
       if (effects.kind !== "staged") throw new Error("Markdown import commit effects failed");
       return Object.freeze({ kind: "committed" as const, revisionId, replayed: false });
     });
+    if (committed.kind === "denied") {
+      await this.#closeForTerminalFailure(
+        stepSession, Object.freeze([sessionFailure("(snapshot)", "import_authorization_lost")]),
+        stepId, false, "canceled",
+      );
+      return committed;
+    }
     if (committed.kind === "head_conflict") {
-      const closed = await this.#closeForHeadConflict(session);
+      const closed = await this.#closeForHeadConflict(stepSession, stepId);
       if (closed?.state === "committed" && closed.revisionId !== null) {
         return Object.freeze({ kind: "committed" as const, revisionId: closed.revisionId, replayed: true });
       }
       throw new MarkdownImportError("import_head_conflict", "import base HEAD changed");
     }
     return committed;
+    } catch (error) {
+      if (allIssuedObjectWritesSettled) {
+        await this.#closeForTerminalFailure(
+          stepSession,
+          Object.freeze([sessionFailure("(snapshot)", "import_promotion_interrupted")]),
+          stepId,
+        );
+      }
+      throw error;
+    } finally {
+      if (allIssuedObjectWritesSettled) {
+        await this.#metadata.runMarkdownImportTransaction((transaction) =>
+          transaction.settleMarkdownImportStep({
+            importId: session.importId,
+            stepId,
+            settledAt: this.#clock.now(),
+          }));
+      }
+    }
   }
 
   async cancel(actorValue: ActorContext, importId: string, expectedVersionValue: unknown) {
@@ -1230,6 +1389,10 @@ export class MarkdownImportService {
       const transitioned = await transaction.transitionMarkdownImportSession({
         importId: session.importId,
         expectedVersion,
+        expectedActiveStepId: session.activeStepId ?? null,
+        activeStepId: null,
+        unsettledWriterPossible: (session.unsettledWriterPossible ?? false) ||
+          (session.activeStepId ?? null) !== null,
         from: Object.freeze(["active", "validating", "validated", "finalizing"]),
         to: "canceled",
         updatedAt: this.#clock.now(),
@@ -1320,15 +1483,22 @@ export class MarkdownImportService {
     });
   }
 
-  async #closeForHeadConflict(session: Readonly<MarkdownImportSession>) {
+  async #closeForHeadConflict(
+    session: Readonly<MarkdownImportSession>,
+    stepId?: string,
+    unknownWriter = false,
+  ) {
     return this.#closeForTerminalFailure(session, Object.freeze([
       sessionFailure("(snapshot)", "import_head_conflict"),
-    ]));
+    ]), stepId, unknownWriter);
   }
 
   async #closeForTerminalFailure(
     session: Readonly<MarkdownImportSession>,
     terminalFailures: readonly Readonly<MarkdownImportSessionFailure>[],
+    stepId?: string,
+    unknownWriter = false,
+    terminalState: "validation_failed" | "canceled" = "validation_failed",
   ) {
     const closedAt = this.#clock.now();
     return this.#metadata.runMarkdownImportTransaction(async (transaction) => {
@@ -1345,8 +1515,11 @@ export class MarkdownImportService {
       const transitioned = await transaction.transitionMarkdownImportSession({
         importId: current.importId,
         expectedVersion: current.version,
+        expectedActiveStepId: stepId ?? null,
+        activeStepId: null,
+        unsettledWriterPossible: (current.unsettledWriterPossible ?? false) || unknownWriter,
         from: Object.freeze(["active", "validating", "validated", "finalizing"]),
-        to: "validation_failed",
+        to: terminalState,
         updatedAt: closedAt,
         failures,
       });
@@ -1378,7 +1551,8 @@ export class MarkdownImportService {
     if (
       (session.state === "active" || session.state === "validating" ||
         session.state === "validated" || session.state === "finalizing") &&
-      Date.parse(session.expiresAt) <= Date.parse(this.#clock.now())
+      Date.parse(session.expiresAt) <= Date.parse(this.#clock.now()) &&
+      (session.activeStepId ?? null) === null
     ) throw new MarkdownImportError("import_session_expired", "import session expired");
     return session;
   }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import { BoundedObjectCleanupHandler } from "@mind-diary/application-background";
 import {
   CanonicalRevisionCoordinator,
   DEFAULT_CAPACITY_LIMITS,
@@ -474,6 +475,489 @@ test("Markdown import survives restart, replays a batch, commits one HEAD and cl
   assert.equal(cleaned.deleted, 2);
   assert.equal((await metadata.listMarkdownImportStagedFiles(started.session.importId)).length, 0);
   assert.ok((await metadata.readMarkdownImportSession(started.session.importId)).cleanupCompletedAt);
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "released");
+});
+
+test("an abandoned import promotion page resumes after restart without releasing unknown writes", async () => {
+  const objects = new InMemoryObjectStore();
+  let metadata = new InMemoryRevisionMetadataStore();
+  let revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const generatedIds = ids();
+  const clock = { now: () => T1 };
+  let imports = service({ metadata, objects, revisions, clock, generatedIds });
+  const bytes = ENCODER.encode("---\nokf_version: \"0.2\"\n---\n\n# Imported\n");
+  const files = [{
+    path: "index.md",
+    bytes,
+    size: bytes.byteLength,
+    sha256: await objects.calculateSha256(bytes),
+  }];
+  const planned = await imports.plan({
+    actor: actor("request_promotion_fence_plan"),
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial",
+    idempotencyKey: "promotion-fence-plan",
+    files: files.map(({ path, sha256, size }) => ({ path, sha256, size })),
+  });
+  const started = await imports.start({
+    actor: actor("request_promotion_fence_start"),
+    spaceId: MINDS.ordinary.spaceId,
+    planId: planned.plan.planId,
+    idempotencyKey: "promotion-fence-session",
+  });
+  const staged = await imports.stageBatch({
+    actor: actor("request_promotion_fence_stage"),
+    importId: started.session.importId,
+    checkpoint: 1,
+    expectedVersion: started.session.version,
+    files,
+  });
+  const validated = await imports.validate({
+    actor: actor("request_promotion_fence_validate"),
+    importId: started.session.importId,
+    expectedVersion: staged.session.version,
+  });
+  let signalPut;
+  let releasePut;
+  const putStarted = new Promise((resolve) => { signalPut = resolve; });
+  const putGate = new Promise((resolve) => { releasePut = resolve; });
+  let putCalls = 0;
+  const delayedObjects = new Proxy(objects, {
+    get(target, property) {
+      if (property === "putSpaceCanonicalObject") return async (request) => {
+        putCalls += 1;
+        if (putCalls === 1) {
+          signalPut();
+          await putGate;
+          throw new Error("synthetic abandoned import worker");
+        }
+        return target.putSpaceCanonicalObject(request);
+      };
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  imports = service({ metadata, objects: delayedObjects, revisions, clock, generatedIds });
+  const first = imports.commit({
+    actor: actor("request_promotion_fence_first"),
+    importId: started.session.importId,
+    expectedVersion: validated.session.version,
+  });
+  await putStarted;
+  const running = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.ok(running.activeStepId);
+  metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(metadata.exportDurableSnapshot());
+  revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
+  const cancelMetadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(metadata.exportDurableSnapshot());
+  const cancelImports = service({ metadata: cancelMetadata, objects,
+    revisions: new CanonicalRevisionCoordinator({ objects, revisions: cancelMetadata }),
+    clock, generatedIds });
+  const canceled = await cancelImports.cancel(actor("request_promotion_fence_cancel"),
+    started.session.importId, running.version);
+  assert.equal(canceled.session.state, "canceled");
+  assert.equal(canceled.session.activeStepId, null);
+  assert.equal(canceled.session.unsettledWriterPossible, true);
+  assert.equal((await cancelMetadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "cleanup_pending");
+  const conflictMetadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(metadata.exportDurableSnapshot());
+  const conflictRevisions = new CanonicalRevisionCoordinator({ objects, revisions: conflictMetadata });
+  let injectHeadChange = true;
+  const conflictRaceMetadata = new Proxy(conflictMetadata, {
+    get(target, property) {
+      if (property === "runMarkdownImportTransaction") return async (operation) => {
+        if (injectHeadChange) {
+          injectHeadChange = false;
+          assert.equal((await conflictRevisions.commit({
+            spaceId: MINDS.ordinary.spaceId,
+            expectedRevisionId: "revision_import_initial",
+            revisionId: "revision_import_conflict_after_lost_step",
+            committedAt: T1,
+            committedBy: { kind: "principal", principalId: PRINCIPALS.owner.principalId },
+            summary: "Concurrent HEAD",
+            files: [{ path: "index.md", bytes: ENCODER.encode("# Concurrent HEAD\n"),
+              mediaType: MARKDOWN_MEDIA_TYPE }],
+          })).kind, "committed");
+        }
+        return target.runMarkdownImportTransaction(operation);
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const conflictImports = service({ metadata: conflictRaceMetadata, objects,
+    revisions: conflictRevisions, clock, generatedIds });
+  await assert.rejects(conflictImports.commit({
+    actor: actor("request_promotion_fence_head_conflict"),
+    importId: started.session.importId,
+    expectedVersion: running.version,
+  }), (error) => error instanceof MarkdownImportError && error.code === "import_head_conflict");
+  const conflicted = await conflictMetadata.readMarkdownImportSession(started.session.importId);
+  assert.equal(conflicted.state, "validation_failed");
+  assert.equal(conflicted.activeStepId, null);
+  assert.equal(conflicted.unsettledWriterPossible, true);
+  assert.equal((await conflictMetadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "cleanup_pending");
+  const afterExpiry = new Date(Date.parse(running.expiresAt) + 1_000).toISOString();
+  await metadata.collectExpiredCapacityReservations({ now: afterExpiry, limit: 10 });
+  const restarted = service({ metadata, objects: delayedObjects, revisions,
+    clock: { now: () => afterExpiry }, generatedIds });
+  const callsBeforeSecond = putCalls;
+  const recovered = await restarted.commit({
+    actor: actor("request_promotion_fence_second"),
+    importId: started.session.importId,
+    expectedVersion: running.version,
+  });
+  assert.equal(recovered.kind, "committed");
+  assert.equal(putCalls, callsBeforeSecond + 2);
+  assert.equal((await metadata.readMarkdownImportSession(started.session.importId))
+    .unsettledWriterPossible, true);
+  releasePut();
+  await assert.rejects(first, /synthetic abandoned import worker/u);
+  await restarted.collectExpired();
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "cleanup_pending");
+});
+
+test("a superseded import page releases capacity after its old writer settles", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const generatedIds = ids();
+  const clock = { now: () => T1 };
+  const bytes = ENCODER.encode("---\nokf_version: \"0.2\"\n---\n\n# Settled import\n");
+  const files = [{ path: "index.md", bytes, size: bytes.byteLength,
+    sha256: await objects.calculateSha256(bytes) }];
+  const normal = service({ metadata, objects, revisions, clock, generatedIds });
+  const plan = await normal.plan({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial", idempotencyKey: "settled-plan",
+    files: files.map(({ path, sha256, size }) => ({ path, sha256, size })) });
+  const started = await normal.start({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    planId: plan.plan.planId, idempotencyKey: "settled-session" });
+  const staged = await normal.stageBatch({ actor: actor(), importId: started.session.importId,
+    checkpoint: 1, expectedVersion: started.session.version, files });
+  const validated = await normal.validate({ actor: actor(), importId: started.session.importId,
+    expectedVersion: staged.session.version });
+  let signalFirstPut;
+  const firstPutStarted = new Promise((resolve) => { signalFirstPut = resolve; });
+  let resumeFirstPut;
+  const firstPutHold = new Promise((resolve) => { resumeFirstPut = resolve; });
+  let putCalls = 0;
+  const delayedObjects = new Proxy(objects, {
+    get(target, property) {
+      if (property === "putSpaceCanonicalObject") return async (request) => {
+        putCalls += 1;
+        if (putCalls === 1) {
+          signalFirstPut();
+          await firstPutHold;
+        }
+        return target.putSpaceCanonicalObject(request);
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const imports = service({ metadata, objects: delayedObjects, revisions, clock, generatedIds });
+  const first = imports.commit({ actor: actor("settled-first"),
+    importId: started.session.importId, expectedVersion: validated.session.version });
+  await firstPutStarted;
+  const running = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.ok(running.activeStepId);
+  const recovered = await imports.commit({ actor: actor("settled-second"),
+    importId: started.session.importId, expectedVersion: running.version });
+  assert.equal(recovered.kind, "committed");
+  assert.equal((await metadata.readMarkdownImportSession(started.session.importId))
+    .unsettledStepIds?.length, 1);
+  await imports.collectExpired();
+  assert.equal((await metadata.readMarkdownImportSession(started.session.importId))
+    .cleanupCompletedAt, null);
+  resumeFirstPut();
+  await assert.rejects(first, (error) => error instanceof MarkdownImportError &&
+    error.code === "import_state_conflict");
+  const settled = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.deepEqual(settled.unsettledStepIds, []);
+  assert.equal(settled.unsettledWriterPossible, false);
+  await imports.collectExpired();
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "released");
+  assert.ok((await metadata.readMarkdownImportSession(started.session.importId)).cleanupCompletedAt);
+});
+
+test("revocation after promotion writes closes the import without releasing possible orphans", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const generatedIds = ids();
+  const clock = { now: () => T1 };
+  const normal = service({ metadata, objects, revisions, clock, generatedIds });
+  const bytes = ENCODER.encode("---\nokf_version: \"0.2\"\n---\n\n# Revoked import\n");
+  const files = [{ path: "index.md", bytes, size: bytes.byteLength,
+    sha256: await objects.calculateSha256(bytes) }];
+  const plan = await normal.plan({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial", idempotencyKey: "revoked-plan",
+    files: files.map(({ path, sha256, size }) => ({ path, sha256, size })) });
+  const started = await normal.start({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    planId: plan.plan.planId, idempotencyKey: "revoked-session" });
+  const staged = await normal.stageBatch({ actor: actor(), importId: started.session.importId,
+    checkpoint: 1, expectedVersion: started.session.version, files });
+  const validated = await normal.validate({ actor: actor(), importId: started.session.importId,
+    expectedVersion: staged.session.version });
+  let revoked = false;
+  const revokingObjects = new Proxy(objects, {
+    get(target, property) {
+      if (property === "putSpaceCanonicalObject") return async (request) => {
+        const result = await target.putSpaceCanonicalObject(request);
+        if (!revoked) { revoked = true; revoke(metadata); }
+        return result;
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const imports = service({ metadata, objects: revokingObjects, revisions, clock, generatedIds });
+  const result = await imports.commit({ actor: actor("revoked-writer"),
+    importId: started.session.importId, expectedVersion: validated.session.version });
+  assert.equal(result.kind, "denied");
+  const closed = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.equal(closed.state, "canceled");
+  assert.equal(closed.activeStepId, null);
+  assert.equal(closed.canonicalWriteExposure, true);
+  assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_import_initial");
+  await imports.collectExpired();
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "cleanup_pending");
+  const cleanup = new BoundedObjectCleanupHandler({
+    objects,
+    checkpoints: metadata,
+    reachability: metadata,
+    staging: metadata,
+    exports: metadata,
+    clock: { now: () => "2027-01-02T00:00:00.000Z" },
+    monotonicNow: () => 0,
+  });
+  const serviceActor = { kind: "service", serviceId: "failed-import-recovery",
+    requestId: "failed-import-recovery", occurredAtUtc: "2027-01-02T00:00:00.000Z",
+    deploymentCapabilities: [] };
+  const tooYoung = await cleanup.handle({ actor: serviceActor,
+    createdBefore: "2026-08-22T18:05:00.000Z", maxObjects: 1_000,
+    maxBytes: 268_435_456, maxDurationMs: 1_000 });
+  assert.equal(tooYoung.cycleCompleted, true);
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "cleanup_pending");
+  const blockedObjects = new Proxy(objects, {
+    get(target, property) {
+      if (property === "deleteObjectCleanupCandidate") return async (request) =>
+        request.candidate.namespace === "space_canonical"
+          ? false
+          : target.deleteObjectCleanupCandidate(request);
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const failedDelete = await new BoundedObjectCleanupHandler({
+    objects: blockedObjects, checkpoints: metadata, reachability: metadata,
+    staging: metadata, exports: metadata,
+    clock: { now: () => "2027-01-02T00:00:00.000Z" }, monotonicNow: () => 0,
+  }).handle({ actor: serviceActor, createdBefore: "2027-01-01T00:00:00.000Z",
+    maxObjects: 1_000, maxBytes: 268_435_456, maxDurationMs: 1_000 });
+  assert.equal(failedDelete.cycleCompleted, true);
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "cleanup_pending");
+  const reclaimed = await cleanup.handle({ actor: serviceActor,
+    createdBefore: "2027-01-01T00:00:00.000Z", maxObjects: 1_000,
+    maxBytes: 268_435_456, maxDurationMs: 1_000 });
+  assert.equal(reclaimed.cycleCompleted, true);
+  assert.ok(reclaimed.deleted > 0);
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "released");
+  assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_import_initial");
+});
+
+test("a settled import writer closes its step when final metadata commit fails", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const generatedIds = ids();
+  const clock = { now: () => T1 };
+  const normal = service({ metadata, objects, revisions, clock, generatedIds });
+  const bytes = ENCODER.encode("---\nokf_version: \"0.2\"\n---\n\n# Metadata failure\n");
+  const files = [{ path: "index.md", bytes, size: bytes.byteLength,
+    sha256: await objects.calculateSha256(bytes) }];
+  const plan = await normal.plan({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial", idempotencyKey: "failed-final-plan",
+    files: files.map(({ path, sha256, size }) => ({ path, sha256, size })) });
+  const started = await normal.start({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    planId: plan.plan.planId, idempotencyKey: "failed-final-session" });
+  const staged = await normal.stageBatch({ actor: actor(), importId: started.session.importId,
+    checkpoint: 1, expectedVersion: started.session.version, files });
+  const validated = await normal.validate({ actor: actor(), importId: started.session.importId,
+    expectedVersion: staged.session.version });
+  let transactions = 0;
+  const failingMetadata = new Proxy(metadata, {
+    get(target, property) {
+      if (property === "runMarkdownImportTransaction") return async (operation) => {
+        transactions += 1;
+        if (transactions === 2) throw new Error("synthetic final metadata failure");
+        return target.runMarkdownImportTransaction(operation);
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const imports = service({ metadata: failingMetadata, objects, revisions, clock, generatedIds });
+  await assert.rejects(imports.commit({ actor: actor("failed-final-commit"),
+    importId: started.session.importId, expectedVersion: validated.session.version }),
+  /synthetic final metadata failure/u);
+  assert.equal(transactions, 4);
+  const closed = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.equal(closed.state, "validation_failed");
+  assert.equal(closed.activeStepId, null);
+  assert.equal(closed.unsettledWriterPossible, false);
+  assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_import_initial");
+  await imports.collectExpired();
+  assert.ok((await metadata.readMarkdownImportSession(started.session.importId)).cleanupCompletedAt);
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "cleanup_pending");
+});
+
+test("a staged batch with a lost D1 response has no stranded staging writer", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const generatedIds = ids();
+  const clock = { now: () => T1 };
+  const normal = service({ metadata, objects, revisions, clock, generatedIds });
+  const bytes = ENCODER.encode("---\nokf_version: \"0.2\"\n---\n\n# Staging response\n");
+  const files = [{ path: "index.md", bytes, size: bytes.byteLength,
+    sha256: await objects.calculateSha256(bytes) }];
+  const plan = await normal.plan({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial", idempotencyKey: "staging-response-plan",
+    files: files.map(({ path, sha256, size }) => ({ path, sha256, size })) });
+  const started = await normal.start({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    planId: plan.plan.planId, idempotencyKey: "staging-response-session" });
+  let transactions = 0;
+  const lostResponseMetadata = new Proxy(metadata, {
+    get(target, property) {
+      if (property === "runMarkdownImportTransaction") return async (operation) => {
+        transactions += 1;
+        const result = await target.runMarkdownImportTransaction(operation);
+        if (transactions === 3) throw new Error("synthetic lost staging response");
+        return result;
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const importing = service({ metadata: lostResponseMetadata, objects, revisions,
+    clock, generatedIds });
+  await assert.rejects(importing.stageBatch({ actor: actor(),
+    importId: started.session.importId, checkpoint: 1,
+    expectedVersion: started.session.version, files }), /synthetic lost staging response/u);
+  const durable = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.equal(durable.checkpoint, 1);
+  assert.deepEqual(durable.activeStagingStepIds, []);
+  assert.equal((await metadata.listMarkdownImportStagedFiles(started.session.importId)).length, 1);
+  const replay = await normal.stageBatch({ actor: actor(), importId: started.session.importId,
+    checkpoint: 1, expectedVersion: started.session.version, files });
+  assert.equal(replay.kind, "staged");
+  assert.equal(replay.replayed, true);
+});
+
+test("uncertain staged object write keeps import capacity and cleanup fenced", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const generatedIds = ids();
+  const clock = { now: () => T1 };
+  const normal = service({ metadata, objects, revisions, clock, generatedIds });
+  const bytes = ENCODER.encode("---\nokf_version: \"0.2\"\n---\n\n# Uncertain staging\n");
+  const files = [{ path: "index.md", bytes, size: bytes.byteLength,
+    sha256: await objects.calculateSha256(bytes) }];
+  const plan = await normal.plan({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial", idempotencyKey: "uncertain-stage-plan",
+    files: files.map(({ path, sha256, size }) => ({ path, sha256, size })) });
+  const started = await normal.start({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    planId: plan.plan.planId, idempotencyKey: "uncertain-stage-session" });
+  const uncertainObjects = new Proxy(objects, {
+    get(target, property) {
+      if (property === "putStagedBundleFile") return async (request) => {
+        await target.putStagedBundleFile(request);
+        throw new Error("synthetic uncertain staged PUT");
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const importing = service({ metadata, objects: uncertainObjects, revisions,
+    clock, generatedIds });
+  await assert.rejects(importing.stageBatch({ actor: actor(),
+    importId: started.session.importId, checkpoint: 1,
+    expectedVersion: started.session.version, files }), /synthetic uncertain staged PUT/u);
+  const uncertain = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.equal(uncertain.activeStagingStepIds.length, 1);
+  const canceled = await normal.cancel(actor(), started.session.importId, uncertain.version);
+  assert.equal(canceled.session.state, "canceled");
+  const cleaned = await normal.collectExpired();
+  assert.equal(cleaned.sessions, 0);
+  const gc = await new BoundedObjectCleanupHandler({
+    objects, checkpoints: metadata, reachability: metadata, staging: metadata,
+    exports: metadata, clock: { now: () => "2027-01-02T00:00:00.000Z" },
+    monotonicNow: () => 0,
+  }).handle({ actor: { kind: "service", serviceId: "uncertain-stage-gc",
+    requestId: "uncertain-stage-gc", occurredAtUtc: "2027-01-02T00:00:00.000Z",
+    deploymentCapabilities: [] }, createdBefore: "2027-01-01T00:00:00.000Z",
+    maxObjects: 1_000, maxBytes: 268_435_456, maxDurationMs: 1_000 });
+  assert.equal(gc.cycleCompleted, true);
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "cleanup_pending");
+});
+
+test("an unarmed staging step is retired on expiry before it can write", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const generatedIds = ids();
+  const normal = service({ metadata, objects, revisions, clock: { now: () => T1 }, generatedIds });
+  const bytes = ENCODER.encode("---\nokf_version: \"0.2\"\n---\n\n# Prepared only\n");
+  const file = { path: "index.md", bytes, size: bytes.byteLength,
+    sha256: await objects.calculateSha256(bytes) };
+  const plan = await normal.plan({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial", idempotencyKey: "prepared-stage-plan",
+    files: [{ path: file.path, size: file.size, sha256: file.sha256 }] });
+  const started = await normal.start({ actor: actor(), spaceId: MINDS.ordinary.spaceId,
+    planId: plan.plan.planId, idempotencyKey: "prepared-stage-session" });
+  const stepId = "prepared-stage-only";
+  const canonicalRequestHash = await objects.calculateSha256(ENCODER.encode("prepared step"));
+  const prepared = await metadata.runMarkdownImportTransaction((transaction) =>
+    transaction.beginMarkdownImportStagingStep({
+      importId: started.session.importId,
+      expectedVersion: started.session.version,
+      checkpoint: 1,
+      canonicalRequestHash,
+      stepId,
+      startedAt: T1,
+    }));
+  assert.equal(prepared.kind, "claimed");
+  const afterExpiry = new Date(Date.parse(started.session.expiresAt) + 1_000).toISOString();
+  const expired = service({ metadata, objects, revisions,
+    clock: { now: () => afterExpiry }, generatedIds });
+  const cleaned = await expired.collectExpired();
+  assert.equal(cleaned.sessions, 1);
+  const retired = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.equal(retired.state, "expired");
+  assert.deepEqual(retired.activeStagingStepIds, []);
+  assert.equal(await metadata.runMarkdownImportTransaction((transaction) =>
+    transaction.armMarkdownImportStagingStep({ importId: started.session.importId,
+      expectedVersion: started.session.version, stepId, armedAt: afterExpiry })), false);
+  assert.equal((await metadata.listCapacityReservationsForTest()).find((item) =>
+    item.reservationId === started.session.reservationId)?.state, "released");
 });
 
 test("batch checkpoints reject gaps and changed replay while exact replay stays idempotent", async () => {

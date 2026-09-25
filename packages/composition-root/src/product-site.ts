@@ -146,6 +146,7 @@ import {
   type RestrictedUatGeneratedSourceTestConfig,
 } from "./restricted-uat-generated-sources.js";
 import { SystemBackupCleanupBarrier } from "./system-backup-cleanup-barrier.js";
+import { SitesCanonicalKeyGate } from "./sites-canonical-key-gate.js";
 import { SitesSystemBackupService } from "./system-backup-sites.js";
 import { createSystemBackupHttpHandler } from "./system-backup-http.js";
 
@@ -921,16 +922,19 @@ export async function createProductSiteRuntime(
   // Existing sessions may outlive operator-key rotation or temporary route
   // disablement; canonical cleanup must keep honoring their D1 pins.
   const backupCleanupBarrier = new SystemBackupCleanupBarrier(options.database);
-  const [objects, tokenHasher, downloadCrypto, csrf] = await Promise.all([
-    createSitesObjectStore(options.bucket, backupCleanupBarrier),
-    createWebCryptoTokenHasher({ verifierKey: options.tokenVerifierKey }),
-    createWebCryptoExportDownloadSecretCrypto({ verifierKey: options.exportDownloadVerifierKey }),
-    createCsrf(options.csrfKey),
-  ]);
+  const canonicalKeyGate = new SitesCanonicalKeyGate(options.database);
   const metadata = await createSitesMetadataStore(options.database, {
     ...(options.metadataDiagnostics === undefined ? {} : { diagnostics: options.metadataDiagnostics }),
     ...(options.onMetadataQueueTimeout === undefined ? {} : { onQueueTimeout: options.onMetadataQueueTimeout }),
   });
+  const [objects, tokenHasher, downloadCrypto, csrf] = await Promise.all([
+    createSitesObjectStore(options.bucket, backupCleanupBarrier, canonicalKeyGate, {
+      canDelete: (request) => metadata.canPhysicallyDeleteCanonicalObject(request),
+    }),
+    createWebCryptoTokenHasher({ verifierKey: options.tokenVerifierKey }),
+    createWebCryptoExportDownloadSecretCrypto({ verifierKey: options.exportDownloadVerifierKey }),
+    createCsrf(options.csrfKey),
+  ]);
   const systemBackup = options.systemBackupOperatorKey === undefined ? null :
     new SitesSystemBackupService({
       database: options.database,

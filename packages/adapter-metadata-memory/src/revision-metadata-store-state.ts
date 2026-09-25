@@ -76,6 +76,7 @@ import {
 import {
   SHA256_PATTERN,
   activeReservationAmounts,
+  authorizationStateKey,
   canonicalManifestSource,
   canonicalKeysForEnvelope,
   capacityOwnerForSpace,
@@ -312,6 +313,36 @@ export abstract class RevisionMetadataStoreState {
               utilization: "normal",
             });
           }
+          if (request.requireActiveWritablePrincipal) {
+            const state = this._currentSitesAuthorizationState({
+              principalId: request.requestedByPrincipalId,
+              spaceId: request.spaceId,
+              tokenId: null,
+            }) ?? (this._principals.size === 0 && this._knowledgeSpaces.size === 0
+              ? this._authorizationStates.get(authorizationStateKey({
+                  principalId: request.requestedByPrincipalId,
+                  spaceId: request.spaceId,
+                  tokenId: request.authorizationTokenId ?? null,
+                }))
+              : undefined);
+            const member = state?.membership;
+            if (
+              state?.principal.principalId !== request.requestedByPrincipalId ||
+              state.principal.state !== "active" ||
+              state.space.spaceId !== request.spaceId ||
+              state.space.state !== "active" ||
+              member?.principalId !== request.requestedByPrincipalId ||
+              member.spaceId !== request.spaceId ||
+              member.state !== "active" ||
+              (member.role !== "editor" && member.role !== "admin" && member.role !== "owner")
+            ) {
+              return Object.freeze({
+                kind: "rejected",
+                reason: "owner_not_found",
+                utilization: "normal",
+              });
+            }
+          }
           // Expiry is part of admission authority, not merely background
           // housekeeping. Atomically retire stale active reservations before
           // computing quota and heavy-operation fairness so a missed collector
@@ -342,9 +373,15 @@ export abstract class RevisionMetadataStoreState {
                   utilization: "normal",
                 });
             }
-            const resumableCommit = request.operation === "commit" &&
-              existing.state === "cleanup_pending";
-            if (existing.state === "cleanup_pending" && !resumableCommit) {
+            // A commit may still have an object writer after its TTL. Neither
+            // expiry nor an old cleanup marker proves that writer stopped, so
+            // the same key cannot acquire a replacement slot here.
+            if (existing.state === "cleanup_pending" ||
+                (request.operation === "import" && existing.state === "released") ||
+                (request.operation === "commit" && existing.state === "released" &&
+                  (existing.writerClosedAt === undefined || existing.writerClosedAt === null ||
+                    typeof request.attemptId !== "string" || request.attemptId.length === 0 ||
+                    request.attemptId === existing.attemptId))) {
               this._capacityQuotaRejects += 1;
               return Object.freeze({
                 kind: "rejected",
@@ -360,11 +397,13 @@ export abstract class RevisionMetadataStoreState {
                 }),
               });
             }
-            if (existing.state === "released" || resumableCommit) {
+            if (existing.state === "released") {
               const reacquired = cloneCapacityReservation(Object.freeze({
                 ...existing,
                 actual: null,
+                ...(request.attemptId === undefined ? {} : { attemptId: request.attemptId }),
                 state: "active" as const,
+              writerClosedAt: null,
                 createdAt: request.createdAt,
                 expiresAt: request.expiresAt,
                 updatedAt: request.createdAt,
@@ -549,6 +588,7 @@ export abstract class RevisionMetadataStoreState {
             ownerPrincipalId,
             actual: null,
             state: "active" as const,
+            writerClosedAt: null,
             updatedAt: request.createdAt,
           }));
           reservations.set(reservation.reservationId, reservation);

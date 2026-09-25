@@ -8,6 +8,7 @@ import {
 } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
+import { DEFAULT_CAPACITY_LIMITS } from "@mind-diary/application-content";
 import {
   AccountBootstrapService,
   MIND_DELETION_IMPACT_LIFETIME_MINUTES,
@@ -20,6 +21,7 @@ import {
 import {
   CAPABILITIES,
   bindingVersion,
+  idempotencyKey,
   version,
   verifiedSpaceHost,
 } from "@mind-diary/domain";
@@ -139,6 +141,50 @@ async function createMind(env, owner, handle = "delete-target") {
     { name: "Delete Target", handle, idempotencyKey: `create-${handle}` },
   );
 }
+
+test("Mind deletion waits for an unclosed canonical writer before retiring the handle", async () => {
+  const env = harness();
+  const owner = await createAccount(env, "pending-writer");
+  const mind = await createMind(env, owner, "pending-writer-delete");
+  const reservationId = `capacity:commit:${mind.mindId}:pending-delete`;
+  const admitted = await env.metadata.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation({
+      reservationId,
+      attemptId: "pending-delete-attempt",
+      requestedByPrincipalId: owner.principalId,
+      spaceId: mind.mindId,
+      operation: "commit",
+      operationRef: "pending-delete",
+      baseRevisionId: mind.headRevisionId,
+      idempotencyKey: idempotencyKey("pending-delete"),
+      requested: { physicalCanonicalBytes: 1024, temporaryBytes: 0, d1MetadataBytes: 512 },
+      bulk: false,
+      heavy: false,
+      createdAt: CREATED_AT,
+      expiresAt: "2026-08-07T06:15:00.000Z",
+    }, DEFAULT_CAPACITY_LIMITS));
+  assert.equal(admitted.kind, "admitted");
+  const preview = await env.deletion.getDeletionImpact(actor(owner.principalId), {
+    handle: "pending-writer-delete",
+  });
+  const command = {
+    handle: "pending-writer-delete",
+    impactId: preview.impactId,
+    confirmation: preview.confirmation,
+    idempotencyKey: "delete-pending-writer",
+  };
+  await assert.rejects(env.deletion.deleteSpace(actor(owner.principalId), command),
+    (error) => error instanceof OrdinaryMindControlFailure &&
+      error.code === "deletion_cleanup_incomplete");
+  assert.equal((await env.routes.resolveExactMind(actor(owner.principalId), command.handle)).mindId,
+    mind.mindId);
+  await env.metadata.runCapacityTransaction((transaction) =>
+    transaction.cancelCapacityReservation({ reservationId, canceledAt: DELETE_AT }));
+  assert.equal(await env.metadata.closeCapacityReservationWriter({
+    reservationId, expectedAttemptId: "pending-delete-attempt", closedAt: DELETE_AT,
+  }), true);
+  assert.equal((await env.deletion.deleteSpace(actor(owner.principalId), command)).replayed, false);
+});
 
 async function seedPrincipalToken(env, principalId) {
   const created = await env.tokens.createMcpToken({
@@ -547,7 +593,8 @@ test("shared content objects survive and durable cleanup work resumes after serv
   assert.deepEqual(await env.metadata.inspectDeletionCleanupForTest(), []);
   assert.ok(await env.metadata.inspectOrdinaryMindStateForTest(second.mindId));
   for (const entry of secondState.revisions[0].manifest.entries) {
-    assert.ok(await env.objects.getImmutable(entry.sha256));
+    assert.equal(await env.objects.getSpaceCanonicalObject("markdown", first.mindId, entry.sha256), null);
+    assert.ok(await env.objects.getSpaceCanonicalObject("markdown", second.mindId, entry.sha256));
   }
 });
 
@@ -751,7 +798,7 @@ test("new previews prune expired impact state while pending cleanup IDs remain r
   assert.deepEqual(await pendingEnv.metadata.inspectDeletionCleanupForTest(), []);
 });
 
-test("concurrent object re-put advances protectedAt and prevents unsafe physical deletion", async () => {
+test("concurrent Space object re-put advances protectedAt and leaves deletion cleanup pending", async () => {
   const base = new InMemoryObjectStore();
   let protectOnNextDelete = false;
   const objects = {
@@ -777,7 +824,23 @@ test("concurrent object re-put advances protectedAt and prevents unsafe physical
     getSpaceCanonicalObject: (kind, spaceId, digest) =>
       base.getSpaceCanonicalObject(kind, spaceId, digest),
     listSpaceCanonicalObjects: (request) => base.listSpaceCanonicalObjects(request),
-    deleteSpaceCanonicalObject: (request) => base.deleteSpaceCanonicalObject(request),
+    deleteSpaceCanonicalObject: async (request) => {
+      if (protectOnNextDelete) {
+        protectOnNextDelete = false;
+        const current = await base.getSpaceCanonicalObject(
+          request.kind, request.spaceId, request.sha256,
+        );
+        assert.ok(current);
+        await base.putSpaceCanonicalObject({
+          kind: request.kind,
+          spaceId: request.spaceId,
+          bytes: current.bytes,
+          mediaType: current.mediaType,
+          createdAt: "2026-08-07T06:10:01.000Z",
+        });
+      }
+      return base.deleteSpaceCanonicalObject(request);
+    },
     putBundleFile: (request) => base.putBundleFile(request),
     getBundleFile: (spaceId, digest) => base.getBundleFile(spaceId, digest),
     listBundleFileObjects: (request) => base.listBundleFileObjects(request),
@@ -803,15 +866,20 @@ test("concurrent object re-put advances protectedAt and prevents unsafe physical
     handle: target.handle,
   });
   protectOnNextDelete = true;
-  const deleted = await env.deletion.deleteSpace(actor(owner.principalId), {
+  await assert.rejects(env.deletion.deleteSpace(actor(owner.principalId), {
     handle: target.handle,
     impactId: preview.impactId,
     confirmation: preview.confirmation,
     idempotencyKey: "protected-reput-delete",
+  }), /deletion cleanup is incomplete/u);
+  const retained = await base.listSpaceCanonicalObjects({
+    spaceId: target.mindId,
+    createdBefore: "2026-08-07T06:11:00.000Z",
+    excluded: [],
+    limit: 10,
   });
-  assert.equal(deleted.canonicalObjectsRetained, 1);
-  const retained = await Promise.all(digests.map((digest) => base.getImmutable(digest)));
-  assert.equal(retained.filter(Boolean).length, 1);
-  assert.equal(retained.find(Boolean).protectedAt, "2026-08-07T06:10:01.000Z");
-  assert.deepEqual(await env.metadata.inspectDeletionCleanupForTest(), []);
+  assert.equal(retained.length, 1);
+  assert.equal(retained[0].protectedAt, "2026-08-07T06:10:01.000Z");
+  assert.ok(digests.includes(retained[0].sha256));
+  assert.equal((await env.metadata.inspectDeletionCleanupForTest()).length, 1);
 });

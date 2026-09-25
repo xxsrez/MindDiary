@@ -3134,6 +3134,14 @@ Stale HEAD возвращает tool execution error `revision_conflict` с
 `details.current_revision`. Никаких objects/revision, достижимых из HEAD, не
 публикуется.
 
+Если тот же exact changeset ещё удерживает активный commit reservation,
+параллельный вызов возвращает retryable `commit_in_progress` до записи объектов.
+Другой payload с тем же idempotency key получает `idempotency_conflict` до
+записи объектов. Клиент сначала вызывает `reconcile_changeset` с неизменённым
+payload/key и повторяет исходный commit только после подтверждённого завершения
+первой попытки. Ни `missing` во время выполнения, ни истечение reservation
+не доказывают, что первый writer уже остановился.
+
 ### `reconcile_changeset`
 
 Input schema is exactly `commit_changeset`: the caller repeats the original

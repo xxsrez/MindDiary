@@ -194,6 +194,31 @@ export const SITES_METADATA_MIGRATIONS = Object.freeze([
       )`,
     ]),
   }),
+  Object.freeze({
+    version: 7,
+    name: "canonical-key-mutation-gates",
+    statements: Object.freeze([
+      `CREATE TABLE IF NOT EXISTS md_canonical_key_gates (
+        key_digest TEXT PRIMARY KEY,
+        operation_id TEXT NOT NULL UNIQUE,
+        acquired_at TEXT NOT NULL
+      )`,
+    ]),
+  }),
+  Object.freeze({
+    version: 8,
+    name: "canonical-creation-intents",
+    statements: Object.freeze([
+      `CREATE TABLE IF NOT EXISTS md_canonical_creation_intents (
+        intent_id TEXT NOT NULL,
+        key_digest TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (intent_id, key_digest)
+      )`,
+      `CREATE INDEX IF NOT EXISTS md_canonical_creation_intents_key
+       ON md_canonical_creation_intents (key_digest)`,
+    ]),
+  }),
 ]);
 
 type DurableTarget = "metadata" | "tokens";
@@ -275,6 +300,25 @@ function accountDeletionPrincipalId(
     typeof request.principalId !== "string"
   ) return null;
   return request.principalId as PrincipalId;
+}
+
+function committedCanonicalCreationIntentId(
+  event: DurableEvent,
+  result: unknown,
+): string | null {
+  if (event.kind !== "transaction" || typeof result !== "object" || result === null ||
+    !("kind" in result) || result.kind !== "created") return null;
+  const method = event.method === "runAccountBootstrapTransaction"
+    ? "createAccountBootstrap"
+    : event.method === "runOrdinaryMindTransaction" &&
+        !("replayed" in result && result.replayed === true)
+      ? "createOrdinaryMind" : null;
+  if (method === null) return null;
+  const records = event.calls.find((call) => call.method === method)?.args[0];
+  if (typeof records !== "object" || records === null ||
+    !("canonicalCreationIntentId" in records) ||
+    typeof records.canonicalCreationIntentId !== "string") return null;
+  return records.canonicalCreationIntentId;
 }
 
 function invalidatesSystemBackup(event: DurableEvent, result: unknown): boolean {
@@ -361,6 +405,7 @@ const METADATA_MUTATIONS = new Set([
   "reconcileCapacityUsage",
   "collectExpiredCapacityReservations",
   "releaseCapacityReservation",
+  "closeCapacityReservationWriter",
   "claimObjectCleanup",
   "completeObjectCleanupBatch",
   "failObjectCleanupBatch",
@@ -1453,6 +1498,7 @@ export class SitesMetadataStore {
         expectedSequence,
       );
     const deletedPrincipalId = accountDeletionPrincipalId(event, mutationResult);
+    const committedCreationIntentId = committedCanonicalCreationIntentId(event, mutationResult);
     const invalidatesBackup = invalidatesSystemBackup(event, mutationResult);
     const advance = this.#database
       .prepare(
@@ -1469,6 +1515,17 @@ export class SitesMetadataStore {
       .bind(sequence, invalidatesBackup ? 1 : 0, expectedSequence,
         event.target, event.method, payloadJson);
     const statements = [append, advance];
+    if (committedCreationIntentId !== null) {
+      statements.push(this.#database.prepare(
+        `/*md-canonical-creation-commit*/ DELETE FROM md_canonical_creation_intents
+         WHERE intent_id = ?1
+           AND EXISTS (
+             SELECT 1 FROM md_metadata_events
+             WHERE sequence = ?2 AND target = ?3 AND operation = ?4
+               AND payload_json = ?5
+           )`,
+      ).bind(committedCreationIntentId, sequence, event.target, event.method, payloadJson));
+    }
     if (invalidatesBackup) {
       statements.push(this.#database.prepare(
         `/*md-backup-invalidate-deleted-state*/ UPDATE md_backup_sessions

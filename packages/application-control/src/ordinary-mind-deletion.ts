@@ -313,6 +313,12 @@ export class OrdinaryMindDeletionService {
           "The idempotency key was already used for another request.",
         );
       }
+      if (deleted.kind === "writer_in_progress") {
+        throw new OrdinaryMindControlFailure(
+          "deletion_cleanup_incomplete",
+          "A canonical writer is still active or has an uncertain outcome; retry after recovery.",
+        );
+      }
       throw new OrdinaryMindControlFailure(
         "ordinary_mind_unavailable",
         "Mind deletion is unavailable.",
@@ -388,6 +394,15 @@ export class OrdinaryMindDeletionService {
           else canonicalObjectsRetained += 1;
         }
         if (candidates.length < 1_000) break;
+      }
+      const remainingSpaceObjects = await this.#objects.listSpaceCanonicalObjects({
+        spaceId: work.spaceId,
+        createdBefore: canonicalUtcInstant(Date.parse("9999-12-31T23:59:59.999Z")),
+        excluded: [],
+        limit: 1,
+      });
+      if (remainingSpaceObjects.length !== 0) {
+        throw new Error("deleted Mind still has canonical objects");
       }
       const completed = await this.#ordinaryMinds.runOrdinaryMindTransaction(
         (transaction) =>

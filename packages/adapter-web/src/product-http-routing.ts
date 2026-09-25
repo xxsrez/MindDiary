@@ -255,6 +255,7 @@ export function applicationErrorStatus(code: string): number {
   if (code === "binding_state_unavailable") return 503;
   if (code === "mind_usage_unavailable") return 503;
   if (code === "capacity_accounting_untrusted") return 503;
+  if (code === "commit_in_progress") return 409;
   if (code === "capacity_fairness_limit" || code === "capacity_soft_limit") return 429;
   if (code === "capacity_hard_limit") return 413;
   if (
@@ -292,7 +293,8 @@ export function applicationErrorRetryable(code: string): boolean {
     code === "recovery_deadline_exceeded" ||
     code === "capacity_fairness_limit" ||
     code === "capacity_soft_limit" ||
-    code === "capacity_accounting_untrusted";
+    code === "capacity_accounting_untrusted" ||
+    code === "commit_in_progress";
 }
 
 /** Authenticated web/control handler. It deliberately never reads Bearer auth. */

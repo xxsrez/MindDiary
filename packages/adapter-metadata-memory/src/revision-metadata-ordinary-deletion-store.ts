@@ -263,6 +263,13 @@ export abstract class RevisionMetadataOrdinaryDeletionStore extends RevisionMeta
             if (tx.deletionCleanup.has(request.impactId)) {
               return Object.freeze({ kind: "invalid_record" });
             }
+            if ([...this._capacityReservations.values()].some((writer) =>
+              writer.spaceId === spaceId &&
+              (writer.operation === "commit" || writer.operation === "import") &&
+              (writer.state === "active" ||
+                (writer.state === "cleanup_pending" && !writer.writerClosedAt)))) {
+              return Object.freeze({ kind: "writer_in_progress" });
+            }
             const selected = targetRecordSelection(spaceId, ordinaryMindDeletionState(tx));
             const targetRevisions = tx.revisionSpaces.get(spaceId)?.revisions;
             if (!targetRevisions) return Object.freeze({ kind: "invalid_record" });
@@ -559,6 +566,14 @@ export abstract class RevisionMetadataOrdinaryDeletionStore extends RevisionMeta
             ) {
               tx.accountDeletionImpacts.delete(impact.impactId);
               return Object.freeze({ kind: "deletion_impact_changed" });
+            }
+            if ([...this._capacityReservations.values()].some((writer) =>
+              (currentSelection.deletedSpaceIdSet.has(writer.spaceId) ||
+                writer.requestedByPrincipalId === request.principalId) &&
+              (writer.operation === "commit" || writer.operation === "import") &&
+              (writer.state === "active" ||
+                (writer.state === "cleanup_pending" && !writer.writerClosedAt)))) {
+              return Object.freeze({ kind: "writer_in_progress" });
             }
 
             const targetSelections = new Map(

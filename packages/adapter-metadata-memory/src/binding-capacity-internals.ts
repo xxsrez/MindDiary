@@ -978,6 +978,21 @@ export function cloneObjectCleanupCheckpoint(value: unknown): Readonly<ObjectCle
     !(OBJECT_CLEANUP_NAMESPACES as readonly string[]).includes(source.namespace) ||
     (source.cursor !== null && typeof source.cursor !== "string") ||
     typeof source.cycleStartedAt !== "string" || !Number.isFinite(Date.parse(source.cycleStartedAt)) ||
+    (source.canonicalCreatedBefore !== undefined &&
+      (typeof source.canonicalCreatedBefore !== "string" ||
+        !Number.isFinite(Date.parse(source.canonicalCreatedBefore)))) ||
+    (source.recoveryCohort !== undefined &&
+      (!Array.isArray(source.recoveryCohort) || source.recoveryCohort.length > 32 ||
+        !source.recoveryCohort.every((item) =>
+          item !== null && typeof item === "object" && !Array.isArray(item) &&
+          typeof item.reservationId === "string" && item.reservationId.length > 0 &&
+          typeof item.attemptId === "string" && item.attemptId.length > 0 &&
+          typeof item.spaceId === "string" && item.spaceId.length > 0))) ||
+    (source.recoveryCursor !== undefined && source.recoveryCursor !== null &&
+      (typeof source.recoveryCursor !== "string" || source.recoveryCursor.length > 512)) ||
+    (source.blockedSpaceIds !== undefined &&
+      (!Array.isArray(source.blockedSpaceIds) || source.blockedSpaceIds.length > 32 ||
+        !source.blockedSpaceIds.every((item) => typeof item === "string" && item.length > 0))) ||
     typeof source.updatedAt !== "string" || !Number.isFinite(Date.parse(source.updatedAt)) ||
     (source.leaseExpiresAt !== null &&
       (typeof source.leaseExpiresAt !== "string" || !Number.isFinite(Date.parse(source.leaseExpiresAt)))) ||
@@ -989,6 +1004,12 @@ export function cloneObjectCleanupCheckpoint(value: unknown): Readonly<ObjectCle
     namespace: source.namespace as ObjectCleanupNamespace,
     cursor: source.cursor as string | null,
     cycleStartedAt: source.cycleStartedAt as UtcInstant,
+    canonicalCreatedBefore: source.canonicalCreatedBefore as UtcInstant | undefined,
+    recoveryCohort: Object.freeze(((source.recoveryCohort ?? []) as Array<{
+      reservationId: string; attemptId: string; spaceId: SpaceId;
+    }>).map((item) => Object.freeze({ ...item }))),
+    recoveryCursor: source.recoveryCursor as string | null | undefined,
+    blockedSpaceIds: Object.freeze([...(source.blockedSpaceIds ?? []) as SpaceId[]]),
     updatedAt: source.updatedAt as UtcInstant,
     leaseExpiresAt: source.leaseExpiresAt as UtcInstant | null,
     retries: source.retries as number,

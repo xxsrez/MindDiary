@@ -564,14 +564,39 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       });
     }
 
+  async closeCapacityReservationWriter(request: Readonly<{
+      reservationId: string;
+      expectedAttemptId: string;
+      closedAt: UtcInstant;
+    }>): Promise<boolean> {
+      return this._runExclusive(async () => {
+        const current = this._capacityReservations.get(request.reservationId);
+        if (current === undefined || current.attemptId !== request.expectedAttemptId ||
+          current.operation !== "commit" ||
+          (current.state !== "active" && current.state !== "cleanup_pending")) return false;
+        if (current.writerClosedAt !== undefined && current.writerClosedAt !== null) return true;
+        this._capacityReservations.set(request.reservationId,
+          cloneCapacityReservation(Object.freeze({
+            ...current,
+            writerClosedAt: request.closedAt,
+            updatedAt: request.closedAt,
+          })));
+        return true;
+      });
+    }
+
   async releaseCapacityReservation(request: Readonly<{
       reservationId: string;
+      expectedAttemptId?: string;
       releasedAt: UtcInstant;
     }>): Promise<boolean> {
       return this._runExclusive(async () => {
         const current = this._capacityReservations.get(request.reservationId);
         if (current === undefined || current.state === "released") return false;
         if (current.state === "active") return false;
+        // Canonical exposure needs a complete fenced object-cleanup cycle.
+        // That proof is committed atomically by completeObjectCleanupBatch.
+        if (current.operation === "commit" || current.operation === "import") return false;
         this._capacityReservations.set(
           request.reservationId,
           cloneCapacityReservation(Object.freeze({

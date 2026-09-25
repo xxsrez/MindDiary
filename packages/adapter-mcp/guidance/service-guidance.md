@@ -116,6 +116,10 @@ over the new HEAD. On an uncertain commit transport outcome, call
 `reconcile_changeset` with the exact original Mind, base, operations,
 `source_references`, summary and idempotency key before any retry. Do not alter
 the payload or select a fallback destination during reconciliation.
+If `commit_changeset` returns retryable `commit_in_progress`, another request
+with that exact key may still be writing objects. Reconcile the unchanged
+request and retry only after that attempt has demonstrably finished. A missing
+reconciliation result or expired reservation does not prove it has stopped.
 
 Treat each destination's success, no-op, failure and unknown result
 independently. Preserve a successful immutable revision. Surface only unresolved

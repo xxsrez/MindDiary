@@ -1304,6 +1304,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
           code,
           "The changeset was not committed.",
           result.kind === "revision_conflict" ||
+            code === "commit_in_progress" ||
             (result.kind === "denied" && result.decision.retryable),
           output as Readonly<Record<string, unknown>>,
         );

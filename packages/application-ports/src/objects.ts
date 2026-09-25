@@ -255,8 +255,23 @@ export interface SpaceCanonicalObjectDeleteRequest {
   readonly createdBefore: UtcInstant;
 }
 
+export interface SpaceCanonicalCreationIntent {
+  readonly intentId: string;
+  readonly createdAt: UtcInstant;
+  readonly objects: readonly Readonly<{
+    kind: SpaceCanonicalObjectKind;
+    spaceId: SpaceId;
+    sha256: Sha256Digest;
+  }>[];
+}
+
 /** Space-isolated v3 Markdown and revision-manifest bytes. */
 export interface SpaceCanonicalObjectStore {
+  /** Required by Sites creation flows before their first object PUT. */
+  beginSpaceCanonicalCreationIntent?(
+    request: Readonly<SpaceCanonicalCreationIntent>,
+  ): Promise<void>;
+  completeSpaceCanonicalCreationIntent?(intentId: string): Promise<void>;
   putSpaceCanonicalObject(
     request: Readonly<SpaceCanonicalObjectWriteRequest>,
   ): Promise<SpaceCanonicalObjectPutResult>;
@@ -697,6 +712,14 @@ export interface ObjectCleanupCheckpoint {
   readonly namespace: ObjectCleanupNamespace;
   readonly cursor: string | null;
   readonly cycleStartedAt: UtcInstant;
+  readonly canonicalCreatedBefore?: UtcInstant | undefined;
+  readonly recoveryCohort?: readonly Readonly<{
+    reservationId: string;
+    attemptId: string;
+    spaceId: SpaceId;
+  }>[] | undefined;
+  readonly recoveryCursor?: string | null | undefined;
+  readonly blockedSpaceIds?: readonly SpaceId[] | undefined;
   readonly updatedAt: UtcInstant;
   readonly leaseExpiresAt: UtcInstant | null;
   readonly retries: number;
@@ -733,6 +756,7 @@ export interface ObjectCleanupCheckpointStore {
   claimObjectCleanup(request: Readonly<{
     now: UtcInstant;
     leaseExpiresAt: UtcInstant;
+    canonicalCreatedBefore: UtcInstant;
   }>): Promise<ClaimObjectCleanupResult>;
   completeObjectCleanupBatch(request: Readonly<{
     expectedVersion: Version;
@@ -740,6 +764,8 @@ export interface ObjectCleanupCheckpointStore {
     cursor: string | null;
     cycleStartedAt: UtcInstant;
     completedAt: UtcInstant;
+    cycleCompleted: boolean;
+    blockedSpaceIds: readonly SpaceId[];
   }>): Promise<boolean>;
   failObjectCleanupBatch(request: Readonly<{
     expectedVersion: Version;

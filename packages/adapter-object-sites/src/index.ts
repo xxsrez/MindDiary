@@ -26,6 +26,7 @@ import {
   type SpaceCanonicalObjectWriteRequest,
   type SpaceCanonicalObjectListRequest,
   type SpaceCanonicalObjectDeleteRequest,
+  type SpaceCanonicalCreationIntent,
   type BundleFileObject,
   type OpenedBundleFileObject,
   type ObjectIntegrityManifest,
@@ -106,6 +107,25 @@ export interface R2BucketLike {
 
 export interface CanonicalCleanupBarrier {
   run(operation: () => Promise<boolean>): Promise<boolean>;
+}
+
+export interface CanonicalMutationGate {
+  run<Result>(
+    key: string,
+    operation: (markMutationStarted: () => () => void) => Promise<Result>,
+  ): Promise<Result>;
+  beginCreationIntent(intentId: string, keys: readonly string[], createdAt: string): Promise<void>;
+  completeCreationIntent(intentId: string): Promise<void>;
+  hasCreationIntent(key: string): Promise<boolean>;
+}
+
+export interface CanonicalDeleteSafety {
+  canDelete(request: Readonly<{
+    namespace: "immutable" | "bundle_file" | "space_canonical";
+    kind?: "markdown" | "revision_manifest";
+    spaceId?: SpaceCanonicalObjectMetadata["spaceId"];
+    sha256: Digest;
+  }>): Promise<boolean>;
 }
 
 type Digest = ImmutableObjectMetadata["sha256"];
@@ -638,10 +658,46 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   readonly kind = "object-store" as const;
   readonly #bucket: R2BucketLike;
   readonly #cleanupBarrier: CanonicalCleanupBarrier | undefined;
+  readonly #mutationGate: CanonicalMutationGate | undefined;
+  readonly #deleteSafety: CanonicalDeleteSafety | undefined;
 
-  constructor(bucket: R2BucketLike, cleanupBarrier?: CanonicalCleanupBarrier) {
+  constructor(bucket: R2BucketLike, cleanupBarrier?: CanonicalCleanupBarrier,
+    mutationGate?: CanonicalMutationGate, deleteSafety?: CanonicalDeleteSafety) {
     this.#bucket = bucket;
     this.#cleanupBarrier = cleanupBarrier;
+    this.#mutationGate = mutationGate;
+    this.#deleteSafety = deleteSafety;
+  }
+
+  async beginSpaceCanonicalCreationIntent(request: SpaceCanonicalCreationIntent): Promise<void> {
+    if (this.#mutationGate === undefined) {
+      throw new Error("canonical creation gate is unavailable");
+    }
+    assertUtc(request.createdAt);
+    if (!/^[0-9a-f-]{36}$/u.test(request.intentId)) {
+      throw new Error("canonical creation intent ID is invalid");
+    }
+    const keys = request.objects.map((object) => {
+      assertDigest(object.sha256);
+      return spaceCanonicalKey(object.kind, object.spaceId, object.sha256);
+    });
+    await this.#mutationGate.beginCreationIntent(request.intentId, keys, request.createdAt);
+  }
+
+  async completeSpaceCanonicalCreationIntent(intentId: string): Promise<void> {
+    if (this.#mutationGate === undefined) {
+      throw new Error("canonical creation gate is unavailable");
+    }
+    await this.#mutationGate.completeCreationIntent(intentId);
+  }
+
+  #runCanonical<Result>(
+    key: string,
+    operation: (markMutationStarted: () => () => void) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#mutationGate === undefined
+      ? operation(() => () => undefined)
+      : this.#mutationGate.run(key, operation);
   }
 
   async ready(): Promise<this> {
@@ -748,6 +804,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     objectKey: string,
     manifest: Readonly<ObjectIntegrityManifest>,
     manifestDigest: Digest,
+    markMutationStarted: () => () => void,
   ): Promise<void> {
     const key = integritySidecarKey(objectKey, manifest.spaceId);
     const bytes = integrityEncoder.encode(serializeObjectIntegrityManifest(manifest));
@@ -764,11 +821,13 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       ) throw new ObjectStoreFailure("object_tampered", "object integrity sidecar collision");
       return;
     }
+    const confirmNoMutation = markMutationStarted();
     const stored = await this.#bucket.put(key, bytes, {
       customMetadata: integritySidecarMetadata(objectKey, manifest, manifestDigest),
       onlyIf: { etagDoesNotMatch: "*" },
     });
     if (stored !== null) return;
+    confirmNoMutation();
     const winner = await this.#get(key);
     if (winner === null) throw new ObjectStoreFailure("object_tampered", "object integrity sidecar publication failed");
     const metadata = winner.customMetadata ?? {};
@@ -859,9 +918,11 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const bytes = new Uint8Array(request.bytes);
     const digest = await this.calculateSha256(bytes);
     const key = canonicalKey(digest);
+    return this.#runCanonical(key, async (markMutationStarted) => {
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
       const existing = await this.#get(key);
       if (!existing) {
+        const confirmNoMutation = markMutationStarted();
         const stored = await this.#bucket.put(key, bytes, {
           httpMetadata: { contentType: MARKDOWN },
           customMetadata: canonicalMetadata(
@@ -873,7 +934,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           ),
           onlyIf: { etagDoesNotMatch: "*" },
         });
-        if (!stored) continue;
+        if (!stored) { confirmNoMutation(); continue; }
         return Object.freeze({
           object: metadataFromR2(stored),
           status: "stored",
@@ -899,6 +960,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           ? request.createdAt
           : metadata.protectedAt;
       if (protectedAt !== metadata.protectedAt) {
+        const confirmNoMutation = markMutationStarted();
         const updated = await this.#bucket.put(key, existingBytes, {
           httpMetadata: { contentType: MARKDOWN },
           customMetadata: canonicalMetadata(
@@ -910,7 +972,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           ),
           onlyIf: { etagMatches: existing.etag },
         });
-        if (!updated) continue;
+        if (!updated) { confirmNoMutation(); continue; }
         return Object.freeze({
           object: metadataFromR2(updated),
           status: "already_exists",
@@ -919,6 +981,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       return Object.freeze({ object: metadata, status: "already_exists" });
     }
     throw new Error("R2 immutable-object CAS retry budget exhausted");
+    });
   }
 
   async getImmutable(digest: Digest): Promise<Readonly<ImmutableObject> | null> {
@@ -966,6 +1029,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     );
     const key = spaceCanonicalKey(request.kind, request.spaceId, digest);
     const mediaType = request.mediaType;
+    return this.#runCanonical(key, async (markMutationStarted) => {
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
       const existing = await this.#get(key);
       if (!existing) {
@@ -978,7 +1042,8 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           createdAt: request.createdAt,
           protectedAt: request.createdAt,
         });
-        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest);
+        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest, markMutationStarted);
+        const confirmNoMutation = markMutationStarted();
         const stored = await this.#bucket.put(key, bytes, {
           httpMetadata: { contentType: mediaType },
           customMetadata: spaceCanonicalMetadataSource(
@@ -990,7 +1055,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           ),
           onlyIf: { etagDoesNotMatch: "*" },
         });
-        if (!stored) continue;
+        if (!stored) { confirmNoMutation(); continue; }
         return Object.freeze({ object: spaceCanonicalMetadataFromR2(stored), status: "stored", integrityRoot: integrityManifest.root });
       }
       const metadata = spaceCanonicalMetadataFromR2(existing);
@@ -1015,7 +1080,8 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         ? request.createdAt
         : metadata.protectedAt;
       if (protectedAt !== metadata.protectedAt) {
-        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest);
+        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest, markMutationStarted);
+        const confirmNoMutation = markMutationStarted();
         const updated = await this.#bucket.put(key, existingBytes, {
           httpMetadata: { contentType: mediaType },
           customMetadata: spaceCanonicalMetadataSource(
@@ -1027,12 +1093,13 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           ),
           onlyIf: { etagMatches: existing.etag },
         });
-        if (!updated) continue;
+        if (!updated) { confirmNoMutation(); continue; }
         return Object.freeze({ object: spaceCanonicalMetadataFromR2(updated), status: "already_exists", integrityRoot: integrityManifest.root });
       }
       return Object.freeze({ object: metadata, status: "already_exists", integrityRoot: integrityManifest.root });
     }
     throw new Error("R2 Space canonical CAS retry budget exhausted");
+    });
   }
 
   async getSpaceCanonicalObject(
@@ -1166,13 +1233,22 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   async deleteSpaceCanonicalObject(
     request: SpaceCanonicalObjectDeleteRequest,
   ): Promise<boolean> {
-    return this.#cleanupBarrier === undefined
-      ? this.#deleteSpaceCanonicalObject(request)
-      : this.#cleanupBarrier.run(() => this.#deleteSpaceCanonicalObject(request));
+    const key = spaceCanonicalKey(request.kind, request.spaceId, request.sha256);
+    return this.#runCanonical(key, async (markMutationStarted) => {
+      if (await this.#mutationGate?.hasCreationIntent(key)) return false;
+      if (this.#deleteSafety !== undefined && !(await this.#deleteSafety.canDelete({
+        namespace: "space_canonical", kind: request.kind,
+        spaceId: request.spaceId, sha256: request.sha256,
+      }))) return false;
+      return this.#cleanupBarrier === undefined
+        ? this.#deleteSpaceCanonicalObject(request, markMutationStarted)
+        : this.#cleanupBarrier.run(() => this.#deleteSpaceCanonicalObject(request, markMutationStarted));
+    });
   }
 
   async #deleteSpaceCanonicalObject(
     request: SpaceCanonicalObjectDeleteRequest,
+    markMutationStarted: () => () => void,
   ): Promise<boolean> {
     assertDigest(request.sha256);
     assertUtc(request.createdBefore);
@@ -1200,6 +1276,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         // by DELETE_STATE, while the caller re-applies current reachability
         // before selecting this candidate.
         if (compareUtc(deleteBoundary, request.createdBefore) > 0) return false;
+        markMutationStarted();
         await this.#bucket.delete(key);
         await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
         return true;
@@ -1211,6 +1288,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         sha256: request.sha256,
         size: metadata.size,
       });
+      const confirmNoMutation = markMutationStarted();
       const claimed = await this.#bucket.put(key, bytes, {
         httpMetadata: { contentType: metadata.mediaType },
         customMetadata: spaceCanonicalMetadataSource(
@@ -1224,7 +1302,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         ),
         onlyIf: { etagMatches: current.etag },
       });
-      if (!claimed) continue;
+      if (!claimed) { confirmNoMutation(); continue; }
       await this.#bucket.delete(key);
       await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
       return true;
@@ -1250,10 +1328,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       integrityEncoder.encode(serializeObjectIntegrityManifest(integrityManifest)),
     );
     const key = `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/sha256/${digest.slice(7)}`;
+    return this.#runCanonical(key, async (markMutationStarted) => {
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
       const existing = await this.#get(key);
       if (!existing) {
-        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest);
+        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest, markMutationStarted);
+        const confirmNoMutation = markMutationStarted();
         const stored = await this.#bucket.put(key, bytes, {
           httpMetadata: { contentType: request.mediaType },
           customMetadata: this.#bundleCustomMetadata(
@@ -1272,7 +1352,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           ),
           onlyIf: { etagDoesNotMatch: "*" },
         });
-        if (!stored) continue;
+        if (!stored) { confirmNoMutation(); continue; }
         return Object.freeze({ object: this.#bundleMetadata(stored), status: "stored", integrityRoot: integrityManifest.root });
       }
       const metadata = this.#bundleMetadata(existing);
@@ -1292,7 +1372,8 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         ? request.createdAt
         : metadata.protectedAt;
       if (protectedAt !== metadata.protectedAt) {
-        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest);
+        await this.#writeIntegrityManifest(key, integrityManifest, integrityDigest, markMutationStarted);
+        const confirmNoMutation = markMutationStarted();
         const updated = await this.#bucket.put(key, existingBytes, {
           httpMetadata: { contentType: metadata.mediaType },
           customMetadata: this.#bundleCustomMetadata(
@@ -1304,12 +1385,13 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           ),
           onlyIf: { etagMatches: existing.etag },
         });
-        if (!updated) continue;
+        if (!updated) { confirmNoMutation(); continue; }
         return Object.freeze({ object: this.#bundleMetadata(updated), status: "already_exists", integrityRoot: integrityManifest.root });
       }
       return Object.freeze({ object: metadata, status: "already_exists", integrityRoot: integrityManifest.root });
     }
     throw new Error("R2 BundleFile CAS retry budget exhausted");
+    });
   }
 
   async getBundleFile(
@@ -1430,13 +1512,20 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   async deleteBundleFileObject(
     request: BundleFileObjectDeleteRequest,
   ): Promise<boolean> {
-    return this.#cleanupBarrier === undefined
-      ? this.#deleteBundleFileObject(request)
-      : this.#cleanupBarrier.run(() => this.#deleteBundleFileObject(request));
+    const key = `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/sha256/${request.sha256.slice(7)}`;
+    return this.#runCanonical(key, async (markMutationStarted) => {
+      if (this.#deleteSafety !== undefined && !(await this.#deleteSafety.canDelete({
+        namespace: "bundle_file", spaceId: request.spaceId, sha256: request.sha256,
+      }))) return false;
+      return this.#cleanupBarrier === undefined
+        ? this.#deleteBundleFileObject(request, markMutationStarted)
+        : this.#cleanupBarrier.run(() => this.#deleteBundleFileObject(request, markMutationStarted));
+    });
   }
 
   async #deleteBundleFileObject(
     request: BundleFileObjectDeleteRequest,
+    markMutationStarted: () => () => void,
   ): Promise<boolean> {
     assertDigest(request.sha256);
     assertUtc(request.createdBefore);
@@ -1453,6 +1542,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       const state = current.customMetadata?.state ?? ACTIVE_STATE;
       if (state === DELETE_STATE) {
         if (current.customMetadata?.deleteBoundary !== request.createdBefore) return false;
+        markMutationStarted();
         await this.#bucket.delete(key);
         await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
         return true;
@@ -1464,6 +1554,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         sha256: request.sha256,
         size: metadata.size,
       });
+      const confirmNoMutation = markMutationStarted();
       const claimed = await this.#bucket.put(key, bytes, {
         httpMetadata: { contentType: metadata.mediaType },
         customMetadata: this.#bundleCustomMetadata(
@@ -1477,7 +1568,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         ),
         onlyIf: { etagMatches: current.etag },
       });
-      if (!claimed) continue;
+      if (!claimed) { confirmNoMutation(); continue; }
       await this.#bucket.delete(key);
       await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
       return true;
@@ -1714,6 +1805,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     assertBundleMediaType(request.mediaType);
     const stagedKey = `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(request.stagedFileId)}`;
     const canonicalKey = `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/sha256/${request.sha256.slice(7)}`;
+    return this.#runCanonical(canonicalKey, async (markMutationStarted) => {
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
       const staged = await this.#get(stagedKey);
       if (staged === null) throw new ObjectStoreFailure("object_tampered", "staged BundleFile is missing");
@@ -1738,6 +1830,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         if (compareUtc(request.createdAt, metadata.protectedAt) <= 0) {
           return Object.freeze({ object: metadata, status: "already_exists" });
         }
+        const confirmNoMutation = markMutationStarted();
         const updated = await this.#bucket.put(canonicalKey, bodyStream(existing), {
           httpMetadata: { contentType: metadata.mediaType },
           customMetadata: this.#bundleCustomMetadata({
@@ -1746,7 +1839,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           }, ACTIVE_STATE, "", existingManifest ?? undefined, existing.customMetadata?.integrityProofDigest as Digest | undefined),
           onlyIf: { etagMatches: existing.etag },
         });
-        if (updated === null) continue;
+        if (updated === null) { confirmNoMutation(); continue; }
         return Object.freeze({ object: this.#bundleMetadata(updated), status: "already_exists" });
       }
       const integrityManifest = await buildIntegrityManifestFromStream(
@@ -1762,8 +1855,9 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       );
       const stagedForPut = await this.#get(stagedKey);
       if (stagedForPut === null) throw new ObjectStoreFailure("object_tampered", "staged BundleFile disappeared");
-      await this.#writeIntegrityManifest(canonicalKey, integrityManifest, integrityDigest);
+      await this.#writeIntegrityManifest(canonicalKey, integrityManifest, integrityDigest, markMutationStarted);
       const [bodyForPut, bodyForVerify] = stagedForPut.body.tee();
+      const confirmNoMutation = markMutationStarted();
       const storedPromise = this.#bucket.put(canonicalKey, bodyForPut, {
         httpMetadata: { contentType: request.mediaType },
         customMetadata: this.#bundleCustomMetadata({
@@ -1790,10 +1884,11 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         reverified.chunkCount !== integrityManifest.chunkCount ||
         reverified.chunkDigests.some((item, index) => item !== integrityManifest.chunkDigests[index])
       ) {
+        if (stored === null) confirmNoMutation();
         if (stored !== null) await this.#bucket.delete(canonicalKey).catch(() => undefined);
         throw new ObjectStoreFailure("object_tampered", "promoted BundleFile failed integrity verification");
       }
-      if (stored === null) continue;
+      if (stored === null) { confirmNoMutation(); continue; }
       const metadata = this.#bundleMetadata(stored);
       if (metadata.size !== request.size) {
         await this.#bucket.delete(canonicalKey).catch(() => undefined);
@@ -1802,6 +1897,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       return Object.freeze({ object: metadata, status: "stored", integrityRoot: integrityManifest.root });
     }
     throw new Error("R2 BundleFile promotion CAS retry budget exhausted");
+    });
   }
 
   async deleteStagedBundleFile(stagedFileId: string): Promise<boolean> {
@@ -1838,12 +1934,21 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   }
 
   async deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean> {
-    return this.#cleanupBarrier === undefined
-      ? this.#deleteImmutableObject(request)
-      : this.#cleanupBarrier.run(() => this.#deleteImmutableObject(request));
+    const key = canonicalKey(request.sha256);
+    return this.#runCanonical(key, async (markMutationStarted) => {
+      if (this.#deleteSafety !== undefined && !(await this.#deleteSafety.canDelete({
+        namespace: "immutable", sha256: request.sha256,
+      }))) return false;
+      return this.#cleanupBarrier === undefined
+        ? this.#deleteImmutableObject(request, markMutationStarted)
+        : this.#cleanupBarrier.run(() => this.#deleteImmutableObject(request, markMutationStarted));
+    });
   }
 
-  async #deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean> {
+  async #deleteImmutableObject(
+    request: ImmutableObjectDeleteRequest,
+    markMutationStarted: () => () => void,
+  ): Promise<boolean> {
     assertDigest(request.sha256);
     assertUtc(request.createdBefore);
     assertUtc(request.expectedProtectedAt);
@@ -1862,10 +1967,12 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         current.customMetadata?.state === DELETE_STATE &&
         current.customMetadata.deleteBoundary === request.createdBefore
       ) {
+        markMutationStarted();
         await this.#bucket.delete(key);
         return true;
       }
       const bytes = await bodyBytes(current);
+      const confirmNoMutation = markMutationStarted();
       const claimed = await this.#bucket.put(key, bytes, {
         httpMetadata: { contentType: MARKDOWN },
         customMetadata: canonicalMetadata(
@@ -1879,7 +1986,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         ),
         onlyIf: { etagMatches: current.etag },
       });
-      if (!claimed) continue;
+      if (!claimed) { confirmNoMutation(); continue; }
       await this.#bucket.delete(key);
       return true;
     }
@@ -2489,6 +2596,8 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
 export async function createSitesObjectStore(
   bucket: R2BucketLike,
   cleanupBarrier?: CanonicalCleanupBarrier,
+  mutationGate?: CanonicalMutationGate,
+  deleteSafety?: CanonicalDeleteSafety,
 ): Promise<SitesObjectStore> {
-  return new SitesObjectStore(bucket, cleanupBarrier).ready();
+  return new SitesObjectStore(bucket, cleanupBarrier, mutationGate, deleteSafety).ready();
 }
