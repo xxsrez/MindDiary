@@ -10,6 +10,7 @@ import { AcceptanceSessionStore } from "./session-store.mjs";
 import { handleAcceptanceSession } from "./session-http.mjs";
 import { cleanupRun } from "./cleanup.mjs";
 import { acceptanceInventory } from "./inventory.mjs";
+import { canonicalGateProbe } from "./canonical-gate-probe.mjs";
 import { recoverOrphanOAuth } from "./oauth-recovery.mjs";
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
@@ -113,7 +114,7 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
           }
         }
         return { tables };
-      });
+      }, () => canonicalGateProbe(environment));
       if (sessionResponse) return sessionResponse;
       if (path.startsWith("/api/v1/internal/system-backup/")) {
         let backupRun;

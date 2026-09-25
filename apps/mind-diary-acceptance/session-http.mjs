@@ -33,7 +33,7 @@ async function controller(request, expected) {
   return difference === 0;
 }
 
-export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe) {
+export async function handleAcceptanceSession(request, store, controllerKey, cleanup, inventory, recoverOAuth, backupSchemaProbe, gateProbe) {
   const { pathname, origin } = new URL(request.url);
   if (!pathname.startsWith("/_acceptance/")) return null;
   if (origin !== ACCEPTANCE_ORIGIN) return json({ error: "wrong_audience" }, 403);
@@ -58,6 +58,7 @@ export async function handleAcceptanceSession(request, store, controllerKey, cle
       return json({ error: "not_found" }, 404);
     }
     if (pathname === "/_acceptance/inventory" && request.method === "GET" && inventory) return json(await inventory());
+    if (pathname === "/_acceptance/canonical-gate-probe" && request.method === "GET" && gateProbe) return json(await gateProbe());
     if (pathname === "/_acceptance/recover" && request.method === "POST" && cleanup) {
       if (Object.keys(await body(request)).length !== 0) return json({ error: "invalid_request" }, 400);
       await store.ready();
