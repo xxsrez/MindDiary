@@ -898,6 +898,18 @@ Internal operator query принимает bounded `query`, `state`,
 corpus/Mind names/request history и audit-ит только opaque operator,
 operation/time. Это не content MCP и не customer-wide user-search API.
 
+Для разрешённой диагностики MD-485 временно доступен только в Product UAT
+`GET /api/v1/internal/operators/diagnostics/md485-object-reachability` без
+query. Маршрут требует Sites identity, service-operator allowlist и текущую
+роль Owner конкретного автобусного Mind. Ответ содержит только состояние
+одной исторической capacity reservation и агрегаты R2 metadata по canonical
+объектам этого Mind: количество, байты, достижимость из текущих ревизий и
+временное окно создания; содержимое, object keys и сведения других Minds не
+возвращаются. Неполный обход R2 или изменение metadata sequence во время чтения
+даёт `503`. Это read-only исследование: совпадение времени создания с резервом
+не доказывает, что именно этот резерв записал объект. После адресного чтения
+маршрут удаляется отдельным UAT cut.
+
 Markdown import wire contract в local candidate:
 
 - plan принимает `expected_revision_id`, `Idempotency-Key` и полный массив

@@ -1243,6 +1243,29 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
       ));
     }
 
+  /** Internal scoped read for an authorized operator diagnostic. */
+  async listReachableSpaceCanonicalObjectsForSpace(spaceId: SpaceId): Promise<readonly Readonly<{
+    kind: "markdown" | "revision_manifest"; spaceId: SpaceId; sha256: Digest;
+  }>[]> {
+    const reachable = [...this._objectReachabilityCounts().spaceCanonical.keys()]
+      .flatMap((key) => {
+        const [kind, candidateSpaceId, sha256] = key.split("\u0000");
+        return candidateSpaceId === spaceId ? [Object.freeze({
+          kind: kind as "markdown" | "revision_manifest", spaceId,
+          sha256: sha256 as Digest,
+        })] : [];
+      });
+    for (const note of this._queuedNotes.values()) {
+      if (note.spaceId === spaceId && !reachable.some((item) =>
+        item.kind === "markdown" && item.sha256 === note.payloadHash)) {
+        reachable.push(Object.freeze({ kind: "markdown", spaceId,
+          sha256: note.payloadHash }));
+      }
+    }
+    return Object.freeze(reachable.sort((left, right) =>
+      left.kind.localeCompare(right.kind) || left.sha256.localeCompare(right.sha256)));
+  }
+
   async isSpaceCanonicalObjectReachable(
       kind: "markdown" | "revision_manifest",
       spaceId: SpaceId,

@@ -36,6 +36,11 @@ import {
   type R2BucketLike,
 } from "@mind-diary/adapter-object-sites";
 import {
+  authorizeMd485ObjectReachability,
+  createMd485ObjectReachability,
+  MD485_OBJECT_REACHABILITY_PATH,
+} from "./md485-object-reachability.js";
+import {
   createSitesSearchIndex,
   type D1DatabaseLike as SearchD1DatabaseLike,
 } from "@mind-diary/adapter-search-sites";
@@ -1739,6 +1744,26 @@ export async function createProductSiteRuntime(
     ...controlServices,
     consistentRead,
   });
+  const md485ObjectReachability = createMd485ObjectReachability({
+    bucket: options.bucket,
+    readSequence: async () => {
+      const rows = await options.database.prepare(
+        "SELECT backup_sequence AS sequence FROM md_backup_control WHERE singleton_id = 1",
+      ).all<{ sequence: number }>();
+      const row = rows.results?.[0];
+      if (!Number.isSafeInteger(row?.sequence)) throw new Error("metadata sequence unavailable");
+      return row!.sequence;
+    },
+    readMetadata: (mindId) => metadata.withConsistentRead(async (store) => ({
+      reservations: await store.listCapacityReservationsForSpace(mindId as never),
+      reachable: await store.listReachableSpaceCanonicalObjectsForSpace(mindId as never),
+    })),
+    authorizedMindId: authorizeMd485ObjectReachability({
+      resolveIdentity, operatorPrincipalIds: configuredOperatorPrincipalIds,
+      resolveTargetMind: (actor) => control.services.routes.resolveRoute(
+        actor as never, "/madeira-bus-schedules"),
+    }),
+  });
 
   const restrictedUatGeneratedSourceHandler =
     restrictedUatGeneratedSourceTest === undefined
@@ -2366,6 +2391,10 @@ export async function createProductSiteRuntime(
       const path = new URL(request.url).pathname;
       if (path.startsWith("/api/v1/internal/system-backup")) {
         return systemBackupHttp(request);
+      }
+      if (options.publicOrigin === "https://mind-diary.example.invalid" &&
+          path === MD485_OBJECT_REACHABILITY_PATH) {
+        return md485ObjectReachability(request);
       }
       const oauthResponse = await oauth.fetch(request);
       if (oauthResponse !== null) return oauthResponse;

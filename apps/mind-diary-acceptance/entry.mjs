@@ -14,6 +14,7 @@ import { recoverOrphanOAuth } from "./oauth-recovery.mjs";
 import { ACCEPTANCE_ORIGIN } from "./runtime-target.mjs";
 import { AcceptanceTelemetryJournal } from "./telemetry-journal.mjs";
 import { ACCEPTANCE_BACKUP_EXTRA_D1_SCHEMA } from "./backup-test-profile.mjs";
+import { recoverMd485RetiredKey } from "./md485-retired-key-recovery.mjs";
 
 export function createAcceptanceWorker({ createRuntime = createProductSiteRuntime } = {}) {
   const stores = new WeakMap();
@@ -113,7 +114,7 @@ export function createAcceptanceWorker({ createRuntime = createProductSiteRuntim
           }
         }
         return { tables };
-      });
+      }, (phase) => recoverMd485RetiredKey(environment, phase));
       if (sessionResponse) return sessionResponse;
       if (path.startsWith("/api/v1/internal/system-backup/")) {
         let backupRun;

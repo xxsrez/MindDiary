@@ -617,6 +617,16 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       ));
     }
 
+  /** Internal scoped read for an authorized operator diagnostic. */
+  async listCapacityReservationsForSpace(spaceId: SpaceId): Promise<readonly Readonly<CapacityReservation>[]> {
+    return this._runExclusive(async () => Object.freeze(
+      [...this._capacityReservations.values()]
+        .filter((reservation) => reservation.spaceId === spaceId)
+        .sort((left, right) => left.reservationId.localeCompare(right.reservationId))
+        .map(cloneCapacityReservation),
+    ));
+  }
+
   async readMindBindingSet(
       bindingOwnerId: MindBindingOwnerId,
       principalId: PrincipalId,
