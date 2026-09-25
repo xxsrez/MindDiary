@@ -507,6 +507,36 @@ export class AccountDeletionService {
           }
           if (candidates.length < 1_000) break;
         }
+        for (;;) {
+          const candidates = await this.#objects.listBundleFileObjects({
+            spaceId,
+            createdBefore: work.deleteBefore,
+            excluded: [],
+            limit: 1_000,
+          });
+          if (candidates.length === 0) break;
+          for (const candidate of candidates) {
+            const removed = await this.#objects.deleteBundleFileObject({
+              spaceId: candidate.spaceId,
+              sha256: candidate.sha256,
+              expectedProtectedAt: candidate.protectedAt,
+              createdBefore: work.deleteBefore,
+            });
+            if (!removed) throw new Error("BundleFile erasure changed during cleanup");
+            canonicalObjectsDeleted += 1;
+          }
+        }
+        for (;;) {
+          const stagedIds = await this.#accounts.listDeletionStagedBundleFiles(spaceId, 1_000);
+          if (stagedIds.length === 0) break;
+          for (const stagedId of stagedIds) {
+            await this.#objects.deleteStagedBundleFile(stagedId);
+            if (await this.#objects.getStagedBundleFile(stagedId) !== null ||
+                !(await this.#accounts.deleteDeletionStagedBundleFileRecord(spaceId, stagedId))) {
+              throw new Error("staged BundleFile erasure changed during cleanup");
+            }
+          }
+        }
       }
       const completed = await this.#accounts.runAccountDeletionTransaction(
         (transaction) =>

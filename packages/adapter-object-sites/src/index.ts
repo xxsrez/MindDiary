@@ -1414,8 +1414,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const excluded = new Set(
       request.excluded.map((item) => `${item.spaceId}\u0000${item.sha256}`),
     );
-    return Object.freeze((await this.#listAll(BUNDLE_PREFIX))
-      .filter((object) => (object.customMetadata?.state ?? ACTIVE_STATE) === ACTIVE_STATE)
+    const prefix = request.spaceId === undefined
+      ? BUNDLE_PREFIX
+      : `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/`;
+    return Object.freeze((await this.#listAll(prefix))
+      .filter((object) => {
+        const state = object.customMetadata?.state ?? ACTIVE_STATE;
+        return state === ACTIVE_STATE || state === DELETE_STATE;
+      })
       .map((object) => this.#bundleMetadata(object))
       .filter((item) =>
         !excluded.has(`${item.spaceId}\u0000${item.sha256}`) &&
@@ -1453,8 +1459,8 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       const state = current.customMetadata?.state ?? ACTIVE_STATE;
       if (state === DELETE_STATE) {
         if (current.customMetadata?.deleteBoundary !== request.createdBefore) return false;
-        await this.#bucket.delete(key);
         await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
+        await this.#bucket.delete(key);
         return true;
       }
       const bytes = await bodyBytes(current);
@@ -1478,8 +1484,8 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         onlyIf: { etagMatches: current.etag },
       });
       if (!claimed) continue;
-      await this.#bucket.delete(key);
       await this.#bucket.delete(integritySidecarKey(key, request.spaceId));
+      await this.#bucket.delete(key);
       return true;
     }
     throw new Error("R2 BundleFile delete CAS retry budget exhausted");

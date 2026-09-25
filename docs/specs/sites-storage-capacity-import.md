@@ -524,7 +524,10 @@ reopens it. It never rebases or partially imports automatically.
 
 Race policy is conservative: uncertain reachability skips deletion and emits a
 safe retry metric. Whole-Mind deletion uses its separate restartable erasure
-state machine; ordinary GC cannot replace that contract.
+state machine; ordinary GC cannot replace that contract. The erasure work item
+must finish scoped canonical BundleFile and verified staged-file removal,
+including integrity sidecars, before it is marked complete. Partial R2 failure
+keeps the work item retryable; a different Space's objects are never included.
 
 ## Privacy, threat model and operations
 

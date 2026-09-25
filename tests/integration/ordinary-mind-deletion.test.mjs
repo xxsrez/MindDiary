@@ -256,8 +256,50 @@ test("Owner preview is expiring, impact-bound and whole-Mind deletion leaves onl
   const env = harness();
   const owner = await createAccount(env, 1);
   const target = await createMind(env, owner);
+  const controlSpaceId = "space_delete_control";
+  const attachmentBytes = Uint8Array.of(1, 2, 3, 4);
+  const targetBundle = await env.objects.putBundleFile({
+    spaceId: target.mindId,
+    bytes: attachmentBytes,
+    mediaType: "application/zip",
+    createdAt: CREATED_AT,
+  });
+  const controlBundle = await env.objects.putBundleFile({
+    spaceId: controlSpaceId,
+    bytes: attachmentBytes,
+    mediaType: "application/zip",
+    createdAt: CREATED_AT,
+  });
+  const stagedId = "staged_mind_delete_target";
+  await env.objects.putStagedBundleFile({
+    stagedFileId: stagedId,
+    bindingOwnerId: "binding_owner_mind_delete",
+    spaceId: target.mindId,
+    bytes: attachmentBytes,
+    createdAt: CREATED_AT,
+  });
   await seedPrincipalToken(env, owner.principalId);
   await seedTargetBinding(env, owner.principalId, target.mindId);
+  const staged = await env.metadata.runBundleFileStagingTransaction((transaction) =>
+    transaction.createStagedBundleFile({
+      stagedFileId: stagedId,
+      bindingOwnerId: "binding_owner_mind_delete",
+      sourceKind: "session_attachment",
+      writeBindingId: "write_binding_mind_delete",
+      writeBindingGeneration: bindingVersion(1),
+      spaceId: target.mindId,
+      displayFilename: "bundle.zip",
+      mediaType: "application/zip",
+      sha256: targetBundle.object.sha256,
+      size: attachmentBytes.byteLength,
+      state: "verified",
+      createdAt: CREATED_AT,
+      expiresAt: "2026-08-07T07:00:00.000Z",
+      consumedAt: null,
+      rejectionCode: null,
+    }, 268_435_456, CREATED_AT),
+  );
+  assert.equal(staged.kind, "created");
   assert.equal(
     await env.metadata.changeOrdinaryVisibilityForTest(
       target.mindId,
@@ -404,6 +446,10 @@ test("Owner preview is expiring, impact-bound and whole-Mind deletion leaves onl
   for (const digest of targetDigests) {
     assert.equal(await env.objects.getImmutable(digest), null);
   }
+  assert.equal(await env.objects.getBundleFile(target.mindId, targetBundle.object.sha256), null);
+  assert.ok(await env.objects.getBundleFile(controlSpaceId, controlBundle.object.sha256));
+  assert.equal(await env.objects.getStagedBundleFile(stagedId), null);
+  assert.equal(await env.metadata.readStagedBundleFile(stagedId), null);
 
   const retry = await env.deletion.deleteSpace(
     actor(owner.principalId, "request_delete_retry"),

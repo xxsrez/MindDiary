@@ -3544,6 +3544,44 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
       idempotencyKey: "create-restartable-deletion",
     },
   );
+  const seedDeletionAttachment = async (spaceId, stagedFileId) => {
+    const bytes = Uint8Array.of(21, 22, 23);
+    const bundle = await boundary.objects.putBundleFile({
+      spaceId,
+      bytes,
+      mediaType: "application/zip",
+      createdAt: T1,
+    });
+    await boundary.objects.putStagedBundleFile({
+      stagedFileId,
+      bindingOwnerId: "binding_sites_erasure",
+      spaceId,
+      bytes,
+      createdAt: T1,
+    });
+    const staged = await boundary.metadata.runBundleFileStagingTransaction((transaction) =>
+      transaction.createStagedBundleFile({
+        stagedFileId,
+        bindingOwnerId: "binding_sites_erasure",
+        sourceKind: "session_attachment",
+        writeBindingId: "write_sites_erasure",
+        writeBindingGeneration: 1,
+        spaceId,
+        displayFilename: "erasure.zip",
+        mediaType: "application/zip",
+        sha256: bundle.object.sha256,
+        size: bytes.byteLength,
+        state: "verified",
+        createdAt: T1,
+        expiresAt: T5,
+        consumedAt: null,
+        rejectionCode: null,
+      }, 268_435_456, T1),
+    );
+    assert.equal(staged.kind, "created");
+    return bundle.object.sha256;
+  };
+  const mindBundleDigest = await seedDeletionAttachment(mind.mindId, "staged_sites_mind_erasure");
   const proofFor = (spaceId, baseRevisionId, baseManifestHash) => ({
     spaceId,
     baseRevisionId,
@@ -3633,6 +3671,9 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
   );
   assert.equal(mindResult.replayed, true);
   assert.deepEqual(await boundary.metadata.inspectDeletionCleanupForTest(), []);
+  assert.equal(await boundary.objects.getBundleFile(mind.mindId, mindBundleDigest), null);
+  assert.equal(await boundary.objects.getStagedBundleFile("staged_sites_mind_erasure"), null);
+  assert.equal(await boundary.metadata.readStagedBundleFile("staged_sites_mind_erasure"), null);
 
   let failAccountIndexPurge = true;
   const failingAccountIndex = {
@@ -3663,6 +3704,7 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
   const accountDeletion = new AccountDeletionService(accountDeletionOptions);
   const accountRecord = await boundary.metadata.readAccount(owner.principalId);
   const personalSpaceId = accountRecord.personalMind.space.spaceId;
+  const accountBundleDigest = await seedDeletionAttachment(personalSpaceId, "staged_sites_account_erasure");
   const personalBaseRevisionId = accountRecord.personalMind.space.headRevisionId;
   const personalBase = await boundary.metadata.readRevision(personalSpaceId, personalBaseRevisionId);
   assert.equal(await boundary.metadata.storePreflightProducerProof(
@@ -3719,6 +3761,9 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
   assert.equal(accountResult.replayed, true);
   assert.equal(await boundary.metadata.readAccount(owner.principalId), null);
   assert.deepEqual(await boundary.metadata.inspectAccountDeletionCleanupForTest(), []);
+  assert.equal(await boundary.objects.getBundleFile(personalSpaceId, accountBundleDigest), null);
+  assert.equal(await boundary.objects.getStagedBundleFile("staged_sites_account_erasure"), null);
+  assert.equal(await boundary.metadata.readStagedBundleFile("staged_sites_account_erasure"), null);
 });
 
 async function runObjectContract(name, factory) {
@@ -3871,6 +3916,50 @@ test("Sites Space-canonical cleanup resumes after crash between delete mark and 
     ),
     null,
   );
+});
+
+test("Sites BundleFile erasure resumes after a sidecar delete failure and stays Space-scoped", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  let store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const bytes = Uint8Array.of(1, 2, 3, 4);
+  const target = await store.putBundleFile({
+    spaceId: "space_bundle_erasure",
+    bytes,
+    mediaType: "application/zip",
+    createdAt: T0,
+  });
+  const control = await store.putBundleFile({
+    spaceId: "space_bundle_control",
+    bytes,
+    mediaType: "application/zip",
+    createdAt: T0,
+  });
+  bucket.failNextDelete();
+  await assert.rejects(store.deleteBundleFileObject({
+    spaceId: "space_bundle_erasure",
+    sha256: target.object.sha256,
+    expectedProtectedAt: target.object.protectedAt,
+    createdBefore: T1,
+  }), /synthetic R2 delete failure/u);
+  store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const pending = await store.listBundleFileObjects({
+    spaceId: "space_bundle_erasure",
+    createdBefore: T2,
+    excluded: [],
+    limit: 10,
+  });
+  assert.equal(pending.length, 1);
+  assert.equal(await store.deleteBundleFileObject({
+    spaceId: pending[0].spaceId,
+    sha256: pending[0].sha256,
+    expectedProtectedAt: pending[0].protectedAt,
+    createdBefore: T1,
+  }), true);
+  assert.equal(await store.getBundleFile("space_bundle_erasure", target.object.sha256), null);
+  assert.ok(await store.getBundleFile("space_bundle_control", control.object.sha256));
+  assert.equal([...bucket.records.keys()].some((key) =>
+    key.startsWith("spaces/space_bundle_erasure/integrity/")), false);
 });
 
 test("R2 cleanup is lease-safe, restartable after failure, and export cleanup is durable", async () => {

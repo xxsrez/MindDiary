@@ -284,6 +284,47 @@ test("preview binds the exact cascade and deletion preserves foreign revisions w
   );
   const tokenId = await seedToken(env, deleted.principalId);
   await seedAccountBinding(env, deleted.principalId, owned.mindId);
+  const attachmentBytes = Uint8Array.of(7, 8, 9);
+  const ownedBundle = await env.objects.putBundleFile({
+    spaceId: owned.mindId,
+    bytes: attachmentBytes,
+    mediaType: "application/zip",
+    createdAt: CREATED_AT,
+  });
+  const survivorBundle = await env.objects.putBundleFile({
+    spaceId: foreignMembershipMind.mindId,
+    bytes: attachmentBytes,
+    mediaType: "application/zip",
+    createdAt: CREATED_AT,
+  });
+  const stagedId = "staged_account_delete_target";
+  await env.objects.putStagedBundleFile({
+    stagedFileId: stagedId,
+    bindingOwnerId: "binding_owner_account_delete",
+    spaceId: owned.mindId,
+    bytes: attachmentBytes,
+    createdAt: CREATED_AT,
+  });
+  const staged = await env.metadata.runBundleFileStagingTransaction((transaction) =>
+    transaction.createStagedBundleFile({
+      stagedFileId: stagedId,
+      bindingOwnerId: "binding_owner_account_delete",
+      sourceKind: "session_attachment",
+      writeBindingId: "write_binding_account_delete",
+      writeBindingGeneration: bindingVersion(1),
+      spaceId: owned.mindId,
+      displayFilename: "account.zip",
+      mediaType: "application/zip",
+      sha256: ownedBundle.object.sha256,
+      size: attachmentBytes.byteLength,
+      state: "verified",
+      createdAt: CREATED_AT,
+      expiresAt: "2026-08-07T08:00:00.000Z",
+      consumedAt: null,
+      rejectionCode: null,
+    }, 268_435_456, CREATED_AT),
+  );
+  assert.equal(staged.kind, "created");
   const foreignRevisionId = await seedForeignRevision(
     env,
     foreignMembershipMind,
@@ -330,6 +371,10 @@ test("preview binds the exact cascade and deletion preserves foreign revisions w
   assert.equal(result.replayed, false);
   assert.equal(result.spacesDeleted, 2);
   assert.equal(result.tokensRevoked, 1);
+  assert.equal(await env.objects.getBundleFile(owned.mindId, ownedBundle.object.sha256), null);
+  assert.ok(await env.objects.getBundleFile(foreignMembershipMind.mindId, survivorBundle.object.sha256));
+  assert.equal(await env.objects.getStagedBundleFile(stagedId), null);
+  assert.equal(await env.metadata.readStagedBundleFile(stagedId), null);
   assert.equal(await env.metadata.readAccount(deleted.principalId), null);
   assert.equal(await env.metadata.readPrincipalActivity(deleted.principalId), null);
   const bindingsAfterDeletion = await env.metadata.readMindBindingSet(

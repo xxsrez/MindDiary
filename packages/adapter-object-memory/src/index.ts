@@ -737,6 +737,7 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     );
     return Object.freeze([...this.#bundleFiles.entries()]
       .filter(([, item]) =>
+        (request.spaceId === undefined || item.spaceId === request.spaceId) &&
         !excluded.has(`${item.spaceId}:${item.sha256}`) &&
         compareUtc(item.protectedAt, request.createdBefore) < 0)
       .sort(([, left], [, right]) =>
