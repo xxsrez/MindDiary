@@ -34,3 +34,29 @@ test("controller and browser exchange reject forged identity, origin and oversiz
   assert.match(accepted.headers.get("set-cookie"), /HttpOnly/);
   assert.equal((await call("/_acceptance/session", { code: exchange.code }, { origin: ACCEPTANCE_ORIGIN })).status, 401);
 });
+
+test("product recovery is controller-only and accepts only bounded clock modes", async (t) => {
+  const db = new SqliteD1(); t.after(() => db.close());
+  const store = new AcceptanceSessionStore(db), key = "a".repeat(43);
+  const run = await store.create({}, "product-recovery-test-run-0001");
+  const calls = [];
+  const request = (input, headers = {}) => handleAcceptanceSession(
+    new Request(ACCEPTANCE_ORIGIN + `/_acceptance/runs/${run.id}/product-recovery`, {
+      method: "POST", headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(input),
+    }),
+    store, key, undefined, undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, undefined, undefined,
+    async (runId, hours) => {
+      calls.push({ runId, hours });
+      return { run_id: runId, clock: hours === 0 ? "system" : "advanced_25_hours" };
+    },
+  );
+  assert.equal((await request({ advance_hours: 0 })).status, 401);
+  const controller = { authorization: `Bearer ${key}` };
+  assert.equal((await request({ advance_hours: 24 }, controller)).status, 400);
+  assert.equal((await request({ advance_hours: 25, extra: true }, controller)).status, 400);
+  assert.equal((await request({ advance_hours: 0 }, controller)).status, 200);
+  assert.equal((await request({ advance_hours: 25 }, controller)).status, 200);
+  assert.deepEqual(calls, [{ runId: run.id, hours: 0 }, { runId: run.id, hours: 25 }]);
+});
