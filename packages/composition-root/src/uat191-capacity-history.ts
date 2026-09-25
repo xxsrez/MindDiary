@@ -284,6 +284,7 @@ export function createUat191CapacityHistory(input: {
     }
     const actor = await input.authorizedActor(request).catch(() => null);
     if (actor === null) return response(404, { ok: false, error: "not_found" });
+    let stage = "snapshot";
     try {
       const headResult = await input.database.prepare(
         `/*md485-capacity-head*/ SELECT sequence, chunk_count, payload_chars, updated_at
@@ -508,6 +509,7 @@ export function createUat191CapacityHistory(input: {
         }
       }
       if (targetCandidates.length > 10) throw new Error("too many target candidates");
+      stage = "incident_event";
       const incidentResult = await input.database.prepare(
         `/*md485-target-incident*/ SELECT sequence, payload_json, committed_at
          FROM md_metadata_events WHERE sequence = 13025 AND target = 'metadata'`,
@@ -528,6 +530,7 @@ export function createUat191CapacityHistory(input: {
           incidentRequested === null || incidentArgs?.heavy !== true) {
         throw new Error("incident request invalid");
       }
+      stage = "incident_prior";
       const priorIncidentResult = await input.database.prepare(
         `/*md485-incident-prior*/ SELECT sequence, payload_json, committed_at
          FROM md_metadata_events WHERE sequence BETWEEN 1269 AND 13024
@@ -547,6 +550,7 @@ export function createUat191CapacityHistory(input: {
         prior_admission_calls_with_same_id: priorIncidentCalls.filter((call) =>
           call.method === "admitCapacityReservation").length,
         present_in_current_snapshot: snapshotReservations.has(incidentId) };
+      stage = "target_trace";
       const targetCandidateTraces: Record<string, unknown>[] = [];
       for (const candidate of targetCandidates) {
         const id = safeId(candidate.reservationId);
@@ -608,6 +612,7 @@ export function createUat191CapacityHistory(input: {
             archive_cleaned_at: job.archiveCleanedAt,
           } });
       }
+      stage = "collector_summary";
       const collectorColumns = targetCandidates.map((_, index) =>
         `SUM(CASE WHEN committed_at >= ?${index + 5} AND committed_at < ?3 THEN 1 ELSE 0 END) AS since_expiry_${index}`);
       const collectorResult = await input.database.prepare(
@@ -675,7 +680,7 @@ export function createUat191CapacityHistory(input: {
         interpretation: "Events list committed callbacks' attempted calls, not return values; failed import admission can be absent. Confirmed create follows an export/import admission in the same transaction or a later stage record. Terminal calls are observed calls, not proof of successful state transitions. Ledger and memberships are as of snapshot_sequence, may lag the latest event, and are not historical state at the incident. Snapshot rows cannot exclude deleted or reacquired reservations. A snapshot state of active can be expired by time. IDs are disclosed only for the currently owner-authorized target Mind.",
       } });
     } catch {
-      return response(503, { ok: false, error: "diagnostic_unavailable" });
+      return response(503, { ok: false, error: "diagnostic_unavailable", stage });
     }
   };
 }
