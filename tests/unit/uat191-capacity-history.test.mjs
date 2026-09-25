@@ -56,7 +56,9 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
       }]]),
       capacityReservations: encodedMap([
         [ownId, { reservationId: ownId, spaceId: OWN, heavy: true,
-          createdAt: "2026-09-21T10:00:01.000Z", state: "released", updatedAt: "2026-09-21T12:00:00.000Z" }],
+          operation: "export", operationRef: "job-own",
+          createdAt: "2026-09-21T10:00:01.000Z", expiresAt: "2026-09-21T12:00:00.000Z",
+          state: "released", updatedAt: "2026-09-25T12:00:00.000Z" }],
         [foreignId, { reservationId: foreignId, spaceId: FOREIGN, heavy: true,
           createdAt: "2026-09-21T10:00:02.000Z", state: "active", updatedAt: "2026-09-21T10:00:02.000Z" }],
       ]),
@@ -107,6 +109,13 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
                   payload_json: '{"v":1,"kind":"direct","target":"tokens","method":"noop","args":[]}' };
               }) };
           }
+          if (sql.includes("/*md485-target-collectors*/")) return {
+            success: true, results: [],
+          };
+          if (sql.includes("/*md485-target-related*/")) return {
+            success: true, results: [event(1, ownId, OWN, "job-own"),
+              event(2, foreignId, FOREIGN, "job-foreign")],
+          };
           if (sql.includes("/*md485-capacity-events*/")) {
             assert.match(sql, /completeExpiredExportCleanup/u);
             return { success: true,
@@ -168,7 +177,9 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
   const boundedBody = await bounded.json();
   assert.equal(boundedBody.data.historical_replay.status, "skipped_after_hosted_timeout");
   assert.deepEqual(boundedBody.data.snapshot_rows_created_before_cutoff_possible_active,
-    { target: 0, owned_other: 0, site_other: 1 });
+    { target: 1, owned_other: 0, site_other: 1 });
+  assert.equal(boundedBody.data.target_candidate_traces[0].reservation_id, ownId);
+  assert.equal(boundedBody.data.target_candidate_traces[0].related_calls.length, 1);
   assert.equal(JSON.stringify(boundedBody).includes(foreignId), false);
 });
 

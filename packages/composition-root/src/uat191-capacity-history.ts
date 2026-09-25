@@ -472,6 +472,7 @@ export function createUat191CapacityHistory(input: {
       const lastTransitionBeforeCutoffNonactive = { target: 0, owned_other: 0, site_other: 0 };
       const possibleExpiredAtCutoff = { target: 0, owned_other: 0, site_other: 0 };
       const snapshotRowsCreatedAfterCutoff = { target: 0, owned_other: 0, site_other: 0 };
+      const targetCandidates: Record<string, unknown>[] = [];
       for (const reservation of snapshotReservations.values()) {
         if (reservation.heavy !== true ||
             typeof reservation.createdAt !== "string" ||
@@ -492,10 +493,78 @@ export function createUat191CapacityHistory(input: {
           if (typeof reservation.expiresAt === "string" && reservation.expiresAt <= AT) {
             possibleExpiredAtCutoff[scope] += 1;
           }
+          if (scope === "target") targetCandidates.push(reservation);
         } else {
           lastTransitionBeforeCutoffNonactive[scope] += 1;
         }
       }
+      if (targetCandidates.length > 10) throw new Error("too many target candidates");
+      const targetCandidateTraces: Record<string, unknown>[] = [];
+      for (const candidate of targetCandidates) {
+        const id = safeId(candidate.reservationId);
+        const ref = safeId(candidate.operationRef);
+        if (id === null || ref === null) throw new Error("invalid candidate identifier");
+        const relatedResult = await input.database.prepare(
+          `/*md485-target-related*/ SELECT sequence, payload_json, committed_at
+           FROM md_metadata_events WHERE target = 'metadata'
+             AND (instr(payload_json, ?1) > 0 OR instr(payload_json, ?2) > 0)
+           ORDER BY sequence ASC LIMIT 201`,
+        ).bind(id, ref).all<EventRow>();
+        const relatedRows = relatedResult.results ?? [];
+        if (relatedResult.success === false || relatedRows.length > 200) {
+          throw new Error("target event trace unavailable");
+        }
+        const relatedCalls = relatedRows.map((row) => {
+          const event = object(JSON.parse(row.payload_json));
+          return { sequence: row.sequence, committed_at: row.committed_at,
+            methods: calls(event).filter((call) => {
+              const args = JSON.stringify(call.args ?? []);
+              return args.includes(id) || args.includes(ref);
+            }).map((call) => String(call.method)).slice(0, 20) };
+        }).filter((item) => item.methods.length > 0);
+        const exportJobs = metadata.exportJobs;
+        const job = pairs(exportJobs).map(([, value]) => object(value))
+          .find((value) => value?.jobId === ref);
+        targetCandidateTraces.push({ reservation_id: id, operation_ref: ref,
+          operation: candidate.operation, created_at_snapshot: candidate.createdAt,
+          expires_at_snapshot: candidate.expiresAt, state_at_snapshot: candidate.state,
+          updated_at_snapshot: candidate.updatedAt,
+          related_calls: relatedCalls,
+          job_at_snapshot: job == null ? null : {
+            state: job.state, version: job.version, updated_at: job.updatedAt,
+            completed_at: job.completedAt, expires_at: job.expiresAt,
+            archive_cleaned_at: job.archiveCleanedAt,
+          } });
+      }
+      const collectorResult = await input.database.prepare(
+        `/*md485-target-collectors*/ SELECT sequence, payload_json, committed_at
+         FROM md_metadata_events WHERE target = 'metadata' AND committed_at < ?1
+           AND instr(payload_json, 'collectExpiredCapacityReservations') > 0
+         ORDER BY sequence ASC LIMIT 201`,
+      ).bind("2026-09-21T15:41:52.951Z").all<EventRow>();
+      const collectorRows = collectorResult.results ?? [];
+      if (collectorResult.success === false || collectorRows.length > 200) {
+        throw new Error("collector trace unavailable");
+      }
+      const collectorCallsBeforeImport = collectorRows.flatMap((row) => {
+        const event = object(JSON.parse(row.payload_json));
+        return calls(event).filter((call) =>
+          call.method === "collectExpiredCapacityReservations").map(() => ({
+            committed_at: row.committed_at,
+          }));
+      });
+      const collectorCounts = {
+        before_export: collectorCallsBeforeImport.filter((call) =>
+          call.committed_at < AT).length,
+        export_to_import: collectorCallsBeforeImport.filter((call) =>
+          call.committed_at >= AT).length,
+        since_target_expiry_before_export: targetCandidates.map((candidate) => ({
+          reservation_id: candidate.reservationId,
+          count: collectorCallsBeforeImport.filter((call) =>
+            typeof candidate.expiresAt === "string" &&
+            call.committed_at >= candidate.expiresAt && call.committed_at < AT).length,
+        })),
+      };
       return response(200, { ok: true, data: {
         incident: "MD-485/UAT191", from_utc: FROM, before_utc: AT,
         historical_replay_feasibility: {
@@ -530,6 +599,8 @@ export function createUat191CapacityHistory(input: {
         snapshot_rows_created_before_cutoff_last_transition_nonactive: lastTransitionBeforeCutoffNonactive,
         snapshot_rows_created_before_cutoff_possible_expired: possibleExpiredAtCutoff,
         snapshot_rows_created_after_cutoff: snapshotRowsCreatedAfterCutoff,
+        target_candidate_traces: targetCandidateTraces,
+        collector_counts: collectorCounts,
         target_reservations: owned,
         limits_at_incident: { mind: 1, owner: 2, site: 8 },
         interpretation: "Events list committed callbacks' attempted calls, not return values; failed import admission can be absent. Confirmed create follows an export/import admission in the same transaction or a later stage record. Terminal calls are observed calls, not proof of successful state transitions. Ledger and memberships are as of snapshot_sequence, may lag the latest event, and are not historical state at the incident. Snapshot rows cannot exclude deleted or reacquired reservations. A snapshot state of active can be expired by time. IDs are disclosed only for the currently owner-authorized target Mind.",
