@@ -144,8 +144,7 @@ export function createUat191CapacityHistory(input: {
       const eventResult = await input.database.prepare(
         `/*md485-capacity-events*/ SELECT sequence, payload_json, committed_at
          FROM md_metadata_events
-         WHERE sequence < 13025 AND committed_at >= ?1 AND committed_at < ?2
-           AND target = 'metadata'
+         WHERE committed_at >= ?1 AND committed_at < ?2 AND target = 'metadata'
            AND (instr(payload_json, 'capacity:') > 0 OR
                 instr(payload_json, '"heavy":true') > 0 OR
                 instr(payload_json, '"method":"completeExportJob"') > 0 OR

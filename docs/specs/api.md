@@ -573,12 +573,13 @@ exact Origin и CSRF; не добавляет MCP tools/scopes или права
 оператор из allowlist, который сейчас является Owner `/madeira-bus-schedules`;
 остальные запросы получают `404`. Параметров нет. Маршрут читает только D1:
 последний сохранённый metadata snapshot и ограниченную выборку событий capacity за
-20.09.2026 15:30–21.09.2026 15:40 UTC. Он не меняет canonical state.
+20.09.2026 15:30 UTC до 21.09.2026 15:40:15.540 UTC, не включая правую
+границу. Он не меняет canonical state.
 
 Ответ содержит идентификаторы резервирований только для целевого Mind, у которого
 запрашивающий сейчас Owner. Для прочих Minds выводятся лишь суммарные числа по
-событиям и ledger из сохранённого snapshot,
-без principal/Mind/job/reservation identifiers, содержимого, путей, email и
+событиям и ledger из сохранённого snapshot, без principal/Mind/job/reservation
+identifiers, содержимого, путей, email и
 секретов. Событие `admitCapacityReservation` фиксирует вызов, а не результат;
 создание job/session в той же транзакции либо staged record отдельно отмечается
 как подтверждение. Snapshot может отставать от последних событий и не является
