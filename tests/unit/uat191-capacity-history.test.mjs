@@ -58,6 +58,14 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
           }] };
           if (sql.includes("/*md485-capacity-chunks*/")) return { success: true,
             results: [{ chunk_index: 0, payload_json: snapshot }] };
+          if (sql.includes("/*md485-capacity-historical-stats*/")) return {
+            success: true, results: [{ event_count: 11756, payload_chars: 100000,
+              first_sequence: 1269, last_sequence: 13024 }],
+          };
+          if (sql.includes("/*md485-capacity-legacy-snapshot*/")) return {
+            success: true, results: [{ sequence: 1268, payload_json: snapshot,
+              updated_at: "2026-08-23T02:11:42.275Z" }],
+          };
           if (sql.includes("/*md485-capacity-events*/")) {
             assert.match(sql, /completeExpiredExportCleanup/u);
             return { success: true,
@@ -98,6 +106,7 @@ test("UAT191 capacity summary never exposes another owner's identifiers", async 
   assert.deepEqual(body.data.confirmed_without_terminal_call_unexpired_at_cutoff,
     { target: 0, owned_other: 0, site_other: 1 });
   assert.equal(body.data.target_reservations[0].reservation_id, ownId);
+  assert.equal(body.data.historical_replay_feasibility.contiguous_by_count, true);
   assert.equal(JSON.stringify(body).includes(foreignId), false);
   assert.equal(JSON.stringify(body).includes(FOREIGN), false);
   assert.equal(JSON.stringify(body).includes("job-foreign"), false);

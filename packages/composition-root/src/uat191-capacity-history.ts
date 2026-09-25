@@ -28,6 +28,17 @@ interface HeadRow {
   readonly payload_chars: number;
   readonly updated_at: string;
 }
+interface HistoricalStatsRow {
+  readonly event_count: number;
+  readonly payload_chars: number;
+  readonly first_sequence: number;
+  readonly last_sequence: number;
+}
+interface LegacySnapshotRow {
+  readonly sequence: number;
+  readonly payload_json: string;
+  readonly updated_at: string;
+}
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -124,6 +135,28 @@ export function createUat191CapacityHistory(input: {
       const snapshot = object(JSON.parse(encoded));
       const metadata = object(snapshot?.metadata);
       if (snapshot?.v !== 1 || metadata === null) throw new Error("snapshot invalid");
+      const historicalStatsResult = await input.database.prepare(
+        `/*md485-capacity-historical-stats*/ SELECT COUNT(*) AS event_count,
+          COALESCE(SUM(LENGTH(payload_json)), 0) AS payload_chars,
+          MIN(sequence) AS first_sequence, MAX(sequence) AS last_sequence
+         FROM md_metadata_events WHERE sequence BETWEEN 1269 AND 13024`,
+      ).all<HistoricalStatsRow>();
+      const historicalStats = historicalStatsResult.results?.[0];
+      if (historicalStatsResult.success === false || historicalStats === undefined) {
+        throw new Error("historical event stats unavailable");
+      }
+      const legacySnapshotResult = await input.database.prepare(
+        `/*md485-capacity-legacy-snapshot*/ SELECT sequence, payload_json, updated_at
+         FROM md_metadata_snapshots WHERE singleton_id = 1`,
+      ).all<LegacySnapshotRow>();
+      const legacySnapshot = legacySnapshotResult.results?.[0];
+      if (legacySnapshotResult.success === false || legacySnapshot === undefined ||
+          legacySnapshot.sequence !== 1268) throw new Error("legacy snapshot unavailable");
+      const legacyEnvelope = object(JSON.parse(legacySnapshot.payload_json));
+      const legacyMetadata = object(legacyEnvelope?.metadata);
+      if (legacyEnvelope?.v !== 1 || legacyMetadata === null) {
+        throw new Error("legacy snapshot invalid");
+      }
       const ownedMindIds = new Set<string>();
       for (const [, entry] of pairs(metadata.memberships)) {
         const membership = object(entry);
@@ -270,6 +303,20 @@ export function createUat191CapacityHistory(input: {
       }
       return response(200, { ok: true, data: {
         incident: "MD-485/UAT191", from_utc: FROM, before_utc: AT,
+        historical_replay_feasibility: {
+          checkpoint_sequence: legacySnapshot.sequence,
+          checkpoint_updated_at: legacySnapshot.updated_at,
+          checkpoint_payload_chars: legacySnapshot.payload_json.length,
+          metadata_snapshot_version: legacyMetadata.v ?? null,
+          checkpoint_heavy_reservations: pairs(legacyMetadata.capacityReservations)
+            .filter(([, value]) => object(value)?.heavy === true).length,
+          event_count: historicalStats.event_count,
+          event_payload_chars: historicalStats.payload_chars,
+          first_sequence: historicalStats.first_sequence,
+          last_sequence: historicalStats.last_sequence,
+          contiguous_by_count: historicalStats.event_count === 11756 &&
+            historicalStats.first_sequence === 1269 && historicalStats.last_sequence === 13024,
+        },
         snapshot_sequence: head.sequence, snapshot_updated_at: head.updated_at,
         events_scanned: rows.length,
         distinct_heavy_admission_ids_seen: byScope,
