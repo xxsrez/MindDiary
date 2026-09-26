@@ -19,6 +19,15 @@ const STAGED_FILES = [
 
 const first = (database, sql, ...args) => database.prepare(sql).bind(...args).first();
 
+export function stagingWriterClosed(session) {
+  return session === null || (session.importId === IMPORT_ID &&
+    session.spaceId === SPACE_ID && session.state === "committed" &&
+    session.activeStepId == null && session.unsettledWriterPossible === false &&
+    Array.isArray(session.activeStagingStepIds) && session.activeStagingStepIds.length === 0 &&
+    Array.isArray(session.armedStagingStepIds) && session.armedStagingStepIds.length === 0 &&
+    Array.isArray(session.unsettledStepIds) && session.unsettledStepIds.length === 0);
+}
+
 async function inspect(environment) {
   const database = environment.DB;
   const bucket = environment.MIND_DIARY_BUCKET;
@@ -107,6 +116,7 @@ export async function recoverMd485RetiredKey(environment, phase) {
       object_count: before.inventory.object_count,
       import_record: session ? { state: session.state, active_step: session.activeStepId ?? null,
         staging_steps: session.activeStagingStepIds?.length ?? null,
+        armed_staging_steps: session.armedStagingStepIds?.length ?? null,
         unsettled_steps: session.unsettledStepIds?.length ?? null,
         unsettled_writer: session.unsettledWriterPossible ?? null,
         cleanup_completed_at: session.cleanupCompletedAt } : null,
@@ -131,7 +141,7 @@ export async function recoverMd485RetiredKey(environment, phase) {
   if (phase === "delete_staging") {
     const metadata = await createSitesMetadataStore(environment.DB);
     if (!before.actorDone || before.objectPresent || before.sidecarPresent ||
-        await metadata.readMarkdownImportSession(IMPORT_ID) !== null) {
+        !stagingWriterClosed(await metadata.readMarkdownImportSession(IMPORT_ID))) {
       throw new Error("recovery_staging_preflight_failed");
     }
     // Validate the entire exact allowlist before the first destructive call.

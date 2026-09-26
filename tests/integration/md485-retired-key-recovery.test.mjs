@@ -4,7 +4,21 @@ import { SqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
 import { createSitesMetadataStore } from "../../packages/adapter-metadata-sites/dist/index.js";
 import { DEFAULT_CAPACITY_LIMITS } from "../../packages/application-content/dist/index.js";
 import { AcceptanceSessionStore } from "../../apps/mind-diary-acceptance/session-store.mjs";
-import { recoverMd485RetiredKey } from "../../apps/mind-diary-acceptance/md485-retired-key-recovery.mjs";
+import { recoverMd485RetiredKey, stagingWriterClosed } from "../../apps/mind-diary-acceptance/md485-retired-key-recovery.mjs";
+
+test("retained committed import permits staging cleanup only with explicit closed writers", () => {
+  const session = { importId: "import_02d9cd7c-c7d8-4928-877f-a69e10df7fa0",
+    spaceId: "space_f631d87d-b34a-4bf2-94e7-53f6cc38f653", state: "committed",
+    activeStepId: null, unsettledWriterPossible: false, activeStagingStepIds: [],
+    armedStagingStepIds: [], unsettledStepIds: [] };
+  assert.equal(stagingWriterClosed(session), true);
+  for (const change of [{ state: "staging" }, { spaceId: "other" },
+    { importId: "other" }, { activeStepId: "active" }, { unsettledWriterPossible: true },
+    { activeStagingStepIds: ["active"] }, { armedStagingStepIds: ["armed"] },
+    { unsettledStepIds: ["unknown"] }, { armedStagingStepIds: undefined }]) {
+    assert.equal(stagingWriterClosed({ ...session, ...change }), false);
+  }
+});
 
 const runId = "c9520f86-1879-46a6-81ff-d1b5a5f92db2";
 const spaceId = "space_f631d87d-b34a-4bf2-94e7-53f6cc38f653";
