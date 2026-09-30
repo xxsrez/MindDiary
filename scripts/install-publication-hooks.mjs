@@ -12,4 +12,3 @@ if (existing && resolve(root, existing) !== hooks) {
 for (const name of ["pre-commit", "commit-msg", "pre-push"]) chmodSync(resolve(hooks, name), 0o755);
 git(["config", "--local", "core.hooksPath", hooks]);
 console.log("Publication hooks installed for this Git repository and its linked worktrees.");
-

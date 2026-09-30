@@ -75,4 +75,3 @@ Shallow clone и недоступные объекты не дают полож�
 
 [GitHub: удаление чувствительных данных](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
 описывает ограничения force push, PR refs, cached views и чужих клонов.
-

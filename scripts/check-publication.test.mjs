@@ -50,3 +50,13 @@ test("history scan finds a secret removed from HEAD and commit messages", () => 
 test("missing Git object and missing commit message fail closed", () => fixture(({ scan }) => {
   assert.equal(scan("--commit-message", "missing").status, 1);
 }));
+
+test("annotated tag messages and tracked environment files cannot bypass the scan", () => fixture(({ root, git, scan }) => {
+  writeFileSync(join(root, "sample.md"), "safe");
+  git("add", "sample.md"); git("commit", "-qm", "initial");
+  git("tag", "-a", "release", "-m", claim);
+  assert.equal(scan("--history").status, 1);
+  writeFileSync(join(root, ".env"), "CONFIG=local");
+  git("add", ".env");
+  assert.equal(scan("--staged").status, 1);
+}));

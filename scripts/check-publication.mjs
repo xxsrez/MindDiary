@@ -71,18 +71,23 @@ export async function main(args) {
   const failures = [];
   let count = 0;
   const inspect = (id, kind, bytes) => {
-    if (!["blob", "commit", "tag"].includes(kind)) return;
+    if (!["blob", "tree", "commit", "tag", "ref", "path"].includes(kind)) return;
     for (const label of findings(bytes, kind)) failures.push(`${kind} ${id.slice(0, 12)}: ${label}`);
   };
   if (args[0] === "--history" || args[0] === "--pre-push") {
     if (git(["rev-parse", "--is-shallow-repository"]).toString().trim() === "true") throw new Error("Full history is required");
     let revisions = ["--all"];
     if (args[0] === "--pre-push") {
-      revisions = readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((line) => line.split(/\s+/)[1])
-        .filter((oid) => !/^0+$/.test(oid));
+      const updates = readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((line) => line.split(/\s+/));
+      for (const [localRef, , remoteRef] of updates) inspect("push-ref", "ref", Buffer.from(localRef + "\n" + remoteRef));
+      revisions = updates.map((fields) => fields[1]).filter((oid) => !/^0+$/.test(oid));
       if (revisions.some((oid) => !/^[0-9a-f]{40,64}$/.test(oid))) throw new Error("Invalid push input");
-      if (!revisions.length) { console.log("Publication scan: no objects to push."); return; }
+      if (!revisions.length) {
+        if (failures.length) throw new Error("Unsafe push ref");
+        console.log("Publication scan: no objects to push."); return;
+      }
     }
+    if (args[0] === "--history") inspect("all-refs", "ref", git(["for-each-ref", "--format=%(refname)"]));
     const lines = git(["rev-list", "--objects", "--no-object-names", ...revisions]).toString().trim();
     const ids = [...new Set(lines ? lines.split("\n") : [])];
     count = await scanObjects(ids, inspect);
@@ -91,6 +96,7 @@ export async function main(args) {
     const ids = [];
     for (const entry of entries) {
       const [meta, path] = entry.split("\t");
+      inspect("index-path", "path", Buffer.from(path));
       const [mode, oid, stage] = meta.split(" ");
       if (stage !== "0") throw new Error("Resolve index conflicts before publication scan");
       if (/(^|\/)\.env(?:\..*)?$/.test(path) && !path.endsWith(".env.example")) failures.push("index: private environment file");
