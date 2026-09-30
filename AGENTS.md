@@ -319,6 +319,15 @@ delivery profile и ADR-0008/ADR-0009
 
 ## Безопасность
 
+- Приватные настройки и материалы владельца находятся только внутри рабочей
+  папки: `.private/config`, `.private/acceptance`, `.private/archive`.
+  Внешние символьные ссылки и зависимость от прежней рабочей папки запрещены.
+  `.private/`, `.dev.vars*` и `*.git.bundle` никогда не добавляйте в Git,
+  source mirror или публикуемый artifact. Архив содержит неочищенные данные;
+  перед использованием в публичном коде нужна отдельная проверка. Настройка:
+  `npm run private:setup`, проверка: `npm run private:check`. Действующий
+  приватный release profile — `.private/release-profile.md`.
+
 - Spaces по умолчанию приватны. Не логируйте содержимое приватных concepts,
   chunks, source content, access tokens или download URLs.
 - Переключать `private | unlisted | public` может только Owner. Для `public` и

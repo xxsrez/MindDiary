@@ -1,3 +1,4 @@
+import { privateAcceptanceDirectory } from "./lib/private-operations.mjs";
 // One scoped acceptance journey; deliberately not a full model-suite receipt.
 import assert from "node:assert/strict";
 import { readFile, readdir, writeFile, appendFile, mkdir } from "node:fs/promises";
@@ -11,7 +12,7 @@ import { AcceptanceModelServer } from "./lib/acceptance-model-server.mjs";
 
 const [tag, identityFile, plugin] = process.argv.slice(2);
 assert.match(tag ?? "", /^[a-zA-Z0-9_-]{1,80}$/);
-const root = join(homedir(), ".codex/private/mind-diary-acceptance");
+const root = privateAcceptanceDirectory();
 assert.ok(plugin?.startsWith(join(homedir(), ".codex/plugins/cache/")));
 const identity = JSON.parse(await readFile(identityFile, "utf8"));
 const skill = await readFile(join(plugin, "skills/mind-diary/SKILL.md"), "utf8");

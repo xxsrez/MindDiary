@@ -18,7 +18,7 @@ process.once("uncaughtException", error => {
   console.error(JSON.stringify({ status: "failed", phase, kind, diagnostics: diagnostics.slice(-12) })); process.exit(1);
 });
 
-const origin = "https://mind-diary-acceptance.example.invalid";
+const origin = process.env.MIND_DIARY_ACCEPTANCE_ORIGIN ?? "https://mind-diary-acceptance.example.invalid";
 const platformToken = process.env.MD_ACCEPTANCE_PLATFORM_TOKEN;
 const controllerKey = process.env.MD_ACCEPTANCE_CONTROLLER_KEY;
 const clientId = process.env.MD_ACCEPTANCE_OAUTH_CLIENT_ID;

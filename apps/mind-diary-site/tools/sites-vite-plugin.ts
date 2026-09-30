@@ -24,7 +24,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-/** Packages only public hosting metadata and D1 migrations. */
+/** Packages hosting metadata and migrations; runtime secrets stay in Sites. */
 export function sites(): Plugin {
   let root = process.cwd();
   return {
@@ -36,9 +36,17 @@ export function sites(): Plugin {
       const server = resolve(root, "dist", "server", "index.js");
       await rm(output, { recursive: true, force: true });
       await mkdir(output, { recursive: true });
-      const hosting = resolve(root, ".openai", "hosting.json");
+      const hosting = process.env.MIND_DIARY_HOSTING_CONFIG ?? resolve(root, ".openai", "hosting.json");
       const drizzle = resolve(root, "drizzle");
-      if (await exists(hosting)) await cp(hosting, resolve(output, "hosting.json"));
+      let manifest;
+      try {
+        manifest = JSON.parse(await readFile(hosting, "utf8"));
+        if (!/^appgprj_[a-z0-9]+$/.test(manifest.project_id) || manifest.d1 !== "DB" ||
+            manifest.r2 !== "MIND_DIARY_BUCKET" ||
+            Object.keys(manifest).some((key) => !["project_id", "d1", "r2"].includes(key)) ||
+            (process.env.MIND_DIARY_HOSTING_CONFIG && manifest.project_id.includes("example"))) throw new Error();
+      } catch { throw new Error("Site hosting configuration is invalid; values withheld."); }
+      await writeFile(resolve(output, "hosting.json"), `${JSON.stringify(manifest, null, 2)}\n`);
       if (await exists(drizzle)) await cp(drizzle, resolve(output, "drizzle"), { recursive: true });
       if (await exists(server)) {
         await writeFile(resolve(output, "release.json"), `${JSON.stringify({
@@ -46,6 +54,7 @@ export function sites(): Plugin {
           candidate_sha: await gitRevision(root, "HEAD"),
           candidate_tree_sha: await gitRevision(root, "HEAD^{tree}"),
           server_sha256: await sha256(server),
+          hosting_sha256: await sha256(resolve(output, "hosting.json")),
         }, null, 2)}\n`);
       }
     },

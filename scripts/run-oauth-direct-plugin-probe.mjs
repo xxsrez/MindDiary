@@ -57,9 +57,9 @@ const MAX_CODEX_PROMPT_INPUT_BYTES = 2 * 1024 * 1024;
 const MODERN_PROTOCOL = "2026-07-28";
 const COMPAT_PROTOCOL = "2025-11-25";
 export const CODEX_PLUGIN_MCP_URL =
-  "https://mind-diary.example.invalid/api/mcp";
+  `${process.env.MIND_DIARY_UAT_ORIGIN ?? "https://mind-diary.example.invalid"}/api/mcp`;
 export const CODEX_PLUGIN_OAUTH_RESOURCE =
-  "https://mind-diary.example.invalid/api/mcp";
+  CODEX_PLUGIN_MCP_URL;
 
 export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "package.marketplace-head-tree-clean",

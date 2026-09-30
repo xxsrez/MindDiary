@@ -1,8 +1,8 @@
+import { privateAcceptanceDirectory } from "./lib/private-operations.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { acceptanceDigest, createAcceptanceComponent } from "./lib/acceptance-evidence.mjs";
 import { readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 import { createCollaborationFixture } from "./lib/acceptance-fixture.mjs";
@@ -13,7 +13,7 @@ const runnerSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" 
 const identityPath = process.env.MD_ACCEPTANCE_IDENTITY_FILE;
 const identity = identityPath ? JSON.parse(await readFile(identityPath, "utf8")) : null;
 if (identity && execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim()) throw new Error("clean_runner_required");
-const privateRoot = join(homedir(), ".codex/private/mind-diary-acceptance");
+const privateRoot = privateAcceptanceDirectory();
 const tag = process.argv[2] ?? crypto.randomUUID();
 if (!/^[A-Za-z0-9_-]{1,80}$/.test(tag)) throw new Error("invalid_run_tag");
 const expected = process.env.MD_ACCEPTANCE_EXPECTED_SHA;

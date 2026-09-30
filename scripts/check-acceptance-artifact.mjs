@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { resolve, relative, isAbsolute } from "node:path";
-import { ACCEPTANCE_PROJECT } from "../apps/mind-diary-acceptance/runtime-target.mjs";
+import { ACCEPTANCE_PROJECT, ACCEPTANCE_ORIGIN } from "../apps/mind-diary-acceptance/runtime-target.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -11,6 +11,8 @@ const hash = (value) => createHash("sha256").update(value).digest("hex");
 const directory = resolve(root, "apps/mind-diary-acceptance/dist");
 const manifest = JSON.parse(await readFile(resolve(directory, ".openai/acceptance-build.json"), "utf8"));
 assert.equal(manifest.schema, "mind-diary/acceptance-build/v1");
+assert.equal(manifest.target_sha256, hash(JSON.stringify({ origin: ACCEPTANCE_ORIGIN, project: ACCEPTANCE_PROJECT })), "acceptance target digest mismatch");
+assert.ok(!ACCEPTANCE_PROJECT.includes("example"), "release requires a configured private acceptance target");
 assert.equal(manifest.candidate_sha, git("rev-parse", "HEAD"));
 assert.equal(manifest.dirty, false, "release build must use a clean checkout");
 assert.equal(git("status", "--porcelain"), "", "checkout changed after build");

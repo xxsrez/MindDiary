@@ -47,7 +47,7 @@ const secretPatterns = [
 
 for (const relativePath of existing) {
   if (
-    forbiddenTrackedConfig.test(relativePath) &&
+    (forbiddenTrackedConfig.test(relativePath) || /(^|\/)\.dev\.vars[^/]*$|(^|\/)\.private\/|\.git\.bundle$/.test(relativePath)) &&
     relativePath !== ".env.example" &&
     !relativePath.endsWith("/.env.example")
   ) {
@@ -82,6 +82,9 @@ for (const requiredPattern of [
   ".env.*",
   "!.env.example",
   ".local/",
+  ".private/",
+  ".dev.vars*",
+  "*.git.bundle",
 ]) {
   if (!gitignore.split("\n").includes(requiredPattern)) {
     errors.push(`.gitignore: required pattern ${requiredPattern} is missing`);

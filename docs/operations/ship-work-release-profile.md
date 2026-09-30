@@ -2,6 +2,15 @@
 
 Статус: accepted project configuration, revision 10, 2026-09-10.
 
+После подготовки публичного репозитория адреса и project IDs в этом файле —
+примеры. Перед hosted release выполните `npm run private:setup` и используйте
+сгенерированный `.private/release-profile.md` как effective profile.
+`npm run with:private -- <command> ...` подключает реальные targets к runner-ам,
+а `npm run site:build:uat` собирает Site с приватным hosting manifest.
+Значения и правила хранения описаны в
+[инструкции приватной конфигурации](public-repository-preparation.md#приватные-настройки-после-переезда).
+Без private profile публикация по примерным target запрещена.
+
 ## Обычный UAT release: соразмерная приёмка
 
 По решению владельца от 2026-09-09 этот профиль — ориентир и каталог

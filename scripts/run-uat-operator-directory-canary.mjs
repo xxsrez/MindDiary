@@ -22,7 +22,7 @@ const EVIDENCE_SCHEMA = "mind-diary/uat-operator-directory-canary-evidence/v1";
 const CLEANUP_EVIDENCE_SCHEMA =
   "mind-diary/uat-operator-directory-cleanup-evidence/v1";
 const ACTOR_SOURCE = "environment-backed-sites-session";
-const DEFAULT_BASE_URL = "https://mind-diary.example.invalid";
+const DEFAULT_BASE_URL = process.env.MIND_DIARY_UAT_ORIGIN ?? "https://mind-diary.example.invalid";
 const MCP_PROTOCOL = "2026-07-28";
 const TOKEN_TTL_MILLISECONDS = 60 * 60 * 1_000;
 const ACTOR_CLASSES = Object.freeze(["operator", "mind_role", "ordinary"]);

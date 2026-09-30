@@ -13,6 +13,10 @@
   ],
   "scripts": {
     "dev": "node scripts/run-dev.mjs",
+    "private:check": "node scripts/private-operations.mjs check",
+    "private:setup": "node scripts/private-operations.mjs setup",
+    "with:private": "node scripts/private-operations.mjs run --",
+    "site:build:uat": "npm run build --silent && node scripts/private-operations.mjs run -- npm --prefix apps/mind-diary-site run build",
     "acceptance:run": "node scripts/run-acceptance-suite.mjs",
     "clean": "tsc -b --clean && node scripts/clean-output.mjs",
     "build": "tsc -b",

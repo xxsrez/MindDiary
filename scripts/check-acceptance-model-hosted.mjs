@@ -1,3 +1,4 @@
+import { privateAcceptanceDirectory } from "./lib/private-operations.mjs";
 import assert from "node:assert/strict";
 import { readFile, writeFile, appendFile, mkdir, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -13,7 +14,7 @@ import { MIND_DIARY_CHATGPT_CUSTOM_INSTRUCTIONS } from "../packages/adapter-web/
 import { acceptanceDigest, createAcceptanceComponent, ACCEPTANCE_MODEL_CASES } from "./lib/acceptance-evidence.mjs";
 let phase = "configuration";
 process.once("uncaughtException", () => { console.error(JSON.stringify({ status: "failed", phase })); process.exit(1); });
-const root = join(homedir(), ".codex/private/mind-diary-acceptance");
+const root = privateAcceptanceDirectory();
 const tag = process.argv[2];
 if (!/^[a-zA-Z0-9_-]{1,80}$/.test(tag ?? "")) throw new Error("exact_run_tag_required");
 const expected = process.env.MD_ACCEPTANCE_EXPECTED_SHA;

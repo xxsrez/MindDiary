@@ -73,5 +73,63 @@ Shallow clone и недоступные объекты не дают полож�
 среду. Настройка настоящего target требует приватного deployment configuration
 и отдельной проверки; восстановление реальных IDs в tracked файлах запрещено.
 
+## Приватные настройки после переезда
+
+Рабочий проект не должен зависеть от папки Legacy. Реальные hosting manifests,
+адреса UAT/acceptance и локальные dev-ключи хранятся внутри рабочей папки в
+`.private/config` (каталоги `0700`, файлы `0600`). Внешние каталоги и символьные
+ссылки для конфигурации запрещены. Это приватная конфигурация владельца, её нельзя
+публиковать или включать в source mirror. Значения runtime secrets работающего
+Site остаются в настройках Sites; локальные dev-ключи не заменяют их.
+
+Состав приватного каталога: `operations.json` со schema
+`mind-diary/private-operations/v1` и полями `uat_origin`/`acceptance_origin`;
+`hosting.product.json`, `hosting.acceptance.json` с
+`project_id`, `d1`, `r2`; `development.vars` с локальным origin и четырьмя
+независимыми dev-ключами из `.env.example`. Это не копии секретов hosted Site.
+Project IDs берутся из существующих Sites, среды product/acceptance должны
+различаться. Необязательный `hosting.probe.json` допускается только для отдельно
+подтверждённого capability Site; старый probe не является prerequisite релиза.
+Временные source-write credentials получают заново через
+Sites при релизе; их не сохраняют в этих manifests.
+
+При переносе на другой компьютер приватный каталог переносится отдельным
+защищённым способом или настраивается заново; `git clone` его не восстанавливает.
+
+```sh
+npm run private:setup
+npm run private:check
+npm run dev
+npm run site:build:uat
+```
+
+`private:setup` создаёт обычные игнорируемые файлы локального
+`.dev.vars` и действующего приватного release profile. Публичный профиль
+сохраняет примеры; перед hosted release используется `.private/release-profile.md`.
+После изменения публичного профиля повторите `private:setup`.
+
+Команды hosted-проверок запускаются с `npm run with:private -- <command> ...`.
+Wrapper подключает выбранные targets через environment; при отсутствующей или
+небезопасной конфигурации завершает работу без запуска команды. Он не загружает
+runtime credentials Sites, не продлевает временные credentials, не делает push
+или deploy сам. Для acceptance сохраняется отдельный target, а platform token
+и controller key читаются из `.private/acceptance` вместе с журналами проверок.
+
+Весь `.private/` исключён из Git. Проверки staged changes и публикуемой истории
+блокируют его даже при принудительном `git add -f`. Папка `.private/archive`
+содержит независимые копии прежних приватных материалов, локальной истории и
+незавершённой работы; это архив для восстановления, не источник запуска или
+развёртывания. Его файлы и Git bundles никогда не импортируют в публичный Git
+без отдельной очистки. Локальный `.private/README.md` описывает состав архива
+и результат сверки. При переносе рабочей папки нужно перенести и `.private/`;
+одного публичного Git clone недостаточно для восстановления приватных данных.
+
+Сборка с приватной конфигурацией помещает реальный manifest только в игнорируемый
+`dist/.openai/hosting.json`. Release metadata фиксирует его hash; artifact gate
+проверяет выбранный target и запрещает release с примером вместо project ID.
+Source subtree по-прежнему содержит только публичные файлы. Hosted release
+требует чистого exact candidate, разрешения Git/CI и применимых live gates;
+успех локальной сборки не доказывает deployment.
+
 [GitHub: удаление чувствительных данных](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
 описывает ограничения force push, PR refs, cached views и чужих клонов.

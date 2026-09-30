@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -51,6 +51,19 @@ test("missing Git object and missing commit message fail closed", () => fixture(
   assert.equal(scan("--commit-message", "missing").status, 1);
 }));
 
+test("forced local runtime and private configuration files are blocked even without recognizable secrets", () => fixture(({ root, git, scan }) => {
+  writeFileSync(join(root, ".dev.vars"), "CONFIG=local");
+  git("add", ".dev.vars");
+  assert.equal(scan("--staged").status, 1);
+  git("rm", "--cached", ".dev.vars");
+  mkdirSync(join(root, ".private"));
+  writeFileSync(join(root, ".private", "settings.json"), "{}");
+  git("add", ".private/settings.json");
+  assert.equal(scan("--staged").status, 1);
+  git("commit", "-qm", "accidental private configuration");
+  assert.equal(scan("--history").status, 1);
+}));
+
 test("annotated tag messages and tracked environment files cannot bypass the scan", () => fixture(({ root, git, scan }) => {
   writeFileSync(join(root, "sample.md"), "safe");
   git("add", "sample.md"); git("commit", "-qm", "initial");
@@ -58,5 +71,23 @@ test("annotated tag messages and tracked environment files cannot bypass the sca
   assert.equal(scan("--history").status, 1);
   writeFileSync(join(root, ".env"), "CONFIG=local");
   git("add", ".env");
+  assert.equal(scan("--staged").status, 1);
+}));
+
+test("ignored archive cannot enter the index or push history through force-add", () => fixture(({ root, git, scan }) => {
+  writeFileSync(join(root, ".gitignore"), ".private/\n*.git.bundle\n");
+  mkdirSync(join(root, ".private"));
+  writeFileSync(join(root, ".private", "archive.bin"), Buffer.from([0, 1, 2, 3]));
+  git("add", ".gitignore");
+  git("add", "-f", ".private/archive.bin");
+  assert.equal(scan("--staged").status, 1);
+  git("commit", "-qm", "accidental binary archive");
+  const oid = git("rev-parse", "HEAD");
+  const push = spawnSync(process.execPath, [scanner, "--pre-push"], { cwd: root, env, encoding: "utf8",
+    input: `refs/heads/main ${oid} refs/heads/main ${"0".repeat(40)}\n` });
+  assert.equal(push.status, 1);
+  git("rm", "--cached", ".private/archive.bin");
+  writeFileSync(join(root, "original.git.bundle"), "opaque compressed data");
+  git("add", "-f", "original.git.bundle");
   assert.equal(scan("--staged").status, 1);
 }));

@@ -18,6 +18,7 @@ export const rules = [
 export function findings(bytes, kind = "blob") {
   const text = bytes.toString("utf8");
   const result = rules.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
+  if (kind === "tree" && /(?:\.dev\.vars[^/\0]*|\.private|[^/\0]*\.git\.bundle|\.env(?!\.example\0)[^/\0]*)\0/.test(text)) result.push("private configuration in history");
   for (const match of text.matchAll(/\b[A-Za-z0-9_.+-]+@([A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,})\b/g)) {
     if (!/(?:^|\.)(?:invalid|example|test|local)$|^example\.(?:com|org|net)$|^users\.noreply\.github\.com$/i.test(match[1])) {
       result.push("non-public contact email");
@@ -99,7 +100,8 @@ export async function main(args) {
       inspect("index-path", "path", Buffer.from(path));
       const [mode, oid, stage] = meta.split(" ");
       if (stage !== "0") throw new Error("Resolve index conflicts before publication scan");
-      if (/(^|\/)\.env(?:\..*)?$/.test(path) && !path.endsWith(".env.example")) failures.push("index: private environment file");
+      if ((/(^|\/)\.env(?:\..*)?$/.test(path) && !path.endsWith(".env.example")) ||
+          /(^|\/)\.dev\.vars[^/]*$|(^|\/)\.private\/|\.git\.bundle$/.test(path)) failures.push("index: private environment file");
       if (mode !== "160000") ids.push(oid);
     }
     count = await scanObjects([...new Set(ids)], inspect);

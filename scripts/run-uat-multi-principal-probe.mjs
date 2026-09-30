@@ -20,7 +20,7 @@ const STATE_SCHEMA = "mind-diary/uat-multi-principal-state/v1";
 const EVIDENCE_SCHEMA = "mind-diary/multi-principal-evidence/v1";
 const ACTOR_SOURCE = "explicit-test-principal-reference";
 const MCP_PROTOCOL = "2026-07-28";
-const DEFAULT_BASE_URL = "https://mind-diary.example.invalid";
+const DEFAULT_BASE_URL = process.env.MIND_DIARY_UAT_ORIGIN ?? "https://mind-diary.example.invalid";
 const ENVIRONMENT = Object.freeze({
   ownerSitesToken: ["MIND_DIARY_UAT_OWNER", "SITES_TOKEN"].join("_"),
   participantSitesToken: ["MIND_DIARY_UAT_PARTICIPANT", "SITES_TOKEN"].join("_"),

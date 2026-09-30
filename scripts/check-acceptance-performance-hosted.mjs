@@ -1,6 +1,6 @@
+import { privateAcceptanceDirectory } from "./lib/private-operations.mjs";
 import assert from "node:assert/strict";
 import { readFile, writeFile, appendFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -20,7 +20,7 @@ process.once("uncaughtException", () => { console.error(JSON.stringify({ status:
 const [tag, action, inputPath] = process.argv.slice(2);
 assert.match(tag ?? "", /^[a-zA-Z0-9_-]{1,80}$/);
 assert.ok(["sample", "finalize", "cleanup"].includes(action));
-const root = join(homedir(), ".codex/private/mind-diary-acceptance");
+const root = privateAcceptanceDirectory();
 const platformToken = JSON.parse(await readFile(join(root, "platform-token.json"), "utf8")).token;
 const controllerKey = await readFile(join(root, "controller-key"), "utf8");
 const client = await new AcceptanceClient({ directory: join(root, "runs", tag), platformToken, controllerKey }).open();
@@ -34,7 +34,7 @@ if (action === "cleanup") {
 } else if (action === "sample") {
   const identity = JSON.parse(await readFile(inputPath, "utf8"));
   const build = await (await client.request("/_acceptance/build")).json();
-  assert.equal(identity.project_id, "appgprj_example8ca2ca9e5243cfd6");
+  assert.equal(identity.project_id, process.env.MIND_DIARY_ACCEPTANCE_PROJECT ?? "appgprj_example8ca2ca9e5243cfd6");
   for (const key of ["candidate_sha", "common_modules_sha256", "test_adapter_sha256"]) assert.equal(identity[key], build[key]);
   assert.equal(execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim(), "", "clean_runner_required");
   assert.ok(!client.state.performance?.samples, "samples_already_recorded");

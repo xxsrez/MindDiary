@@ -1,3 +1,4 @@
+import { privateAcceptanceDirectory } from "./lib/private-operations.mjs";
 import assert from "node:assert/strict";
 import { readFile, writeFile, mkdir, rename, lstat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -11,7 +12,7 @@ import { verifyAcceptanceApplicability } from "./lib/acceptance-applicability.mj
 // yield to the controlling agent; routine fixture/CI/model work runs here.
 const [tag, configurationPath] = process.argv.slice(2);
 assert.match(tag ?? "", /^[a-zA-Z0-9_-]{1,48}$/);
-const root = join(homedir(), ".codex/private/mind-diary-acceptance");
+const root = privateAcceptanceDirectory();
 const directory = join(root, "suites", tag);
 await mkdir(directory, { recursive: true, mode: 0o700 });
 assert.equal((await lstat(directory)).mode & 0o077, 0);

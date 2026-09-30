@@ -3,7 +3,7 @@ import { chromium } from "@playwright/test";
 
 // Dedicated CI test browser, never a connection to the user's browser/profile.
 // The exact private test origin is fixed; no caller-selected URL or redirects.
-const origin = "https://mind-diary-acceptance.example.invalid";
+const origin = process.env.MIND_DIARY_ACCEPTANCE_ORIGIN ?? "https://mind-diary-acceptance.example.invalid";
 const token = process.env.MD_ACCEPTANCE_PLATFORM_TOKEN;
 if (!token) throw new Error("missing_platform_token");
 const browser = await chromium.launch({ headless: true });

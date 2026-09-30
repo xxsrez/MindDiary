@@ -1,6 +1,6 @@
+import { privateAcceptanceDirectory } from "./lib/private-operations.mjs";
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
@@ -13,7 +13,7 @@ import { snapshotAcceptanceFixture, verifyAcceptanceSnapshot } from "./lib/accep
 // saved version through Sites, records the provider read-back, then runs verify.
 const [tag, action, identityPath] = process.argv.slice(2);
 if (!/^[a-zA-Z0-9_-]{1,80}$/.test(tag ?? "") || !["prepare", "verify", "cleanup"].includes(action)) throw Error("invalid_persistence_command");
-const root = join(homedir(), ".codex/private/mind-diary-acceptance");
+const root = privateAcceptanceDirectory();
 const config = { directory: join(root, "runs", tag), platformToken: JSON.parse(await readFile(join(root, "platform-token.json"), "utf8")).token,
   controllerKey: await readFile(join(root, "controller-key"), "utf8") };
 const client = await new AcceptanceClient(config).open();
@@ -29,7 +29,7 @@ if (action === "cleanup") {
   await clean(); console.log(JSON.stringify({ status: "baseline_restored" }));
 } else {
   const identity = JSON.parse(await readFile(identityPath, "utf8"));
-  assert.equal(identity.project_id, "appgprj_example8ca2ca9e5243cfd6");
+  assert.equal(identity.project_id, process.env.MIND_DIARY_ACCEPTANCE_PROJECT ?? "appgprj_example8ca2ca9e5243cfd6");
   const build = await (await client.request("/_acceptance/build")).json();
   for (const key of ["candidate_sha", "common_modules_sha256", "test_adapter_sha256"]) assert.equal(identity[key], build[key]);
   const runnerSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();

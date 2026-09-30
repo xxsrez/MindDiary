@@ -1,6 +1,6 @@
+import { privateAcceptanceDirectory } from "./lib/private-operations.mjs";
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
@@ -9,7 +9,7 @@ import { acceptanceDigest, createAcceptanceComponent } from "./lib/acceptance-ev
 
 const [tag, identityPath] = process.argv.slice(2);
 if (!/^[a-zA-Z0-9_-]{1,70}$/.test(tag ?? "")) throw Error("invalid_recovery_tag");
-const root = join(homedir(), ".codex/private/mind-diary-acceptance");
+const root = privateAcceptanceDirectory();
 const credentials = { platformToken: JSON.parse(await readFile(join(root, "platform-token.json"), "utf8")).token,
   controllerKey: await readFile(join(root, "controller-key"), "utf8") };
 const identity = JSON.parse(await readFile(identityPath, "utf8"));
@@ -22,7 +22,7 @@ let primary = await new AcceptanceClient(config("")).open();
 let secondary = await new AcceptanceClient(config("-ttl")).open();
 assert.equal(primary.state.phase, "prepared", "fresh_recovery_tag_required");
 const build = await (await primary.request("/_acceptance/build")).json();
-assert.equal(identity.project_id, "appgprj_example8ca2ca9e5243cfd6");
+assert.equal(identity.project_id, process.env.MIND_DIARY_ACCEPTANCE_PROJECT ?? "appgprj_example8ca2ca9e5243cfd6");
 for (const key of ["candidate_sha", "common_modules_sha256", "test_adapter_sha256"]) assert.equal(identity[key], build[key]);
 const baseline = await primary.control("/_acceptance/inventory");
 primary.state.recovery = { baseline }; await primary.save();

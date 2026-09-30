@@ -1,7 +1,7 @@
+import { privateAcceptanceDirectory } from "./lib/private-operations.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { AcceptanceClient } from "./lib/acceptance-client.mjs";
 import { createCollaborationFixture } from "./lib/acceptance-fixture.mjs";
@@ -15,7 +15,7 @@ assert.equal(execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }
   "clean_runner_required");
 const tag = process.argv[2] ?? crypto.randomUUID();
 assert.match(tag, /^[A-Za-z0-9_-]{1,80}$/u);
-const privateRoot = join(homedir(), ".codex/private/mind-diary-acceptance");
+const privateRoot = privateAcceptanceDirectory();
 const [platform, controllerKey] = await Promise.all([
   readFile(join(privateRoot, "platform-token.json"), "utf8").then((value) => JSON.parse(value).token),
   readFile(join(privateRoot, "controller-key"), "utf8").then((value) => value.trim()),

@@ -199,7 +199,7 @@ async function verifyFreshInstall(snapshot) {
     try {
       assertFreshOAuthMcpServerProjection(
         server,
-        "https://mind-diary.example.invalid/api/mcp",
+        `${process.env.MIND_DIARY_UAT_ORIGIN ?? "https://mind-diary.example.invalid"}/api/mcp`,
       );
     } catch {
       fail("settings_connections_mcp_resolution_mismatch");
