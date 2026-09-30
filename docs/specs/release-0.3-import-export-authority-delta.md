@@ -16,7 +16,7 @@ import/export workflow.
 санитизированной версии исходного коммита; это не новая hosted-проверка.
 
 Этот register основан на repository candidate
-`4833f7d12771b84681fcc262dc248bf7e5916d28`. Машинная форма находится в
+`7d5d8e67da1418371d5e1b2fd869faf5c797b857`. Машинная форма находится в
 `tests/fixtures/import-export-authority-delta/contract.v1.json`; conformance test
 проверяет закрытые route/schema/state matrices, но не доказывает runtime cutover
 или UAT.

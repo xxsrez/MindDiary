@@ -1,5 +1,8 @@
 # Документация Mind Diary
 
+[Подготовка публичного репозитория](operations/public-repository-preparation.md):
+границы приватных данных, проверки перед commit/push и перенос очищенной истории.
+
 Mind Diary имеет single-principal UAT deployment в OpenAI Sites с проверенными
 authenticated web/control и Codex MCP flows. Документы ниже разделяют
 проверенные внешние факты, реализованный repository behavior, UAT
