@@ -1,0 +1,21 @@
+name: Publication hygiene
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  publication:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.13.0
+      - name: Test scanner
+        run: node --test scripts/check-publication.test.mjs
+      - name: Inspect reachable Git history
+        run: node scripts/check-publication.mjs --history
+      - name: Inspect checked out index
+        run: node scripts/check-publication.mjs --staged
+

@@ -2,7 +2,7 @@
   "$schema": "mind-diary/import-export-authority-delta/v1",
   "version": 1,
   "source": "docs/specs/release-0.3-import-export-authority-delta.md",
-  "observed_candidate": "25d8b8213ff1bf938b57831d1febe8649c283250",
+  "observed_candidate": "57a8c6ef25a885c50fe29cf1018a149fc1b28026",
   "evidence": {
     "git_object_type": "commit",
     "digest_algorithm": "sha256",

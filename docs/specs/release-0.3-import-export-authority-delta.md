@@ -12,8 +12,11 @@ Content MCP сохраняет discovery, read/history/standalone validation и 
 atomic commit в заранее разрешённый exact target, но не начинает и не ведёт
 import/export workflow.
 
+После очистки публичной истории SHA и контрольные суммы привязаны к
+санитизированной версии исходного коммита; это не новая hosted-проверка.
+
 Этот register основан на repository candidate
-`25d8b8213ff1bf938b57831d1febe8649c283250`. Машинная форма находится в
+`57a8c6ef25a885c50fe29cf1018a149fc1b28026`. Машинная форма находится в
 `tests/fixtures/import-export-authority-delta/contract.v1.json`; conformance test
 проверяет закрытые route/schema/state matrices, но не доказывает runtime cutover
 или UAT.
