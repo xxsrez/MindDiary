@@ -129,7 +129,9 @@ runtime credentials Sites, не продлевает временные credenti
 проверяет выбранный target и запрещает release с примером вместо project ID.
 Source subtree по-прежнему содержит только публичные файлы. Hosted release
 требует чистого exact candidate, разрешения Git/CI и применимых live gates;
-успех локальной сборки не доказывает deployment.
+успех локальной сборки не доказывает deployment. CI отдельно проверяет acceptance artifact с фиксированной синтетической целью
+через `--synthetic-ci`. Эта проверка не подтверждает hosted acceptance и не
+заменяет обычную проверку артефакта с настроенной приватной целью.
 
 [GitHub: удаление чувствительных данных](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
 описывает ограничения force push, PR refs, cached views и чужих клонов.
