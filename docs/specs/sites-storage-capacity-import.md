@@ -124,7 +124,13 @@ D1 хранит transactional records:
   status;
 - canonical metadata event log и chunked materialized recovery snapshot:
   snapshot payload не становится одной D1 value, а bounded chunks atomically
-  переключаются через exact sequence head и читаются bounded pages.
+  переключаются через exact sequence head и читаются bounded pages. После
+  проверки snapshot и непрерывного replay tail неудачная запись производного
+  checkpoint не блокирует загрузку; повреждённый snapshot, разрыв tail или
+  недопустимое canonical event при этом не обходятся. Транзакция content,
+  состоящая только из явно известных read-операций, не создаёт событие и не
+  переписывает snapshot; перед возвратом она проверяет, что journal sequence
+  не изменилась, иначе выполняется повтор на свежем состоянии.
 
 D1 не хранит Markdown bodies, opaque bytes, ZIP bytes, private search corpus,
 download secrets или signed URLs. Manifest entry rows могут быть bounded

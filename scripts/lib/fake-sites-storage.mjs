@@ -82,6 +82,7 @@ export class FakeD1Database {
   oauthClients = new Map();
   oauthRequests = new Map();
   oauthGrants = new Map();
+  oauthPendingRevocations = new Set();
   oauthCodes = new Map();
   oauthAccess = new Map();
   oauthRefresh = new Map();
@@ -239,6 +240,12 @@ export class FakeD1Database {
         row.principal_id === values[2] &&
         row.client_id === values[3] &&
         row.resource === values[5]);
+      if (existing && values.length > 9 &&
+          (existing.id !== values[9] || (existing.revoked_at ?? null) !== values[10] ||
+           existing.scopes_json !== values[11])) return { success: true, meta: { changes: 0 } };
+      if (existing && this.oauthPendingRevocations.has(existing.id)) return { success: true, meta: { changes: 0 } };
+      if (existing?.revoked_at && sql.includes("NOT EXISTS") &&
+          [...this.oauthAccess.values()].some((row) => row.grant_id === existing.id && !row.revoked_at)) return { success: true, meta: { changes: 0 } };
       const reconnecting = existing?.revoked_at != null;
       const row = existing ?? {
         id: values[0],
@@ -268,6 +275,7 @@ export class FakeD1Database {
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-oauth-code-create*/")) {
+      if (values.length > 10 && (!this.oauthGrants.get(values[10]) || this.oauthGrants.get(values[10]).revoked_at)) return { success: true, meta: { changes: 0 } };
       this.oauthCodes.set(values[0], {
         id: values[0],
         code_verifier: values[1],
@@ -284,6 +292,7 @@ export class FakeD1Database {
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-oauth-access-create*/")) {
+      if (values.length > 9 && (!this.oauthGrants.get(values[9]) || this.oauthGrants.get(values[9]).revoked_at)) return { success: true, meta: { changes: 0 } };
       this.oauthAccess.set(values[0], {
         id: values[0],
         token_verifier: values[1],
@@ -300,6 +309,7 @@ export class FakeD1Database {
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-oauth-refresh-create*/")) {
+      if (values.length > 11 && (!this.oauthGrants.get(values[11]) || this.oauthGrants.get(values[11]).revoked_at)) return { success: true, meta: { changes: 0 } };
       this.oauthRefresh.set(values[0], {
         id: values[0],
         token_verifier: values[1],
@@ -319,8 +329,16 @@ export class FakeD1Database {
     }
     if (sql.includes("/*md-oauth-grant-touch*/")) {
       const row = this.oauthGrants.get(values[2]);
+      if (sql.includes("revoked_at IS NULL") && row?.revoked_at) return { success: true, meta: { changes: 0 } };
       if (row) Object.assign(row, { last_used_at: values[0], updated_at: values[1] });
       return { success: true, meta: { changes: row ? 1 : 0 } };
+    }
+    if (sql.includes("/*md-oauth-revocation-pending*/")) {
+      if (this.oauthGrants.has(values[0])) this.oauthPendingRevocations.add(values[0]);
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-oauth-revocation-complete*/")) {
+      return { success: true, meta: { changes: this.oauthPendingRevocations.delete(values[0]) ? 1 : 0 } };
     }
     if (sql.includes("/*md-oauth-access-touch*/")) {
       const row = this.oauthAccess.get(values[1]);
@@ -329,10 +347,19 @@ export class FakeD1Database {
     }
     if (sql.includes("/*md-oauth-grant-revoke*/")) {
       const row = this.oauthGrants.get(values[2]);
+      if (sql.includes("NOT EXISTS") && [...this.oauthAccess.values()].some((item) => item.grant_id === values[2] && !item.revoked_at)) return { success: true, meta: { changes: 0 } };
+      if (sql.includes("revoked_at IS NULL") && row?.revoked_at) return { success: true, meta: { changes: 0 } };
       if (row) Object.assign(row, { revoked_at: values[0], updated_at: values[1] });
       return { success: true, meta: { changes: row ? 1 : 0 } };
     }
+    if (sql.includes("/*md-oauth-grant-freeze*/")) {
+      const row = this.oauthGrants.get(values[2]);
+      if (!row || row.revoked_at) return { success: true, meta: { changes: 0 } };
+      Object.assign(row, { revoked_at: values[0], updated_at: values[1] });
+      return { success: true, meta: { changes: 1 } };
+    }
     if (sql.includes("/*md-oauth-family-revoke*/")) {
+      if (values.length > 2 && !this.oauthGrants.get(values[2])?.revoked_at) return { success: true, meta: { changes: 0 } };
       let changes = 0;
       for (const row of this.oauthRefresh.values()) {
         if (row.family_id === values[1] && !row.revoked_at) {
@@ -353,6 +380,7 @@ export class FakeD1Database {
       return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-oauth-refresh-grant-revoke*/")) {
+      if (values.length > 2 && !this.oauthGrants.get(values[2])?.revoked_at) return { success: true, meta: { changes: 0 } };
       let changes = 0;
       for (const row of this.oauthRefresh.values()) {
         if (row.grant_id === values[1] && !row.revoked_at) {
@@ -374,13 +402,22 @@ export class FakeD1Database {
     }
     if (sql.includes("/*md-oauth-access-record-revoke*/")) {
       const row = this.oauthAccess.get(values[1]);
-      if (row && !row.revoked_at) row.revoked_at = values[0];
-      return { success: true, meta: { changes: row ? 1 : 0 } };
+      const match = row && !row.revoked_at && (values.length < 3 || row.token_verifier === values[2]);
+      if (match) row.revoked_at = values[0];
+      return { success: true, meta: { changes: match ? 1 : 0 } };
     }
     if (sql.includes("/*md-oauth-refresh-record-revoke*/")) {
       const row = this.oauthRefresh.get(values[1]);
-      if (row && !row.revoked_at) row.revoked_at = values[0];
-      return { success: true, meta: { changes: row ? 1 : 0 } };
+      const match = row && !row.revoked_at && (values.length < 3 || row.token_verifier === values[2]);
+      if (match) row.revoked_at = values[0];
+      return { success: true, meta: { changes: match ? 1 : 0 } };
+    }
+    if (sql.includes("/*md-oauth-refresh-unconsume*/")) {
+      const row = this.oauthRefresh.get(values[0]);
+      const grant = row && this.oauthGrants.get(row.grant_id);
+      const match = row && row.used_at === values[1] && !row.revoked_at && grant && !grant.revoked_at;
+      if (match) row.used_at = null;
+      return { success: true, meta: { changes: match ? 1 : 0 } };
     }
     if (sql.includes("/*md-oauth-principal-grants-revoke*/")) {
       let changes = 0;
@@ -779,6 +816,11 @@ export class FakeD1Database {
           : [],
       };
     }
+    if (sql.includes("/*md-oauth-issued-access-current*/")) {
+      const row = this.oauthAccess.get(values[0]);
+      const grant = row && this.oauthGrants.get(row.grant_id);
+      return { results: row && !row.revoked_at && grant && !grant.revoked_at ? [{ id: row.id }] : [] };
+    }
     if (sql.includes("/*md-oauth-access-grant-list*/")) {
       return {
         results: [...this.oauthAccess.values()]
@@ -789,7 +831,8 @@ export class FakeD1Database {
     if (sql.includes("/*md-oauth-access-principal-list*/")) {
       return {
         results: [...this.oauthAccess.values()]
-          .filter((row) => row.principal_id === values[0] && !row.revoked_at)
+          .filter((row) => row.principal_id === values[0] && !row.revoked_at &&
+            (!sql.includes("EXISTS") || this.oauthGrants.get(row.grant_id)?.revoked_at))
           .map((row) => ({ id: row.id, principal_id: row.principal_id })),
       };
     }
@@ -844,6 +887,11 @@ export class FakeD1Database {
         .sort((left, right) => right.created_at.localeCompare(left.created_at) ||
           right.connection_ref.localeCompare(left.connection_ref));
       return { results: rows.slice(0, limit) };
+    }
+    if (sql.includes("/*md-oauth-connection-revoke-read*/")) {
+      const row = [...this.oauthGrants.values()].find((item) => item.principal_id === values[0] && item.connection_ref === values[1] &&
+        (!item.revoked_at || this.oauthPendingRevocations.has(item.id) || [...this.oauthAccess.values()].some((access) => access.grant_id === item.id && !access.revoked_at)));
+      return { results: row ? [{ ...row }] : [] };
     }
     if (sql.includes("/*md-oauth-connection-read*/")) {
       const row = [...this.oauthGrants.values()].find((item) =>
@@ -1103,6 +1151,7 @@ export class FakeD1Database {
     this.oauthClients.clear();
     this.oauthRequests.clear();
     this.oauthGrants.clear();
+    this.oauthPendingRevocations.clear();
     this.oauthCodes.clear();
     this.oauthAccess.clear();
     this.oauthRefresh.clear();

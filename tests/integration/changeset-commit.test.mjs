@@ -391,6 +391,56 @@ test("queued note does not survive a writable generation change as write authori
   assert.equal(await env.metadata.isSpaceCanonicalObjectReachable("markdown", record.spaceId, record.payloadHash), true);
 });
 
+test("terminal failed notes remain available but do not permanently fill the queue", async () => {
+  const env = await fixture();
+  const editor = actor(PRINCIPALS.editor.principalId, "token_note_full", "request_note_full");
+  const scheduled = [];
+  const notes = new NoteQueueService({ metadata: env.metadata, objects: env.objects,
+    authorizer: new CapabilityAuthorizer(env.metadata), clock: { now: () => FIXED_NOW },
+    commits: env.service({ currentActor: editor, nextRevisionId: "revision_note_full" }),
+    schedule: (id) => scheduled.push(id) });
+  const first = await notes.enqueue(editor, MINDS.ordinary.spaceId,
+    { idempotencyKey: "terminal-0", title: "Synthetic", text: "Retained." });
+  await env.metadata.runContentCommitTransaction(async (tx) => {
+    const original = await tx.readQueuedNote(first.receiptId);
+    for (let i = 0; i < 32; i += 1) {
+      const receiptId = i === 0 ? first.receiptId : `note_${i.toString(16).padStart(64, "0")}`;
+      await tx.putQueuedNote({ ...original, receiptId, path: `raw/inbox/${receiptId}.md`,
+        state: "failed", attempts: 1, failureCode: "denied" });
+    }
+  });
+  scheduled.length = 0;
+  await notes.recover();
+  assert.equal((await notes.status(editor, MINDS.ordinary.spaceId, first.receiptId)).state, "failed");
+  const next = await notes.enqueue(editor, MINDS.ordinary.spaceId,
+    { idempotencyKey: "after-terminal", title: "Next", text: "Still accepted." });
+  assert.equal(next.state, "queued");
+  const snapshot = env.metadata.exportDurableSnapshot();
+  assert.equal(snapshot.queuedNotes.size, 33);
+  assert.equal(InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot).exportDurableSnapshot().queuedNotes.size, 33);
+  assert.deepEqual(scheduled, [next.receiptId]);
+});
+
+test("recovery marks an abandoned note with exhausted attempts as failed", async () => {
+  const env = await fixture();
+  const editor = actor(PRINCIPALS.editor.principalId, "token_note_exhausted", "request_note_exhausted");
+  const notes = new NoteQueueService({ metadata: env.metadata, objects: env.objects,
+    authorizer: new CapabilityAuthorizer(env.metadata), clock: { now: () => FIXED_NOW },
+    commits: env.service({ currentActor: editor, nextRevisionId: "revision_note_exhausted" }),
+    schedule: () => {} });
+  const accepted = await notes.enqueue(editor, MINDS.ordinary.spaceId,
+    { idempotencyKey: "abandoned", title: "Synthetic", text: "Retained." });
+  await env.metadata.runContentCommitTransaction(async (tx) => {
+    const current = await tx.readQueuedNote(accepted.receiptId);
+    await tx.putQueuedNote({ ...current, state: "running", attempts: 5, leaseUntil: 0 });
+  });
+  await notes.recover();
+  const status = await notes.status(editor, MINDS.ordinary.spaceId, accepted.receiptId);
+  assert.equal(status.state, "failed");
+  assert.equal(status.failureCode, "note_processing_failed");
+  assert.equal((await env.snapshot()).head, REVISIONS.initial.revisionId);
+});
+
 test("queued note reconciles a lost successful response without a second revision", async () => {
   const env = await fixture();
   const editor = actor(PRINCIPALS.editor.principalId, "token_note_unknown", "request_note_unknown");

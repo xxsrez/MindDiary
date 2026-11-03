@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   MCP_CONTENT_TOOLS,
+  MCP_AGENT_INSTRUCTIONS,
+  MCP_TOOL_DEFINITIONS,
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_LEGACY_CODEX_PROTOCOL,
   createLegacyCodexMcpHttpHandler,
@@ -210,6 +212,8 @@ function harness({ fused = false } = {}) {
   return {
     send,
     sendLegacyCodex,
+    handler,
+    legacyCodexHandler,
     state: {
       authenticationCalls: () => authenticationCalls,
       listCalls: () => listCalls,
@@ -220,6 +224,52 @@ function harness({ fused = false } = {}) {
     },
   };
 }
+
+test("both MCP profiles reject and cancel oversized streamed JSON before dispatch", async () => {
+  const fixture = harness();
+  for (const [handler, path] of [
+    [fixture.handler, "/api/mcp"],
+    [fixture.legacyCodexHandler, MCP_LEGACY_CODEX_ENDPOINT],
+  ]) {
+    let pulls = 0;
+    let cancelled = false;
+    const chunk = new Uint8Array(1024 * 1024);
+    const body = new ReadableStream({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const response = await handler(new Request(`https://mind-diary.invalid${path}`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        authorization: "Bearer valid-transport-token",
+        "content-type": "application/json",
+        "content-length": "1",
+      },
+      body,
+      duplex: "half",
+    }));
+    assert.equal(response.status, 413);
+    assert.equal((await response.json()).error.code, -32600);
+    assert.equal(cancelled, true);
+    assert.equal(pulls, 33);
+  }
+  assert.equal(fixture.state.listCalls(), 0);
+  assert.equal(fixture.state.authorizationCalls(), 0);
+  assert.equal(fixture.state.executionCalls(), 0);
+});
+
+test("note tool guidance distinguishes acceptance from a committed revision", () => {
+  const enqueue = MCP_TOOL_DEFINITIONS.find((tool) => tool.name === "enqueue_note");
+  const status = MCP_TOOL_DEFINITIONS.find((tool) => tool.name === "get_note_status");
+  assert.match(enqueue.description, /queued means accepted, not committed/u);
+  assert.match(enqueue.description, /check get_note_status or tell the user/u);
+  assert.match(status.description, /does not start processing/u);
+  assert.match(MCP_AGENT_INSTRUCTIONS, /result is still pending or failed/u);
+});
 
 async function jsonRpcBody(response) {
   return response.json();

@@ -1,5 +1,10 @@
 # Privacy-safe операции UAT pilot
 
+Обычные ручные UAT-проверки выбирать по [frontmatter общего каталога](manual-acceptance/uat-selection.md).
+Там же указано соответствие карточкам. Ниже сохранён специализированный
+операционный/machine контракт; он не является отдельным каталогом обычных
+ручных проверок и не запускается целиком из-за одного UAT-релиза.
+
 Статус: accepted operational runbook для bounded UAT pilot, обновлено
 2026-08-10. Документ не является production SLA, legal retention policy или
 обещанием recovery.

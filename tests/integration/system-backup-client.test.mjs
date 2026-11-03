@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import fsPromises from "node:fs/promises";
@@ -549,8 +549,17 @@ test("SIGKILL after a durable object part preserves the old checkpoint and resum
 
 test("a separate Mac runner process keeps observed memory bounded across larger objects", async (t) => {
   const f = await fixture();
+  const cleanSource = await mkdtemp(join(tmpdir(), "mind-diary-backup-source-"));
   let server;
   try {
+    // The separate runner validates session expiry against its real clock.
+    f.setNow(new Date().toISOString());
+    // Recovery kits require a clean, committed source; keep the developer's
+    // worktree and private files out of the independently launched runner.
+    const cloned = spawnSync("git", ["clone", "--quiet", "--no-hardlinks", process.cwd(), cleanSource], {
+      encoding: "utf8", timeout: 120_000,
+    });
+    assert.equal(cloned.status, 0, cloned.stderr);
     let origin;
     server = createServer(async (incoming, outgoing) => {
       try {
@@ -584,7 +593,7 @@ test("a separate Mac runner process keeps observed memory bounded across larger 
       const directory = await mkdtemp(join(tmpdir(), "mind-diary-backup-measure-"));
       try {
         const child = spawn(process.execPath, [
-          join(process.cwd(), "scripts", "system-backup.mjs"),
+          join(cleanSource, "scripts", "system-backup.mjs"),
           "run", "--directory", directory,
         ], { env: { ...process.env,
           MIND_DIARY_BACKUP_ORIGIN: origin,
@@ -609,6 +618,7 @@ test("a separate Mac runner process keeps observed memory bounded across larger 
       `delta=${peaks[2] - peaks[0]} bytes`);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
+    await rm(cleanSource, { recursive: true, force: true });
     await f.close();
   }
 });

@@ -113,8 +113,16 @@ test("macOS install creates a private independent source and launch agent; unins
     return result.stdout.trim();
   };
   try {
+    // Installation deliberately refuses dirty sources. Exercise that contract
+    // against an isolated checkout rather than requiring the developer's worktree
+    // to be clean or copying uncommitted/private files into the test.
+    const cleanSource = join(home, "clean-source");
+    const cloned = spawnSync("git", ["clone", "--quiet", "--no-hardlinks", ROOT, cleanSource], {
+      encoding: "utf8", timeout: 120_000,
+    });
+    assert.equal(cloned.status, 0, cloned.stderr);
     const installed = await installScheduledBackup({ directory: backup,
-      origin: ORIGIN, home, sourceRoot: ROOT, execute,
+      origin: ORIGIN, home, sourceRoot: cleanSource, execute,
       keyProvider: async () => KEY,
       now: () => new Date("2026-09-13T00:00:00.000Z") });
     assert.equal(installed.installed, true);

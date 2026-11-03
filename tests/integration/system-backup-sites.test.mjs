@@ -264,6 +264,8 @@ test("pending physical cleanup blocks target registration; expiry rejects old pa
 test("an active target pins physical cleanup until deletion invalidates it", async () => {
   const fixture = await setup();
   try {
+    // The cleanup barrier uses the actual clock, so its session must use it too.
+    fixture.setNow(new Date().toISOString());
     const barrier = new SystemBackupCleanupBarrier(fixture.database);
     const session = await fixture.service.createSession();
     let deleted = false;

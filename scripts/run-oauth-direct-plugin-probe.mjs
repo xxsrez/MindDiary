@@ -266,26 +266,33 @@ export function createEvidence({
   }));
 }
 
-export function assertMindUsageSkillPolicy(skill) {
-  if (typeof skill !== "string") {
+export function assertMindUsageSkillPolicy(skill, guidance) {
+  if (typeof skill !== "string" || typeof guidance !== "string") {
     fail("installed_mind_usage_skill_policy_missing");
   }
-  const normalized = skill.replace(/\s+/gu, " ");
+  const entrypoint = skill.replace(/\s+/gu, " ");
+  const normalized = guidance.replace(/\s+/gu, " ");
   const required = [
-    "Start each relevant workflow with fresh `list_minds`",
-    "Personal Mind has `routing_profile=personal_default` and an optional description",
+    "Start every relevant workflow with `list_minds`",
+    "Personal Mind has `routing_profile=personal_default`",
+    "ordinary Minds have `routing_profile=description_based`",
     "When the current user names an exact Mind",
-    "Otherwise select only the readable Mind or Minds whose descriptions genuinely fit",
-    "For any `read_write` Mind without a description, write only when the current user directly asks in this conversation",
+    "An enabled Mind without a description is used only on a direct current request",
+    "Never default or fall back to `/me`",
+    "For any effective `read_write` Mind without a description, write only when the current user directly asks in this conversation to save, update or delete specific knowledge in that exact Mind",
     "`only` restricts fan-out to the named Mind or Minds",
-    "For every newly discussed piece of durable knowledge, consider automatic preservation",
-    "Save in every matching Mind independently",
+    "every fresh descriptor whose nonempty description genuinely matches and whose effective capability allows writing",
+    "keep every Mind independent",
     "No extra confirmation is needed for a qualifying save",
-    "Preserve exact `source_references` when one Mind supplies content saved elsewhere",
-    "Fetch a targeted existing Memory before deciding whether the result is a create, update, explicit delete or semantic no-op",
-    "Validate the complete proposed OKF 0.2 bundle before commit",
-    "call `reconcile_changeset` with the exact original full request and idempotency key",
-    "Briefly tell the user what was created, updated or removed",
+    "Moving knowledge retrieved from Personal Mind into an ordinary Mind with other readers requires a direct user request for that transfer",
+    "Preserve exact `source_references`",
+    "current credential, `content:write` scope, current ACL",
+    "A `queued` receipt confirms durable acceptance, not a committed revision",
+    "Check `get_note_status` or tell the user the result is still pending or failed",
+    "do not claim the note was saved as a committed revision until the receipt says `committed`",
+    "use `preflight_changeset` if the connected server publishes it",
+    "Commit creates a revision on success; it is not a dry run",
+    "`reconcile_changeset` with the exact original Mind, base, operations",
   ];
   const retired = [
     "get_mind_bindings",
@@ -297,10 +304,13 @@ export function assertMindUsageSkillPolicy(skill) {
     "automatic_capture",
     "rebind",
     "unbind",
+    "durable queued receipt is enough to continue",
+    "Validate the complete proposed OKF 0.2 bundle before commit",
   ];
   if (
+    !entrypoint.includes("references/service-guidance.md") ||
     required.some((fragment) => !normalized.includes(fragment)) ||
-    retired.some((fragment) => normalized.includes(fragment))
+    retired.some((fragment) => `${entrypoint} ${normalized}`.includes(fragment))
   ) {
     fail("installed_mind_usage_skill_policy_missing");
   }
@@ -578,7 +588,8 @@ async function verifyFreshPluginContext(snapshot, assertions) {
       { installedRoot, description },
     );
     assertions.add("package.skill-discovery");
-    assertMindUsageSkillPolicy(skill);
+    const guidance = await readFile(join(installedRoot, "skills", "mind-diary", "references", "service-guidance.md"), "utf8");
+    assertMindUsageSkillPolicy(skill, guidance);
     assertions.add("package.mind-usage-skill-policy");
 
     const installedList = await codexJson(

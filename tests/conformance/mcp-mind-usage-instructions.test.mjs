@@ -34,7 +34,8 @@ test("central MCP guidance describes the complete principal Mind usage policy", 
     /partial success and unknown outcomes per destination/u,
     /durable knowledge explicitly discussed/u,
     /exact source Mind, revision, and locator provenance/u,
-    /Validate the complete proposed OKF 0\.2 bundle/u,
+    /commit_changeset validates the resulting bundle and creates a revision on success/u,
+    /it is not a dry run/u,
     /read the exact committed revision/u,
     /reconcile the exact original payload/u,
     /Do not narrate routine Mind Diary discovery/u,
@@ -48,6 +49,8 @@ test("central MCP guidance describes the complete principal Mind usage policy", 
   assert.match(MCP_AGENT_INSTRUCTIONS, /Do not run heavy uploads over 4 MiB concurrently/u);
   assert.match(MCP_AGENT_INSTRUCTIONS, /Track committed, pending, failed, and unknown files internally/u);
   assert.doesNotMatch(MCP_AGENT_INSTRUCTIONS, /capture_knowledge/u);
+  assert.doesNotMatch(MCP_AGENT_INSTRUCTIONS, /Validate the complete proposed OKF 0\.2 bundle before commit/u);
+  assert.match(MCP_AGENT_INSTRUCTIONS, /do not commit a semantic no-op/u);
 });
 
 test("Mind-aware tool descriptions repeat the local decision and write safety at the point of use", () => {

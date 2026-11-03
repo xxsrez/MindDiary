@@ -84,7 +84,7 @@ export interface SitesOAuthConnectorOptions {
   readonly verifierKey: Uint8Array;
   readonly authorizationTokens?: Pick<
     McpTokenStore,
-    "createMcpToken" | "revokeMcpToken"
+    "createMcpToken" | "revokeMcpToken" | "readMcpTokenForAuthorization"
   >;
   readonly revokeWriteTargetOwner?: (input: Readonly<{
     bindingOwnerId: string;
@@ -201,6 +201,9 @@ export const SITES_OAUTH_SCHEMA = Object.freeze([
     updated_at TEXT NOT NULL,
     last_used_at TEXT,
     UNIQUE(principal_id, client_id, resource)
+  )`,
+  `CREATE TABLE IF NOT EXISTS md_oauth_revocation_pending (
+    grant_id TEXT PRIMARY KEY
   )`,
   `CREATE TABLE IF NOT EXISTS md_oauth_authorization_codes (
     id TEXT PRIMARY KEY,
@@ -917,6 +920,12 @@ export async function createSitesOAuthConnector(
           WHERE principal_id = ? AND client_id = ? AND resource = ? LIMIT 1`)
         .bind(identity.principalId, pending.client_id, pending.resource),
     );
+    if (existing !== null && existing.revoked_at) {
+      // A user explicitly reconnecting can finish a previously interrupted
+      // revoke before the old grant is replaced. Never transfer its authority.
+      const revokedAt = now().toISOString();
+      await finishGrantRevocation(String(existing.id), identity.principalId, revokedAt);
+    }
     const grantId = existing === null || existing.revoked_at
       ? `md_oauth_grant_${crypto.randomUUID()}`
       : String(existing.id);
@@ -944,7 +953,7 @@ export async function createSitesOAuthConnector(
       credentialScopes: grantedScopes,
       occurredAt: timestamp.toISOString(),
     });
-    await options.database.batch([
+    const [grantUpdated, codeCreated] = await options.database.batch([
       options.database
         .prepare(`/*md-oauth-grant-upsert*/ INSERT INTO md_oauth_grants
           (id, connection_ref, principal_id, client_id, client_name, resource, scopes_json,
@@ -970,7 +979,14 @@ export async function createSitesOAuthConnector(
               WHEN md_oauth_grants.revoked_at IS NULL
                 THEN md_oauth_grants.last_used_at
               ELSE NULL
-            END`)
+            END
+          WHERE md_oauth_grants.id = ? AND md_oauth_grants.revoked_at IS ?
+            AND md_oauth_grants.scopes_json = ?
+            AND (md_oauth_grants.revoked_at IS NULL OR NOT EXISTS
+              (SELECT 1 FROM md_oauth_access_tokens t
+               WHERE t.grant_id = md_oauth_grants.id AND t.revoked_at IS NULL))
+            AND NOT EXISTS (SELECT 1 FROM md_oauth_revocation_pending p
+              WHERE p.grant_id = md_oauth_grants.id)`)
         .bind(
           grantId,
           connectionRef,
@@ -981,12 +997,16 @@ export async function createSitesOAuthConnector(
           JSON.stringify(grantedScopes),
           timestamp.toISOString(),
           timestamp.toISOString(),
+          existing?.id ?? "",
+          existing?.revoked_at ?? null,
+          existing?.scopes_json ?? "",
         ),
       options.database
         .prepare(`/*md-oauth-code-create*/ INSERT INTO md_oauth_authorization_codes
           (id, code_verifier, grant_id, principal_id, client_id, redirect_uri,
            resource, scopes_json, code_challenge, expires_at, consumed_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
+          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL
+          WHERE EXISTS (SELECT 1 FROM md_oauth_grants g WHERE g.id = ? AND g.revoked_at IS NULL)`)
         .bind(
           `md_oauth_code_${crypto.randomUUID()}`,
           codeVerifier,
@@ -998,8 +1018,12 @@ export async function createSitesOAuthConnector(
           JSON.stringify(requestedScopes),
           pending.code_challenge,
           new Date(timestamp.getTime() + OAUTH_AUTHORIZATION_CODE_TTL_SECONDS * 1_000).toISOString(),
+          grantId,
         ),
     ]);
+    if (grantUpdated?.meta?.changes !== 1 || codeCreated?.meta?.changes !== 1) {
+      throw new OAuthProtocolError("invalid_request", "Connection changed; restart authorization", 409);
+    }
     redirect.searchParams.set("code", code);
     if (state !== null) redirect.searchParams.set("state", state);
     return new Response(null, { status: 303, headers: { location: redirect.toString(), "cache-control": "no-store" } });
@@ -1011,13 +1035,27 @@ export async function createSitesOAuthConnector(
     rows: readonly DbRow[],
     revokedAt: string,
   ): Promise<void> => {
-    if (options.authorizationTokens === undefined) return;
     for (const row of rows) {
-      await options.authorizationTokens.revokeMcpToken({
-        principalId: String(row.principal_id) as PrincipalId,
-        tokenId: String(row.id) as TokenId,
-        revokedAt: revokedAt as UtcInstant,
-      });
+      if (options.authorizationTokens !== undefined) {
+        const revoked = await options.authorizationTokens.revokeMcpToken({
+          principalId: String(row.principal_id) as PrincipalId,
+          tokenId: String(row.id) as TokenId,
+          revokedAt: revokedAt as UtcInstant,
+        });
+        // not_found can also mean an account-deletion reservation, even with
+        // a live mirror. Confirm the mirror is absent before treating it as
+        // fenced. For a grant revoke OAuth is already closed and a late issuer
+        // rechecks it before returning its secret. For single-token revoke the
+        // presented secret could only have been returned after mirror creation.
+        if (revoked.kind === "not_found" && await options.authorizationTokens.readMcpTokenForAuthorization(String(row.id) as TokenId) !== null) {
+          throw new Error("OAuth authorization token mirror is unavailable");
+        }
+      }
+      await options.database
+        .prepare(`/*md-oauth-access-record-revoke*/ UPDATE md_oauth_access_tokens
+          SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`)
+        .bind(revokedAt, row.id)
+        .run();
     }
   };
 
@@ -1025,7 +1063,6 @@ export async function createSitesOAuthConnector(
     grantId: string,
     revokedAt: string,
   ): Promise<void> => {
-    if (options.authorizationTokens === undefined) return;
     const rows = await options.database
       .prepare(`/*md-oauth-access-grant-list*/ SELECT id, principal_id
         FROM md_oauth_access_tokens WHERE grant_id = ? AND revoked_at IS NULL`)
@@ -1034,32 +1071,48 @@ export async function createSitesOAuthConnector(
     await revokeMirroredRows(rows.results ?? [], revokedAt);
   };
 
-  const revokeGrantAndFamily = async (
+  const finishGrantRevocation = async (
     grantId: string,
-    familyId: string,
     principalId: string,
+    revokedAt: string,
   ): Promise<void> => {
-    const timestamp = now().toISOString();
-    await revokeMirroredGrant(grantId, timestamp);
     await options.revokeWriteTargetOwner?.({
       bindingOwnerId: grantId,
       principalId,
-      occurredAt: timestamp,
+      occurredAt: revokedAt,
     });
+    await revokeMirroredGrant(grantId, revokedAt);
+    await options.database.prepare(`/*md-oauth-revocation-complete*/
+      DELETE FROM md_oauth_revocation_pending WHERE grant_id = ?`).bind(grantId).run();
+  };
+
+  const freezeGrant = async (grantId: string, timestamp: string): Promise<void> => {
+    // The marker is committed with the freeze, even for a grant with no access
+    // rows, so a failed owner fence can be retried without exposing old grants.
     await options.database.batch([
       options.database
-        .prepare(`/*md-oauth-grant-revoke*/ UPDATE md_oauth_grants
+        .prepare(`/*md-oauth-revocation-pending*/ INSERT OR IGNORE INTO md_oauth_revocation_pending (grant_id)
+          SELECT id FROM md_oauth_grants WHERE id = ?`)
+        .bind(grantId),
+      options.database
+        .prepare(`/*md-oauth-grant-freeze*/ UPDATE md_oauth_grants
           SET revoked_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL`)
         .bind(timestamp, timestamp, grantId),
       options.database
-        .prepare(`/*md-oauth-family-revoke*/ UPDATE md_oauth_refresh_tokens
-          SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL`)
-        .bind(timestamp, familyId),
-      options.database
-        .prepare(`/*md-oauth-access-grant-revoke*/ UPDATE md_oauth_access_tokens
+        .prepare(`/*md-oauth-refresh-grant-revoke*/ UPDATE md_oauth_refresh_tokens
           SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL`)
         .bind(timestamp, grantId),
     ]);
+  };
+
+  const revokeGrantAndFamily = async (
+    grantId: string,
+    _familyId: string,
+    principalId: string,
+  ): Promise<void> => {
+    const timestamp = now().toISOString();
+    await freezeGrant(grantId, timestamp);
+    await finishGrantRevocation(grantId, principalId, timestamp);
   };
 
   const rejectRefreshReuse = async (
@@ -1115,72 +1168,108 @@ export async function createSitesOAuthConnector(
     const accessExpiresAt = new Date(
       timestamp.getTime() + OAUTH_ACCESS_TOKEN_TTL_SECONDS * 1_000,
     ).toISOString();
-    await options.database.batch([
-      options.database
-        .prepare(`/*md-oauth-access-create*/ INSERT INTO md_oauth_access_tokens
-          (id, token_verifier, grant_id, principal_id, client_id, resource,
-           scopes_json, expires_at, created_at, last_used_at, revoked_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`)
-        .bind(
-          accessId,
-          accessVerifier,
-          input.grantId,
-          input.principalId,
-          input.clientId,
-          input.resource,
-          JSON.stringify(input.scopes),
-          accessExpiresAt,
-          timestamp.toISOString(),
-        ),
-      options.database
-        .prepare(`/*md-oauth-refresh-create*/ INSERT INTO md_oauth_refresh_tokens
-          (id, token_verifier, grant_id, family_id, parent_id, principal_id,
-           client_id, resource, scopes_json, expires_at, created_at, used_at, revoked_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`)
-        .bind(
-          refreshId,
-          refreshVerifier,
-          input.grantId,
-          familyId,
-          input.parentId ?? null,
-          input.principalId,
-          input.clientId,
-          input.resource,
-          JSON.stringify(input.scopes),
-          new Date(timestamp.getTime() + OAUTH_REFRESH_TOKEN_TTL_SECONDS * 1_000).toISOString(),
-          timestamp.toISOString(),
-        ),
-      options.database
-        .prepare(`/*md-oauth-grant-touch*/ UPDATE md_oauth_grants
-          SET last_used_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL`)
-        .bind(timestamp.toISOString(), timestamp.toISOString(), input.grantId),
-    ]);
-    if (options.authorizationTokens !== undefined) {
-      const verifierHex = accessVerifier.slice(accessVerifier.lastIndexOf(":") + 1);
-      const mirrored = await options.authorizationTokens.createMcpToken({
-        tokenId: accessId as TokenId,
-        principalId: input.principalId as PrincipalId,
-        name: "OAuth connector authorization",
-        verifier: `hmac-sha256:v1:${verifierHex}` as TokenVerifier,
-        displayPrefix: "mdp_v1_OAuth0…",
-        scopes: Object.freeze([...input.scopes]) as EffectiveTokenScopes,
-        createdAt: timestamp.toISOString() as UtcInstant,
-        expiresAt: accessExpiresAt as UtcInstant,
-      });
-      if (mirrored.kind !== "created") {
-        const revokedAt = now().toISOString();
+    let cleanupMirror = false;
+    try {
+      const [accessCreated, refreshCreated] = await options.database.batch([
+        options.database
+          .prepare(`/*md-oauth-access-create*/ INSERT INTO md_oauth_access_tokens
+            (id, token_verifier, grant_id, principal_id, client_id, resource,
+             scopes_json, expires_at, created_at, last_used_at, revoked_at)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL
+            WHERE EXISTS (SELECT 1 FROM md_oauth_grants g WHERE g.id = ? AND g.revoked_at IS NULL)`)
+          .bind(
+            accessId,
+            accessVerifier,
+            input.grantId,
+            input.principalId,
+            input.clientId,
+            input.resource,
+            JSON.stringify(input.scopes),
+            accessExpiresAt,
+            timestamp.toISOString(),
+            input.grantId,
+          ),
+        options.database
+          .prepare(`/*md-oauth-refresh-create*/ INSERT INTO md_oauth_refresh_tokens
+            (id, token_verifier, grant_id, family_id, parent_id, principal_id,
+             client_id, resource, scopes_json, expires_at, created_at, used_at, revoked_at)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL
+            WHERE EXISTS (SELECT 1 FROM md_oauth_grants g WHERE g.id = ? AND g.revoked_at IS NULL)`)
+          .bind(
+            refreshId,
+            refreshVerifier,
+            input.grantId,
+            familyId,
+            input.parentId ?? null,
+            input.principalId,
+            input.clientId,
+            input.resource,
+            JSON.stringify(input.scopes),
+            new Date(timestamp.getTime() + OAUTH_REFRESH_TOKEN_TTL_SECONDS * 1_000).toISOString(),
+            timestamp.toISOString(),
+            input.grantId,
+          ),
+        options.database
+          .prepare(`/*md-oauth-grant-touch*/ UPDATE md_oauth_grants
+            SET last_used_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL`)
+          .bind(timestamp.toISOString(), timestamp.toISOString(), input.grantId),
+      ]);
+      if (accessCreated?.meta?.changes !== 1 || refreshCreated?.meta?.changes !== 1) {
+        throw new Error("OAuth grant changed during issuance");
+      }
+      if (options.authorizationTokens !== undefined) {
+        const verifierHex = accessVerifier.slice(accessVerifier.lastIndexOf(":") + 1);
+        // A thrown provider call may have committed. A definite non-created
+        // result instead belongs to the pre-existing record, not this request.
+        cleanupMirror = true;
+        const mirrored = await options.authorizationTokens.createMcpToken({
+          tokenId: accessId as TokenId,
+          principalId: input.principalId as PrincipalId,
+          name: "OAuth connector authorization",
+          verifier: `hmac-sha256:v1:${verifierHex}` as TokenVerifier,
+          displayPrefix: "mdp_v1_OAuth0…",
+          scopes: Object.freeze([...input.scopes]) as EffectiveTokenScopes,
+          createdAt: timestamp.toISOString() as UtcInstant,
+          expiresAt: accessExpiresAt as UtcInstant,
+        });
+        if (mirrored.kind !== "created") {
+          cleanupMirror = false;
+          throw new Error("OAuth authorization token mirror could not be created");
+        }
+      }
+      const current = await statementFirst<DbRow>(options.database
+        .prepare(`/*md-oauth-issued-access-current*/ SELECT t.id
+          FROM md_oauth_access_tokens t JOIN md_oauth_grants g ON g.id = t.grant_id
+          WHERE t.id = ? AND t.revoked_at IS NULL AND g.revoked_at IS NULL LIMIT 1`)
+        .bind(accessId));
+      if (current === null) throw new Error("OAuth grant changed during issuance");
+    } catch (error) {
+      // Neither generated secret has been returned. Provider failures can be
+      // ambiguous, so retire any partial records and mirror on a best-effort
+      // basis before allowing the caller to recover its consumed parent.
+      const revokedAt = now().toISOString();
+      if (cleanupMirror) {
+        try {
+          await options.authorizationTokens?.revokeMcpToken({
+            principalId: input.principalId as PrincipalId,
+            tokenId: accessId as TokenId,
+            revokedAt: revokedAt as UtcInstant,
+          });
+        } catch { /* The secret was never exposed; preserve the original error. */ }
+      }
+      try {
         await options.database.batch([
           options.database
             .prepare(`/*md-oauth-access-record-revoke*/ UPDATE md_oauth_access_tokens
-              SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`)
-            .bind(revokedAt, accessId),
+              SET revoked_at = ? WHERE id = ? AND token_verifier = ? AND revoked_at IS NULL`)
+            .bind(revokedAt, accessId, accessVerifier),
           options.database
             .prepare(`/*md-oauth-refresh-record-revoke*/ UPDATE md_oauth_refresh_tokens
-              SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`)
-            .bind(revokedAt, refreshId),
+              SET revoked_at = ? WHERE id = ? AND token_verifier = ? AND revoked_at IS NULL`)
+            .bind(revokedAt, refreshId, refreshVerifier),
         ]);
-        throw new Error("OAuth authorization token mirror could not be created");
-      }
+      } catch { /* Cleanup remains best-effort for secrets never returned. */ }
+      throw error;
     }
     return Object.freeze({
       access_token: accessToken,
@@ -1274,11 +1363,12 @@ export async function createSitesOAuthConnector(
     if (scopes.some((scope) => !originalScopes.includes(scope))) {
       throw new OAuthProtocolError("invalid_scope", "Refresh cannot add scopes that were not granted");
     }
+    const consumedAt = now().toISOString();
     const consumed = await statementFirst<DbRow>(
       options.database
         .prepare(`/*md-oauth-refresh-consume*/ UPDATE md_oauth_refresh_tokens
           SET used_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL RETURNING id`)
-        .bind(now().toISOString(), row.id),
+        .bind(consumedAt, row.id),
     );
     if (consumed === null) {
       const current = await statementFirst<DbRow>(
@@ -1297,15 +1387,26 @@ export async function createSitesOAuthConnector(
       }
       await rejectRefreshReuse(current, now());
     }
-    return issueTokens({
-      grantId: String(row.grant_id),
-      principalId: String(row.principal_id),
-      clientId,
-      resource: String(row.resource),
-      scopes,
-      familyId: String(row.family_id),
-      parentId: String(row.id),
-    });
+    try {
+      return await issueTokens({
+        grantId: String(row.grant_id),
+        principalId: String(row.principal_id),
+        clientId,
+        resource: String(row.resource),
+        scopes,
+        familyId: String(row.family_id),
+        parentId: String(row.id),
+      });
+    } catch (error) {
+      try {
+        await options.database.prepare(`/*md-oauth-refresh-unconsume*/ UPDATE md_oauth_refresh_tokens
+          SET used_at = NULL WHERE id = ? AND used_at = ? AND revoked_at IS NULL
+            AND EXISTS (SELECT 1 FROM md_oauth_grants g
+              WHERE g.id = md_oauth_refresh_tokens.grant_id AND g.revoked_at IS NULL)`)
+          .bind(row.id, consumedAt).run();
+      } catch { /* An unresolved rollback must not hide the issuance failure. */ }
+      throw error;
+    }
   };
 
   const tokenRequest = async (request: Request): Promise<Response> => {
@@ -1365,8 +1466,12 @@ export async function createSitesOAuthConnector(
             .run();
         }
       }
-    } catch {
-      // RFC 7009 makes revocation responses indistinguishable.
+    } catch (error) {
+      // Unknown credentials remain indistinguishable from successful revokes.
+      // A service failure must not be reported as a completed revocation.
+      if (!(error instanceof OAuthProtocolError)) {
+        return new Response(null, { status: 503, headers: { "cache-control": "no-store", pragma: "no-cache" } });
+      }
     }
     return new Response(null, { status: 200, headers: { "cache-control": "no-store", pragma: "no-cache" } });
   };
@@ -1527,48 +1632,32 @@ export async function createSitesOAuthConnector(
     principalId: string,
     connectionRef: string,
   ): Promise<boolean> => {
-    const connection = await readConnection(principalId, connectionRef);
+    if (!CONNECTION_REF_PATTERN.test(connectionRef)) return false;
+    await ensureSchema();
+    const row = await statementFirst<DbRow>(options.database
+      .prepare(`/*md-oauth-connection-revoke-read*/ SELECT id, connection_ref, client_name,
+        scopes_json, created_at, last_used_at FROM md_oauth_grants g
+        WHERE principal_id = ? AND connection_ref = ? AND
+          (revoked_at IS NULL OR EXISTS (SELECT 1 FROM md_oauth_access_tokens t
+            WHERE t.grant_id = g.id AND t.revoked_at IS NULL) OR
+            EXISTS (SELECT 1 FROM md_oauth_revocation_pending p WHERE p.grant_id = g.id)) LIMIT 1`)
+      .bind(principalId, connectionRef));
+    const connection = row === null ? null : connectionRecord(row);
     if (connection === null) return false;
     const grantId = connection.bindingOwnerId;
     const timestamp = now().toISOString();
-    await revokeMirroredGrant(grantId, timestamp);
-    await options.revokeWriteTargetOwner?.({
-      bindingOwnerId: grantId,
-      principalId,
-      occurredAt: timestamp,
-    });
-    await options.database.batch([
-      options.database
-        .prepare(`/*md-oauth-grant-revoke*/ UPDATE md_oauth_grants SET revoked_at = ?, updated_at = ? WHERE id = ?`)
-        .bind(timestamp, timestamp, grantId),
-      options.database
-        .prepare(`/*md-oauth-access-grant-revoke*/ UPDATE md_oauth_access_tokens SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL`)
-        .bind(timestamp, grantId),
-      options.database
-        .prepare(`/*md-oauth-refresh-grant-revoke*/ UPDATE md_oauth_refresh_tokens SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL`)
-        .bind(timestamp, grantId),
-    ]);
+    await freezeGrant(grantId, timestamp);
+    await finishGrantRevocation(grantId, principalId, timestamp);
     return true;
   };
 
   const revokePrincipalConnections = async (principalId: string): Promise<void> => {
     await ensureSchema();
     const timestamp = now().toISOString();
-    if (options.authorizationTokens !== undefined) {
-      const rows = await options.database
-        .prepare(`/*md-oauth-access-principal-list*/ SELECT id, principal_id
-          FROM md_oauth_access_tokens WHERE principal_id = ? AND revoked_at IS NULL`)
-        .bind(principalId)
-        .all<DbRow>();
-      await revokeMirroredRows(rows.results ?? [], timestamp);
-    }
     await options.database.batch([
       options.database
         .prepare(`/*md-oauth-principal-grants-revoke*/ UPDATE md_oauth_grants SET revoked_at = ?, updated_at = ? WHERE principal_id = ? AND revoked_at IS NULL`)
         .bind(timestamp, timestamp, principalId),
-      options.database
-        .prepare(`/*md-oauth-principal-access-revoke*/ UPDATE md_oauth_access_tokens SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL`)
-        .bind(timestamp, principalId),
       options.database
         .prepare(`/*md-oauth-principal-refresh-revoke*/ UPDATE md_oauth_refresh_tokens SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL`)
         .bind(timestamp, principalId),
@@ -1576,6 +1665,13 @@ export async function createSitesOAuthConnector(
         .prepare(`/*md-oauth-principal-requests-delete*/ DELETE FROM md_oauth_authorization_requests WHERE principal_id = ?`)
         .bind(principalId),
     ]);
+    const rows = await options.database
+      .prepare(`/*md-oauth-access-principal-list*/ SELECT id, principal_id
+        FROM md_oauth_access_tokens t WHERE principal_id = ? AND revoked_at IS NULL
+          AND EXISTS (SELECT 1 FROM md_oauth_grants g WHERE g.id = t.grant_id AND g.revoked_at IS NOT NULL)`)
+      .bind(principalId)
+      .all<DbRow>();
+    await revokeMirroredRows(rows.results ?? [], timestamp);
   };
 
   const deletePrincipalConnections = async (principalId: string): Promise<void> => {
@@ -1587,6 +1683,8 @@ export async function createSitesOAuthConnector(
       options.database.prepare(`/*md-oauth-principal-codes-purge*/ DELETE FROM md_oauth_authorization_codes WHERE principal_id = ?`).bind(principalId),
       options.database.prepare(`/*md-oauth-principal-access-purge*/ DELETE FROM md_oauth_access_tokens WHERE principal_id = ?`).bind(principalId),
       options.database.prepare(`/*md-oauth-principal-refresh-purge*/ DELETE FROM md_oauth_refresh_tokens WHERE principal_id = ?`).bind(principalId),
+      options.database.prepare(`/*md-oauth-principal-pending-purge*/ DELETE FROM md_oauth_revocation_pending
+        WHERE grant_id IN (SELECT id FROM md_oauth_grants WHERE principal_id = ?)`).bind(principalId),
       options.database.prepare(`/*md-oauth-principal-grants-purge*/ DELETE FROM md_oauth_grants WHERE principal_id = ?`).bind(principalId),
     ]);
   };

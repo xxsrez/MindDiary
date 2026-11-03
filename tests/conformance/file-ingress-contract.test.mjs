@@ -25,7 +25,7 @@ test("MD-466 replaces caller-selected source classes with one file input", async
   assert.match(adr, /полностью заменяет отдельный Apps endpoint/u);
   assert.match(report, /size \| `81`/u);
   assert.match(report, /17df3b2e7b539859517289b61da45d7807c53d9a3c15a4d71a6e7a9f847864ca/u);
-  assert.match(report, /`not_yet_tested`, а не\s+`unsupported`/u);
+  assert.match(report, /проверенная внешняя\s+несовместимость текущего ChatGPT Work file-parameter bridge/u);
 });
 
 test("single file input preserves the bounded staged-ref security boundary", async () => {

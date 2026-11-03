@@ -6,6 +6,15 @@ import { capacityExpiry, capacityReservationId, DEFAULT_CAPACITY_LIMITS } from "
 
 const encoder = new TextEncoder();
 
+function retryableFailure(note: Readonly<QueuedNote>): boolean {
+  return note.state === "failed" && note.attempts < 3 &&
+    (note.failureCode === "note_processing_failed" || note.failureCode === "revision_conflict");
+}
+
+function occupiesQueueSlot(note: Readonly<QueuedNote>): boolean {
+  return note.state === "queued" || note.state === "running" || retryableFailure(note);
+}
+
 export class NoteQueueService {
   constructor(private readonly dependencies: {
     metadata: ContentCommitMetadataStore;
@@ -48,7 +57,7 @@ export class NoteQueueService {
       const existing = await tx.readQueuedNote(receiptId);
       if (existing !== null && existing.payloadHash !== payloadHash) throw new Error("idempotency_conflict");
       if (existing === null && (await tx.listQueuedNotes()).filter((item) =>
-        item.spaceId === spaceId && item.state !== "committed").length >= 32) throw new Error("note_queue_full");
+        item.spaceId === spaceId && occupiesQueueSlot(item)).length >= 32) throw new Error("note_queue_full");
       if (existing === null) {
         const createdAt = clock.now();
         const admission = await tx.admitCapacityReservation({ reservationId, requestedByPrincipalId: actor.principalId,
@@ -60,7 +69,7 @@ export class NoteQueueService {
       return existing;
     });
     if (prior !== null) {
-      if (prior.state !== "committed") await this.dependencies.schedule(receiptId);
+      if (occupiesQueueSlot(prior)) await this.dependencies.schedule(receiptId);
       return this.receipt(prior);
     }
     // Bytes are durable before the atomic receipt. A rejected request leaves only
@@ -74,7 +83,7 @@ export class NoteQueueService {
         if (existing.payloadHash !== payloadHash) throw new Error("idempotency_conflict");
         return existing;
       }
-      const pending = (await tx.listQueuedNotes()).filter((item) => item.spaceId === spaceId && item.state !== "committed");
+      const pending = (await tx.listQueuedNotes()).filter((item) => item.spaceId === spaceId && occupiesQueueSlot(item));
       if (pending.length >= 32) throw new Error("note_queue_full");
       const created: QueuedNote = {
         receiptId, spaceId, actor, writePin, payloadHash, size: bytes.length,
@@ -86,7 +95,7 @@ export class NoteQueueService {
       if (consumed !== "consumed" && consumed !== "already_consumed") throw new Error("note_capacity_rejected");
       return created;
     });
-    if (note.state !== "committed") await this.dependencies.schedule(receiptId);
+    if (occupiesQueueSlot(note)) await this.dependencies.schedule(receiptId);
     return this.receipt(note);
   }
 
@@ -104,7 +113,11 @@ export class NoteQueueService {
     const now = Date.parse(clock.now());
     const note = await metadata.runContentCommitTransaction(async (tx) => {
       const current = await tx.readQueuedNote(receiptId);
-      if (current === null || current.state === "committed" || current.leaseUntil > now || current.attempts >= 5) return null;
+      if (current === null || !occupiesQueueSlot(current) || current.leaseUntil > now) return null;
+      if (current.attempts >= 5) {
+        await tx.putQueuedNote({ ...current, state: "failed", failureCode: "note_processing_failed", leaseUntil: 0 });
+        return null;
+      }
       const claimed: QueuedNote = { ...current, state: "running", attempts: current.attempts + 1, leaseUntil: now + 120_000 };
       await tx.putQueuedNote(claimed);
       return claimed;
@@ -160,7 +173,7 @@ export class NoteQueueService {
 
   async recover(limit = 4): Promise<void> {
     const pending = await this.dependencies.metadata.runContentCommitTransaction(async (tx) =>
-      (await tx.listQueuedNotes()).filter((note) => note.state !== "committed" && note.attempts < 3 &&
+      (await tx.listQueuedNotes()).filter((note) => occupiesQueueSlot(note) &&
         note.leaseUntil <= Date.parse(this.dependencies.clock.now())).slice(0, limit));
     for (const note of pending) await this.process(note.receiptId);
   }

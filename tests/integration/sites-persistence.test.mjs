@@ -1828,6 +1828,81 @@ test("snapshot write failure after fenced append self-heals from canonical tail"
   assert.equal(database.metadataSnapshotHead.sequence, 1);
 });
 
+test("cold replay stays available when its derived checkpoint write fails", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  database.failNext("/*md-metadata-snapshot-write*/");
+  await store.reserveHandle({ host: HOST, handle: "cold-replay", spaceId: "space_cold_replay" });
+  assert.equal(database.metadataSnapshotHead.sequence, 0);
+
+  const batch = database.batch.bind(database);
+  let checkpointFailures = 2;
+  database.batch = async (statements) => {
+    if (checkpointFailures > 0 && statements.some((statement) =>
+      statement.sql.includes("/*md-metadata-snapshot-write*/"))) {
+      checkpointFailures -= 1;
+      throw new Error("synthetic checkpoint outage");
+    }
+    return batch(statements);
+  };
+  const restarted = await createSitesMetadataStore(database);
+  assert.deepEqual(await restarted.resolveHandle({ host: HOST, handle: "cold-replay" }),
+    { kind: "resolved", spaceId: "space_cold_replay" });
+  checkpointFailures = 0;
+  const repaired = await createSitesMetadataStore(database);
+  assert.deepEqual(await repaired.resolveHandle({ host: HOST, handle: "cold-replay" }),
+    { kind: "resolved", spaceId: "space_cold_replay" });
+  assert.equal(database.metadataSnapshotHead.sequence, 1);
+});
+
+test("read-only content transactions do not append events or rewrite checkpoints", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  const events = database.metadataEvents.length;
+  const snapshots = database.metadataSnapshotWriteCount;
+  assert.equal(await store.runContentCommitTransaction((tx) => tx.readHead("missing")), null);
+  assert.equal(database.metadataEvents.length, events);
+  assert.equal(database.metadataSnapshotWriteCount, snapshots);
+});
+
+test("a read-only content transaction retries when another isolate commits during its read", async () => {
+  const database = new FakeD1Database();
+  const first = await createSitesMetadataStore(database);
+  const second = await createSitesMetadataStore(database);
+  let attempts = 0;
+  await first.runContentCommitTransaction(async (tx) => {
+    await tx.readHead("missing");
+    if (++attempts === 1) {
+      await second.reserveHandle({ host: HOST, handle: "concurrent-read", spaceId: "space_concurrent_read" });
+    }
+  });
+  assert.equal(attempts, 2);
+  assert.equal(database.metadataEvents.length, 1);
+});
+
+test("a content transaction mixing reads and writes remains a durable event", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  const receiptId = `note_${"a".repeat(64)}`;
+  const note = {
+    receiptId, spaceId: "space_mixed", actor: {
+      kind: "registered_principal", principalId: "principal_mixed",
+      authentication: { kind: "mcp_token", tokenId: "token_mixed", effectiveScopes: ["content:read", "content:write"] },
+      deploymentCapabilities: ["content:write"], requestId: "request_mixed", occurredAtUtc: T0,
+    },
+    writePin: { principalId: "principal_mixed", spaceId: "space_mixed", generationId: "generation_mixed" },
+    payloadHash: `sha256:${"b".repeat(64)}`, size: 1, path: `raw/inbox/${receiptId}.md`,
+    state: "queued", attempts: 0, leaseUntil: 0, expectedRevisionId: null, revisionId: null, failureCode: null,
+  };
+  await store.runContentCommitTransaction(async (tx) => {
+    assert.equal(await tx.readQueuedNote(note.receiptId), null);
+    await tx.putQueuedNote(note);
+  });
+  assert.equal(database.metadataEvents.length, 1);
+  const restarted = await createSitesMetadataStore(database);
+  assert.deepEqual(await restarted.runContentCommitTransaction((tx) => tx.readQueuedNote(note.receiptId)), note);
+});
+
 test("Mind binding transactions keep fenced durability without rewriting every snapshot", async () => {
   const database = new FakeD1Database();
   const store = await createSitesMetadataStore(database);

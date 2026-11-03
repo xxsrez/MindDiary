@@ -766,7 +766,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "f052608fe741aa5fd21c99ca7f3e9792bcd94399",
+      gitBlob: "aac74df6daed62c50000c634b6f752f05fa7c82c",
     },
     {
       surface: "plugin-label",
@@ -808,7 +808,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "package-probe-source",
         path: "scripts/run-oauth-direct-plugin-probe.mjs",
-        gitBlob: "1b03dd864af2242102066e4e1eb6644b51c59427",
+        gitBlob: "a1b1e9878561f97338f6e8c30774ddcf390fd379",
       }],
     },
     {
@@ -829,12 +829,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "b2d02af3f9284e6b208f5ed5296911c7a207d27f",
+          gitBlob: "b1bffd20a9b551444aecdd2614067acef6529908",
         },
         {
           role: "installed-skill-probe-source",
           path: "scripts/run-oauth-direct-plugin-probe.mjs",
-          gitBlob: "1b03dd864af2242102066e4e1eb6644b51c59427",
+          gitBlob: "a1b1e9878561f97338f6e8c30774ddcf390fd379",
         },
       ],
     },
@@ -852,7 +852,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "f052608fe741aa5fd21c99ca7f3e9792bcd94399",
+        gitBlob: "aac74df6daed62c50000c634b6f752f05fa7c82c",
       }],
     },
     {

@@ -15,6 +15,11 @@ matrix. Ниже сохраняется полный execution contract, а не
 
 ## 1. Назначение и принципы
 
+В Mind Diary единственный источник актуальных ручных сценариев —
+[каталог глубокой проверки](../operations/manual-acceptance/uat-selection.md).
+UAT выбирает его подмножество по меткам и темам; автоматические проверки
+и orchestration этого контракта остаются отдельно.
+
 `ship-work-release` доставляет bounded work scope с acceptance-driven
 декомпозицией, управляемым параллелизмом, точной integration authority,
 восстановлением после crash и проверяемыми release artifacts.

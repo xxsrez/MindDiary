@@ -6,8 +6,10 @@ import { writeFile } from "node:fs/promises";
 import { MCP_TOOL_DEFINITIONS } from "../packages/adapter-mcp/dist/index.js";
 import { canonical } from "./lib/multi-principal-probe-core.mjs";
 
-const SOURCE = "mind-diary-hosted-mcp-tools-list";
-const SCHEMA = "mind-diary/file-ingress-hosted-tool-inventory/v1";
+// This is the expected local candidate, not an observation of a deployment.
+// Keep historical hosted/direct evidence untouched.
+const SOURCE = "mind-diary-candidate-mcp-tools-list";
+const SCHEMA = "mind-diary/candidate-tool-inventory/v1";
 
 function hash(value) {
   return `sha256:${createHash("sha256").update(canonical(value)).digest("hex")}`;
@@ -26,16 +28,8 @@ function inventory(definitions) {
   };
 }
 
-const hosted = inventory(MCP_TOOL_DEFINITIONS);
-const direct = inventory(MCP_TOOL_DEFINITIONS.filter(({ name }) =>
-  name !== "stage_bundle_file"));
-await Promise.all([
-  writeFile(
-    new URL("../tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json", import.meta.url),
-    `${JSON.stringify(hosted, null, 2)}\n`,
-  ),
-  writeFile(
-    new URL("../tests/fixtures/file-ingress-evidence/direct-tool-inventory.json", import.meta.url),
-    `${JSON.stringify(direct, null, 2)}\n`,
-  ),
-]);
+const candidate = inventory(MCP_TOOL_DEFINITIONS);
+await writeFile(
+  new URL("../tests/fixtures/file-ingress-evidence/candidate-tool-inventory.json", import.meta.url),
+  `${JSON.stringify(candidate, null, 2)}\n`,
+);

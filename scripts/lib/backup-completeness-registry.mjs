@@ -19,6 +19,7 @@ export const backupPolicy = Object.freeze({
     md_oauth_registered_clients: ["revoke", "id client_name redirect_uris_json grant_types_json response_types_json token_endpoint_auth_method created_at last_used_at"],
     md_oauth_authorization_requests: ["revoke", "id principal_id client_id client_name redirect_uri resource scopes_json state code_challenge expires_at created_at"],
     md_oauth_grants: ["revoke", "id principal_id client_id client_name resource scopes_json revoked_at created_at updated_at last_used_at connection_ref"],
+    md_oauth_revocation_pending: ["reset", "grant_id"],
     md_oauth_authorization_codes: ["revoke", "id code_verifier grant_id principal_id client_id redirect_uri resource scopes_json code_challenge expires_at consumed_at"],
     md_oauth_access_tokens: ["revoke", "id token_verifier grant_id principal_id client_id resource scopes_json expires_at created_at last_used_at revoked_at"],
     md_oauth_refresh_tokens: ["revoke", "id token_verifier grant_id family_id parent_id principal_id client_id resource scopes_json expires_at created_at used_at revoked_at"],

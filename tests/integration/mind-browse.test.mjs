@@ -818,7 +818,7 @@ test("BundleFile listing returns metadata only, verifies preview bytes, and stay
 
 test("differential file operations compose over one exact mixed-file revision with bounded continuations", async (t) => {
   try {
-    assert.match(execFileSync("rg", ["--version"], { encoding: "utf8" }), /^ripgrep 15\.2\.0$/mu);
+    assert.match(execFileSync("rg", ["--version"], { encoding: "utf8" }), /^ripgrep 15\.2\.0(?:\s+\(rev [^)]+\))?$/mu);
   } catch (error) {
     if (error?.code === "ENOENT") {
       t.skip("external ripgrep oracle is unavailable; run gate:file-operations-differential");

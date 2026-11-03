@@ -7,7 +7,11 @@
 точные bytes в Space-scoped object storage и durable receipt до ответа
 `queued`. Ответ не означает canonical commit. `get_note_status(mind, receipt_id)`
 возвращает `queued | running | committed | failed` и, после commit, exact
-revision/path. Опрос и read-back агентом не обязательны. Повтор одинакового
+revision/path. Квитанцию `queued` нельзя представлять как завершённую запись:
+клиент проверяет итог либо сообщает, что результат ещё не подтверждён.
+Terminal `failed` сохраняется для диагностики, но не занимает один из 32
+слотов активной очереди; сохранённые данные автоматически не удаляются.
+Повтор одинакового
 ключа возвращает ту же квитанцию; другой payload с тем же ключом отклоняется.
 
 Обработчик использует текущие credential/ACL и исходную write generation,
@@ -429,6 +433,26 @@ server-side `used_at` возвращает `invalid_grant`, не выдаёт cr
 отзывает grant: параллельный caller должен перечитать общий credential store.
 Повтор после этого bounded окна, некорректный `used_at` либо reuse в уже revoked
 family отзывает весь grant и его active authorization records.
+Если выдача новой пары завершилась ошибкой до передачи credentials клиенту,
+сервер условно освобождает исходный refresh token для повтора, только если его
+запись и grant не отозваны. Это не восстанавливает потерянный уже отправленный
+ответ и не ослабляет обнаружение повторного использования успешной ротации.
+Отзыв подключения сначала закрывает grant для новой аутентификации и refresh,
+затем credential owner и authorization mirrors. Незавершённая очистка owner
+отмечается отдельно, в том числе когда access rows отсутствуют.
+OAuth access row отмечается обработанной после подтверждённого durable отзыва
+её authorization mirror либо проверки отсутствия mirror при уже закрытом
+grant; незавершённый отзыв можно повторить по прежнему
+connection ref. Создание новых access и refresh rows допускается только для
+действующего grant. Пока у отозванного grant есть необработанные access rows,
+reconnect не заменяет его новым. Это не гарантирует завершение большого отзыва
+за один запрос и не выдаёт неуспешную обработку mirrors за успешный отзыв.
+Новый явный consent может сначала повторить незавершённый отзыв старого grant;
+при продолжающейся ошибке он не создаёт новый credential.
+Consent обновляет только тот grant, scopes и lifecycle state, которые были
+прочитаны; если отзыв, reconnect или другой consent изменил их, authorization
+нужно начать заново. Временная ошибка revoke возвращает `503`, чтобы клиент не
+считал credential отозванным; неизвестный credential получает обычный `200`.
 
 OAuth grant связан с `principal_id + client_id + resource`, а не с одним Mind.
 Allowed resource для pilot — exact canonical modern MCP URL `/api/mcp`.
@@ -1684,6 +1708,10 @@ opt-in modern discovery; matching Worker events завершились HTTP 200.
 
 - Endpoint: `POST /api/mcp` over HTTPS Streamable HTTP.
 - Каждый JSON-RPC request — отдельный HTTP POST.
+- Оба MCP profile принимают JSON-RPC body не больше 32 MiB в UTF-8 bytes.
+  Предел проверяется во время чтения независимо от `Content-Length`; при
+  превышении оставшийся поток отменяется до разбора и выполнения операции.
+  Это envelope limit, отдельный от лимитов отдельных файлов и changeset.
 - Protocol state не выводится из connection/session. Каждый request несёт
   protocol version и client capabilities в `_meta`.
 - `MCP-Protocol-Version`, `Mcp-Method` и для `tools/call`/`resources/read`
@@ -2445,7 +2473,10 @@ Output:
 ```
 
 Validator проверяет весь выбранный bundle, а не только `wiki/` или найденные
-entries.
+entries. Он проверяет существующую revision и не принимает предлагаемый
+changeset. Отдельного MCP dry-run tool в текущем каталоге нет: `commit_changeset`
+проверяет полный предлагаемый результат при выполнении и при успехе создаёт
+revision, поэтому не является предварительным просмотром.
 
 ### `get_file_ingress_capabilities`
 
@@ -2999,6 +3030,9 @@ Brain-scale descriptor list is not rejected by the ordinary 64 KiB control
 request limit. The bound applies before JSON parsing and never raises the
 10,000-file, 64 MiB logical-corpus or D1 admission limits. An oversized plan is
 `invalid_request`; every other ordinary JSON route keeps the 64 KiB envelope.
+These limits are enforced in bytes while consuming the request stream, including
+when `Content-Length` is missing or inaccurate. Once the limit is exceeded,
+the remaining body is cancelled and no control operation is executed.
 
 Start request:
 
@@ -3337,6 +3371,7 @@ resource read заново проверяет current membership или baseline
 | Condition | HTTP | JSON-RPC |
 |---|---:|---:|
 | Invalid JSON | `400` | `-32700` |
+| JSON-RPC body exceeds 32 MiB | `413` | `-32600` |
 | Invalid request | `400` | `-32600` |
 | Unknown MCP method | `404` | `-32601` |
 | Unknown tool либо malformed tool arguments | `400` | `-32602` |

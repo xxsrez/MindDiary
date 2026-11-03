@@ -58,6 +58,11 @@ installation в ChatGPT Web, native file transport на другом host или
 переносимость macOS companion. Базовую корректность без skill доказывают
 server-side tool descriptions и независимый no-skill MCP journey; сложные
 workflow проверяются отдельно на exact Marketplace package.
+При package/OAuth probe policy проверяется по установленному `SKILL.md` и его
+portable reference после проверки содержимого пакета. Проверка учитывает, что
+`queued` ещё не означает commit, отдельный preflight может отсутствовать, а
+`commit_changeset` создаёт revision при успехе. Она не приписывает текущему
+MCP каталогу отсутствующие tools и не заменяет проверку server-side authority.
 
 ## Product authority Release 0.3
 

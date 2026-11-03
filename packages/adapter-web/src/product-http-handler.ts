@@ -358,11 +358,6 @@ export function createProductWebHttpHandler(
           return json(200, { ok: true, data: snakeOutput({ items, nextCursor: page.nextCursor }) });
         }
         const connectionRef = String(matched.path.connection_ref ?? "");
-        const connection = await dependencies.oauthConnections.read(
-          identity.actor.principalId,
-          connectionRef,
-        );
-        if (connection === null) return errorResponse(404, "connection_not_found", requestId);
         if (matched.operation === "revoke_connection") {
           if (requiredString(input.idempotencyKey) === null) {
             return errorResponse(400, "invalid_request", requestId);
@@ -377,7 +372,10 @@ export function createProductWebHttpHandler(
           );
           return json(200, { ok: true, data: { revoked: true } });
         }
-        const fresh = connection;
+        const fresh = await dependencies.oauthConnections.read(
+          identity.actor.principalId,
+          connectionRef,
+        );
         if (fresh === null) return errorResponse(404, "connection_not_found", requestId);
         const detail = safeConnectionDetail(fresh);
         if (detail === null) return errorResponse(404, "connection_not_found", requestId);

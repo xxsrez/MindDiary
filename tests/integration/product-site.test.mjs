@@ -135,6 +135,36 @@ const registeredActor = Object.freeze({
   deploymentCapabilities: Object.freeze([]),
 });
 
+test("oversized streamed control requests are rejected before executing an operation", async () => {
+  let calls = 0;
+  let pulls = 0;
+  let cancelled = false;
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf", verify: () => true },
+    control: { execute: () => { calls += 1; throw new Error("unexpected operation"); } },
+  });
+  const body = new ReadableStream({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(new Uint8Array(40 * 1024));
+    },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  const response = await handler(new Request(`${origin}/api/v1/minds`, {
+    method: "POST",
+    headers: { origin, "x-csrf-token": "csrf", "content-type": "application/json" },
+    body,
+    duplex: "half",
+  }));
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error.code, "invalid_request");
+  assert.equal(calls, 0);
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+});
+
 const sessionProjection = Object.freeze({
   principal: Object.freeze({
     principalId: "principal_one",
@@ -991,14 +1021,11 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /choose Read and write independently for every ordinary or Personal Mind/u);
   assert.match(codexHelpHtml, /Any Mind without a description needs your direct request for a specific write there/u);
   assert.match(codexHelpHtml, /This account-wide set is shared by every Connection and personal token/u);
-  assert.match(codexHelpHtml, /Save durable facts\/decisions from this request to every matching Mind/u);
-  assert.match(codexHelpHtml, /For new notes use enqueue_note/u);
-  assert.match(codexHelpHtml, /continue without polling\/read-back/u);
-  assert.match(codexHelpHtml, /Refresh list_minds before writing/u);
-  assert.match(codexHelpHtml, /&#39;only&#39; limits destinations/u);
+  assert.match(codexHelpHtml, /перед обращением к интернету проверь Mind Diary UAT/u);
+  assert.match(codexHelpHtml, /Записывай туда только по моей прямой просьбе/u);
   assert.match(codexHelpHtml, /Updating this help page does not replace Custom Instructions you already saved/u);
-  assert.match(codexHelpHtml, /Copy isolated routing check/u);
-  assert.match(codexHelpHtml, /at least three writable Minds matching descriptions/u);
+  assert.match(codexHelpHtml, /Check the source order/u);
+  assert.match(codexHelpHtml, /The instructions above do not request automatic saving/u);
   assert.match(codexHelpHtml, /Create the first useful Memory/);
   assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/);
   assert.match(codexHelpHtml, /href="\/settings\/developer\/mcp">Advanced MCP/);
@@ -2003,6 +2030,28 @@ test("Connections expose credential scopes only and reject retired per-credentia
   assert.equal((await removed.json()).error.code, "not_found");
   assert.equal(targetReads, 0);
   assert.equal(targetMutations, 0);
+});
+
+test("connection DELETE can resume a revoked grant without exposing its hidden detail", async () => {
+  const connectionRef = `conn_v1_${"a".repeat(32)}`;
+  const revocations = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf", verify: () => true },
+    control: { execute() { throw new Error("unexpected operation"); } },
+    oauthConnections: {
+      async listPage() { return { items: [], nextCursor: null }; },
+      async read() { return null; },
+      async revoke(principalId, ref) { revocations.push([principalId, ref]); return ref === connectionRef; },
+    },
+  });
+  const headers = { origin, "x-csrf-token": "csrf", "idempotency-key": "retry-revoke" };
+  const hidden = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}`));
+  assert.equal(hidden.status, 404);
+  const resumed = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}`, { method: "DELETE", headers }));
+  assert.equal(resumed.status, 200);
+  assert.deepEqual(revocations, [[registeredActor.principalId, connectionRef]]);
 });
 
 test("connection lookup makes unknown, foreign, and revoked presentation refs indistinguishable", async () => {

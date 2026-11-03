@@ -345,7 +345,7 @@ test("pool, U-ACCESS, MD-354 contract and runbook share one exact actor and invi
       "utf8",
     ).then(JSON.parse),
     readFile(
-      new URL("../../docs/operations/release-0.3-access-admin-uat-runbook.md", import.meta.url),
+      new URL("../../docs/operations/legacy-acceptance/release-0.3-access-admin-uat-runbook.md", import.meta.url),
       "utf8",
     ),
   ]);

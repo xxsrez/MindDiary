@@ -19,11 +19,29 @@ export async function readInput(
   }
   const declaredLength = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    void request.body?.cancel().catch(() => undefined);
     throw new TypeError("request body is too large");
   }
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > maxBytes) {
-    throw new TypeError("request body is too large");
+  const reader = request.body?.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bodyBytes = 0;
+  if (reader !== undefined) {
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        bodyBytes += next.value.byteLength;
+        if (bodyBytes > maxBytes) {
+          void reader.cancel().catch(() => undefined);
+          throw new TypeError("request body is too large");
+        }
+        text += decoder.decode(next.value, { stream: true });
+      }
+      text += decoder.decode();
+    } finally {
+      reader.releaseLock();
+    }
   }
   if (text.length === 0) return Object.freeze({});
   const value: unknown = JSON.parse(text);

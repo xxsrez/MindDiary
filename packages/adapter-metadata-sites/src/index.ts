@@ -486,6 +486,19 @@ interface TailReplayResult {
   readonly shouldCheckpoint: boolean;
 }
 
+// Only methods explicitly verified to be side-effect free may avoid the
+// canonical event append. Unknown or new transaction methods stay fenced.
+const READ_ONLY_CONTENT_TRANSACTION_METHODS = new Set([
+  "readCurrentAuthorizationState",
+  "readPrincipalMindUsage",
+  "validatePrincipalMindUsageWritePin",
+  "checkIdempotency",
+  "readHead",
+  "readRevision",
+  "readQueuedNote",
+  "listQueuedNotes",
+]);
+
 function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
   if (TOKEN_MUTATIONS.has(event.method)) {
     // The fenced token event is already canonical durability. OAuth refresh is
@@ -1069,7 +1082,12 @@ export class SitesMetadataStore {
     const metadata = new InMemoryRevisionMetadataStore();
     const tokens = new InMemoryMcpTokenStore();
     const replayed = await this.#replayRows(metadata, tokens, 0, eventRows);
-    await this.#persistSnapshot(replayed.sequence, metadata, tokens);
+    try {
+      await this.#persistSnapshot(replayed.sequence, metadata, tokens);
+    } catch {
+      // The contiguous canonical event log has already been replayed; the
+      // materialized checkpoint is only an optimization and can be retried.
+    }
     return { metadata, tokens, sequence: replayed.sequence };
   }
 
@@ -1088,7 +1106,12 @@ export class SitesMetadataStore {
       ? await this.#replayTail(metadata, tokens, sequenceAtSnapshot)
       : await this.#replayRows(metadata, tokens, sequenceAtSnapshot, tailRows);
     if (replayed.shouldCheckpoint) {
-      await this.#persistSnapshot(replayed.sequence, metadata, tokens);
+      try {
+        await this.#persistSnapshot(replayed.sequence, metadata, tokens);
+      } catch {
+        // Keep serving the validated snapshot plus canonical tail. A later
+        // restart can retry this derived checkpoint.
+      }
     }
     return { metadata, tokens, sequence: replayed.sequence };
   }
@@ -1232,6 +1255,15 @@ export class SitesMetadataStore {
           )),
       );
       if (isEmptyRecoveryTransaction(method, calls, callResults)) return result;
+      if (method === "runContentCommitTransaction" && calls.length > 0 &&
+          calls.every((call) => READ_ONLY_CONTENT_TRANSACTION_METHODS.has(call.method))) {
+        // The former no-op append supplied a CAS fence. Keep its freshness
+        // guarantee by observing the canonical tail before returning; retry
+        // the callback if another isolate committed during the read.
+        const tail = await this.#replayTail(loaded.metadata, loaded.tokens, loaded.sequence);
+        if (tail.sequence !== loaded.sequence) continue;
+        return result;
+      }
       const event: DurableEvent = {
         v: 1,
         kind: "transaction",

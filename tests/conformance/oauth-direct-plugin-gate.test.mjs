@@ -239,34 +239,28 @@ test("Codex prompt-input parser proves the installed skill is model-visible", ()
   );
 });
 
-test("installed skill principal-owned Mind usage policy is complete and fail-closed", () => {
-  const policy = [
-    "Start each relevant workflow with fresh `list_minds`",
-    "Personal Mind has `routing_profile=personal_default` and an optional description",
-    "When the current user names an exact Mind",
-    "Otherwise select only the readable Mind or Minds whose descriptions genuinely fit",
-    "For any `read_write` Mind without a description, write only when the current user directly asks in this conversation",
-    "`only` restricts fan-out to the named Mind or Minds",
-    "For every newly discussed piece of durable knowledge, consider automatic preservation",
-    "Save in every matching Mind independently",
-    "No extra confirmation is needed for a qualifying save",
-    "Preserve exact `source_references` when one Mind supplies content saved elsewhere",
-    "Fetch a targeted existing Memory before deciding whether the result is a create, update, explicit delete or semantic no-op",
-    "Validate the complete proposed OKF 0.2 bundle before commit",
-    "call `reconcile_changeset` with the exact original full request and idempotency key",
-    "Briefly tell the user what was created, updated or removed",
-  ].join("\n");
-  assert.equal(assertMindUsageSkillPolicy(policy), true);
-  assert.throws(
-    () => assertMindUsageSkillPolicy("Use every accessible Mind and save everything."),
-    (error) => error instanceof ProbeFailure &&
-      error.code === "installed_mind_usage_skill_policy_missing",
-  );
-  assert.throws(
-    () => assertMindUsageSkillPolicy(`${policy}\nwrite_binding_id`),
-    (error) => error instanceof ProbeFailure &&
-      error.code === "installed_mind_usage_skill_policy_missing",
-  );
+test("installed skill and portable reference preserve the Mind usage policy", async () => {
+  // Snapshot of the locally reviewed 0.1.0+codex.20261103125018 package.
+  const root = new URL("../fixtures/oauth-direct-plugin/skills/mind-diary/", import.meta.url);
+  const skill = await readFile(new URL("SKILL.md", root), "utf8");
+  const guidance = await readFile(new URL("references/service-guidance.md", root), "utf8");
+  assert.equal(assertMindUsageSkillPolicy(skill, guidance), true);
+
+  const invalid = [
+    [skill, ""],
+    [skill.replace("references/service-guidance.md", "references/missing.md"), guidance],
+    [skill, guidance.replace("not a committed\nrevision", "a committed\nrevision")],
+    [skill, guidance.replace("use `preflight_changeset` if the connected server publishes it", "always call `preflight_changeset`")],
+    [skill, `${guidance}\nwrite_binding_id`],
+    [skill, `${guidance}\nValidate the complete proposed OKF 0.2 bundle before commit`],
+  ];
+  for (const [badSkill, badGuidance] of invalid) {
+    assert.throws(
+      () => assertMindUsageSkillPolicy(badSkill, badGuidance),
+      (error) => error instanceof ProbeFailure &&
+        error.code === "installed_mind_usage_skill_policy_missing",
+    );
+  }
 });
 
 test("Codex prompt-input discovery fails closed for cache-only, wrong-source, and duplicate evidence", () => {

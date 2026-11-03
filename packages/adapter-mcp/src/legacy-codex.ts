@@ -2,6 +2,8 @@ import {
   type McpBearerAuthenticationResult,
 } from "@mind-diary/application-content";
 
+import { McpBodyTooLarge, readMcpJsonBody } from "./json-body.js";
+
 import {
   MCP_TARGET_PROTOCOL,
   MCP_LEGACY_CODEX_PROTOCOL,
@@ -250,9 +252,11 @@ export function createLegacyCodexMcpHttpHandler(
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await request.text());
-    } catch {
-      const response = jsonRpcError(null, -32700, "Parse error", 400);
+      parsed = await readMcpJsonBody(request);
+    } catch (error) {
+      const response = error instanceof McpBodyTooLarge
+        ? jsonRpcError(null, -32600, "Request body too large", 413)
+        : jsonRpcError(null, -32700, "Parse error", 400);
       await safeLog(dependencies.logger, request, requestId, response, "protocol_error");
       return response;
     }

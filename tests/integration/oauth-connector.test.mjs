@@ -7,6 +7,8 @@ import {
   createSitesOAuthConnector,
 } from "../../packages/adapter-oauth-sites/dist/index.js";
 import { InMemoryMcpTokenStore } from "../../packages/adapter-metadata-memory/dist/index.js";
+import { createProductWebHttpHandler } from "../../packages/adapter-web/dist/index.js";
+import { SqliteD1 } from "../../scripts/lib/sqlite-d1.mjs";
 
 const ORIGIN = "https://mind-diary.example";
 const REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect";
@@ -36,6 +38,7 @@ class OAuthD1 {
   clients = new Map();
   requests = new Map();
   grants = new Map();
+  pendingRevocations = new Set();
   codes = new Map();
   access = new Map();
   refresh = new Map();
@@ -75,6 +78,12 @@ class OAuthD1 {
       const existing = [...this.grants.values()].find(
         (row) => row.principal_id === values[2] && row.client_id === values[3] && row.resource === values[5],
       );
+      if (existing && values.length > 9 &&
+          (existing.id !== values[9] || (existing.revoked_at ?? null) !== values[10] ||
+           existing.scopes_json !== values[11])) return this.result(0);
+      if (existing && this.pendingRevocations.has(existing.id)) return this.result(0);
+      if (existing?.revoked_at && sql.includes("NOT EXISTS") &&
+          [...this.access.values()].some((row) => row.grant_id === existing.id && !row.revoked_at)) return this.result(0);
       const reconnecting = existing?.revoked_at != null;
       const row = existing ?? {
         id: values[0], connection_ref: values[1], principal_id: values[2], client_id: values[3],
@@ -94,6 +103,7 @@ class OAuthD1 {
       return this.result();
     }
     if (sql.includes("/*md-oauth-code-create*/")) {
+      if (values.length > 10 && (!this.grants.get(values[10]) || this.grants.get(values[10]).revoked_at)) return this.result(0);
       this.codes.set(values[0], {
         id: values[0], code_verifier: values[1], grant_id: values[2],
         principal_id: values[3], client_id: values[4], redirect_uri: values[5],
@@ -103,6 +113,7 @@ class OAuthD1 {
       return this.result();
     }
     if (sql.includes("/*md-oauth-access-create*/")) {
+      if (values.length > 9 && (!this.grants.get(values[9]) || this.grants.get(values[9]).revoked_at)) return this.result(0);
       this.access.set(values[0], {
         id: values[0], token_verifier: values[1], grant_id: values[2],
         principal_id: values[3], client_id: values[4], resource: values[5],
@@ -112,6 +123,7 @@ class OAuthD1 {
       return this.result();
     }
     if (sql.includes("/*md-oauth-refresh-create*/")) {
+      if (values.length > 11 && (!this.grants.get(values[11]) || this.grants.get(values[11]).revoked_at)) return this.result(0);
       this.refresh.set(values[0], {
         id: values[0], token_verifier: values[1], grant_id: values[2], family_id: values[3],
         parent_id: values[4], principal_id: values[5], client_id: values[6],
@@ -122,8 +134,16 @@ class OAuthD1 {
     }
     if (sql.includes("/*md-oauth-grant-touch*/")) {
       const row = this.grants.get(values[2]);
+      if (sql.includes("revoked_at IS NULL") && row?.revoked_at) return this.result(0);
       if (row) Object.assign(row, { last_used_at: values[0], updated_at: values[1] });
       return this.result(row ? 1 : 0);
+    }
+    if (sql.includes("/*md-oauth-revocation-pending*/")) {
+      if (this.grants.has(values[0])) this.pendingRevocations.add(values[0]);
+      return this.result();
+    }
+    if (sql.includes("/*md-oauth-revocation-complete*/")) {
+      return this.result(this.pendingRevocations.delete(values[0]) ? 1 : 0);
     }
     if (sql.includes("/*md-oauth-access-touch*/")) {
       const row = this.access.get(values[1]);
@@ -132,10 +152,19 @@ class OAuthD1 {
     }
     if (sql.includes("/*md-oauth-grant-revoke*/")) {
       const row = this.grants.get(values[2]);
+      if (sql.includes("NOT EXISTS") && [...this.access.values()].some((item) => item.grant_id === values[2] && !item.revoked_at)) return this.result(0);
+      if (sql.includes("revoked_at IS NULL") && row?.revoked_at) return this.result(0);
       if (row) Object.assign(row, { revoked_at: values[0], updated_at: values[1] });
       return this.result(row ? 1 : 0);
     }
+    if (sql.includes("/*md-oauth-grant-freeze*/")) {
+      const row = this.grants.get(values[2]);
+      if (!row || row.revoked_at) return this.result(0);
+      Object.assign(row, { revoked_at: values[0], updated_at: values[1] });
+      return this.result(1);
+    }
     if (sql.includes("/*md-oauth-family-revoke*/")) {
+      if (values.length > 2 && !this.grants.get(values[2])?.revoked_at) return this.result(0);
       for (const row of this.refresh.values()) if (row.family_id === values[1] && !row.revoked_at) row.revoked_at = values[0];
       return this.result();
     }
@@ -144,6 +173,7 @@ class OAuthD1 {
       return this.result();
     }
     if (sql.includes("/*md-oauth-refresh-grant-revoke*/")) {
+      if (values.length > 2 && !this.grants.get(values[2])?.revoked_at) return this.result(0);
       for (const row of this.refresh.values()) if (row.grant_id === values[1] && !row.revoked_at) row.revoked_at = values[0];
       return this.result();
     }
@@ -153,13 +183,20 @@ class OAuthD1 {
     }
     if (sql.includes("/*md-oauth-access-record-revoke*/")) {
       const row = this.access.get(values[1]);
-      if (row && !row.revoked_at) row.revoked_at = values[0];
+      if (row && !row.revoked_at && (values.length < 3 || row.token_verifier === values[2])) row.revoked_at = values[0];
       return this.result(row ? 1 : 0);
     }
     if (sql.includes("/*md-oauth-refresh-record-revoke*/")) {
       const row = this.refresh.get(values[1]);
-      if (row && !row.revoked_at) row.revoked_at = values[0];
+      if (row && !row.revoked_at && (values.length < 3 || row.token_verifier === values[2])) row.revoked_at = values[0];
       return this.result(row ? 1 : 0);
+    }
+    if (sql.includes("/*md-oauth-refresh-unconsume*/")) {
+      const row = this.refresh.get(values[0]);
+      const grant = row && this.grants.get(row.grant_id);
+      if (!row || row.used_at !== values[1] || row.revoked_at || !grant || grant.revoked_at) return this.result(0);
+      row.used_at = null;
+      return this.result(1);
     }
     if (sql.includes("/*md-oauth-principal-grants-revoke*/")) {
       for (const row of this.grants.values()) if (row.principal_id === values[2] && !row.revoked_at) row.revoked_at = values[0];
@@ -217,11 +254,17 @@ class OAuthD1 {
       if (!row) return { results: [] };
       return { results: [{ ...row, grant_revoked_at: this.grants.get(row.grant_id)?.revoked_at ?? null }] };
     }
+    if (sql.includes("/*md-oauth-issued-access-current*/")) {
+      const row = this.access.get(values[0]);
+      const grant = row && this.grants.get(row.grant_id);
+      return { results: row && !row.revoked_at && grant && !grant.revoked_at ? [{ id: row.id }] : [] };
+    }
     if (sql.includes("/*md-oauth-access-grant-list*/")) {
       return { results: [...this.access.values()].filter((row) => row.grant_id === values[0] && !row.revoked_at).map((row) => ({ id: row.id, principal_id: row.principal_id })) };
     }
     if (sql.includes("/*md-oauth-access-principal-list*/")) {
-      return { results: [...this.access.values()].filter((row) => row.principal_id === values[0] && !row.revoked_at).map((row) => ({ id: row.id, principal_id: row.principal_id })) };
+      return { results: [...this.access.values()].filter((row) => row.principal_id === values[0] && !row.revoked_at &&
+        (!sql.includes("EXISTS") || this.grants.get(row.grant_id)?.revoked_at)).map((row) => ({ id: row.id, principal_id: row.principal_id })) };
     }
     if (sql.includes("/*md-oauth-access-owner*/")) {
       const row = [...this.access.values()].find((item) => item.token_verifier === values[0] && item.client_id === values[1]);
@@ -270,6 +313,11 @@ class OAuthD1 {
           right.connection_ref.localeCompare(left.connection_ref));
       return { results: rows.slice(0, limit) };
     }
+    if (sql.includes("/*md-oauth-connection-revoke-read*/")) {
+      const row = [...this.grants.values()].find((item) => item.principal_id === values[0] && item.connection_ref === values[1] &&
+        (!item.revoked_at || this.pendingRevocations.has(item.id) || [...this.access.values()].some((access) => access.grant_id === item.id && !access.revoked_at)));
+      return { results: row ? [{ ...row }] : [] };
+    }
     if (sql.includes("/*md-oauth-connection-read*/")) {
       const row = [...this.grants.values()].find((item) =>
         item.principal_id === values[0] && item.connection_ref === values[1] && !item.revoked_at);
@@ -288,7 +336,7 @@ async function pkce(value) {
 }
 
 async function environment(options = {}) {
-  const database = new OAuthD1();
+  const database = options.database ?? new OAuthD1();
   const authorizationTokens = new InMemoryMcpTokenStore();
   const targetRegistrations = [];
   const targetRevocations = [];
@@ -609,6 +657,459 @@ test("refresh reuse after the bounded grace revokes the entire connection", asyn
   assert.equal(targetRevocations[0].principalId, "principal_1");
   assert.equal(targetRevocations[0].bindingOwnerId, grantId);
   assert.deepEqual(await connector.authenticator.authenticate(rotatedBody.access_token, "request_reuse"), { kind: "invalid" });
+});
+
+test("refresh can be retried after token mirror creation fails before credentials are returned", async () => {
+  let current = new Date("2026-08-26T20:00:00.000Z");
+  const { connector, authorizationTokens, database } = await environment({ now: () => new Date(current) });
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const create = authorizationTokens.createMcpToken.bind(authorizationTokens);
+  authorizationTokens.createMcpToken = async () => { throw new Error("synthetic mirror outage"); };
+  const request = () => new Request(`${ORIGIN}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: issued.refresh_token,
+      client_id: client.client_id, resource: `${ORIGIN}/api/mcp` }),
+  });
+  assert.equal((await connector.fetch(request())).status, 500);
+  authorizationTokens.createMcpToken = create;
+  current = new Date(current.getTime() + (OAUTH_REFRESH_REUSE_GRACE_SECONDS + 1) * 1_000);
+  const retried = await connector.fetch(request());
+  assert.equal(retried.status, 200, await retried.clone().text());
+  const result = await retried.json();
+  assert.equal((await connector.authenticator.authenticate(result.access_token, "request_retry")).kind, "authenticated");
+  assert.equal([...database.access.values()].filter((row) => row.revoked_at).length, 1);
+  assert.equal([...database.refresh.values()].filter((row) => row.revoked_at).length, 1);
+});
+
+test("a definite mirror ID collision never revokes the pre-existing token", async () => {
+  const { connector, authorizationTokens } = await environment();
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  let revocations = 0;
+  authorizationTokens.createMcpToken = async () => ({ kind: "token_id_conflict" });
+  authorizationTokens.revokeMcpToken = async () => { revocations += 1; return { kind: "not_found" }; };
+  const failed = await connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: issued.refresh_token,
+      client_id: client.client_id, resource: `${ORIGIN}/api/mcp` }),
+  }));
+  assert.equal(failed.status, 500);
+  assert.equal(revocations, 0);
+});
+
+test("a partial connection revoke resumes after already fenced access rows", async () => {
+  const { connector, authorizationTokens, database } = await environment();
+  const client = await register(connector);
+  await authorize(connector, client.client_id);
+  await authorize(connector, client.client_id);
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  const revoke = authorizationTokens.revokeMcpToken.bind(authorizationTokens);
+  const seen = [];
+  authorizationTokens.revokeMcpToken = async (request) => {
+    seen.push(request.tokenId);
+    if (seen.length === 2) throw new Error("synthetic interruption");
+    return revoke(request);
+  };
+  await assert.rejects(connector.revokeConnection("principal_1", connection.connectionRef), /synthetic interruption/u);
+  assert.equal([...database.access.values()].filter((row) => row.revoked_at).length, 1);
+  assert.equal((await connector.listConnectionPage("principal_1")).items.length, 0);
+  authorizationTokens.revokeMcpToken = async (request) => { seen.push(request.tokenId); return revoke(request); };
+  assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+  assert.equal(seen.filter((id) => id === seen[0]).length, 1);
+  assert.equal([...database.access.values()].filter((row) => !row.revoked_at).length, 0);
+});
+
+test("explicit reconnect finishes an interrupted revoke before creating a new grant", async () => {
+  const { connector, authorizationTokens } = await environment();
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  const revoke = authorizationTokens.revokeMcpToken.bind(authorizationTokens);
+  authorizationTokens.revokeMcpToken = async () => { throw new Error("synthetic interruption"); };
+  await assert.rejects(connector.revokeConnection("principal_1", connection.connectionRef), /synthetic interruption/u);
+  authorizationTokens.revokeMcpToken = revoke;
+  const reconnected = await authorize(connector, client.client_id);
+  const current = (await connector.listConnectionPage("principal_1")).items[0];
+  assert.notEqual(current.connectionRef, connection.connectionRef);
+  assert.deepEqual(await connector.authenticator.authenticate(issued.access_token, "request_old_grant"), { kind: "invalid" });
+  assert.equal((await connector.authenticator.authenticate(reconnected.access_token, "request_new_grant")).kind, "authenticated");
+});
+
+test("owner-fence failure freezes the connection and keeps revoke retryable", async () => {
+  let fail = true;
+  const { connector } = await environment({ revokeWriteTargetOwner: () => {
+    if (fail) throw new Error("synthetic owner fence outage");
+  } });
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  await assert.rejects(connector.revokeConnection("principal_1", connection.connectionRef), /owner fence outage/u);
+  assert.equal((await connector.listConnectionPage("principal_1")).items.length, 0);
+  assert.deepEqual(await connector.authenticator.authenticate(issued.access_token, "owner_outage"), { kind: "invalid" });
+  fail = false;
+  assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+});
+
+test("a failed grant freeze leaves the connection active and revoke retryable", async () => {
+  let ownerFenced = false;
+  const { connector, authorizationTokens, database } = await environment({
+    revokeWriteTargetOwner: () => { ownerFenced = true; },
+  });
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const actor = await connector.authenticator.authenticate(issued.access_token, "request_before_freeze_failure");
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  const batch = database.batch.bind(database);
+  let fail = true;
+  database.batch = async (statements) => {
+    if (fail && statements.some((statement) => statement.sql.includes("/*md-oauth-grant-freeze*/"))) {
+      fail = false;
+      throw new Error("synthetic freeze failure");
+    }
+    return batch(statements);
+  };
+  await assert.rejects(connector.revokeConnection("principal_1", connection.connectionRef), /freeze failure/u);
+  assert.equal(ownerFenced, false);
+  assert.equal((await connector.listConnectionPage("principal_1")).items.length, 1);
+  assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+  assert.equal((await authorizationTokens.readMcpTokenForAuthorization(actor.actor.authentication.tokenId)).state, "revoked");
+});
+
+test("web DELETE resumes a partially failed revoke through the real connector", async () => {
+  const { connector, authorizationTokens } = await environment();
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  const actor = { kind: "registered_principal", principalId: "principal_1",
+    authentication: { kind: "sites_identity", verifiedByPlatform: true },
+    requestId: "request_web_retry", occurredAtUtc: new Date().toISOString(), deploymentCapabilities: [] };
+  const handler = createProductWebHttpHandler({ applicationOrigin: ORIGIN,
+    resolveIdentity: () => ({ kind: "authenticated", actor }),
+    csrf: { issue: () => "csrf", verify: () => true },
+    control: { execute() { throw new Error("unexpected operation"); } },
+    oauthConnections: { listPage: connector.listConnectionPage,
+      read: connector.readConnection, revoke: connector.revokeConnection },
+  });
+  const request = () => new Request(`${ORIGIN}/api/v1/connections/${connection.connectionRef}`, {
+    method: "DELETE", headers: { origin: ORIGIN, "x-csrf-token": "csrf", "idempotency-key": "retry-web" },
+  });
+  const revoke = authorizationTokens.revokeMcpToken.bind(authorizationTokens);
+  authorizationTokens.revokeMcpToken = async () => { throw new Error("synthetic interruption"); };
+  assert.notEqual((await handler(request())).status, 200);
+  assert.deepEqual(await connector.authenticator.authenticate(issued.access_token, "request_web_frozen"), { kind: "invalid" });
+  authorizationTokens.revokeMcpToken = revoke;
+  assert.equal((await handler(request())).status, 200);
+});
+
+test("not_found cannot falsely fence a still-present OAuth mirror", async () => {
+  const { connector, authorizationTokens, database } = await environment();
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  authorizationTokens.revokeMcpToken = async () => ({ kind: "not_found" });
+  await assert.rejects(connector.revokeConnection("principal_1", connection.connectionRef), /mirror is unavailable/u);
+  assert.equal([...database.access.values()].filter((row) => !row.revoked_at).length, 1);
+  assert.deepEqual(await connector.authenticator.authenticate(issued.access_token, "request_missing_mirror"), { kind: "invalid" });
+  assert.equal((await connector.listConnectionPage("principal_1")).items.length, 0);
+});
+
+test("failed single-token revoke does not hide a live mirror from connection revoke", async () => {
+  const { connector, authorizationTokens, database } = await environment();
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const actor = await connector.authenticator.authenticate(issued.access_token, "request_before_token_revoke");
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  const revoke = authorizationTokens.revokeMcpToken.bind(authorizationTokens);
+  authorizationTokens.revokeMcpToken = async () => ({ kind: "not_found" });
+  const response = await connector.fetch(new Request(`${ORIGIN}/oauth/revoke`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token: issued.access_token, client_id: client.client_id }),
+  }));
+  assert.equal(response.status, 503);
+  assert.equal([...database.access.values()].filter((row) => !row.revoked_at).length, 1);
+  authorizationTokens.revokeMcpToken = revoke;
+  assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+  assert.equal((await authorizationTokens.readMcpTokenForAuthorization(actor.actor.authentication.tokenId)).state, "revoked");
+});
+
+test("connection revoke cannot succeed while a concurrent issuance remains unfenced", async () => {
+  const { connector, authorizationTokens } = await environment();
+  const client = await register(connector);
+  const initial = await authorize(connector, client.client_id);
+  const actor = await connector.authenticator.authenticate(initial.access_token, "request_before_revoke");
+  assert.equal(actor.kind, "authenticated");
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  const revoke = authorizationTokens.revokeMcpToken.bind(authorizationTokens);
+  let release;
+  let entered;
+  const paused = new Promise((resolve) => { entered = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  let first = true;
+  authorizationTokens.revokeMcpToken = async (request) => {
+    if (first) { first = false; entered(); await held; }
+    return revoke(request);
+  };
+  const revoking = connector.revokeConnection("principal_1", connection.connectionRef);
+  await paused;
+  const concurrent = await authorize(connector, client.client_id).then((tokens) => tokens, (error) => error);
+  release();
+  const result = await revoking;
+  const mirror = await authorizationTokens.readMcpTokenForAuthorization(actor.actor.authentication.tokenId);
+  assert.equal(result, true);
+  assert.equal(mirror.state, "revoked");
+  if (!(concurrent instanceof Error)) {
+    const newActor = await connector.authenticator.authenticate(concurrent.access_token, "request_new_connection");
+    assert.equal(newActor.kind, "authenticated");
+    assert.notEqual(newActor.actor.authentication.bindingOwnerId, actor.actor.authentication.bindingOwnerId);
+  }
+});
+
+test("a mirror created after grant freeze cannot publish its credential", async () => {
+  const { connector, authorizationTokens } = await environment();
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  const create = authorizationTokens.createMcpToken.bind(authorizationTokens);
+  let release;
+  let entered;
+  let lateTokenId;
+  const paused = new Promise((resolve) => { entered = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  authorizationTokens.createMcpToken = async (input) => {
+    lateTokenId = input.tokenId;
+    entered();
+    await held;
+    return create(input);
+  };
+  const rotating = connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: issued.refresh_token,
+      client_id: client.client_id, resource: `${ORIGIN}/api/mcp` }),
+  }));
+  await paused;
+  assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+  release();
+  assert.equal((await rotating).status, 500);
+  assert.equal((await authorizationTokens.readMcpTokenForAuthorization(lateTokenId)).state, "revoked");
+  assert.deepEqual(await connector.authenticator.authenticate(issued.access_token, "request_after_freeze"), { kind: "invalid" });
+});
+
+test("stale consent cannot reactivate a grant revoked while consent was pending", async () => {
+  let pause = false;
+  let entered;
+  let release;
+  const paused = new Promise((resolve) => { entered = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  const { connector } = await environment({ registerWriteTargetOwner: async () => {
+    if (pause) { entered(); await held; }
+  } });
+  const client = await register(connector);
+  const original = await authorize(connector, client.client_id);
+  const connection = (await connector.listConnectionPage("principal_1")).items[0];
+  pause = true;
+  const staleConsent = authorize(connector, client.client_id).then(() => null, (error) => error);
+  await paused;
+  assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+  release();
+  assert.ok(await staleConsent instanceof Error);
+  assert.equal((await connector.listConnectionPage("principal_1")).items.length, 0);
+  assert.deepEqual(await connector.authenticator.authenticate(original.access_token, "request_stale_consent"), { kind: "invalid" });
+});
+
+test("guarded issuance, refresh and revoke execute on transactional SQLite", async () => {
+  const database = new SqliteD1();
+  try {
+    const { connector } = await environment({ database });
+    const client = await register(connector);
+    const issued = await authorize(connector, client.client_id);
+    const response = await connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: issued.refresh_token,
+        client_id: client.client_id, resource: `${ORIGIN}/api/mcp` }),
+    }));
+    assert.equal(response.status, 200, await response.clone().text());
+    const rotated = await response.json();
+    const connection = (await connector.listConnectionPage("principal_1")).items[0];
+    assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+    assert.deepEqual(await connector.authenticator.authenticate(rotated.access_token, "request_sqlite"), { kind: "invalid" });
+  } finally { database.close(); }
+});
+
+test("transactional SQLite fences a mirror created after grant freeze", async () => {
+  const database = new SqliteD1();
+  try {
+    const { connector, authorizationTokens } = await environment({ database });
+    const client = await register(connector);
+    const issued = await authorize(connector, client.client_id);
+    const connection = (await connector.listConnectionPage("principal_1")).items[0];
+    const create = authorizationTokens.createMcpToken.bind(authorizationTokens);
+    let release;
+    let entered;
+    let lateTokenId;
+    const held = new Promise((resolve) => { release = resolve; });
+    const paused = new Promise((resolve) => { entered = resolve; });
+    authorizationTokens.createMcpToken = async (input) => {
+      lateTokenId = input.tokenId;
+      entered();
+      await held;
+      return create(input);
+    };
+    const rotating = connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: issued.refresh_token,
+        client_id: client.client_id, resource: `${ORIGIN}/api/mcp` }),
+    }));
+    await paused;
+    assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+    release();
+    assert.equal((await rotating).status, 500);
+    assert.equal((await authorizationTokens.readMcpTokenForAuthorization(lateTokenId)).state, "revoked");
+  } finally { database.close(); }
+});
+
+test("transactional SQLite does not reopen a grant from stale consent", async () => {
+  const database = new SqliteD1();
+  try {
+    let pause = false;
+    let entered;
+    let release;
+    const paused = new Promise((resolve) => { entered = resolve; });
+    const held = new Promise((resolve) => { release = resolve; });
+    const { connector } = await environment({ database, registerWriteTargetOwner: async () => {
+      if (pause) { entered(); await held; }
+    } });
+    const client = await register(connector);
+    await authorize(connector, client.client_id);
+    const connection = (await connector.listConnectionPage("principal_1")).items[0];
+    pause = true;
+    const staleConsent = authorize(connector, client.client_id).then(() => null, (error) => error);
+    await paused;
+    assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+    release();
+    assert.ok(await staleConsent instanceof Error);
+    assert.equal((await connector.listConnectionPage("principal_1")).items.length, 0);
+  } finally { database.close(); }
+});
+
+test("transactional SQLite reconnect completes a partially revoked grant", async () => {
+  const database = new SqliteD1();
+  try {
+    const { connector, authorizationTokens } = await environment({ database });
+    const client = await register(connector);
+    const issued = await authorize(connector, client.client_id);
+    const old = (await connector.listConnectionPage("principal_1")).items[0];
+    const revoke = authorizationTokens.revokeMcpToken.bind(authorizationTokens);
+    authorizationTokens.revokeMcpToken = async () => { throw new Error("synthetic interruption"); };
+    await assert.rejects(connector.revokeConnection("principal_1", old.connectionRef), /synthetic interruption/u);
+    authorizationTokens.revokeMcpToken = revoke;
+    const next = await authorize(connector, client.client_id);
+    const current = (await connector.listConnectionPage("principal_1")).items[0];
+    assert.notEqual(current.connectionRef, old.connectionRef);
+    assert.deepEqual(await connector.authenticator.authenticate(issued.access_token, "request_sqlite_old"), { kind: "invalid" });
+    assert.equal((await connector.authenticator.authenticate(next.access_token, "request_sqlite_new")).kind, "authenticated");
+  } finally { database.close(); }
+});
+
+test("transactional SQLite freezes refresh reuse and explicit revoke despite an owner outage", async () => {
+  for (const trigger of ["reuse", "rfc7009"]) {
+    const database = new SqliteD1();
+    try {
+      let current = new Date("2026-08-26T20:00:00.000Z");
+      let fail = false;
+      const { connector } = await environment({ database, now: () => new Date(current),
+        revokeWriteTargetOwner: () => { if (fail) throw new Error("synthetic owner outage"); } });
+      const client = await register(connector);
+      const issued = await authorize(connector, client.client_id);
+      const connection = (await connector.listConnectionPage("principal_1")).items[0];
+      const refresh = (token) => connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+        method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: token,
+          client_id: client.client_id, resource: `${ORIGIN}/api/mcp` }),
+      }));
+      const rotatedResponse = await refresh(issued.refresh_token);
+      assert.equal(rotatedResponse.status, 200);
+      const rotated = await rotatedResponse.json();
+      current = new Date(current.getTime() + OAUTH_REFRESH_REUSE_GRACE_SECONDS * 1_000 + 1);
+      fail = true;
+      const response = trigger === "reuse"
+        ? await refresh(issued.refresh_token)
+        : await connector.fetch(new Request(`${ORIGIN}/oauth/revoke`, {
+            method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({ token: rotated.refresh_token, client_id: client.client_id }),
+          }));
+      assert.equal(response.status, trigger === "reuse" ? 500 : 503);
+      assert.deepEqual(await connector.authenticator.authenticate(rotated.access_token, "after_owner_outage"), { kind: "invalid" });
+      assert.equal((await refresh(rotated.refresh_token)).status, 400);
+      fail = false;
+      assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+      assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), false);
+    } finally { database.close(); }
+  }
+});
+
+test("transactional SQLite retains a retry marker when no unrevoked access rows remain", async () => {
+  const database = new SqliteD1();
+  try {
+    let fail = false;
+    const { connector } = await environment({ database,
+      revokeWriteTargetOwner: () => { if (fail) throw new Error("synthetic owner outage"); } });
+    const client = await register(connector);
+    const issued = await authorize(connector, client.client_id);
+    const connection = (await connector.listConnectionPage("principal_1")).items[0];
+    const accessRevoke = await connector.fetch(new Request(`${ORIGIN}/oauth/revoke`, {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: issued.access_token, client_id: client.client_id }),
+    }));
+    assert.equal(accessRevoke.status, 200);
+    fail = true;
+    await assert.rejects(connector.revokeConnection("principal_1", connection.connectionRef), /owner outage/u);
+    assert.equal((await connector.listConnectionPage("principal_1")).items.length, 0);
+    fail = false;
+    assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), true);
+    assert.equal(await connector.revokeConnection("principal_1", connection.connectionRef), false);
+  } finally { database.close(); }
+});
+
+test("transactional SQLite rejects stale consent without losing another consent's scopes", async () => {
+  const database = new SqliteD1();
+  try {
+    let pause = false;
+    let entered;
+    let release;
+    const paused = new Promise((resolve) => { entered = resolve; });
+    const held = new Promise((resolve) => { release = resolve; });
+    const { connector } = await environment({ database, registerWriteTargetOwner: async () => {
+      if (pause) { pause = false; entered(); await held; }
+    } });
+    const client = await register(connector);
+    await authorize(connector, client.client_id);
+    pause = true;
+    const stale = authorize(connector, client.client_id, "personal:configure").then(() => null, (error) => error);
+    await paused;
+    await authorize(connector, client.client_id, "content:write");
+    release();
+    assert.ok(await stale instanceof Error);
+    assert.deepEqual((await connector.listConnectionPage("principal_1")).items[0].scopes, ["content:read", "content:write"]);
+    await authorize(connector, client.client_id, "personal:configure");
+    assert.deepEqual((await connector.listConnectionPage("principal_1")).items[0].scopes, ["content:read", "content:write", "personal:configure"]);
+  } finally { database.close(); }
+});
+
+test("account cascade removes pending revocation markers with the principal's OAuth rows", async () => {
+  const database = new SqliteD1();
+  try {
+    const { connector } = await environment({ database,
+      revokeWriteTargetOwner: () => { throw new Error("synthetic owner outage"); } });
+    const client = await register(connector);
+    await authorize(connector, client.client_id);
+    const connection = (await connector.listConnectionPage("principal_1")).items[0];
+    await assert.rejects(connector.revokeConnection("principal_1", connection.connectionRef), /owner outage/u);
+    assert.equal(database.sqlite.prepare("SELECT count(*) AS n FROM md_oauth_revocation_pending").get().n, 1);
+    await connector.deletePrincipalConnections("principal_1");
+    assert.equal(database.sqlite.prepare("SELECT count(*) AS n FROM md_oauth_revocation_pending").get().n, 0);
+    assert.equal(database.sqlite.prepare("SELECT count(*) AS n FROM md_oauth_grants").get().n, 0);
+  } finally { database.close(); }
 });
 
 test("OAuth rejects redirect/resource confusion and expires access tokens", async () => {

@@ -131,6 +131,14 @@ principal-owned replacement принят MD-373 в ADR-0024; Personal descriptio
 
 ## Операции
 
+- [Архив специализированных gates](operations/legacy-acceptance/README.md) —
+  прежние machine contracts; не актуальные ручные планы.
+
+- [Глубокая проверка Mind Diary](operations/manual-acceptance/README.md) — ревью
+  всего репозитория, DevOps/MCP, отдельно ChatGPT и Codex, а также отдельные
+  пользовательские сценарии, общий лимит 10 минут, история прогонов и развитие
+  регрессионных проверок; не автотесты и не обязательный запуск текущего релиза.
+
 - [Локальная копия Mind Diary на Mac](operations/system-backup-local.md) —
   ручной CLI MD-446, offline restore MD-447 и порядок fsync/commit, status,
   integrity, GC; первая копия проверена, ежедневный runner MD-448 отменён.

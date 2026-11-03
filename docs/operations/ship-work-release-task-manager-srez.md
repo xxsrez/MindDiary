@@ -12,6 +12,10 @@ receipt.
 
 ## Preflight
 
+Ручной acceptance план разрешать через
+[каталог и selector](manual-acceptance/uat-selection.md); Task Manager хранит
+scope и результаты с ID карточек, не вторую копию их шагов.
+
 1. В fresh callable catalog разрешить configured direct package
    `task-manager@srez-marketplace` и проверить наличие Task Manager
    `get_workspace`, Project/Release/Task reads, native comments и versioned

@@ -4,11 +4,11 @@ import { readFileSync } from "node:fs";
 import { canonical } from "./multi-principal-probe-core.mjs";
 
 const INVENTORY_PATH = new URL(
-  "../../tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
+  "../../tests/fixtures/file-ingress-evidence/candidate-tool-inventory.json",
   import.meta.url,
 );
-const EXPECTED_SCHEMA = "mind-diary/file-ingress-hosted-tool-inventory/v1";
-const EXPECTED_SOURCE = "mind-diary-hosted-mcp-tools-list";
+const EXPECTED_SCHEMA = "mind-diary/candidate-tool-inventory/v1";
+const EXPECTED_SOURCE = "mind-diary-candidate-mcp-tools-list";
 const EXPECTED_TOOL_COUNT = 24;
 
 function schemaHash(value) {
