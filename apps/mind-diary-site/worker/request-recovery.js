@@ -368,10 +368,13 @@ export function createMindDiaryProductWorker(options) {
             return options.fallbackFetch(request, environment, context);
           },
         });
-      } catch {
+      } catch (error) {
+        const timeoutCode = ["metadata_d1_timeout", "metadata_queue_timeout", "runtime_initialization_timeout"].includes(error?.code)
+          ? error.code : undefined;
         console.error(JSON.stringify({
           event: "mind-diary.runtime-unavailable",
           stage: failureStage,
+          ...(timeoutCode === undefined ? {} : { code: timeoutCode }),
         }));
         return Response.json(
           {
